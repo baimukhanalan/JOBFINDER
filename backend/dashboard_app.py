@@ -558,29 +558,34 @@ def roles_reset(company: str = ""):
     return JSONResponse({"ok": True, "company": company, "epoch": rd.reset(company)})
 
 
-# ---- Candidate mailboxes (Mailgun inbound, or the local Mailpit sink) ------
+# ---- Candidate mailboxes (self-hosted Maildir, or the local Mailpit sink) --
 _mail_poller_started = False
 
 
 def _start_mail_poller():
     """Background thread: merge the mail provider -> durable store on a loop so the
-    inbox survives restarts and nothing is lost. Soft no-op if the provider is down."""
+    inbox survives restarts and nothing is lost. Soft no-op if the provider is down.
+
+    On 'selfhost' the Maildir under /var/mail/vhosts is vmail:mail 2770, which this
+    dashboard (running as `programmer`, no mail group) cannot read — the durable
+    store is filled instead by the cron `sg mail -c '... mail_sink --poll'`, exactly
+    like inbox_index.py. So the in-process poller only runs for the local providers."""
     global _mail_poller_started
     if _mail_poller_started:
+        return
+    from backend.tools import mail_sink
+    if mail_sink.PROVIDER == "selfhost":
+        _mail_poller_started = True  # cron owns the poll; nothing to do in-process
         return
     _mail_poller_started = True
 
     def loop():
-        from backend.tools import mail_sink
-        # Mailpit is local and free to hammer; Mailgun's events API is a remote
-        # rate-limited endpoint, so poll it far less often.
-        every = 20.0 if mail_sink.PROVIDER == "mailgun" else 4.0
         while True:
             try:
                 mail_sink.poll_once(int(time.time()))
             except Exception:
                 pass
-            time.sleep(every)
+            time.sleep(4.0)
 
     threading.Thread(target=loop, daemon=True).start()
 
@@ -628,31 +633,12 @@ def mail_draft(id: str = ""):
 
 @app.post("/mail/send")
 def mail_send(id: str = Form(...), text: str = Form(...), subject: str = Form("")):
-    """SEND the human's reply to a recruiter (Mailgun). Runs ONLY from the inbox's
+    """SEND the human's reply to a recruiter (via our own Postfix). Runs ONLY from the inbox's
     Send button — there is no auto-reply. From is derived server-side from the
     original message (the caller cannot spoof it). Returns {ok, ...} or {ok:False,
     error} with 400 so the inbox can show the failure."""
     from backend.tools import mail_sink
     res = mail_sink.send_reply(id, text, subject or None)
-    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
-
-
-@app.post("/mail/inbound")
-async def mail_inbound(request: Request):
-    """Mailgun INBOUND webhook: a route's forward() POST delivers the fully-parsed
-    message (body included), which is the only way to get the body while message
-    retrieval is disabled for the domain. Rejects unsigned/forged posts. Public
-    endpoint — must be on the auth_basic-off list in nginx (like /assist)."""
-    from backend.tools import mail_sink
-    try:
-        form = await request.form()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "bad form"}, status_code=400)
-    fields = {k: (v if isinstance(v, str) else "") for k, v in form.items()}
-    if not mail_sink.mg_verify_webhook(fields.get("token", ""), fields.get("timestamp", ""),
-                                       fields.get("signature", "")):
-        return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
-    res = mail_sink.record_inbound(fields)
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 

@@ -6,7 +6,7 @@ every message ever captured — you can look at different times, nothing is lost
 
 Client-side filter by candidate profile + an address book of every mailbox, so you
 can review who has which address and jump to one candidate's replies. The subtitle
-names the live provider (real Mailgun inbox vs. local throwaway sink) — that
+names the live provider (real self-hosted inbox vs. local throwaway sink) — that
 distinction decides whether an empty inbox means "nothing yet" or "nothing ever".
 """
 from __future__ import annotations
@@ -131,12 +131,11 @@ function esc(s){return (s||"").replace(/[&<>"']/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 function renderHead(d){
-  const mg=d.provider==="mailgun";
-  document.getElementById("pv").textContent = mg ? "· Mailgun" : "· sink";
-  document.getElementById("sub").innerHTML = mg
-    ? `Настоящие входящие через Mailgun · адреса <code>@${esc(d.domain||"")}</code> · `+
-      `catch-all route → store, опрос events API · хранилище персистентное `+
-      `(Mailgun чистит store через ~3 дня, локальная копия остаётся).`
+  const sh=d.provider==="selfhost";
+  document.getElementById("pv").textContent = sh ? "· свой сервер" : "· sink";
+  document.getElementById("sub").innerHTML = sh
+    ? `Настоящие входящие на своём почтовом сервере · адреса <code>@${esc(d.domain||"")}</code> · `+
+      `Postfix → Maildir, чтение с диска · хранилище персистентное.`
     : `Локальный Mailpit-приёмник · адреса <code>@${esc(d.domain||"mail.kz")}</code> · `+
       `реальная почта сюда НЕ приходит. Веб-инбокс Mailpit: <code>localhost:8025</code>`;
 }
@@ -215,7 +214,7 @@ function fmtTs(ts){try{return new Date(ts*1000).toISOString().slice(0,16).replac
 function threadHTML(m){
   if(!m||m.__err) return '<div class="msgcard in"><div class="mbody">(не удалось загрузить письмо)</div></div>';
   const body=(m.body||m.snippet||"").trim()
-    ||"(текст письма недоступен — Mailgun не отдаёт тело на этом плане; см. входящий вебхук)";
+    ||"(текст письма недоступен)";
   const when=m.received?" · "+esc((m.received||"").slice(0,16).replace("T"," ")):"";
   let h=`<div class="msgcard in"><div class="cfrom">${esc(m.from||"")}${when}</div>`+
         `<div class="mbody">${esc(body)}</div></div>`;
@@ -245,7 +244,7 @@ async function toggleBody(subj){
   box.innerHTML=threadHTML(BODYCACHE[id]);
 }
 // Reply SEND: the human writes the reply and clicks Отправить — /mail/send emails
-// the recruiter (Mailgun). There is NO auto-reply; nothing is sent without this click.
+// the recruiter (via our own Postfix). There is NO auto-reply; nothing is sent without this click.
 function composeHTML(d){
   return `<div class="rl">`+
     `<div class="rlhint">Письмо уйдёт <b>рекрутёру</b> ${esc(d.to)} от адреса `+
@@ -304,8 +303,8 @@ function openReply(btn){
 function renderRows(d){
   const msgs=(d.messages||[]).filter(m=>(!FILTER||m.profile===FILTER)&&(!KINDFILTER||m.kind===KINDFILTER));
   const rows=document.getElementById("rows");
-  const hint=(d.provider==="mailgun")
-    ? 'Пусто. Проверь маршрут: <code>python -m backend.tools.mail_sink --status</code>, '+
+  const hint=(d.provider==="selfhost")
+    ? 'Пусто. Проверь состояние: <code>python -m backend.tools.mail_sink --status</code>, '+
       'затем пришли письмо на любой адрес из списка слева.'
     : 'Пусто. Отправь в Mailpit: <code>python -m backend.tools.mail_sink --seed</code>';
   const emptyMsg=KINDFILTER?`Нет писем со статусом «${KIND[KINDFILTER][0]}»${FILTER?" у этого кандидата":""}.`

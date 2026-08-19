@@ -255,9 +255,14 @@ def render_live_html(jobs: list[dict], company: str = _DEFAULT_COMPANY) -> str:
     tgt = _target(company)
     key = tgt.get("key", _DEFAULT_COMPANY)
     name = tgt.get("company", key.title())
-    online_n = sum(1 for j in jobs if _is_online(j))
-    rows = "\n".join(_row(j) for j in jobs)
-    return _TEMPLATE.format(rows=rows, total=len(jobs), online=online_n,
+    # Company tables show ONLY strictly-remote roles — the product rule is "online ==
+    # fully remote". Hybrid AND onsite are filtered out here before rendering; the search
+    # box does any further filtering. This matches what the apply engine targets
+    # (_board_online_roles keeps workplaceType == "remote" only), so the table == the
+    # set we actually apply to.
+    remote_jobs = [j for j in jobs if _is_remote(j)]
+    rows = "\n".join(_row(j) for j in remote_jobs)
+    return _TEMPLATE.format(rows=rows, total=len(remote_jobs),
                             company=html.escape(key), company_name=html.escape(name))
 
 
@@ -345,24 +350,17 @@ _TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 </style></head><body><div class="wrap">
   <a class="back" href="/roles">← Все компании</a>
   <h1>{company_name} — открытые вакансии<span class="live" title="live"></span></h1>
-  <p class="sub">Живой дашборд: вакансии из ATS компании, счётчики (подано/принято/отказ) читаются
-    напрямую из трекера и обновляются <b>мгновенно</b> (SSE-пуш ~1&nbsp;сек), как только бот
-    отработал. <span id="upd"></span></p>
+  <p class="sub">Живой дашборд: <b>только remote-вакансии</b> (гибрид и офис исключены),
+    счётчики (подано/принято/отказ) читаются напрямую из трекера и обновляются
+    <b>мгновенно</b> (SSE-пуш ~1&nbsp;сек), как только бот отработал. <span id="upd"></span></p>
   <div class="stats">
-    <div class="stat"><b>{total}</b><small>всего вакансий</small></div>
-    <div class="stat"><b>{online}</b><small>online (remote/hybrid)</small></div>
+    <div class="stat"><b>{total}</b><small>remote-вакансий</small></div>
     <div class="stat sub"><b id="t-sub">0</b><small>подано (наши)</small></div>
     <div class="stat acc"><b id="t-acc">0</b><small>принято</small></div>
     <div class="stat rej"><b id="t-rej">0</b><small>отказ</small></div>
   </div>
   <div class="controls">
-    <input type="search" id="q" placeholder="Поиск: должность, отдел, ключевые слова в описании…">
-    <div class="seg" id="wp">
-      <button data-f="online" class="on">Только online</button>
-      <button data-f="all">Все</button>
-      <button data-f="remote">Remote</button>
-      <button data-f="hybrid">Hybrid</button>
-    </div>
+    <input type="search" id="q" placeholder="Поиск по remote-вакансиям: должность, отдел, ключевые слова…">
     <button class="reset" id="reset">Сбросить счётчики</button>
     <span class="count" id="count"></span>
   </div>
@@ -377,22 +375,15 @@ _TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   const COMPANY="{company}";
   const rows=[...document.querySelectorAll('tr.role')];
   const q=document.getElementById('q'), count=document.getElementById('count');
-  let filter='online';
+  // Rows are already remote-only (filtered server-side); the search box filters further.
   function applyFilter(){{
     const term=(q.value||'').trim().toLowerCase(); let n=0;
     for(const r of rows){{
-      const wp=r.dataset.wp, online=r.dataset.online==='1';
-      const okF = filter==='all'||(filter==='online'&&online)||(filter==='remote'&&wp==='remote')||(filter==='hybrid'&&wp==='hybrid');
-      const okQ = !term||r.dataset.search.includes(term);
-      const show=okF&&okQ; r.style.display=show?'':'none'; if(show)n++;
+      const show=!term||r.dataset.search.includes(term); r.style.display=show?'':'none'; if(show)n++;
     }}
     count.textContent=n+' вакансий';
   }}
   q.addEventListener('input',applyFilter);
-  document.querySelectorAll('#wp button').forEach(b=>b.addEventListener('click',()=>{{
-    document.querySelectorAll('#wp button').forEach(x=>x.classList.remove('on'));
-    b.classList.add('on'); filter=b.dataset.f; applyFilter();
-  }}));
   // live counts — Server-Sent Events (near-instant, ~1s) with a poll fallback.
   function applyCounts(d){{
     for(const r of rows){{

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ personal_info.full_name }} — Resume</title>
+<style>
+  /* ATS-safe: sans-serif, no tables for layout, no images, no multi-column */
+  @page {
+    size: Letter;
+    margin: 0.5in 0.6in;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.35;
+    color: #111;
+  }
+  body { padding: 0; max-width: 7.3in; }
+  h1 {
+    font-size: 18pt;
+    margin: 0 0 2pt 0;
+    letter-spacing: 0.02em;
+  }
+  .headline {
+    font-size: 11.5pt;
+    color: #444;
+    margin: 0 0 6pt 0;
+    font-weight: 500;
+  }
+  .contact {
+    font-size: 9.5pt;
+    color: #333;
+    margin-bottom: 12pt;
+  }
+  .contact span:not(:last-child)::after { content: " · "; color: #999; }
+  h2 {
+    font-size: 11pt;
+    margin: 14pt 0 6pt 0;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 0.5pt solid #888;
+    padding-bottom: 2pt;
+  }
+  .summary { margin-bottom: 4pt; }
+  .role { margin-bottom: 10pt; page-break-inside: avoid; }
+  .role-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .role-title { font-weight: 600; }
+  .role-company { font-weight: 600; }
+  .role-dates { color: #555; font-size: 9.5pt; }
+  .role-context { color: #555; font-size: 9.5pt; margin: 1pt 0 3pt 0; }
+  ul { margin: 3pt 0 0 0; padding-left: 14pt; }
+  li { margin-bottom: 2pt; }
+  .skills-group { margin-bottom: 3pt; }
+  .skills-label { font-weight: 600; }
+  .cert-list, .edu-list { margin: 0; padding-left: 14pt; }
+  .edu-entry { margin-bottom: 2pt; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>{{ personal_info.full_name }}</h1>
+  {% if headline %}<div class="headline">{{ headline }}</div>{% endif %}
+  <div class="contact">
+    {% if personal_info.email %}<span>{{ personal_info.email }}</span>{% endif %}
+    {% if personal_info.phone %}<span>{{ personal_info.phone }}</span>{% endif %}
+    {% if personal_info.location %}<span>{{ personal_info.location }}</span>{% endif %}
+    {% if personal_info.linkedin %}<span>{{ personal_info.linkedin }}</span>{% endif %}
+  </div>
+</header>
+
+{% if summary %}
+<section>
+  <h2>Summary</h2>
+  <div class="summary">{{ summary }}</div>
+</section>
+{% endif %}
+
+{% if experience %}
+<section>
+  <h2>Experience</h2>
+  {% for role in experience %}
+  <div class="role">
+    <div class="role-header">
+      <div><span class="role-company">{{ role.company }}</span> — <span class="role-title">{{ role.title }}</span></div>
+      <div class="role-dates">{{ role.dates }}</div>
+    </div>
+    {% if role.context %}<div class="role-context">{{ role.context }}</div>{% endif %}
+    {% if role.bullets %}
+    <ul>
+      {% for b in role.bullets %}<li>{{ b }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if skills_grouped %}
+<section>
+  <h2>Skills</h2>
+  {% for group, items in skills_grouped.items() %}
+  <div class="skills-group">
+    <span class="skills-label">{{ group }}:</span> {{ items | join(", ") }}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if certifications %}
+<section>
+  <h2>Certifications</h2>
+  <ul class="cert-list">
+    {% for c in certifications %}<li>{{ c }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if education %}
+<section>
+  <h2>Education</h2>
+  <ul class="edu-list">
+    {% for e in education %}
+    <li class="edu-entry"><strong>{{ e.degree }}</strong> — {{ e.school }}{% if e.year %}, {{ e.year }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+</body>
+</html>

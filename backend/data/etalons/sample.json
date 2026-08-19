@@ -1,0 +1,126 @@
+[
+  {
+    "key": "all-rounder",
+    "label": "All-Channel Support Generalist (6 yrs) — FAKE SAMPLE",
+    "best_for": "documents the etalon schema; every fact below is fictional",
+    "resume": {
+      "headline": "Customer Support Generalist | 6 Years | Phone · Chat · Email — Jordan Sample (fictional)",
+      "summary": "Fictional customer support generalist invented to document the etalon file format. Six made-up years of handling phone, chat, and email queues for imaginary companies, written in the same tone and shape a real niche résumé would use so the tailoring pipeline can be exercised end-to-end without anyone's real work history.",
+      "experience": [
+        {
+          "title": "Customer Support Specialist",
+          "company": "Acme Widgets Inc. — fictional e-commerce retailer",
+          "dates": "April 2021 – Present",
+          "bullets": [
+            "Handled a high daily volume of phone, chat, and email contacts for a made-up online store while keeping a strong (and entirely invented) CSAT score.",
+            "Owned escalated order and billing cases end-to-end, reducing fictional repeat contacts quarter over quarter.",
+            "Wrote and maintained internal help-center articles covering imaginary refund and shipping policies.",
+            "Mentored newly hired sample agents and shadowed their first live interactions."
+          ]
+        },
+        {
+          "title": "Customer Service Representative",
+          "company": "Globex Support Services — fictional BPO",
+          "dates": "June 2019 – March 2021",
+          "bullets": [
+            "Answered inbound calls and emails for several pretend client accounts in rotating queues.",
+            "Met every imaginary SLA target for first response and resolution time.",
+            "Flagged a recurring (and invented) ticket-routing issue that shaved minutes off average handle time once fixed."
+          ]
+        }
+      ],
+      "skills": [
+        {
+          "group": "Tools & Productivity",
+          "items": [
+            "Helpdesk ticketing suites (generic)",
+            "CRM data entry & record management",
+            "Office & spreadsheet basics",
+            "60+ WPM typing (sample figure)"
+          ]
+        },
+        {
+          "group": "Customer Service Competencies",
+          "items": [
+            "Omnichannel support — phone, live chat, email",
+            "De-escalation & conflict resolution",
+            "Knowledge-base authoring",
+            "SLA & CSAT awareness"
+          ]
+        }
+      ],
+      "certifications": [
+        "Sample Customer Service Fundamentals — Fictional Academy (2020)"
+      ],
+      "education": [
+        {
+          "degree": "High School Diploma",
+          "school": "Sampletown High School, Springfield (fictional)",
+          "year": "2014"
+        }
+      ]
+    }
+  },
+  {
+    "key": "technical-support",
+    "label": "Tier 1-2 Technical Support (6 yrs) — FAKE SAMPLE",
+    "best_for": "second niche so variant selection has something to choose between; fictional",
+    "resume": {
+      "headline": "Technical Support Specialist | 6 Years | SaaS Troubleshooting — Jordan Sample (fictional)",
+      "summary": "Fictional tier 1-2 technical support profile for the same invented person, slanted toward SaaS troubleshooting so the niche categorizer has a distinct second option. All companies, metrics, and accomplishments below are made up.",
+      "experience": [
+        {
+          "title": "Technical Support Specialist",
+          "company": "Initech Cloud — fictional SaaS vendor",
+          "dates": "April 2021 – Present",
+          "bullets": [
+            "Diagnosed login, billing, and integration issues for an imaginary B2B web app via tickets and screen-shares.",
+            "Reproduced bugs, wrote clear engineering escalations, and verified fixes in a pretend staging environment.",
+            "Maintained troubleshooting runbooks that cut invented time-to-resolution for common errors.",
+            "Top of the (fictional) leaderboard for first-contact resolution two quarters running."
+          ]
+        },
+        {
+          "title": "Help Desk Agent",
+          "company": "Globex Support Services — fictional BPO",
+          "dates": "June 2019 – March 2021",
+          "bullets": [
+            "Provided first-line software support for several pretend client products by phone and email.",
+            "Triaged and routed tickets by severity, hitting every imaginary response-time target.",
+            "Built a personal snippet library of canned diagnostics later adopted by the whole sample team."
+          ]
+        }
+      ],
+      "skills": [
+        {
+          "group": "Tools & Productivity",
+          "items": [
+            "Ticketing & issue trackers (generic)",
+            "Basic SQL queries for account lookups",
+            "Browser dev-tools log reading",
+            "Screen-share troubleshooting"
+          ]
+        },
+        {
+          "group": "Technical Support Competencies",
+          "items": [
+            "Tier 1-2 triage & escalation",
+            "Bug reproduction & clear repro steps",
+            "Runbook / knowledge-base authoring",
+            "Patient walkthroughs for non-technical users"
+          ]
+        }
+      ],
+      "certifications": [
+        "Sample IT Support Essentials — Fictional Academy (2021)"
+      ],
+      "education": [
+        {
+          "degree": "High School Diploma",
+          "school": "Sampletown High School, Springfield (fictional)",
+          "year": "2014"
+        }
+      ]
+    }
+  }
+]

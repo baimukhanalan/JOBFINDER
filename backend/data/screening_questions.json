@@ -1,0 +1,746 @@
+[
+  {
+    "question": "First Name",
+    "seen": 10
+  },
+  {
+    "question": "Last Name",
+    "seen": 10
+  },
+  {
+    "question": "Email",
+    "seen": 10
+  },
+  {
+    "question": "Resume/CV",
+    "seen": 10
+  },
+  {
+    "question": "Phone",
+    "seen": 6
+  },
+  {
+    "question": "Are you subject to any employment agreements and/or post-employment restrictions with your current employer or a past employer?",
+    "seen": 4
+  },
+  {
+    "question": "Will you now or in the future require sponsorship for a visa to remain in your current location?",
+    "seen": 4
+  },
+  {
+    "question": "Have you reviewed the compensation details (salary range) provided in the job description above?",
+    "seen": 3
+  },
+  {
+    "question": "Please indicate your salary expectation for this role.",
+    "seen": 3
+  },
+  {
+    "question": "Have you previously worked at or consulted for GitLab?",
+    "seen": 3
+  },
+  {
+    "question": "What is your current country of residence?",
+    "seen": 3
+  },
+  {
+    "question": "Preferred Name",
+    "seen": 3
+  },
+  {
+    "question": "Pronouns",
+    "seen": 3
+  },
+  {
+    "question": "Which U.S. State or Canadian Province do you reside in?",
+    "seen": 3
+  },
+  {
+    "question": "How did you first learn about Affirm as an employer?",
+    "seen": 3
+  },
+  {
+    "question": "Have you previously been employed at Affirm for any length of time?",
+    "seen": 3
+  },
+  {
+    "question": "What is your GitHub username? (For future coding assessment)",
+    "seen": 2
+  },
+  {
+    "question": "How did you hear about this role?",
+    "seen": 2
+  },
+  {
+    "question": "Are you 18 years or older?",
+    "seen": 2
+  },
+  {
+    "question": "Are you currently based in the United States and legally authorized to work without sponsorship?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have hands-on WordPress development experience (themes, plugins, or core)?",
+    "seen": 1
+  },
+  {
+    "question": "Are you comfortable reading and debugging PHP in production environments?",
+    "seen": 1
+  },
+  {
+    "question": "Have you worked in a customer-facing technical role (support, solutions, or customer success)?",
+    "seen": 1
+  },
+  {
+    "question": "Are you able to work scheduled shifts that may regularly fall outside standard business hours (including early mornings or late evenings), as well as weekends and holidays?",
+    "seen": 1
+  },
+  {
+    "question": "Briefly describe your hands-on WordPress experience (what you've built or supported).",
+    "seen": 1
+  },
+  {
+    "question": "Describe a technical issue you debugged that required code-level investigation. What was the root cause?",
+    "seen": 1
+  },
+  {
+    "question": "Have you supported high-traffic or mission-critical applications? If yes, in what context?",
+    "seen": 1
+  },
+  {
+    "question": "How do you approach explaining complex technical issues to non-technical customers?",
+    "seen": 1
+  },
+  {
+    "question": "Why are you interested in working for Automattic and why are you applying for the Happiness Engineer role?",
+    "seen": 1
+  },
+  {
+    "question": "How would you describe your current level of experience with WordPress?",
+    "seen": 1
+  },
+  {
+    "question": "What aspects of WordPress are you most familiar with, and can you share a specific example of a challenging WordPress issue you've resolved or a project you're particularly proud of?",
+    "seen": 1
+  },
+  {
+    "question": "How would you describe your experience working in customer-facing support roles?",
+    "seen": 1
+  },
+  {
+    "question": "Tell us more about your customer support background. What channels did you use to help customers (email, chat, phone, etc.), and what kinds of customers or issues were you typically working with?",
+    "seen": 1
+  },
+  {
+    "question": "Please share two professional accomplishments from a recent role (or equivalent personal accomplishments). We're looking for examples where you went beyond day-to-day responsibilities to create a measurable impact. For example, did you do something that leveled up the rest of the team, positively changed the way you and you colleagues worked, or meaningfully impacted the success of the organization? What was the situation, and what did you do? What changed as a result? Why did this matter?",
+    "seen": 1
+  },
+  {
+    "question": "Tell us about a time you used an AI tool to help you solve a problem, learn something new, or get better at your work.",
+    "seen": 1
+  },
+  {
+    "question": "What is your WordPress.com username? If you don't have an account, you can sign up for free at https://wordpress.com/.",
+    "seen": 1
+  },
+  {
+    "question": "Finally, please share the names and contact information for three professional references, as well as a brief description of your relationship. At least one reference must be a current or former supervisor or manager.",
+    "seen": 1
+  },
+  {
+    "question": "What region of the world do you live in?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a LinkedIn profile? If so, please provide a link. Is there anything else you'd like to share with the hiring team?",
+    "seen": 1
+  },
+  {
+    "question": "Do you currently hold United States citizenship? This position requires candidates to hold American citizenship and undergo background checks as required.",
+    "seen": 1
+  },
+  {
+    "question": "Are you currently residing in the United States and able to maintain US-based residency throughout your employment? This is a US-based position and remote work must be performed from within the United States.",
+    "seen": 1
+  },
+  {
+    "question": "Are you able to commit to the following schedule requirements as part of our 24/7 support coverage?",
+    "seen": 1
+  },
+  {
+    "question": "How many years of hands-on experience do you have with WordPress development, troubleshooting, or support?",
+    "seen": 1
+  },
+  {
+    "question": "Which of the following programming languages can you read and troubleshoot proficiently? (Select all that apply)",
+    "seen": 1
+  },
+  {
+    "question": "Do you have experience with PHP?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have experience with JavaScript?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have experience with HTML/CSS?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have previous experience in customer-facing technical support roles, particularly in enterprise or SaaS environments?",
+    "seen": 1
+  },
+  {
+    "question": "Please choose the country in which you are located.",
+    "seen": 1
+  },
+  {
+    "question": "Do you speak fluent German?",
+    "seen": 1
+  },
+  {
+    "question": "Are you based in Japan?",
+    "seen": 1
+  },
+  {
+    "question": "Are you located in one if the following locations: Ireland, United Kingdom, Netherlands, Canada, the Americas?",
+    "seen": 1
+  },
+  {
+    "question": "Are you legally authorized to work in the United States?",
+    "seen": 1
+  },
+  {
+    "question": "Do you now or in the future require sponsorship for employment visa status (e.g., H-1B, TN, E-3, F-1 visa status)?",
+    "seen": 1
+  },
+  {
+    "question": "Do you require immigration sponsorship to work for Affirm in the United States?",
+    "seen": 1
+  },
+  {
+    "question": "Will you require immigration sponsorship at any point in the future to maintain authorization to work in the United States?",
+    "seen": 1
+  },
+  {
+    "question": "Do you now, or will you in the future, require immigration sponsorship to work for Affirm in Canada?",
+    "seen": 1
+  },
+  {
+    "question": "Are you legally authorized to work in the United States (for US roles) / Canada? (Concentrix considers only legally auth",
+    "seen": 1
+  },
+  {
+    "question": "Do you now or will you in the future require visa/employment sponsorship? (standard Workday question)",
+    "seen": 1
+  },
+  {
+    "question": "Do you reside in the United States / have a valid U.S. address? (or province of residence for Canada)",
+    "seen": 1
+  },
+  {
+    "question": "What state/province do you live in? (drives eligibility and routes the application form)",
+    "seen": 1
+  },
+  {
+    "question": "Do you have high-speed wired internet (no wireless/hotspots or satellite) meeting the speed requirement, a desktop/lapto",
+    "seen": 1
+  },
+  {
+    "question": "Are you available for open/flexible scheduling, including possible evenings, weekends, and holidays? (open availability ",
+    "seen": 1
+  },
+  {
+    "question": "Are you 18+ / do you have a high school diploma or GED?",
+    "seen": 1
+  },
+  {
+    "question": "Relevant experience questions (prior customer service / call center / sales / tech support).",
+    "seen": 1
+  },
+  {
+    "question": "EEO / voluntary self-identification: gender, race/ethnicity, veteran status, disability (optional).",
+    "seen": 1
+  },
+  {
+    "question": "California Consumer Privacy Act (CCPA) acknowledgment for CA applicants.",
+    "seen": 1
+  },
+  {
+    "question": "How did you hear about us / referral source.",
+    "seen": 1
+  },
+  {
+    "question": "Consent to background check and (where applicable) to use of AI screening tools.",
+    "seen": 1
+  },
+  {
+    "question": "Harver online assessment suite (Concentrix's primary tool) - invited by email after applying; timed, must be done in a q",
+    "seen": 1
+  },
+  {
+    "question": "Typing test - speed and accuracy, roles typically expect ~30-45 WPM.",
+    "seen": 1
+  },
+  {
+    "question": "Language / grammar / reading comprehension test (English proficiency, sentence correction, vocabulary).",
+    "seen": 1
+  },
+  {
+    "question": "Computer / digital proficiency test.",
+    "seen": 1
+  },
+  {
+    "question": "Situational Judgment Test (SJT) - choose the most effective response to realistic customer scenarios.",
+    "seen": 1
+  },
+  {
+    "question": "Customer-service simulation / role-play - respond to customer queries via chat, email, or voice; live chat simulation ha",
+    "seen": 1
+  },
+  {
+    "question": "Behavioral/personality questionnaire and (for some corporate/IT roles) cognitive/aptitude reasoning.",
+    "seen": 1
+  },
+  {
+    "question": "Work-from-home technical check - internet speed and system requirements test on your own device.",
+    "seen": 1
+  },
+  {
+    "question": "Recorded (on-demand) virtual interview - you record answers to set questions on your own schedule; may blend behavioral ",
+    "seen": 1
+  },
+  {
+    "question": "Are you legally authorized to work in the US / Canada? (work authorization / eligibility to work)",
+    "seen": 1
+  },
+  {
+    "question": "Will you now or in the future require visa sponsorship for employment? (typical Taleo standard question)",
+    "seen": 1
+  },
+  {
+    "question": "What state / province (and city) do you reside in? (drives the AK/HI exclusion and case-by-case state logic)",
+    "seen": 1
+  },
+  {
+    "question": "Are you at least 18 years old?",
+    "seen": 1
+  },
+  {
+    "question": "What is your highest level of education / do you have a high school diploma or GED?",
+    "seen": 1
+  },
+  {
+    "question": "What are your availability / hours and schedule flexibility (days, evenings, weekends; can you commit to the minimum ~20",
+    "seen": 1
+  },
+  {
+    "question": "Do you have (or can you provide) the required equipment and internet: hard-wired high-speed internet ~15-25 Mbps, a quie",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a strong working knowledge of computers and comfort using internet and email?",
+    "seen": 1
+  },
+  {
+    "question": "Are you willing to undergo a criminal background check and, if required, a drug screening after an offer?",
+    "seen": 1
+  },
+  {
+    "question": "Have you previously worked for / applied to TTEC (or been employed by TTEC)?",
+    "seen": 1
+  },
+  {
+    "question": "How did you hear about us / referral source?",
+    "seen": 1
+  },
+  {
+    "question": "EEO / voluntary self-identification questions (gender, race/ethnicity, veteran status, disability) - voluntary.",
+    "seen": 1
+  },
+  {
+    "question": "Computer literacy / computer skills module - tests comfort with PC, internet, email, navigating systems (used as part of",
+    "seen": 1
+  },
+  {
+    "question": "English proficiency / language assessment - written and, for some programs, spoken/voice English. TTEC uses 'language as",
+    "seen": 1
+  },
+  {
+    "question": "Situational Judgment Test (SJT) - workplace/customer scenarios with multiple-choice 'best response' answers; measures wo",
+    "seen": 1
+  },
+  {
+    "question": "Personality / behavioral assessment - work style and culture-fit questionnaire.",
+    "seen": 1
+  },
+  {
+    "question": "Chat simulation / typing assessment - a mock live-chat customer interaction that measures typing speed, grammar, tone, e",
+    "seen": 1
+  },
+  {
+    "question": "Cognitive/aptitude (Cubiks / Talogy) - for some roles: verbal reasoning, numerical/mathematical reasoning, inductive/ded",
+    "seen": 1
+  },
+  {
+    "question": "Systems / technical readiness check - software scans the home computer and internet connection against work-from-home re",
+    "seen": 1
+  },
+  {
+    "question": "Difficulty note: Glassdoor candidates rate the work-at-home interview as low difficulty (~1.3/5), ~80% positive experien",
+    "seen": 1
+  },
+  {
+    "question": "Are you legally authorized to work in the United States / Canada? (standard application eligibility question)",
+    "seen": 1
+  },
+  {
+    "question": "Will you now or in the future require sponsorship for an employment visa? (sponsorship question)",
+    "seen": 1
+  },
+  {
+    "question": "What US state / Canadian province do you reside in? (location/eligibility gate - determines if you qualify for the speci",
+    "seen": 1
+  },
+  {
+    "question": "Are you at least 18 years of age?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a high school diploma or GED (or equivalent)?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a hardwired high-speed internet connection (no wireless/5G)? Some forms ask you to confirm ~100 Mbps down / ",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a quiet, distraction-free dedicated workspace and a webcam?",
+    "seen": 1
+  },
+  {
+    "question": "What is your availability / can you work the required shifts, including weekends as needed?",
+    "seen": 1
+  },
+  {
+    "question": "Are you willing to undergo and able to pass a background check?",
+    "seen": 1
+  },
+  {
+    "question": "For Canada bilingual roles: Are you fluent in both French and English (verbal and written)?",
+    "seen": 1
+  },
+  {
+    "question": "Relevant experience / years in customer service or sales (often 1-2+ years; some postings require it).",
+    "seen": 1
+  },
+  {
+    "question": "Maki People online skills assessment (sent by email from @makipeople.com or @foundever.com after applying; link arrives ",
+    "seen": 1
+  },
+  {
+    "question": "Typing test - type displayed text to measure speed/accuracy (can be skipped if taking the assessment on a mobile phone; ",
+    "seen": 1
+  },
+  {
+    "question": "Situational Judgment Test (SJT) - customer-service scenarios (e.g., handling a billing dispute or an angry customer) whe",
+    "seen": 1
+  },
+  {
+    "question": "Personality / soft-skills assessment - measures adaptability, teamwork, stress management, communication style (Maki per",
+    "seen": 1
+  },
+  {
+    "question": "Language / grammar / communication proficiency check (and French proficiency for Canadian bilingual roles).",
+    "seen": 1
+  },
+  {
+    "question": "Possible chat/voice simulation - some Maki/CX assessments include text-based mock-chat or voice scenarios simulating on-",
+    "seen": 1
+  },
+  {
+    "question": "Behavioral phone interview with recruiter (scenario + availability questions) - human-conducted, not an automated test.",
+    "seen": 1
+  },
+  {
+    "question": "Note: assessment scores are advisory - a recruiter can override a low score and still advance a candidate.",
+    "seen": 1
+  },
+  {
+    "question": "Are you legally authorized to work in the US/Canada? (work authorization)",
+    "seen": 1
+  },
+  {
+    "question": "Visa/work-permit status (Alorica's candidate terms confirm they collect work permit/visa info; sponsorship is generally ",
+    "seen": 1
+  },
+  {
+    "question": "Schedule/shift availability — can you work nights, weekends, the required shift?",
+    "seen": 1
+  },
+  {
+    "question": "Years of call-center / customer-service experience",
+    "seen": 1
+  },
+  {
+    "question": "Highest level of education (HS diploma or GED is the minimum)",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a current Windows PC, high-speed internet, ability to connect via Ethernet, and a quiet workspace?",
+    "seen": 1
+  },
+  {
+    "question": "Are you willing to undergo a background check and pre-employment drug screen?",
+    "seen": 1
+  },
+  {
+    "question": "State/province of residence (drives eligibility for the specific req)",
+    "seen": 1
+  },
+  {
+    "question": "Bilingual? (preferred / higher pay for some roles)",
+    "seen": 1
+  },
+  {
+    "question": "Voluntary EEO: ethnicity, race, gender, veteran status (optional)",
+    "seen": 1
+  },
+  {
+    "question": "Voluntary disability self-identification (optional)",
+    "seen": 1
+  },
+  {
+    "question": "Tax questionnaire: legal name, address, SSN, prior government-benefits history",
+    "seen": 1
+  },
+  {
+    "question": "Harver Assessment platform, ~5 parts total",
+    "seen": 1
+  },
+  {
+    "question": "Situational Judgment Test — ~9 questions in sets of 3; rank or pick most/least effective response to customer-service an",
+    "seen": 1
+  },
+  {
+    "question": "Personality Test — ~75 questions",
+    "seen": 1
+  },
+  {
+    "question": "Skills/cognitive test — ~15 timed questions, ~45 seconds each",
+    "seen": 1
+  },
+  {
+    "question": "Typing Test — ~3-minute speed and accuracy evaluation",
+    "seen": 1
+  },
+  {
+    "question": "Work-from-home / Internet speed test — automated diagnostic of device, internet connection, and tech capability",
+    "seen": 1
+  },
+  {
+    "question": "Phone interview (STAR-method behavioral; covers schedule, WFH experience, employment history, basic tech-troubleshooting",
+    "seen": 1
+  },
+  {
+    "question": "Email address (recommended: the one linked to your PayPal account)",
+    "seen": 1
+  },
+  {
+    "question": "Name and password at signup; full legal name + address during ID verification",
+    "seen": 1
+  },
+  {
+    "question": "Identity verification (Persona): government photo ID front/back + selfie liveness check — confirms identity and implicit",
+    "seen": 1
+  },
+  {
+    "question": "Tax form: W-9 for US contractors (legal name, address, SSN/ITIN or EIN) before payment is released",
+    "seen": 1
+  },
+  {
+    "question": "Work-eligibility / country: eligibility is country-gated (US, CA, UK, IE, AU, NZ); no separate 'are you authorized to wo",
+    "seen": 1
+  },
+  {
+    "question": "No documented questions about equipment specs, scheduled availability, or shift hours at signup — work is self-paced/fle",
+    "seen": 1
+  },
+  {
+    "question": "Starter Assessment (the core gate): one-time, UNPAID, ~1 hr (up to ~2.5 hrs in practice), no retakes. Tests basic writin",
+    "seen": 1
+  },
+  {
+    "question": "Specialist / qualification assessments (post-approval): optional, short, generally unpaid; match domain skills (e.g., co",
+    "seen": 1
+  },
+  {
+    "question": "No standalone typing test, situational-judgment (SJT), mock-chat, or voice/recorded-interview assessment is documented f",
+    "seen": 1
+  },
+  {
+    "question": "Identity/liveness 'assessment' via Persona is a verification step (selfie + head-turn), not a skills test.",
+    "seen": 1
+  },
+  {
+    "question": "NOTE: Prolific does NOT ask traditional employer screening questions. There are NO work-authorization, visa-sponsorship,",
+    "seen": 1
+  },
+  {
+    "question": "Account/identity facts collected at onboarding: email, mobile phone number, full legal name (must exactly match PayPal n",
+    "seen": 1
+  },
+  {
+    "question": "Age (18+) — MANDATORY demographic prescreener.",
+    "seen": 1
+  },
+  {
+    "question": "Current country of residence — MANDATORY demographic prescreener.",
+    "seen": 1
+  },
+  {
+    "question": "About You profile (all OPTIONAL, 300+ prescreeners, most with a 'Rather not say' option): employment status / industry /",
+    "seen": 1
+  },
+  {
+    "question": "Per-study eligibility filters: when you open the dashboard, individual studies may require specific demographics, a part",
+    "seen": 1
+  },
+  {
+    "question": "Identity / liveness verification (Onfido): the core 'assessment' — photograph your real government ID and record a live ",
+    "seen": 1
+  },
+  {
+    "question": "Practice study: a short onboarding study on the Studies page to familiarize you with the study-taking workflow. Must be ",
+    "seen": 1
+  },
+  {
+    "question": "No typing test, no situational-judgment test, no formal customer-support assessment is required to JOIN — Prolific is re",
+    "seen": 1
+  },
+  {
+    "question": "Within actual studies (done after onboarding, by the human), individual researchers may include their own attention chec",
+    "seen": 1
+  },
+  {
+    "question": "What US state do you reside in? (gates eligibility)",
+    "seen": 1
+  },
+  {
+    "question": "Are you a resident of, and legally authorized to work in, the United States?",
+    "seen": 1
+  },
+  {
+    "question": "Do you understand this is a 1099 independent contractor role (self-employed, no W-2 benefits)?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a Windows 11 desktop/laptop (Mac not compatible) meeting specs: 6-core CPU, 16GB RAM, dual 1920x1080 monitor",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a wired Ethernet internet connection (no WiFi/satellite), min 20 Mbps down / 5 Mbps up?",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a USB noise-cancelling headset and a quiet, distraction-free workspace?",
+    "seen": 1
+  },
+  {
+    "question": "Do you consent to a background check conducted by Yardstik and to Liveops sharing your info with Yardstik for that purpo",
+    "seen": 1
+  },
+  {
+    "question": "Do you acknowledge a non-refundable $35 background-check fee paid directly to the third party?",
+    "seen": 1
+  },
+  {
+    "question": "What is your availability / hours? (self-scheduled in blocks as short as 30 min; no minimum login)",
+    "seen": 1
+  },
+  {
+    "question": "Contact info: name, email, phone, mailing address",
+    "seen": 1
+  },
+  {
+    "question": "Do you have a high school diploma or equivalent?",
+    "seen": 1
+  },
+  {
+    "question": "AI voice assessment (tone/empathy/communication)",
+    "seen": 1
+  },
+  {
+    "question": "Scenario/situational-judgment screening",
+    "seen": 1
+  },
+  {
+    "question": "Cognitive assessments gating certification",
+    "seen": 1
+  },
+  {
+    "question": "Automated ~5-min technology/system readiness check",
+    "seen": 1
+  },
+  {
+    "question": "Mock calls with leadership during certification",
+    "seen": 1
+  },
+  {
+    "question": "Client certification pass/fail testing",
+    "seen": 1
+  },
+  {
+    "question": "Country/state of residence (used to enforce US/Canada/Jamaica eligibility and exclude CA, NY, PA, WA residents).",
+    "seen": 1
+  },
+  {
+    "question": "Do you have the required technology/tools (PC, OS, wired internet, USB headset)? — self-attestation in profile, then har",
+    "seen": 1
+  },
+  {
+    "question": "Professional/customer-service experience and skills questions.",
+    "seen": 1
+  },
+  {
+    "question": "Behavioral / situational personality questions (the main assessment).",
+    "seen": 1
+  },
+  {
+    "question": "Program-specific questions for each client contract you select (vary by program; can include schedule/availability and p",
+    "seen": 1
+  },
+  {
+    "question": "Consent to a criminal background check.",
+    "seen": 1
+  },
+  {
+    "question": "Implicit attestation of a quiet, secure, private home work environment.",
+    "seen": 1
+  },
+  {
+    "question": "NOTE: Public application materials do NOT show an explicit US-work-authorization or visa-sponsorship question — because ",
+    "seen": 1
+  },
+  {
+    "question": "One-time behavioral/personality assessment (~30 min) using typical workplace scenarios — single attempt, no retakes, low",
+    "seen": 1
+  },
+  {
+    "question": "Program-specific questions when selecting a contract (a secondary screen tailored per client).",
+    "seen": 1
+  },
+  {
+    "question": "PC scanner — an automated, read-only technology verification (checks Windows OS version, RAM/min 8GB, storage, and inter",
+    "seen": 1
+  },
+  {
+    "question": "Video interview — required only after you're selected for a specific client program (effectively an assessment/interview",
+    "seen": 1
+  },
+  {
+    "question": "NO standalone typing test, no live mock-chat exercise, and no voice/voice-acting assessment are part of the standard app",
+    "seen": 1
+  }
+]

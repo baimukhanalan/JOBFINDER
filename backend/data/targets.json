@@ -1,0 +1,210 @@
+[
+  {
+    "key": "openai",
+    "company": "OpenAI",
+    "ats": "ashby",
+    "slug": "openai",
+    "enabled": true,
+    "note": "729 jobs / ~471 online. Almost only eng / research. First-5 apply target."
+  },
+  {
+    "key": "cohere",
+    "company": "Cohere",
+    "ats": "ashby",
+    "slug": "cohere",
+    "enabled": true,
+    "note": "147 jobs / ~136 online. Eng / technical staff. First-5 apply target."
+  },
+  {
+    "key": "ramp",
+    "company": "Ramp",
+    "ats": "ashby",
+    "slug": "ramp",
+    "enabled": true,
+    "note": "137 jobs / ~124 online. Eng + sales + ops (broad). First-5 apply target."
+  },
+  {
+    "key": "plaid",
+    "company": "Plaid",
+    "ats": "ashby",
+    "slug": "plaid",
+    "enabled": true,
+    "note": "106 jobs / ~102 online. Eng + support + strategy. First-5 apply target."
+  },
+  {
+    "key": "vanta",
+    "company": "Vanta",
+    "ats": "ashby",
+    "slug": "vanta",
+    "enabled": true,
+    "note": "96 jobs / ~87 online. Eng + sales + AE (broad). First-5 apply target."
+  },
+  {
+    "key": "notion",
+    "company": "Notion",
+    "ats": "ashby",
+    "slug": "notion",
+    "enabled": true,
+    "note": "127 jobs / ~86 online. BDR / sales + eng (broad). Dashboard-tracked."
+  },
+  {
+    "key": "replit",
+    "company": "Replit",
+    "ats": "ashby",
+    "slug": "replit",
+    "enabled": true,
+    "note": "74 jobs / ~73 online. Eng / design. Dashboard-tracked."
+  },
+  {
+    "key": "salmon",
+    "company": "Salmon",
+    "ats": "ashby",
+    "slug": "salmon-group",
+    "enabled": true,
+    "note": "Reference (эталон). 129 jobs / ~64 online. Fintech: ops / data / analyst / support."
+  },
+  {
+    "key": "1password",
+    "company": "1Password",
+    "ats": "ashby",
+    "slug": "1password",
+    "enabled": true,
+    "note": "60 jobs / ~57 online. Eng + security + revenue."
+  },
+  {
+    "key": "benchling",
+    "company": "Benchling",
+    "ats": "ashby",
+    "slug": "benchling",
+    "enabled": true,
+    "note": "48 jobs / ~44 online. Eng + recruiting. Dashboard-tracked."
+  },
+  {
+    "key": "render",
+    "company": "Render",
+    "ats": "ashby",
+    "slug": "render",
+    "enabled": true,
+    "note": "34 jobs / ~33 online. Eng. Dashboard-tracked."
+  },
+  {
+    "key": "linear",
+    "company": "Linear",
+    "ats": "ashby",
+    "slug": "linear",
+    "enabled": true,
+    "note": "32 jobs / ~32 online. Eng only. Dashboard-tracked."
+  },
+  {
+    "key": "supabase",
+    "company": "Supabase",
+    "ats": "ashby",
+    "slug": "supabase",
+    "enabled": true,
+    "note": "52 jobs / ~30 online. Eng + support + solution arch. Dashboard-tracked."
+  },
+  {
+    "key": "alchemy",
+    "company": "Alchemy",
+    "ats": "ashby",
+    "slug": "alchemy",
+    "enabled": true,
+    "note": "17 jobs / ~17 online. Eng + finance. Dashboard-tracked."
+  },
+  {
+    "key": "watershed",
+    "company": "Watershed",
+    "ats": "ashby",
+    "slug": "watershed",
+    "enabled": true,
+    "note": "33 jobs / ~13 online. Eng + advisory. Dashboard-tracked."
+  },
+  {
+    "key": "zapier",
+    "company": "Zapier",
+    "ats": "ashby",
+    "slug": "zapier",
+    "enabled": true,
+    "note": "10 jobs / ~10 online. Sales + marketing. Thin board. Dashboard-tracked."
+  },
+  {
+    "key": "posthog",
+    "company": "PostHog",
+    "ats": "ashby",
+    "slug": "posthog",
+    "enabled": true,
+    "note": "11 jobs / ~10 online. Eng + AE. Dashboard-tracked."
+  },
+  {
+    "key": "close",
+    "company": "Close",
+    "ats": "ashby",
+    "slug": "close",
+    "enabled": true,
+    "note": "6 jobs / ~6 online. Eng (USA remote). Dashboard-tracked."
+  },
+  {
+    "key": "quora",
+    "company": "Quora",
+    "ats": "ashby",
+    "slug": "quora",
+    "enabled": true,
+    "note": "6 jobs / ~5 online. Security eng. Dashboard-tracked."
+  },
+  {
+    "key": "runway",
+    "company": "Runway",
+    "ats": "ashby",
+    "slug": "runway",
+    "enabled": true,
+    "note": "4 jobs / ~4 online. Eng. Dashboard-tracked."
+  },
+  {
+    "key": "remotecom",
+    "company": "Remote",
+    "ats": "greenhouse",
+    "slug": "remotecom",
+    "enabled": true,
+    "note": "Greenhouse, no account, 100% standard hosted form. ~224 jobs, 204 remote, 84 family-matched. Apply-enabled."
+  },
+  {
+    "key": "gitlab",
+    "company": "GitLab",
+    "ats": "greenhouse",
+    "slug": "gitlab",
+    "enabled": true,
+    "note": "Greenhouse, no account, 100% standard hosted form. ~200 jobs, 176 remote, 74 family-matched. Apply-enabled."
+  },
+  {
+    "key": "spotify",
+    "company": "Spotify",
+    "ats": "lever",
+    "slug": "spotify",
+    "enabled": true,
+    "note": "Lever, no account, standard jobs.lever.co form. 99 jobs, 33 remote, 20 family-matched. Best real Lever board. Apply-enabled."
+  },
+  {
+    "key": "stripe",
+    "company": "Stripe",
+    "ats": "greenhouse",
+    "slug": "stripe",
+    "enabled": false,
+    "note": "Greenhouse, no account (~572 jobs, ~100 remote). Dashboard-tracked ONLY: apply links redirect to stripe.com career site (prefill won't hit a greenhouse form)."
+  },
+  {
+    "key": "gopuff",
+    "company": "Gopuff",
+    "ats": "lever",
+    "slug": "gopuff",
+    "enabled": false,
+    "note": "Lever, no account, standard form. ~813 jobs but only 7 remote / 4 matched. Dashboard-tracked (thin)."
+  },
+  {
+    "key": "deel",
+    "company": "Deel",
+    "ats": "ashby",
+    "slug": "deel",
+    "enabled": false,
+    "note": "DEAD on the public Ashby board (0 jobs). Real board TBD — Phase 0."
+  }
+]

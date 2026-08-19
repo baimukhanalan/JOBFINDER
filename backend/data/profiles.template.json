@@ -1,0 +1,51 @@
+[
+  {
+    "id": "friend1",
+    "full_name": "REAL FULL NAME",
+    "email": "real.email@gmail.com",
+    "phone": "312-555-0000",
+    "location": "City, ST, US",
+    "city": "City",
+    "state": "ST",
+    "zip_code": "00000",
+    "country": "United States",
+    "linkedin_url": "",
+    "work_authorization": "US Citizen",
+    "needs_sponsorship": "No",
+    "years_experience": "3",
+    "available_start": "Immediately",
+    "is_sample": false,
+    "resume": {
+      "personal_info": {
+        "full_name": "REAL FULL NAME",
+        "email": "real.email@gmail.com",
+        "phone": "312-555-0000",
+        "location": "City, ST, US"
+      },
+      "preferred_titles": ["Customer Support Specialist", "Customer Service Representative", "Chat Support Agent"],
+      "headline": "Customer Support Specialist",
+      "summary": "REAL 1-2 sentence summary: years of experience, channels (email/chat/phone), tools.",
+      "experience": [
+        {
+          "company": "REAL COMPANY (or remove if none)",
+          "title": "REAL TITLE",
+          "dates": "MM/YYYY - Present",
+          "context": "industry",
+          "bullets": [
+            "REAL bullet — what you actually did (action + context). Add 3-6 real ones.",
+            "REAL bullet — tools used, channels, outcomes (only true facts/numbers).",
+            "REAL bullet"
+          ]
+        }
+      ],
+      "skills_grouped": {
+        "Customer Support Platforms": ["REAL tools you've used, e.g. Zendesk, Intercom"],
+        "Other": ["Slack", "Google Workspace"]
+      },
+      "certifications": [],
+      "education": [
+        {"degree": "REAL degree or 'High School Diploma'", "school": "REAL school", "year": "YYYY"}
+      ]
+    }
+  }
+]

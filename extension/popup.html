@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 250px; margin: 0; font: 13px -apple-system, Segoe UI, Arial; background: #0f1216; color: #e7ebf0; }
+  .wrap { padding: 14px; }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  .who { font-size: 11px; color: #8a94a3; margin-bottom: 12px; }
+  button { width: 100%; padding: 12px; border: 0; border-radius: 9px; background: #2563eb; color: #fff;
+           font: 600 14px -apple-system, Segoe UI, Arial; cursor: pointer; }
+  button:active { transform: translateY(1px); }
+  .hint { font-size: 11px; color: #7b8593; margin-top: 11px; line-height: 1.5; }
+  .res { margin-top: 10px; font-size: 12px; color: #46d17f; min-height: 16px; }
+  .key { color: #aab3c0; }
+  .settings { display: flex; gap: 6px; margin-top: 12px; align-items: center; }
+  .settings label { font-size: 11px; color: #8a94a3; white-space: nowrap; }
+  .settings input { flex: 1; min-width: 0; padding: 7px 8px; border-radius: 7px; border: 1px solid #2b3340;
+                    background: #171c23; color: #e7ebf0; font: 12px -apple-system, Segoe UI, Arial; }
+  .settings button { width: auto; padding: 7px 11px; font-size: 12px; background: #232a33; color: #cfd6df; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Apply Assist</h1>
+  <div class="who" id="who">Profile: …</div>
+  <button id="fill">Fill this form</button>
+  <button id="draft" style="margin-top:8px;background:#7a3fd6">Smart fill (server)</button>
+  <div class="who" id="oneclick" style="margin:8px 0 0"></div>
+  <div class="res" id="res"></div>
+  <div class="settings">
+    <label for="pid">Profile ID</label>
+    <input id="pid" placeholder="michael" spellcheck="false">
+    <button id="savePid">Save</button>
+  </div>
+  <div class="hint">
+    <b>Fill</b> = name/email/eligibility (instant, works offline).<br>
+    <b>Smart fill</b> = also answers the screener dropdowns and writes the open
+    "why / describe" questions on the server; reuses your saved answers.<br>
+    Or press <span class="key">Alt+Shift+F</span> to fill locally.<br>
+    Green = filled · Yellow = needs you. Résumé attach manually, then submit yourself.
+  </div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

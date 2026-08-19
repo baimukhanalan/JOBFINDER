@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { width: 380px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+.header { padding: 12px 16px; background: #1e293b; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #334155; }
+.header h1 { font-size: 15px; color: #38bdf8; }
+.stats-bar { display: flex; gap: 8px; font-size: 11px; }
+.stats-bar span { background: #334155; padding: 2px 8px; border-radius: 4px; }
+.stats-bar b { color: #22c55e; }
+
+.content { padding: 16px; }
+
+/* Job info */
+.job-info { background: #1e293b; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+.job-title { font-size: 14px; font-weight: 600; color: #f1f5f9; }
+.job-company { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+.job-id { font-size: 11px; color: #64748b; }
+
+/* Status */
+.status { padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; text-align: center; }
+.status.loading { background: #1e293b; color: #94a3b8; }
+.status.ready { background: #14532d; color: #86efac; }
+.status.done { background: #172554; color: #93c5fd; }
+.status.error { background: #450a0a; color: #fca5a5; }
+
+/* Buttons */
+.actions { display: flex; flex-direction: column; gap: 8px; }
+.btn { padding: 12px; font-size: 14px; font-weight: 600; border: none; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: #22c55e; color: white; }
+.btn-primary:hover:not(:disabled) { background: #16a34a; }
+.btn-fill { background: #3b82f6; color: white; }
+.btn-fill:hover:not(:disabled) { background: #2563eb; }
+.btn-skip { background: #f59e0b; color: #1e293b; }
+.btn-skip:hover:not(:disabled) { background: #d97706; }
+.btn-stop { background: #64748b; color: white; font-size: 12px; padding: 8px; }
+.btn-stop:hover:not(:disabled) { background: #ef4444; }
+.row { display: flex; gap: 8px; }
+.row .btn { flex: 1; }
+
+/* Settings */
+.settings { margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; }
+.settings label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px; }
+.settings input, .settings select { width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #e2e8f0; font-size: 12px; margin-bottom: 8px; }
+
+/* Questions */
+.questions { margin-bottom: 12px; max-height: 200px; overflow-y: auto; }
+.q-item { background: #1e293b; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; font-size: 12px; }
+.q-item label { color: #f1f5f9; display: block; margin-bottom: 4px; font-weight: 500; }
+.q-item input, .q-item select, .q-item textarea { width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 12px; }
+.q-item textarea { min-height: 40px; resize: vertical; }
+
+.empty { text-align: center; padding: 30px; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>⚡ Quick Apply</h1>
+  <div class="stats-bar" id="statsBar">
+    <span><b id="statSent">0</b> sent</span>
+    <span id="statSkip">0 skip</span>
+  </div>
+</div>
+
+<div class="content">
+  <!-- State: idle -->
+  <div id="idleView">
+    <div class="settings">
+      <label>Server</label>
+      <input type="text" id="serverUrl" value="http://173.249.18.153:8000">
+      <label>Platform filter</label>
+      <select id="platform">
+        <option value="">All</option>
+        <option value="greenhouse">Greenhouse</option>
+        <option value="lever">Lever</option>
+        <option value="ashby">Ashby</option>
+        <option value="icims">iCIMS</option>
+      </select>
+      <label>Start from job ID</label>
+      <input type="number" id="startFrom" value="0">
+    </div>
+    <div class="actions" style="margin-top: 12px;">
+      <button class="btn btn-primary" id="btnStart">▶ Start Applying</button>
+    </div>
+  </div>
+
+  <!-- State: running -->
+  <div id="runView" style="display:none">
+    <div class="job-info" id="jobInfo" style="display:none">
+      <div class="job-title" id="jobTitle"></div>
+      <div class="job-company" id="jobCompany"></div>
+      <div class="job-id" id="jobId"></div>
+    </div>
+
+    <div class="status loading" id="statusMsg">Loading next job...</div>
+
+    <div class="questions" id="questionsBox"></div>
+
+    <div class="actions">
+      <button class="btn btn-fill" id="btnFill" style="display:none">🔄 Auto-Fill Form</button>
+      <div class="row">
+        <button class="btn btn-primary" id="btnSubmitted" style="display:none">✅ Submitted</button>
+        <button class="btn btn-skip" id="btnSkip" style="display:none">⏭ Skip</button>
+      </div>
+      <button class="btn btn-stop" id="btnStop">🛑 Stop</button>
+    </div>
+  </div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>

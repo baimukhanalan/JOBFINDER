@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Acme Support — Application</title></head>
+<body>
+<h1>Acme Support Co — Customer Service Representative</h1>
+<form id="app">
+  <p><label for="fn">First name *</label><input id="fn" name="first_name" type="text"></p>
+  <p><label for="ln">Last name *</label><input id="ln" name="last_name" type="text"></p>
+  <p><label for="em">Email address *</label><input id="em" name="email" type="email"></p>
+  <p><label for="ph">Phone number</label><input id="ph" name="phone" type="text"></p>
+  <p><label for="co">Country</label>
+    <select id="co" name="country">
+      <option value="">Select…</option>
+      <option>Canada</option><option>United States</option><option>Mexico</option>
+    </select></p>
+  <p><label for="yrs">How many years of customer service experience do you have?</label>
+    <input id="yrs" name="years" type="text"></p>
+
+  <fieldset><legend>Are you legally authorized to work in the United States?</legend>
+    <label><input type="radio" name="auth_us" value="yes"> Yes</label>
+    <label><input type="radio" name="auth_us" value="no"> No</label>
+  </fieldset>
+
+  <fieldset><legend>Are you authorized to work in Canada?</legend>
+    <label><input type="radio" name="auth_ca" value="yes"> Yes</label>
+    <label><input type="radio" name="auth_ca" value="no"> No</label>
+  </fieldset>
+
+  <fieldset><legend>Will you now or in the future require visa sponsorship?</legend>
+    <label><input type="radio" name="sponsor" value="yes"> Yes</label>
+    <label><input type="radio" name="sponsor" value="no"> No</label>
+  </fieldset>
+
+  <fieldset><legend>Are you at least 18 years of age?</legend>
+    <label><input type="radio" name="age18" value="yes"> Yes</label>
+    <label><input type="radio" name="age18" value="no"> No</label>
+  </fieldset>
+
+  <p><label for="q1">What would you do if you did not know the answer to a customer's question?</label><br>
+    <textarea id="q1" name="why" rows="4" cols="50"></textarea></p>
+  <p><label for="q2">Describe a time you handled an upset customer.</label><br>
+    <textarea id="q2" name="hard" rows="4" cols="50"></textarea></p>
+  <p><label for="q3">Is there anything else you'd like us to know?</label><br>
+    <textarea id="q3" name="else" rows="4" cols="50"></textarea></p>
+
+  <p><label><input type="checkbox" name="agree"> I agree to the terms and consent to a background check.</label></p>
+  <button type="button">Submit</button>
+</form>
+</body></html>

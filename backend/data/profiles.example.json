@@ -1,0 +1,77 @@
+[
+  {
+    "id": "sample",
+    "full_name": "Jordan Sample",
+    "email": "jordan.sample.demo@example.com",
+    "phone": "312-555-0142",
+    "location": "Chicago, IL, US",
+    "city": "Chicago",
+    "state": "IL",
+    "zip_code": "60601",
+    "country": "United States",
+    "linkedin_url": "",
+    "work_authorization": "US Citizen",
+    "needs_sponsorship": "No",
+    "years_experience": "6",
+    "available_start": "Immediately",
+    "is_sample": true,
+    "resume": {
+      "personal_info": {
+        "full_name": "Jordan Sample",
+        "email": "jordan.sample.demo@example.com",
+        "phone": "312-555-0142",
+        "location": "Chicago, IL, US"
+      },
+      "preferred_titles": [
+        "Customer Support Specialist",
+        "Customer Support Engineer",
+        "Technical Support Specialist",
+        "Customer Experience Specialist",
+        "Customer Success Specialist"
+      ],
+      "headline": "Customer Support Specialist",
+      "summary": "Customer Support professional with 6 years across SaaS and consumer products. Handles Tier 1-2 troubleshooting, escalation management, and knowledge base ownership across email, chat, and phone.",
+      "experience": [
+        {
+          "company": "Brightwave SaaS",
+          "title": "Customer Support Specialist",
+          "dates": "03/2021 - Present",
+          "context": "B2B SaaS",
+          "bullets": [
+            "Resolved customer inquiries across email, live chat, and phone via Zendesk, consistently meeting first-response and resolution SLA targets",
+            "Diagnosed and triaged technical issues, reproducing bugs and submitting structured reports to Engineering with logs and repro steps",
+            "Investigated API errors using Postman and browser DevTools to identify root cause before escalation",
+            "Authored and maintained knowledge base articles in Confluence, reducing repeat ticket volume on top issues",
+            "Built Zendesk macros and triggers to streamline refunds, password resets, and account changes",
+            "Onboarded and mentored new hires using documented playbooks and shadowing"
+          ]
+        },
+        {
+          "company": "Northline Commerce",
+          "title": "Customer Service Representative",
+          "dates": "06/2018 - 02/2021",
+          "context": "E-commerce / consumer",
+          "bullets": [
+            "Owned Tier-1 support queue handling email and chat tickets across a high-volume consumer base",
+            "Resolved account access, billing, and order issues with an empathetic, clear written tone",
+            "Coordinated with the fulfillment team on escalations and tracked recurring issues for Product",
+            "Used Intercom for inbound chat and HubSpot Service Hub for case management",
+            "Consistently exceeded team CSAT and SLA targets"
+          ]
+        }
+      ],
+      "skills_grouped": {
+        "Customer Support Platforms": ["Zendesk", "Intercom", "HubSpot Service Hub", "Freshdesk", "Help Scout"],
+        "Collaboration": ["Slack", "Jira", "Confluence", "Notion", "Zoom"],
+        "Technical": ["API debugging (Postman)", "Browser DevTools", "SQL (basic)", "HTML/CSS (read & edit)", "JSON"]
+      },
+      "certifications": [
+        "Zendesk Customer Service Professional - Zendesk, 2023",
+        "HubSpot Service Hub Certification - HubSpot Academy, 2024"
+      ],
+      "education": [
+        {"degree": "B.A. in Communications", "school": "University of Illinois", "year": "2018"}
+      ]
+    }
+  }
+]

@@ -1,0 +1,244 @@
+[
+  {
+    "employer": "Concentrix",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 employee (Concentrix work-at-home roles are employee-based, not 1099 contractor). Eligible for benefits: medical/dental/vision, 401(k), EAP, PTO/holidays, paid training days.",
+    "pay": "Roughly $15-$18/hr base for entry remote CSR roles (Customer Service Rep - Financial posting lists $15-$17/hr). Some postings/roles range $15-$20/hr; chat roles trend lower (median ~$14.44/hr). Pay never below applicable state minimum wage. Paid training; some campaigns offer daily-pay option and performance incentives.",
+    "speed": "Realistically ~1-3 weeks from apply to job offer if you respond quickly (recruiters note 3-5 business days is possible for highly responsive candidates; slow responders take longer because they hire multiple people per req on a first-complete basis). Onboarding/equipment setup happens ~1 week before paid training starts, so apply-to-actual-start is typically ~2-4 weeks.",
+    "eligibility": "US + Canada, but NOT all 50 states / all provinces. Concentrix work-at-home hires in ~35 US states and 9 Canadian provinces (coast-to-coast, all time zones). The specific excluded states are NOT published in one authoritative list and vary by client campaign; eligibility is determined per-posting at application time (the application form rejects ineligible states). Commonly excluded from WAH campaigns are high-cost/regulatory states such as California, plus often Alaska and Hawaii, but this shifts by campaign — verify on the specific posting. You must reside in the US (or eligible CA province) with a valid local address.",
+    "assessment": "Harver virtual assessment (sent by email after applying) — language proficiency, computer proficiency, customer-support situational/behavioral simulations, and a typing test. Plus a mandatory WAH system check: PC/internet speed test (desktop or laptop required — no Mac, Chromebook, tablet, or phone; wired high-speed internet, no wireless/hotspot/satellite), quiet environment required. Followed by a recruiter interview that may include a role-play scenario. Timed assessments.",
+    "apply_url": "https://jobs.concentrix.com/job-search/?country=United+States+Of+America (filter \"Only work from home\" + category \"Customer Service and Support\"). Underlying Workday portal: https://cnx.wd1.myworkdayjobs.com/en-US/external_global",
+    "open_examples": [
+      "Customer Service Rep - Financial (Remote), United States (R1716471 / posting tp-us-16968450)",
+      "Customer Service Rep - Tax (Seasonal, Remote), United States (R1672313)",
+      "Remote Customer Service Representative - Daily Pay Option, $15-$18/hr + benefits"
+    ]
+  },
+  {
+    "employer": "TTEC (TTEC@home / TTEC Remote CX)",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 employee (direct hire with benefits and paid training — not 1099/contractor)",
+    "pay": "Base CSR starting range ~$13.00–$16.35/hr depending on program/state (per official Austin remote-USA posting). Aggregator-reported average ~$23/hr across all TTEC remote roles, range roughly $17–$26/hr depending on role, language skills, and experience. Bilingual roles pay higher.",
+    "speed": "~9 days average application-to-hire per Indeed candidate data; realistically about 1–3 weeks from applying to a training start date, since classes begin in scheduled cohorts. Paid instructor-led virtual training (webcam required) runs several weeks before going live.",
+    "eligibility": "US + Canada. US NOT hiring from: AK, CA, HI, MT (excluded outright). CO, IL, MA, MN, NJ, NY, WA, and Washington D.C. considered ONLY on special business need. Remaining ~37 states eligible. Canada eligible provinces: AB, BC, MB, NB, NL, NS, ON, PE, SK. Quebec roles are bilingual French/English only. No hiring outside US/Canada for these WFH CSR roles.",
+    "assessment": "Multi-part online assessment as part of TTEC's Smart Hire process: (1) Situational Judgment Test (SJT) — simulated customer-interaction scenarios where you pick the best response; (2) Language/Communication assessment — Versant-style voice or written test checking grammar, fluency, pronunciation; (3) Typing speed & accuracy test for chat/email roles (~30-35 WPM minimum). May also include a short personality/behavioral assessment and chat simulation. Followed by recruiter screen/interview.",
+    "apply_url": "https://www.ttecjobs.com/en/work-from-home",
+    "open_examples": [
+      "Customer Service Representative – Remote in USA (Austin, TX-based remote)",
+      "Customer Service Representative - Part time – Remote in USA",
+      "Customer Service and Sales Representative – Work from Home in Canada (incl. Bilingual French-English, Spanish-English)"
+    ]
+  },
+  {
+    "employer": "Foundever (formerly Sitel + Sykes; BPO running Work@Home contact-center programs for 750+ brands)",
+    "hiring_remote_cs_now": "few",
+    "employment": "W2 (regular employee, not 1099). Foundever hires Work@Home CSRs as W2 employees with benefits (health/dental/vision, 401k match, PTO), paid training, and company-provided equipment for most programs. Some campaigns can be seasonal W2.",
+    "pay": "Roughly $15-$19/hr for entry-level frontline Work@Home CSR/tech-support (training often starts ~$15/hr, production up to ~$18-19/hr plus bonuses). Aggregator averages cluster ~$14.50-$18.80/hr; broader Foundever-remote postings span ~$15-$33/hr for higher/licensed/senior roles. Pay varies by client campaign and state.",
+    "speed": "Realistically about 1-3 weeks from application to start when a class is actively ramping: apply -> Maki assessment (same day) -> recruiter contact + interview (a few days to ~1 week) -> background check/onboarding -> start in next training class. Can stretch to 3-4+ weeks if no class is currently filling; right now frontline openings are thin so expect a wait or a \"join talent community\" alert rather than an immediate class.",
+    "eligibility": "US only for these Work@Home CSR roles right now. Canada: Foundever does hire WFH in Canada generally, but the official \"Work at Home Canada\" board currently shows NO open positions (subscribe-to-alerts only) as of early June 2026. US EXCLUDED states (no employment offered): Alaska, California, Connecticut, Delaware, Hawaii, Illinois, Maine, Maryland, Massachusetts, Montana, New Hampshire, New York, Oregon, Rhode Island, Vermont, Washington, plus Washington DC, Puerto Rico, and US Virgin Islands. Typical ELIGIBLE states: AL, AZ, AR, CO, FL, GA, ID, IN, IA, KS, KY, LA, MI, MN, MS, MO, NE, NV, NJ, NM, NC, ND, OH, OK, PA, SC, SD, TN, TX, UT, VA, WV, WI, WY. Exact eligible-state list varies per individual job/client campaign. Must be 18+ with HS diploma/GED.",
+    "assessment": "Maki People online skills assessment (must pass before interview)",
+    "apply_url": "https://jobs.foundever.com/go/Work%40Home-Jobs/9237700/",
+    "open_examples": [
+      "Work at Home Seasonal Customer Service / Technical Support Associate (entry-level, remote US)",
+      "Remote Customer Service Representative (Any Location, US)",
+      "Remote Licensed Customer Service Representative / Licensed Benefits Advisor - Seasonal (insurance; licensing paid by Foundever)"
+    ]
+  },
+  {
+    "employer": "Teleperformance USA (TP)",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 employee (not 1099). Many entry roles are posted as \"Temporary, Full-time\" (seasonal / temp-to-perm with conversion based on performance and business need). Full benefits offered: medical, dental, vision, 401k, PTO, paid training.",
+    "pay": "Entry remote CS roles start around $15.25-$16/hr (e.g. Customer Care Representative posted at $15.25/hr). Glassdoor/ZipRecruiter peg typical remote CSR at ~$18-$22/hr base, range ~$15-$25/hr. Licensed Insurance and Tech & Sales Support roles pay more (often $20-$31/hr plus commission/bonus). Average reported ~$18.80-$22/hr.",
+    "speed": "Realistic: offer in roughly 7-10 days from applying (Teleperformance's self-reported hiring averages ~6.9 days overall, ~9 days for tech-support CSR). Add background check + scheduling into a training cohort, so apply -> actual training start is realistically about 2-4 weeks.",
+    "eligibility": "US: Hires in ~44 states only. EXCLUDED (cannot offer remote employment): California, Colorado, Hawaii, Washington, Oregon, Alaska, and Washington DC (plus US territories). Eligible states explicitly listed include AL, AR, AZ, CT, DE, FL, GA, IA, ID, IL, IN, KS, KY, LA, MA, MD, ME, MI, MN, MO, MS, MT, NC, ND, NE, NH, NJ, NM, NV, NY, OH, OK, PA, RI, SC, SD, TN, TX, UT, VT, VA, WI, WV, WY. Some individual reqs restrict further (e.g. a given posting may name only a subset of states). Must be authorized to work in US without sponsorship. CANADA: hires remotely via a SEPARATE portal (careerseng-teleperformance.icims.com); roles open in AB, BC, MB, NB, NL, NS, PE, QC, SK — Ontario is frequently excluded; province eligibility varies per posting.",
+    "assessment": "Multi-step: (1) online pre-employment assessment measuring language/grammar/spelling, situational judgment, and basic cognitive/literacy (can run up to ~2 hrs for the cognitive portion); (2) TYPING TEST — must type at least 25 WPM; (3) basic computer/Windows-systems proficiency check. Pass the assessment, then a recruiter phone/video screen, then a hiring-manager video interview. Some queues add a listening/spelling component.",
+    "apply_url": "https://careersus-teleperformance.icims.com/jobs/intro",
+    "open_examples": [
+      "Customer Care Representative - Remote (~$15.25/hr, temporary full-time)",
+      "Sales & Customer Service Representative - Remote (and Overnight variant)",
+      "Healthcare Customer Service Representative - Remote"
+    ]
+  },
+  {
+    "employer": "Alorica (Alorica at Home division)",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 (employee, not 1099 independent contractor — confirmed by Alorica and employee reports; year-end W2 issued). Paid training.",
+    "pay": "Roughly $16-$21/hr; reported US average ~$19.97/hr (ZipRecruiter, May 2026), most between $16.83-$21.15/hr. Some WayUp/postings cite ~$16.50/hr for training and production. Pay is guaranteed at least local minimum wage and varies by client/program (hourly, per-call, or per-minute on some campaigns). Equipment is provided on some programs.",
+    "speed": "Realistically about 1-3 weeks from application to a training start date if you clear the Harver assessment and interview promptly. Phases (Harver, interview/mock call, background check) can compress to ~7-10 days for high-volume campaigns or stretch to several weeks depending on the client program and background-check turnaround.",
+    "eligibility": "US-focused. Roles are NOT available in every US state — the application's first question is your location, and it screens you out immediately if your state isn't supported. Alorica does not publish a fixed exclusion list (it varies by client/program), but historically higher-cost / stricter-labor-law states (e.g., California, New York, and sometimes Washington) are frequently NOT offered for at-home programs; some states only appear for specific campaigns. Canada: Alorica has a North America/Canada careers section and brick-and-mortar Canadian sites, but the \"Alorica at Home\" remote agent program is overwhelmingly US-based — confirm Canadian remote availability in the Canada portal before relying on it. Must be 18+ and legally authorized to work in the country.",
+    "assessment": "Multi-stage. Application -> Harver online assessment (the main gate), which has ~5 parts: short intro video, a Situational Judgment Test (~9 scenario questions in sets of 3, including work-from-home scenarios), a personality test (~75 questions), and a timed cognitive/skills test (~15 questions, ~45 seconds each). Also a typing test and basic computer-skills check. Requires a PC/laptop with working headset + mic (Harver has listening tasks and voice recordings). Then an initial interview and a mock-call demonstration, plus a background check. Note: applicants have reported a nonrefundable background-check fee (~$31.95) on some programs.",
+    "apply_url": "https://www.alorica.com/careers (US listings via the Oracle portal: https://fa-euxw-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs ; filter \"Work at Home\")",
+    "open_examples": [
+      "Work at Home Customer Service Representative (Alorica at Home)",
+      "Bilingual (Spanish/English) Remote Customer Service Representative",
+      "Work From Home Customer Service / Call Center Agent (technical support, reservations, insurance claims, order support)"
+    ]
+  },
+  {
+    "employer": "Sutherland (Sutherland Global Services)",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 (full-time direct employee of Sutherland, not 1099/contractor). Includes paid training, medical/dental/vision, 401k, PTO. Company provides equipment; agent supplies hardwired internet (min 2 Mbps up / 10 Mbps down; no wireless/satellite).",
+    "pay": "Entry remote CSR roles cluster around $13.50–$16/hr (e.g., Streaming Support ~$13.50/hr; some CSR postings $14–$15/hr) plus monthly incentive/rewards programs. Aggregator-reported averages run higher ($19–$29/hr) but those blend tenured/specialized roles; entry pay is in the low-to-mid teens. Canada roles list a \"competitive hourly rate\" (CAD, typically ~$15–$17/hr equivalent, not always published).",
+    "speed": "Realistically about 2–5 weeks from apply to first day: a few days to a couple weeks for assessment + interview + background check, then a scheduled training class start (classes run in cohorts, so start dates are batched). Some high-volume programs move faster (1–2 weeks); ~6 weeks of paid training follows the start date.",
+    "eligibility": "US and Canada. Roles are split by country: US postings are \"open only to residents of the United States\" (must be authorized to work in the US); Canada postings are \"open only to residents of Canada.\" No published nationwide list of excluded US states/CA provinces on the careers site, BUT availability is effectively limited to the states/provinces a given program is licensed/registered to hire in, and Sutherland historically does NOT hire WAH agents in CA, and typically excludes a rotating set of states (commonly cited: California, plus at times Alaska, Hawaii, and sometimes others) for specific programs. Province availability in Canada also varies by program (recent live roles posted out of AB and NS; Quebec often excluded for English-only campaigns). Verify on the specific posting before applying.",
+    "assessment": "Online application then a multi-part assessment: (1) typing test — generally 35+ WPM at ~85% accuracy; (2) Versant English language/comprehension test (spoken/written English); (3) situational-judgment + personality/behavioral assessment; followed by a ~30-min phone/virtual interview. The official postings say \"apply and complete testing.\" Roughly 6 weeks of paid training after hire.",
+    "apply_url": "https://careers.smartrecruiters.com/sutherland",
+    "open_examples": [
+      "Customer Support - Streaming Services (Remote / Work-at-Home, Atlanta GA, US) — ~$13.50/hr, supports a major streaming/entertainment brand",
+      "Concierge Healthcare Customer Service (Remote, Jersey City NJ, US)",
+      "Sports Customer Service Specialists - Work At Home (Edmonton AB / Halifax NS, Canada) — ESPN+ Guest Services, chat/email/voice"
+    ]
+  },
+  {
+    "employer": "Conduent",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2",
+    "pay": "~$16.00–$17.50/hr for entry CSR/call-center roles (bilingual ~$17.50). Aggregator averages run higher (~$18–$27/hr) across all remote roles incl. mid/senior; entry call-center postings cluster at $16.",
+    "speed": "Roughly 2–4 weeks from apply to start. High-volume, high-turnover pipeline; postings rotate fast (many job IDs go 410/Gone within weeks). Training classes are scheduled in cohorts (e.g., one posting listed a training class starting early July), so actual start aligns to the next cohort date.",
+    "eligibility": "US only (these postings are \"Remote US\"). Excluded states seen on current CSR postings: AK, CA, HI, MA, IL, MT, NY — plus certain metros/municipalities with their own wage laws: Minneapolis, NYC, Portland (OR), Montgomery County MD, Seattle, and Washington DC. Exclusion list is wage-law driven and varies posting to posting. Canada: Conduent has Canadian operations, but the remote entry CSR roles found are US-only; no equivalent fully-remote Canada CSR postings surfaced.",
+    "assessment": "No universal aptitude test. Conduent's official hiring process notes \"some jobs may require an assessment\" embedded in the application flow (typically a short online/skills or typing assessment for call-center roles). Mandatory across these roles: background check + drug screening as conditional pre-employment screening. Interview is phone or video.",
+    "apply_url": "https://careers.conduent.com/us/en/c/customer-service-transaction-processing-jobs",
+    "open_examples": [
+      "Remote Healthcare Call Center Representative",
+      "Remote Customer Service Representative I (RMTA)",
+      "Call Center Associate – Medicaid (Remote)"
+    ]
+  },
+  {
+    "employer": "ibex (ibex Global Solutions, Inc.) — BPO / customer-experience outsourcer",
+    "hiring_remote_cs_now": "few",
+    "employment": "W2 (employee — not 1099/gig). Confirmed by the benefits package on ibex postings: medical/dental/vision, 401(k), PTO, paid cell-phone service, paid training, and company-provided equipment. ibex is a direct employer, not a gig platform.",
+    "pay": "Roughly $14.00–$16.50/hr base for entry WAH customer-service reps (specific live reqs quote $14.00/hr and $16.50/hr). Glassdoor WFH CSR average ~$17/hr, broader CSR range ~$16–$27/hr depending on campaign/sales incentives. Training is typically paid at a lower rate (reported ~$12/hr on some campaigns). Retention/sales variants add uncapped commission on top of the hourly base.",
+    "speed": "Highly variable. Fast track reported by some candidates: interview Friday -> orientation Monday -> training that week. More typical end-to-end is ~2-4 weeks from apply to start; some report up to ~60 days for support roles. Add ~2-3 weeks of paid training before going live on the phones.",
+    "eligibility": "US only (the icims portal at uscareers-ibex.icims.com is US-facing; Canada is served through a separate jobgether/honcareers funnel, not this portal). Live WAH postings state \"Anywhere in U.S.\" rather than a whitelist. IMPORTANT NUANCE: aggregators repeatedly list \"California, Connecticut, DC, Maryland, Massachusetts, New York, Oregon, Wisconsin\" — but that is the pay-transparency disclosure-state list (states that legally force a salary range into the posting), NOT an eligible-states whitelist and NOT an exclusion list. ibex does not publish a hard excluded-states list on the public posting; some virtual programs in practice exclude CA, NY, WA and other high-cost/high-regulation states depending on the client campaign, so the eligible-state set varies by individual req and must be confirmed in the application flow. Treat any single state list seen on a third-party board as unverified.",
+    "assessment": "Multi-step screening: (1) online application + skills/aptitude assessment, (2) Versant by Pearson spoken-English proficiency test (timed, scored on errors), (3) typing + grammar test, sometimes (4) a mock-call exercise, and a recruiter/phone interview. Pre-employment background check and a drug test (mouth-swab, applied even to remote hires) are standard. Note: remote agents are required to be on camera at all times except breaks/lunch.",
+    "apply_url": "https://uscareers-ibex.icims.com/jobs/search?ss=1&searchKeyword=work%20at%20home",
+    "open_examples": [
+      "Customer Service - Work at Home (req 2026-26048)",
+      "Healthcare Benefits Representative - Remote / Work from Home (req 2026-26133)",
+      "Healthcare Benefits Trainer - Remote / Work from Home (req 2026-26201)"
+    ]
+  },
+  {
+    "employer": "TaskUs",
+    "hiring_remote_cs_now": "few",
+    "employment": "W2 (full-time TaskUs employee; equipment provided by TaskUs, comprehensive benefits — not 1099/contractor)",
+    "pay": "Roughly $14-$18/hr for entry frontline CSR; Indeed-reported range across US postings is approx. $8.25 low / $16.42 avg / $24.90 high per hour (Glassdoor ~$16-$23/hr depending on program/program seniority). Exact rate is not stated in the postings and varies by client program.",
+    "speed": "Roughly 2-4 weeks from application to start. TaskUs reports an average hiring process around 14 days, and new training classes start weekly, so a fast-moving candidate can go offer-to-training-class within ~2 weeks; allow 3-4 weeks accounting for assessments, background check, and equipment pickup/shipping.",
+    "eligibility": "US only (no Canada). The active US remote frontline CS roles are anchored to specific Texas metros — New Braunfels, Brownsville, and San Antonio (\"Texas, USA - Remote\"). In practice these are region-locked hires: the postings target Texas-based applicants and equipment must be picked up at the nearest TaskUs site, so candidates outside the Texas hiring radius are effectively excluded. TaskUs does not publish a nationwide approved/excluded-state list for these roles; eligibility is per-posting and currently Texas-centric. No Canadian provinces — TaskUs has no frontline delivery footprint in Canada (its frontline CX delivery is Philippines, India, Latin America, Greece, Egypt, plus US-Texas).",
+    "assessment": "Multi-step: (1) English written and oral assessment — minimum B1 English level required; (2) typing test — must pass ~25 WPM (New Braunfels onsite track lists 25-30 WPM); (3) standard recruiter phone screen / interview; (4) background screening. Glassdoor pegs interview difficulty ~2.6/5 (low-moderate).",
+    "apply_url": "https://taskus.wd1.myworkdayjobs.com/Careers",
+    "open_examples": [
+      "Retail Sales Customer Service Representative (Brownsville, Texas, USA - Remote) - Req R_2605_6450",
+      "Financial Customer Service Representative (New Braunfels / Brownsville / San Antonio, Texas, USA - Remote) - Req R_2512_17131",
+      "Autonomous Vehicle Roadside Assistance Agent - Charlotte, NC (note: listed 'Remote' but is actually an ONSITE position - Req R_2603_3814)"
+    ]
+  },
+  {
+    "employer": "Boldr (Boldr Impact / boldrimpact.com) — B-Corp certified BPO / outsourcing provider",
+    "hiring_remote_cs_now": "no",
+    "employment": "For the Canada-based roles, employment is full-time employee (Boldr is an Employer of Record / global employment provider and hires its delivery staff as W2-equivalent salaried employees, not 1099 contractors). No 1099/gig CS roles offered to US workers (no US CS roles exist). No W2 US CS roles available currently.",
+    "pay": "Canada Senior Technical Support Advocate listed at ~CAD 40,000-50,000/yr (per Himalayas listing). Boldr markets itself on paying \"living wages.\" US-specific CS pay is N/A (no US CS roles). Third-party aggregators cite a company-wide US average of ~$72k-$94k/yr, but that is a blended cross-functional figure (not entry CS) and not from an actual open CS posting, so treat as unreliable for these roles.",
+    "speed": "Reported as fast — roughly 2-3 days from application to offer/hire for Customer Advocate roles per candidate reports (interview + assessment + final interview compressible into ~2 days), though this reflects their offshore CS pipeline. Realistically 1-3 weeks apply->start is a safer expectation including onboarding; but note none of this applies to US applicants since no US CS roles are open.",
+    "eligibility": "For ENTRY/MID general customer-support, the answer is effectively neither US nor most of CA. As of June 2026, Boldr's live Workable board has ZERO US-based customer-support / chat / call-center openings (the only US listing is a VP of Marketing). Their entry/mid Customer Advocate / Senior Customer Advocate / Customer Specialist roles are all offshore — Philippines (Pasig, Tacloban City) and some project-based in Mexico (Merida) — and are NOT open to US/Canada applicants. The only North America remote roles are Canada-based and concentrated in Ontario (Toronto/Ontario): Technical Support Specialist T3 and Senior Technical Support Advocate (remote, Ontario), plus a Toronto Quality Assurance Specialist (hybrid) and Manager, Client Experience Technical (Toronto, on-site). So: US — excluded entirely for CS right now; Canada — realistically Ontario-only, and only technical/QA/manager roles, not entry-level general chat/call-center support. Other provinces effectively excluded by the postings' Ontario locality. No US states are eligible for CS.",
+    "assessment": "Reported Boldr Customer Advocate hiring flow (Glassdoor/aggregators): online application -> initial/recruiter interview -> an assessment test (commonly English proficiency + situational/customer-service scenario assessment; typing/comms checks are typical for BPO CS) -> final interview. Technical Support roles add role-specific technical screening. Candidates must pass the skills/assessment stage to advance.",
+    "apply_url": "https://apply.workable.com/boldr-1/",
+    "open_examples": [
+      "Senior Technical Support Advocate — remote, Ontario, Canada (40k-50k CAD)",
+      "Technical Support Specialist T3 — remote, Ontario, Canada",
+      "Quality Assurance Specialist (Hybrid) — Toronto, Ontario, Canada"
+    ]
+  },
+  {
+    "employer": "KellyConnect (Kelly Services contact-center division)",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 employee of Kelly Services for the core phone/chat support roles; benefits-eligible, weekly pay. The currently-listed bilingual interpreter roles are 1099 contract instead.",
+    "pay": "~$16.50/hr during training, +$1.00/hr after 90 days. US average ~$19/hr (May 2026), with most workers $15.38-$22.12/hr depending on program/client and location. Weekly pay. (Separate 1099 interpreter roles pay ~$12/hr.)",
+    "speed": "Fast. The hiring flow is mostly automated; some applicants report being tested and interviewed same-day and hired within ~2 days. Realistically expect a few days up to ~2 weeks from application to a scheduled (paid) training-class start date, since starts are batched into class cohorts.",
+    "eligibility": "US-only for the remote WFH program. Canada: Kelly Services Canada does contact-center staffing but the KellyConnect remote support program is US-focused, so treat these remote roles as US-only (no remote-from-Canada). Excluded US states (historical/typical for the WFH program, verify per posting): Alaska, California, District of Columbia, Hawaii, New Jersey, New Mexico, New York, Washington, Minnesota.",
+    "assessment": "Multi-step automated process: (1) online pre-qualification questionnaire about skills/work environment, (2) telephone interview with a Kelly recruiter, (3) online skills testing assessing technical contact-center skills (typing, computer/troubleshooting, customer-scenario aptitude) to match you to a program, (4) online onboarding from home. Some roles add a ~1-hour video interview. Third-party prep exists (JobTestPrep \"Kelly Services assessments\").",
+    "apply_url": "https://www.workforkellyconnect.com/careers-home/jobs",
+    "open_examples": [
+      "Phone/Chat Customer & Technical Support Representative (Work from Home)",
+      "Chat Technical Support Representative (handles up to 3 customers at once)",
+      "Technical Support Advisor - virtual call center (account, billing & tech troubleshooting)"
+    ]
+  },
+  {
+    "employer": "Amazon (Virtual Customer Service / hiring.amazon.com Customer Service)",
+    "hiring_remote_cs_now": "few",
+    "employment": "W2 (Amazon employee, not a 1099 contractor). Often starts part-time/seasonal and scales to full-time (up to 40 hrs/wk) during the Nov-Dec peak; medical benefits typically after ~90 days for eligible roles.",
+    "pay": "~$15-$20/hr in most US locations (varies by state/COL); aggregator-reported averages cluster around $18-$22/hr. Performance incentives + Amazon employee discount.",
+    "speed": "Realistically ~2-4 weeks apply->start. Glassdoor candidate reports average ~21 days from application to hired for the Virtual CSA role; faster during peak/seasonal pushes, slower off-peak.",
+    "eligibility": "US: Roles are gated by ZIP/state at the time of application — Amazon only opens remote CS in a subset of states and the eligible list changes per hiring wave (you must enter your address to see if your state qualifies). Historically NOT hired in: California, New York, New Jersey, Pennsylvania, Massachusetts, Washington (state), Oregon, and a handful of others; commonly open in TX, FL, GA, NC, VA, AZ, OH, etc. There is no single published exclusion list. Canada: Amazon does run a separate CA customer service operation and CA-based remote/virtual CSA postings appear (Ontario etc.), but availability is also province-gated and intermittent; apply via amazon.jobs / ca.indeed listings rather than the US hiring.amazon.com portal.",
+    "assessment": "Multi-stage: (1) location/role screening questions, (2) Work-Style Assessment (~10-25 min personality/Leadership-Principles test), (3) Customer Service Virtual Job Simulation / Virtual Job Tryout (~20-60 min: situational judgment \"Work Scenarios,\" prioritization \"Manage Your Day,\" data questions, work-history and personality sections). Remote applicants also typically face a language/communication assessment (written and/or oral), an internet speed test, and an HR/phone interview. Assessment results are reused if completed within 3 months.",
+    "apply_url": "https://hiring.amazon.com/job-opportunities/customer-service-jobs",
+    "open_examples": [
+      "Remote Customer Service Associate (Virtual)",
+      "Customer Service Associate - Virtual",
+      "Seasonal Work From Home Customer Service Associate"
+    ]
+  },
+  {
+    "employer": "U-Haul (U-Haul International / AMERCO) — Sales & Reservations Work From Home Program",
+    "hiring_remote_cs_now": "yes",
+    "employment": "W2 employee (NOT 1099 / NOT gig). Paid training, benefits-eligible, drug + background check + I-9 required. Both Full-Time and Part-Time (\"Moonlighter\") versions exist.",
+    "pay": "Base ~$13.00/hr plus discretionary per-reservation sales bonus (~$2.05 per booked equipment reservation); realistic effective earnings commonly cited $14-$20/hr depending on performance/location. Entry/non-experienced agents trend toward the lower end (~$13-16); merit base increases available.",
+    "speed": "Fast. ~1-2 weeks apply→offer is common (68% of Indeed respondents got an answer in 1-2 days; some 3 days to 4 weeks). Then a paid 3-4 week education program (U-Haul University) before/at start. So apply→first paid training day is roughly 1-3 weeks; apply→fully ramped on phones ~4-7 weeks.",
+    "eligibility": "US + Canada (the WFH contact center hires \"throughout the United States and Canada\"). Hire-from list rotates by state/province — verify on the specific posting since each job is tied to where they can legally employ you. Known restriction: U-Haul does NOT hire nicotine users in ~21 states where lawful (AL, AK, AZ, AR, DE, FL, GA, HI, ID, IA, KS, MD, MA, MI, NE, PA, TX, UT, VT, VA, WA). No single published \"excluded states\" list for the WFH role itself — availability is posting-specific; CA was not confirmed excluded. Canadian provinces available are not individually published; check the posting's location dropdown.",
+    "assessment": "Multi-stage: (1) home internet SPEED TEST — recruiter sends a link; you must pass U-Haul's connection requirements (wired cable/DSL, no satellite, no cellular hotspot, no public/unsecured Wi-Fi, no proxy) or you don't proceed. (2) Phone screen + a video/Skype interview. (3) Basic skills/typing expectation (~25 WPM). (4) The real gate is the paid 3-4 week training program with in-depth evaluation tests you must PASS to graduate to live calls. Plus drug test + background check + locally-signed I-9.",
+    "apply_url": "https://jobs.uhaul.com/OpenJobs?JobCategory=Call+Center (filter Subcategory: \"Customer Service & Sales - Work From Home\"). Example live full-time WFH posting: https://jobs.uhaul.com/OpenJobs/JobDetail/R175651/",
+    "open_examples": [
+      "Sales & Reservations Agent (Full Time - Work From Home) — req R175651",
+      "Sales & Reservations Agent (Part Time - Work From Home / Moonlighter) — e.g. R182582",
+      "Customer Service Agent (Part Time, Remote) — e.g. R160121"
+    ]
+  },
+  {
+    "employer": "Liveops",
+    "hiring_remote_cs_now": "few",
+    "employment": "1099 independent contractor — NOT W2. You operate as a self-employed small business, sign an Independent Contractor Agreement, register with Openforce, invoice for work, and handle your own taxes/expenses. No benefits.",
+    "pay": "No guaranteed pay (1099 talk-time model). Typical talk-time rate ~$0.25-$0.34 per talk-minute on many programs; some are base rate + commission, some commission-only. Advertised effective rates up to ~$20/hr on certain programs (e.g., seasonal tax support, with a $250 new-agent incentive). Third-party aggregators report a wide self-reported average around $20-$28/hr, but actual earnings depend entirely on call volume, the client program, and hours worked.",
+    "speed": "Realistically about 3-4 weeks apply-to-start: roughly 1 week for application + voice assessment + background check approval, then ~2 weeks of (unpaid, uncompensated) certification before you can take live calls. Seasonal programs can move faster; timelines vary by client program.",
+    "eligibility": "US only — NO Canada (must be a US resident authorized to work in the US). Accepting applications in ~35 states: AL, AK, AZ, DE, FL, GA, ID, IN, IA, KS, KY, ME, MD, MI, MS, MO, MT, NE, NV, NM, NC, ND, OH, OK, PA, RI, SC, SD, TN, TX, UT, VA, WV, WY. EXCLUDED (not accepting): CA, CO, CT, HI, IL, LA, MA, MN, NH, NJ, NY, OR, VT, WA, WI, plus AR, DC and any other state not on the accepting list (list changes over time).",
+    "assessment": "AI-powered voice assessment / automated voice audition: you record yourself in a quiet space responding to guided/scenario prompts (e.g., objection handling, secure data read-backs). An automated speech-recognition + tone/rhythm model scores pronunciation, intelligibility, pacing, tone, turn-taking, comprehension and scenario handling, with human-in-the-loop review for edge cases. Reported passing threshold is roughly 80%. You must also pass a self-funded, non-refundable background check (~$25-$35, run by Yardstik), then complete unpaid program certification training (~2 weeks).",
+    "apply_url": "https://join.liveops.com/apply-now/",
+    "open_examples": [
+      "Healthcare Support Representative (Independent Contractor) — phone support for patients/providers; note: requires 1+ yr phone healthcare experience, so mid-level",
+      "Spanish Bilingual Support Representative (Independent Contractor) — entry/mid customer support",
+      "Life & Health Insurance Sales Agent (Independent Contractor) — sales, license-related",
+      "Seasonal Tax Software Product Support Agent — up to $20/hr + $250 new-agent incentive (entry-friendly, seasonal, seen via Rat Race Rebellion)"
+    ]
+  },
+  {
+    "employer": "Working Solutions",
+    "hiring_remote_cs_now": "yes",
+    "employment": "1099 independent contractor (explicitly NOT W2 employee — \"Working Solutions customer care PROs are independent contractors, not employees\"). Self-pay taxes, provide own equipment/quiet home office.",
+    "pay": "Paid per productive/talk minute, typically $0.25–$0.31 per minute (program-dependent), which Working Solutions advertises as roughly up to ~$18–19/hr equivalent on busy programs. Some programs pay a set amount. Pay is per-minute, NOT a guaranteed hourly wage — idle time is unpaid.",
+    "speed": "Realistically about 1–2 weeks from application to starting, depending on the program's education/certification schedule (per official FAQ). Can stretch longer if waiting for a specific program cohort to open.",
+    "eligibility": "US + Canada. EXCLUDED US states: California, New York, Pennsylvania, Washington (per official FAQ — these residents are not eligible). Canada: hired broadly with no specific province exclusions published; they only contract in US, Canada, and Jamaica (no other countries). Background check required.",
+    "assessment": "Multi-step online application with behavioral + scenario-based personality assessment (\"typical scenarios and a series of behavioral questions to determine if your personality matches\"). WARNING from official guidance: AI-generated answers to personal/behavioral questions are an automatic disqualifier (\"An AI answer to what otherwise should be a personal response will disqualify you for the job\"). Also requires passing a criminal background check, plus a tech/equipment check (Windows 11 or Intel Mac w/ Boot Camp, wired broadband min 10 Mbps). Some programs add unpaid or paid certification/education before going live.",
+    "apply_url": "https://apply.workingsolutions.com/jobs",
+    "open_examples": [
+      "Early Access - Customer Service Representative - Remote (talent pool for upcoming gigs, valid through 2026-07-31)",
+      "Health-Related Services Support Representative - Remote (posted May 2026, ~$18.60/hr avg equivalent)",
+      "Customer Service, Verification Representative - Remote",
+      "Customer Support Representative, Intuit TurboTax - Remote (seasonal)"
+    ]
+  },
+  {
+    "employer": "DataAnnotation (DataAnnotation.tech) + Prolific — gig/fast-cash AI-data platforms",
+    "hiring_remote_cs_now": "no",
+    "employment": "1099 independent contractor (both). DataAnnotation: 1099 contractor, paid via PayPal, no W2. Prolific participants: not employees and not contractors in the staffing sense — paid \"rewards\" cashed out to PayPal; income is self-reported, and PayPal issues a 1099-K, Prolific does not issue a 1099-NEC. Neither offers W2 employment for this kind of work.",
+    "pay": "DataAnnotation: generalist $20–$30+/hr, coding $50–$100+/hr, STEM $40+/hr, professional (law/finance/medicine) $50+/hr — task-based, hours not guaranteed. Prolific: paid per study; platform floor is $8/hr (recommended $12/hr), many studies $9–$20+/hr; earnings are small and intermittent (a side-hustle, not a full income).",
+    "speed": "DataAnnotation: signup + assessment same day; approval in a few days; once on a project, payment via PayPal \"within a few days\" of requesting a withdrawal — realistically first pay roughly 1–2 weeks from applying, IF you pass the assessment and projects are available (work availability is inconsistent). Prolific: account approval often within days; you can earn immediately once a study matches you, but cashout requires a $/£6 minimum balance — realistically first pay in days-to-a-couple-weeks depending on how many studies you qualify for (study availability is throttled by demographics).",
+    "eligibility": "DataAnnotation: US + Canada (plus UK, Ireland, Australia, New Zealand). No specific US states or CA provinces publicly excluded for the contractor track, but tax/eligibility is checked at signup. Prolific (participant gig): US + Canada among 30+ eligible countries; no specific state/province exclusions published — eligibility is gated by account verification and study-specific demographic filters, not by state.",
+    "assessment": "DataAnnotation: a one-time \"Starter Assessment\" (~1 hr generalist; 1–2 hrs for specialized tracks like coding/STEM/law/medicine/language). One attempt only, no retakes; graded on quality/thoroughness, approval typically within a few days. Prolific: no skills assessment — you complete a profile/demographic onboarding and ID/account verification, then qualify for studies via researchers' screening filters (attention checks within studies affect your approval rating).",
+    "apply_url": "https://www.dataannotation.tech/  |  Prolific participants: https://www.prolific.com/participants  (Prolific staff jobs: https://job-boards.greenhouse.io/prolific)",
+    "open_examples": [
+      "DataAnnotation: 'AI Training' / 'Chatbot Trainer' / 'Generalist contributor' (NOT customer support)",
+      "DataAnnotation specialized: 'Coding / STEM / Language AI Trainer'",
+      "Prolific (participant side): paid research studies & surveys — NOT a support job; Prolific's own staff openings are Customer Success / Engineering / Sales, office/hybrid, not remote entry chat agents"
+    ]
+  }
+]

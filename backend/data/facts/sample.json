@@ -1,0 +1,38 @@
+{
+  "shifts_nights": "Yes",
+  "shifts_weekends": "Yes",
+  "overtime": "Yes",
+  "salary_hourly": "20-24",
+  "salary_annual": "45000-55000",
+  "notice_period": "Immediately",
+  "languages": [
+    "English",
+    "Spanish"
+  ],
+  "english_level": "B2 - Upper-Intermediate",
+  "typing_wpm": "65",
+  "tools": [
+    "Zendesk",
+    "Intercom",
+    "Salesforce",
+    "Slack",
+    "Shopify"
+  ],
+  "education_level": "Bachelor's degree",
+  "state": "TX",
+  "timezone": "CST",
+  "equipment_ok": "Yes",
+  "quiet_workspace": "Yes",
+  "industries": [
+    "saas",
+    "ecommerce",
+    "fintech"
+  ],
+  "managed_people": "Yes",
+  "drivers_license": "Yes",
+  "drug_test_ok": "Yes",
+  "background_check_ok": "Yes",
+  "criminal_record": "No",
+  "prior_employee": "No",
+  "referral": "Online job search"
+}

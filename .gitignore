@@ -1,0 +1,80 @@
+# Secrets - NEVER commit
+.env
+.env.local
+.env.*.local
+.env.production
+*.pem
+*.key
+secrets/
+
+# Real people's PII / sessions - NEVER commit (keep .example.json + .template.json only)
+backend/data/profiles.json
+backend/data/profiles.real.json
+backend/data/facts/*
+!backend/data/facts/sample.json
+backend/data/etalons/*
+!backend/data/etalons/sample.json
+data_sessions/
+uploads/
+data/profiles.json
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Build output
+.next/
+dist/
+build/
+out/
+*.egg-info/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Testing
+coverage/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Misc
+.cache/
+tmp/
+temp/
+backend/.assist_token
+uploads/answer_cache.db
+# Extension: real identity + live token stay local (commit the .example.js versions)
+extension/profile.js
+extension/background.js
+extension/apply-assist.zip
+
+# --- Extra PII/secret exclusions (data backups, address map, generated outputs) ---
+# Timestamped backups of profiles/facts/mail_addresses hold the same PII as the
+# originals, so they must never be committed either.
+backend/data/*.bak
+backend/data/*.bak-*
+backend/data/facts.bak-*/
+backend/data/mail_addresses.json
+# Generated dashboards / screenshots can embed candidate data.
+outputs/

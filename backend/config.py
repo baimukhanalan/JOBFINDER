@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # dev only); "selfhost" = real inbound/outbound mail on OUR OWN Postfix/Dovecot
     # server — no third-party service.
     mail_provider: str = "mailpit"
-    mail_domain: str = ""  # address domain (e.g. jobs.systeam.kz); label only on mailpit
+    mail_domain: str = ""  # address domain (e.g. takhet.com); label only on mailpit
     # selfhost inbound: read the Maildir our Postfix delivers into.
     mail_maildir_base: str = "/var/mail/vhosts"
     # selfhost outbound: submit through our own Postfix (127.0.0.1:587, STARTTLS +

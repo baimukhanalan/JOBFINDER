@@ -67,3 +67,46 @@ def classify_regions(job: dict) -> list[str]:
         found.add("OTHER")
     # multi-eligibility: keep every region that fired.
     return [c for c in REGION_CODES if c in found]
+
+
+def _llm_regions(job: dict) -> list[str]:
+    """Ask the local Sumrak LLM to pick regions; returns a subset of REGION_CODES ([] on any failure)."""
+    from backend.config import settings
+    if not settings.llm_url:
+        return []
+    import json as _json
+    import httpx
+    prompt = (
+        "You classify which regions a REMOTE job is open to. "
+        "Reply with ONLY a JSON array using codes from US, CA, UK, OTHER "
+        "(OTHER = open to some region but not US/CA/UK). Empty array if unclear.\n\n"
+        f"Title: {job.get('title','')}\nLocation: {job.get('location','')}\n"
+        f"Description: {(job.get('description','') or '')[:1200]}"
+    )
+    try:
+        r = httpx.post(
+            f"{settings.llm_url}/chat/completions",
+            headers={"Authorization": f"Bearer {settings.llm_key}", "Content-Type": "application/json"},
+            json={"model": settings.llm_model, "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.0, "max_tokens": 40, "stream": False},
+            timeout=60,
+        )
+        r.raise_for_status()
+        text = r.json()["choices"][0]["message"]["content"]
+        m = re.search(r"\[.*?\]", text, re.S)
+        raw = _json.loads(m.group(0)) if m else []
+        return [c for c in REGION_CODES if c in {str(x).upper() for x in raw}]
+    except Exception:
+        return []
+
+
+def classify_with_source(job: dict, use_llm: bool = True) -> tuple[list[str], str]:
+    """Deterministic first; LLM only on the residue. Returns (regions, source)."""
+    rule = classify_regions(job)
+    if rule:
+        return rule, "rule"
+    if use_llm:
+        llm = _llm_regions(job)
+        if llm:
+            return llm, "llm"
+    return [], "unknown"

@@ -64,3 +64,29 @@ def test_latin_america_is_not_us():
 
 def test_empty_when_no_signal():
     assert regions.classify_regions(_j(location="Remote")) == []
+
+
+def test_source_rule_when_deterministic(monkeypatch):
+    called = {"n": 0}
+    monkeypatch.setattr(regions, "_llm_regions", lambda job: called.__setitem__("n", called["n"] + 1) or [])
+    out, src = regions.classify_with_source(_j(location="Remote - US"))
+    assert out == ["US"] and src == "rule"
+    assert called["n"] == 0  # LLM never called when rules resolve
+
+
+def test_source_llm_on_residue(monkeypatch):
+    monkeypatch.setattr(regions, "_llm_regions", lambda job: ["US", "CA"])
+    out, src = regions.classify_with_source(_j(location="Remote"))
+    assert out == ["US", "CA"] and src == "llm"
+
+
+def test_source_unknown_when_llm_empty(monkeypatch):
+    monkeypatch.setattr(regions, "_llm_regions", lambda job: [])
+    out, src = regions.classify_with_source(_j(location="Remote"))
+    assert out == [] and src == "unknown"
+
+
+def test_llm_skipped_when_disabled(monkeypatch):
+    monkeypatch.setattr(regions, "_llm_regions", lambda job: ["US"])
+    out, src = regions.classify_with_source(_j(location="Remote"), use_llm=False)
+    assert out == [] and src == "unknown"

@@ -630,10 +630,23 @@ def mail_candidates():
 @app.get("/mail/message", response_class=HTMLResponse)
 def mail_message(id: str = ""):
     from backend.tools import mailcrm, mailcrm_ui
-    m = mailcrm.get_message(id, mark=True)
-    if not m:
-        return HTMLResponse("<p>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href=\'/mail\'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
-    return HTMLResponse(mailcrm_ui.render_message(m))
+    t = mailcrm.get_thread(id, mark=True)
+    if not t:
+        return HTMLResponse("<p>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href='/mail'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
+    return HTMLResponse(mailcrm_ui.render_thread(t))
+
+
+@app.get("/mail/attachment")
+def mail_attachment(id: str = "", i: int = 0):
+    from urllib.parse import quote
+    from backend.tools import mailcrm
+    res = mailcrm.get_attachment(id, i)
+    if not res:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    filename, ctype, data = res
+    from fastapi.responses import Response
+    return Response(content=data, media_type=ctype,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
 
 
 @app.post("/mail/send")

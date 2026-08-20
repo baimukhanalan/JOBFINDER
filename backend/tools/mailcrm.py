@@ -102,6 +102,31 @@ def _email_only(addr: str) -> str:
     return parseaddr(addr)[1] or addr
 
 
+_RE_PREFIX = re.compile(r"^(?:\s*(?:re|fwd|fw|аноним|ответ)\s*:\s*)+", re.I)
+
+
+def _norm_subject(s: str) -> str:
+    """Thread key: subject with Re:/Fwd: prefixes stripped, lowercased."""
+    return _RE_PREFIX.sub("", (s or "").strip()).strip().lower() or "(без темы)"
+
+
+def _attachments(msg) -> list[dict]:
+    out = []
+    i = 0
+    for part in msg.walk():
+        fn = part.get_filename()
+        disp = (part.get_content_disposition() or "")
+        if fn or disp == "attachment":
+            try:
+                payload = part.get_payload(decode=True) or b""
+            except Exception:
+                payload = b""
+            out.append({"i": i, "filename": fn or f"attachment-{i}",
+                        "type": part.get_content_type(), "size": len(payload)})
+        i += 1
+    return out
+
+
 def _date_ts(msg, path: str) -> int:
     try:
         d = parsedate_to_datetime(msg["Date"]) if msg["Date"] else None
@@ -170,6 +195,8 @@ def list_messages(mailbox: str | None = None, q: str = "",
                 "from": frm, "from_name": _display_name(frm), "from_email": _email_only(frm),
                 "subject": subj, "snippet": snip, "date_ts": _date_ts(msg, path),
                 "seen": seen, "kind": classify(subj, snip),
+                "thread": _norm_subject(subj),
+                "has_att": any(p.get_filename() for p in msg.walk()),
             })
     rows.sort(key=lambda r: (r["date_ts"], r["id"]), reverse=True)
     if before_ts is not None:
@@ -203,10 +230,14 @@ def _mark_read(path: str) -> str:
         return path
 
 
-def get_message(path_hash: str, mark: bool = True) -> dict | None:
-    path = _find_by_id(path_hash)
-    if not path:
-        return None
+def _mailbox_of(path: str) -> dict | None:
+    for c in candidates():
+        if c["maildir"] in path:
+            return c
+    return None
+
+
+def _parse_full(path: str, path_hash: str) -> dict | None:
     try:
         with open(path, "rb") as f:
             msg = BytesParser(policy=policy.default).parse(f)
@@ -223,25 +254,82 @@ def get_message(path_hash: str, mark: bool = True) -> dict | None:
         html = h.get_content() if h else ""
     except Exception:
         pass
-    has_att = any(part.get_filename() for part in msg.walk())
-    mailbox = None
-    for c in candidates():
-        if c["maildir"] in path:
-            mailbox = c
-            break
+    box = _mailbox_of(path)
+    frm = str(msg["From"] or "")
+    subj = str(msg["Subject"] or "")
+    # a message is "outbound" (sent by the candidate) if From is the candidate's own address
+    outbound = bool(box) and _email_only(frm).lower() == box["email"]
+    return {
+        "id": path_hash, "path": path,
+        "mailbox": box["email"] if box else "", "candidate": box["name"] if box else "",
+        "from": frm, "from_name": _display_name(frm), "from_email": _email_only(frm),
+        "to": str(msg["To"] or ""), "subject": subj,
+        "date": str(msg["Date"] or ""), "date_ts": _date_ts(msg, path),
+        "message_id": str(msg["Message-ID"] or "").strip(),
+        "plain": (plain or "")[:MAX_BODY], "html": (html or "")[:MAX_BODY],
+        "attachments": _attachments(msg), "outbound": outbound,
+        "kind": classify(subj, plain or _snippet(msg)), "thread": _norm_subject(subj),
+    }
+
+
+def get_message(path_hash: str, mark: bool = True) -> dict | None:
+    path = _find_by_id(path_hash)
+    if not path:
+        return None
     if mark and (os.sep + "new" + os.sep) in path:
         path = _mark_read(path)
         path_hash = _pid(path)
-    return {
-        "id": path_hash, "mailbox": mailbox["email"] if mailbox else "",
-        "candidate": mailbox["name"] if mailbox else "",
-        "from": str(msg["From"] or ""), "from_name": _display_name(str(msg["From"] or "")),
-        "from_email": _email_only(str(msg["From"] or "")),
-        "to": str(msg["To"] or ""), "subject": str(msg["Subject"] or ""),
-        "date": str(msg["Date"] or ""), "message_id": str(msg["Message-ID"] or "").strip(),
-        "plain": (plain or "")[:MAX_BODY], "html": (html or "")[:MAX_BODY],
-        "has_attachments": has_att,
-    }
+    return _parse_full(path, path_hash)
+
+
+def get_thread(path_hash: str, mark: bool = True) -> dict | None:
+    """The whole conversation for a message: every mail in the SAME candidate
+    mailbox sharing the normalized subject, oldest-first (Gmail-style thread)."""
+    path = _find_by_id(path_hash)
+    if not path:
+        return None
+    box = _mailbox_of(path)
+    if not box:
+        m = get_message(path_hash, mark=mark)
+        return {"subject": m.get("subject", "") if m else "", "candidate": "",
+                "mailbox": "", "messages": [m] if m else []} if m else None
+    # thread key from the opened message
+    opened = _parse_full(path, path_hash)
+    key = opened["thread"] if opened else ""
+    msgs = []
+    for p, seen in _iter_mailbox_files(box["maildir"]):
+        full = _parse_full(p, _pid(p))
+        if not full or full["thread"] != key:
+            continue
+        full["seen"] = seen
+        if mark and (os.sep + "new" + os.sep) in p:
+            np = _mark_read(p)
+            full["path"], full["id"], full["seen"] = np, _pid(np), 1
+        msgs.append(full)
+    msgs.sort(key=lambda m: m["date_ts"])
+    subject = next((m["subject"] for m in reversed(msgs) if m["subject"]), opened.get("subject", "") if opened else "")
+    return {"subject": subject, "candidate": box["name"], "mailbox": box["email"], "messages": msgs}
+
+
+def get_attachment(path_hash: str, i: int):
+    """Return (filename, content_type, bytes) for one attachment, or None."""
+    path = _find_by_id(path_hash)
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            msg = BytesParser(policy=policy.default).parse(f)
+    except Exception:
+        return None
+    for idx, part in enumerate(msg.walk()):
+        if idx == i and (part.get_filename() or part.get_content_disposition() == "attachment"):
+            try:
+                data = part.get_payload(decode=True) or b""
+            except Exception:
+                data = b""
+            return (part.get_filename() or f"attachment-{i}",
+                    part.get_content_type() or "application/octet-stream", data)
+    return None
 
 
 # ---- sending (self-hosted Postfix submission, as the candidate) ------------
@@ -283,7 +371,22 @@ def send(from_email: str, to: str, subject: str, body: str,
             s.send_message(msg)
     except Exception as exc:
         return {"ok": False, "error": f"send failed: {exc}"}
+    # Save a copy into the candidate's own Maildir (cur, Seen) so the sent message
+    # shows in the conversation thread — Gmail-style. Best-effort.
+    try:
+        _save_sent(cand["maildir"], msg)
+    except Exception:
+        pass
     return {"ok": True, "from": from_email, "to": _email_only(to), "subject": msg["Subject"]}
+
+
+def _save_sent(maildir: str, msg) -> None:
+    import time
+    cur = os.path.join(maildir, "cur")
+    os.makedirs(cur, exist_ok=True)
+    name = f"{int(time.time())}.M{os.getpid()}Q{os.urandom(4).hex()}.crm:2,S"
+    with open(os.path.join(cur, name), "wb") as f:
+        f.write(msg.as_bytes())
 
 
 # ---- aggregate counts (nav badges) -----------------------------------------

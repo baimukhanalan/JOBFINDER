@@ -122,6 +122,17 @@ button.primary:hover{background:var(--accent-deep);}
 .mf-to{font-size:12.5px;color:var(--ink-mute);margin-top:5px;}.mf-dot{margin:0 7px;opacity:.6;}
 .mail-frame-wrap{overflow:hidden;}.mail-frame{width:100%;border:0;background:transparent;display:block;}
 .msg-content{white-space:pre-wrap;word-break:break-word;color:var(--ink);line-height:1.7;font-size:14.5px;}
+.clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
+.tcount{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 9px;margin-left:10px;vertical-align:middle;}
+.tsub{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);margin:-8px 0 18px;}
+.tcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;}
+.tcard.out{background:#f2f8f2;border-color:#cfe6d2;}
+.tcard .msg-from{padding-bottom:14px;margin-bottom:14px;}
+.atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+.att{display:inline-flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 12px;color:var(--ink);max-width:280px;}
+.att:hover{background:#e8f0fe;border-color:var(--accent);text-decoration:none;}
+.att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
+.att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
 .mbxlist{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
 .mbxrow{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--ink);}
 .mbxrow:last-child{border-bottom:0;}.mbxrow:hover{background:#f8fafd;text-decoration:none;}
@@ -183,13 +194,15 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
         unread = "" if m.get("seen") else " unread"
         mbox = (f'<span class="mbox">{escape((m.get("candidate") or m.get("mailbox") or "")[:22])}</span>'
                 if show_mailbox else "")
+        clip = ('<span class="clip" title="есть вложение">📎</span>'
+                if m.get("has_att") else "")
         out.append(
             f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}">'
             f'<a class="mrow" href="/mail/message?id={escape(m["id"])}">'
             f'<span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
             f'<span class="mbody"><span class="mtop">'
             f'<span class="msender">{escape(sender)}</span>{_kind_tag(m.get("kind","other"))}{mbox}'
-            f'<span class="mdate">{maildate(m.get("date_ts",0))}</span></span>'
+            f'{clip}<span class="mdate">{maildate(m.get("date_ts",0))}</span></span>'
             f'<span class="msubj">{escape(m.get("subject","") or "(без темы)")}</span>'
             f'<span class="msnip">{escape(m.get("snippet",""))}</span>'
             "</span></a></div>")
@@ -221,29 +234,65 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     return _page("inbox", body, _COMPOSE_MODAL)
 
 
-def render_message(m: dict) -> str:
+def _fmt_size(n: int) -> str:
+    if n >= 1024 * 1024:
+        return f"{n/1024/1024:.1f} МБ"
+    if n >= 1024:
+        return f"{n/1024:.0f} КБ"
+    return f"{n} Б"
+
+
+def _att_chips(m: dict) -> str:
+    atts = m.get("attachments") or []
+    if not atts:
+        return ""
+    chips = []
+    for a in atts:
+        href = f'/mail/attachment?id={escape(m["id"])}&i={a["i"]}'
+        chips.append(
+            f'<a class="att" href="{href}" download>'
+            f'<span class="att-ic">📎</span><span class="att-nm">{escape(a["filename"])}</span>'
+            f'<span class="att-sz">{_fmt_size(a["size"])}</span></a>')
+    return f'<div class="atts">{"".join(chips)}</div>'
+
+
+def _msg_card(m: dict) -> str:
     sender = m.get("from_name") or m.get("from_email") or "?"
-    reply_args = (f"'{escape(m.get('mailbox',''))}','{escape(m.get('from_email',''))}',"
-                  f"\"{escape((m.get('subject') or '').replace(chr(34), ''))}\","
-                  f"'{escape(m.get('message_id',''))}'")
+    side = " out" if m.get("outbound") else ""
+    who = "Вы (кандидат)" if m.get("outbound") else escape(sender)
     if m.get("html"):
         content = (f'<div class="mail-frame-wrap"><iframe class="mail-frame" sandbox="allow-same-origin" '
                    f'onload="fitFrame(this)" srcdoc="{escape(m["html"])}"></iframe></div>')
     else:
         content = f'<div class="msg-content">{escape(m.get("plain","") or "(пустое письмо)")}</div>'
-    att = ('<div class="mf-to">📎 есть вложения (скачивание недоступно)</div>'
-           if m.get("has_attachments") else "")
+    return (
+        f'<div class="tcard{side}">'
+        f'<div class="msg-from"><span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
+        f'<div class="mf-meta"><div class="mf-line"><b>{who}</b><span class="mf-addr">{escape(m.get("from_email",""))}</span>{_kind_tag(m.get("kind","other"))}</div>'
+        f'<div class="mf-to">кому: {escape(m.get("to","") or m.get("mailbox",""))}<span class="mf-dot">·</span>{escape(m.get("date",""))}</div></div></div>'
+        f'{content}{_att_chips(m)}</div>')
+
+
+def render_thread(t: dict) -> str:
+    msgs = t.get("messages") or []
+    # reply prefills from the candidate mailbox to the last INBOUND sender
+    inbound = [m for m in msgs if not m.get("outbound")]
+    tgt = inbound[-1] if inbound else (msgs[-1] if msgs else {})
+    reply_args = (f"'{escape(t.get('mailbox',''))}','{escape(tgt.get('from_email',''))}',"
+                  f"\"{escape((t.get('subject') or '').replace(chr(34), ''))}\","
+                  f"'{escape(tgt.get('message_id',''))}'")
+    cards = "".join(_msg_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
     body = (
         '<div class="msg-toolbar">'
         '<a class="hbtn" href="/mail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>К списку</a>'
+        f'<a class="hbtn" href="/mail?mailbox={escape(t.get("mailbox",""))}">Ящик кандидата</a>'
         '<div class="spacer"></div>'
         f'<button class="hbtn" onclick="reply({reply_args})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
         '</div>'
-        f'<div class="msg-page"><h1 class="msg-subject">{escape(m.get("subject","") or "(без темы)")}</h1>'
-        f'<div class="msg-from"><span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
-        f'<div class="mf-meta"><div class="mf-line"><b>{escape(sender)}</b><span class="mf-addr">{escape(m.get("from_email",""))}</span>{_kind_tag(m.get("kind","other"))}</div>'
-        f'<div class="mf-to">ящик кандидата: {escape(m.get("candidate",""))} &lt;{escape(m.get("mailbox",""))}&gt;<span class="mf-dot">·</span>{escape(m.get("date",""))}</div>{att}</div></div>'
-        f'{content}</div>')
+        f'<div class="msg-page"><h1 class="msg-subject">{escape(t.get("subject","") or "(без темы)")}'
+        f'<span class="tcount">{len(msgs)}</span></h1>'
+        f'<div class="tsub">Ящик: {escape(t.get("candidate",""))} &lt;{escape(t.get("mailbox",""))}&gt;</div>'
+        f'{cards}</div>')
     return _page("inbox", body, _COMPOSE_MODAL)
 
 

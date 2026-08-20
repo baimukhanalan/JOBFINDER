@@ -496,69 +496,159 @@ def _record_assignment(url: str, profile_id: str, ok: bool) -> None:
         tmp.replace(_ASSIGN_FILE)
 
 
-# ---- per-candidate application cap (ATS policy / anti-ban) ------------------
-# Many ATSes cap how many times ONE candidate may apply within a rolling window
-# — e.g. "Candidates may not apply more than 5 times in any 180-day span, across
-# roles." We enforce it at ASSIGNMENT time so a candidate's (cap+1)-th application
-# to a company is never even PREPARED inside the window (a human could otherwise
-# submit it). Scope is per (candidate, company): each employer counts its own roles.
-# Env: APPLY_CAP_PER_WINDOW (0 disables), APPLY_CAP_WINDOW_DAYS.
-APPLY_CAP = int(os.getenv("APPLY_CAP_PER_WINDOW", "5"))
+# ---- eligibility: application cap + candidate-nationality rules ------------
+# (1) APPLICATION CAP — some ATSes cap how many times ONE candidate may apply in a
+#     rolling window. Per the user this is currently OpenAI-only ("no more than 5 in any
+#     180-day span, across roles"), so it is PER-COMPANY, driven by the target's
+#     `apply_cap` (+ optional `apply_cap_window_days`) in targets.json; absent/0 = no cap.
+#     Only SUBMITTED applications count (status submitted/interview/rejected — a human
+#     actually sent it), within the window, enforced at assignment time.
+# (2) NATIONALITY RULE — Kazakhstani personas apply ONLY to Salmon; every other employer
+#     gets US/Canadian personas. Driven by the target's `countries` override, else
+#     Salmon -> {kz}, else {us, ca}. A persona whose KNOWN country (its gen_<cc>_ id
+#     prefix) isn't allowed for the employer is skipped.
+APPLY_CAP = int(os.getenv("APPLY_CAP_PER_WINDOW", "0"))          # global fallback; 0 = per-company only
 APPLY_CAP_WINDOW_DAYS = int(os.getenv("APPLY_CAP_WINDOW_DAYS", "180"))
+_SUBMITTED_STATUSES = {"submitted", "interview", "rejected"}     # actually filed
 
 
 def _company_key(name: str | None) -> str:
     return (name or "").strip().lower()
 
 
+def _target_by_company(name: str) -> dict | None:
+    """Registry entry matching a role's company (by company name OR key)."""
+    key = _company_key(name)
+    for t in load_targets(enabled_only=False):
+        if _company_key(t.get("company")) == key or _company_key(t.get("key")) == key:
+            return t
+    return None
+
+
+def _company_cap(company: str) -> int:
+    """Per-company submitted-application cap: the target's `apply_cap`, else the global
+    fallback APPLY_CAP (0 = no cap)."""
+    t = _target_by_company(company)
+    if t and t.get("apply_cap") is not None:
+        try:
+            return int(t.get("apply_cap") or 0)
+        except Exception:
+            return 0
+    return APPLY_CAP
+
+
+def _company_window(company: str) -> int:
+    t = _target_by_company(company)
+    try:
+        return int((t or {}).get("apply_cap_window_days") or APPLY_CAP_WINDOW_DAYS)
+    except Exception:
+        return APPLY_CAP_WINDOW_DAYS
+
+
+def _company_countries(company: str) -> set[str]:
+    """Nationalities allowed to apply to this employer: target's `countries` override,
+    else Salmon -> {kz}, else {us, ca}."""
+    t = _target_by_company(company)
+    if t and t.get("countries"):
+        return {str(c).lower() for c in t["countries"]}
+    key = _company_key((t or {}).get("key") or company)
+    return {"kz"} if key == "salmon" else {"us", "ca"}
+
+
+def _profile_country(pid: str) -> str:
+    """'kz' | 'us' | 'ca' | 'ph' from the persona id prefix (gen_<cc>_...); '' if unknown."""
+    for cc in ("kz", "us", "ca", "ph"):
+        if (pid or "").startswith(f"gen_{cc}_"):
+            return cc
+    return ""
+
+
+def country_allowed(pid: str, company: str) -> bool:
+    """True if this persona's nationality may apply to this employer (unknown = allowed)."""
+    cc = _profile_country(pid)
+    return (not cc) or (cc in _company_countries(company))
+
+
+def _parse_ts(s) -> float | None:
+    if not s:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _status_rec(pid: str, jid: str, cache: dict) -> dict:
+    sm = cache.get(pid)
+    if sm is None:
+        from backend import status_store
+        sm = cache[pid] = status_store.load(pid)
+    return sm.get(jid, {})
+
+
+def _submit_time(rep, srec: dict) -> float:
+    """When the application was SUBMITTED: the status ts, else the report mtime."""
+    when = _parse_ts(srec.get("ts"))
+    if when is not None:
+        return when
+    try:
+        return rep.stat().st_mtime
+    except Exception:
+        return 0.0
+
+
 def application_counts(within_days: int | None = None) -> dict[tuple[str, str], int]:
-    """{(profile_id, company_key): n} — how many non-gated applications each candidate
-    has to each company whose report.json is newer than the rolling window. Counts
-    PREFILLED applications (report.json, not gated_out): a prepared application can be
-    submitted, so it already consumes the candidate's per-company budget."""
+    """{(profile_id, company_key): n} — SUBMITTED applications (status in
+    _SUBMITTED_STATUSES) per candidate per company whose submit time is within the
+    window. Only actually-sent applications count (per the ATS cap wording)."""
     within = APPLY_CAP_WINDOW_DAYS if within_days is None else within_days
     cutoff = time.time() - within * 86400
     counts: dict[tuple[str, str], int] = {}
+    scache: dict[str, dict] = {}
     for rep in OUT_ROOT.glob("*/*/report.json"):
+        pid, jid = rep.parents[1].name, rep.parent.name
+        srec = _status_rec(pid, jid, scache)
+        if srec.get("status") not in _SUBMITTED_STATUSES:
+            continue
+        if _submit_time(rep, srec) < cutoff:
+            continue
         try:
-            if rep.stat().st_mtime < cutoff:
-                continue
-            r = json.loads(rep.read_text())
+            comp = _company_key(json.loads(rep.read_text()).get("company"))
         except Exception:
             continue
-        if r.get("gated_out"):
-            continue
-        comp = _company_key(r.get("company"))
-        if not comp:
-            continue
-        pid = rep.parents[1].name
-        counts[(pid, comp)] = counts.get((pid, comp), 0) + 1
+        if comp:
+            counts[(pid, comp)] = counts.get((pid, comp), 0) + 1
     return counts
 
 
 def application_count(profile_id: str, company: str, within_days: int | None = None) -> int:
-    """Non-gated applications one candidate has to one company in the window — scans only
-    that profile's dir (cheap for a single check, e.g. the bot picking one candidate)."""
-    within = APPLY_CAP_WINDOW_DAYS if within_days is None else within_days
+    """SUBMITTED applications one candidate has to one company in the window — scans only
+    that profile's dir (cheap for a single check, e.g. the bot picking a candidate)."""
+    within = _company_window(company) if within_days is None else within_days
     cutoff = time.time() - within * 86400
     comp = _company_key(company)
+    scache: dict[str, dict] = {}
     n = 0
     for rep in (OUT_ROOT / profile_id).glob("*/report.json"):
+        srec = _status_rec(profile_id, rep.parent.name, scache)
+        if srec.get("status") not in _SUBMITTED_STATUSES:
+            continue
+        if _submit_time(rep, srec) < cutoff:
+            continue
         try:
-            if rep.stat().st_mtime < cutoff:
-                continue
-            r = json.loads(rep.read_text())
+            if _company_key(json.loads(rep.read_text()).get("company")) == comp:
+                n += 1
         except Exception:
             continue
-        if not r.get("gated_out") and _company_key(r.get("company")) == comp:
-            n += 1
     return n
 
 
 def at_application_cap(profile_id: str, company: str, cap: int | None = None,
                        within_days: int | None = None) -> bool:
-    """True when this candidate has reached the per-company application cap in the window."""
-    cap = APPLY_CAP if cap is None else cap
+    """True when this candidate has reached the company's SUBMITTED-application cap in the
+    window. Cap defaults to the company's registry `apply_cap` (0 = no cap)."""
+    cap = _company_cap(company) if cap is None else cap
     if cap <= 0:
         return False
     return application_count(profile_id, company, within_days) >= cap
@@ -567,7 +657,9 @@ def at_application_cap(profile_id: str, company: str, cap: int | None = None,
 def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
                        ledger: dict[str, dict], k: int,
                        app_counts: dict[tuple[str, str], int] | None = None,
-                       cap: int | None = None) -> dict[str, set[str]]:
+                       caps: dict[str, int] | None = None,
+                       allowed_countries: dict[str, set[str]] | None = None
+                       ) -> dict[str, set[str]]:
     """Give each online role up to `k` family-matched candidates, cycling profiles.
 
     A role needs (k - len(owners)) more genuine candidates; profiles already in the
@@ -575,13 +667,18 @@ def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
     flows to the NEXT untried profile instead of re-offering the one that gated it.
     A profile can be handed MANY roles in its family (one identity, many positions).
 
-    Enforces the per-candidate application cap: a profile at/above the per-company cap
-    is skipped for that company's roles — counting BOTH prior runs (`app_counts`, keyed
-    (pid, company_key)) and assignments made in THIS run (`run_counts`). `cap<=0` (or an
-    empty company on the role) disables the cap. Returns {profile_id: {apply_url, ...}}.
+    Two eligibility gates per (candidate, company), keyed by the company name lowercased:
+      * NATIONALITY — `allowed_countries[company]` is the set of nationalities that
+        employer accepts; a candidate whose KNOWN country isn't in it is skipped (KZ ->
+        Salmon only, US/CA elsewhere). None/absent = no restriction.
+      * APPLICATION CAP — `caps[company]` submitted applications max; counts prior submits
+        (`app_counts`) PLUS assignments made THIS run (`run_counts`). 0/absent = no cap.
+
+    Returns {profile_id: {apply_url, ...}} — the per-profile assignment for this run.
     """
-    cap = APPLY_CAP if cap is None else cap
     app_counts = app_counts or {}
+    caps = caps or {}
+    allowed_countries = allowed_countries or {}
     plan: dict[str, set[str]] = {}
     cursor: dict[str, int] = {}  # per-family rotation pointer
     run_counts: dict[tuple[str, str], int] = {}  # (pid, company) assigned THIS run
@@ -592,6 +689,8 @@ def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
             continue
         url = role["apply_url"]
         company = _company_key(role.get("company"))
+        allowed = allowed_countries.get(company)
+        cap = caps.get(company, 0)
         entry = ledger.get(url, {"owners": [], "tried": []})
         need = k - len(entry["owners"])
         if need <= 0:
@@ -605,10 +704,14 @@ def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
             loops += 1
             if pid in tried:
                 continue  # already owns or already gated this role -> next profile
+            if allowed:
+                cc = _profile_country(pid)
+                if cc and cc not in allowed:
+                    continue  # nationality not eligible for this employer (KZ->Salmon only)
             if cap > 0 and company:
                 have = app_counts.get((pid, company), 0) + run_counts.get((pid, company), 0)
                 if have >= cap:
-                    continue  # candidate at the per-company application cap -> next profile
+                    continue  # at the company's submitted-application cap -> next profile
             plan.setdefault(pid, set()).add(url)
             tried.add(pid)
             if company:
@@ -648,8 +751,22 @@ async def batch_prefill_all(per_vacancy: int = 1, **kwargs) -> dict:
 
     roles = _online_roles()
     jobmap = {r["apply_url"]: r for r in roles}
+    # Per-company eligibility from the target registry: submitted-application caps +
+    # nationality allowlists. Submitted counts are only scanned when a company caps.
+    caps: dict[str, int] = {}
+    allowed_countries: dict[str, set[str]] = {}
+    for t in load_targets(enabled_only=False):
+        ck = _company_key(t.get("company"))
+        if not ck:
+            continue
+        c = _company_cap(t.get("company"))
+        if c > 0:
+            caps[ck] = c
+        allowed_countries[ck] = _company_countries(t.get("company"))
+    window = max([_company_window(c) for c in caps] or [APPLY_CAP_WINDOW_DAYS])
+    app_counts = application_counts(window) if caps else {}
     plan = assign_round_robin(roles, fam_profiles, _load_assignments(), max(1, per_vacancy),
-                              application_counts(), APPLY_CAP)
+                              app_counts, caps, allowed_countries)
     role_fams = {r["family"] for r in roles}
     unassigned = sorted(f for f in role_fams if f and not fam_profiles.get(f))
     unclassified = sorted({r["apply_url"] for r in roles if not r.get("family")})

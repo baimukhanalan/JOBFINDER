@@ -131,67 +131,89 @@ def test_guard_sample_still_blocks_the_sample_profile(monkeypatch):
         _guard_sample(ap, a)
 
 
-# --- per-candidate application cap (ATS policy: <=5 per company per 180 days) -----
-def _acme_roles(n):
-    return [{"apply_url": f"https://acme/{i}", "title": "Data Analyst",
-             "family": "data", "company": "Acme"} for i in range(n)]
+# --- eligibility: submitted-only application cap + nationality rule -------------
+def _roles(company, n, family="data"):
+    return [{"apply_url": f"https://{company}/{i}", "title": "Data Analyst",
+             "family": family, "company": company.title()} for i in range(n)]
 
 
 def test_cap_skips_candidate_already_at_limit():
-    # alice already has 5 Acme applications -> she is at the cap and draws no new roles.
-    plan = batch.assign_round_robin(_acme_roles(4), {"data": ["alice"]}, {}, k=1,
-                                    app_counts={("alice", "acme"): 5}, cap=5)
+    # alice already submitted 5 to OpenAI -> at the cap, draws no new roles.
+    plan = batch.assign_round_robin(_roles("openai", 4), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={("alice", "openai"): 5}, caps={"openai": 5})
     assert "alice" not in plan
 
 
 def test_cap_limits_assignments_within_one_run():
-    # One candidate, ten Acme roles, no prior history: she may take at most 5 this run.
-    plan = batch.assign_round_robin(_acme_roles(10), {"data": ["alice"]}, {}, k=1,
-                                    app_counts={}, cap=5)
+    # One candidate, ten OpenAI roles, no prior submits: at most 5 assigned this run.
+    plan = batch.assign_round_robin(_roles("openai", 10), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={}, caps={"openai": 5})
     assert len(plan.get("alice", set())) == 5
 
 
-def test_cap_is_per_company_not_global():
-    # 4 Acme (alice at cap there) + 2 Globex roles; alice still eligible at Globex.
-    roles = _acme_roles(2) + [
-        {"apply_url": "https://globex/1", "title": "Data Analyst", "family": "data",
-         "company": "Globex"}]
+def test_cap_is_per_company():
+    # alice at cap for OpenAI is still eligible at an uncapped company.
+    roles = _roles("openai", 2) + _roles("cohere", 1)
     plan = batch.assign_round_robin(roles, {"data": ["alice"]}, {}, k=1,
-                                    app_counts={("alice", "acme"): 5}, cap=5)
-    assert plan.get("alice") == {"https://globex/1"}  # only the Globex role
+                                    app_counts={("alice", "openai"): 5}, caps={"openai": 5})
+    assert plan.get("alice") == {"https://cohere/0"}
 
 
-def test_cap_disabled_when_zero():
-    plan = batch.assign_round_robin(_acme_roles(3), {"data": ["alice"]}, {}, k=1,
-                                    app_counts={("alice", "acme"): 99}, cap=0)
+def test_no_cap_when_company_uncapped():
+    plan = batch.assign_round_robin(_roles("cohere", 3), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={("alice", "cohere"): 99}, caps={})
     assert len(plan.get("alice", set())) == 3
 
 
-def test_application_count_windows_gating_and_company(tmp_path, monkeypatch):
+def test_nationality_kz_only_to_salmon():
+    pool = {"data": ["gen_kz_01_a", "gen_us_02_b", "gen_ca_03_c"]}
+    # Salmon accepts ONLY Kazakhstani personas.
+    salmon = batch.assign_round_robin(
+        [{"apply_url": "https://salmon/1", "title": "Data Analyst", "family": "data",
+          "company": "Salmon"}], pool, {}, k=3, allowed_countries={"salmon": {"kz"}})
+    assert salmon.get("gen_kz_01_a") == {"https://salmon/1"}
+    assert "gen_us_02_b" not in salmon and "gen_ca_03_c" not in salmon
+    # OpenAI (any non-Salmon) accepts ONLY US/CA personas.
+    openai = batch.assign_round_robin(
+        [{"apply_url": "https://openai/1", "title": "Data Analyst", "family": "data",
+          "company": "OpenAI"}], pool, {}, k=3, allowed_countries={"openai": {"us", "ca"}})
+    assert "gen_kz_01_a" not in openai
+    assert "gen_us_02_b" in openai and "gen_ca_03_c" in openai
+
+
+def test_country_helpers_from_registry(monkeypatch):
+    monkeypatch.setattr(batch, "load_targets", lambda enabled_only=True: [
+        {"key": "salmon", "company": "Salmon", "countries": ["kz"]},
+        {"key": "openai", "company": "OpenAI", "apply_cap": 5}])
+    assert batch._company_countries("Salmon") == {"kz"}
+    assert batch._company_countries("OpenAI") == {"us", "ca"}   # default: non-Salmon -> US/CA
+    assert batch.country_allowed("gen_kz_01_x", "Salmon") is True
+    assert batch.country_allowed("gen_kz_01_x", "OpenAI") is False
+    assert batch.country_allowed("gen_us_01_y", "OpenAI") is True
+    assert batch.country_allowed("gen_us_01_y", "Salmon") is False
+    assert batch.country_allowed("michael_sample", "OpenAI") is True  # unknown country -> allowed
+    assert batch._company_cap("OpenAI") == 5 and batch._company_cap("Cohere") == 0
+
+
+def test_application_count_submitted_only(tmp_path, monkeypatch):
     import json as _json
-    import os as _os
-    import time as _time
     root = tmp_path / "prefill"
     monkeypatch.setattr(batch, "OUT_ROOT", root)
+    statuses = {("alice", "j1"): "submitted", ("alice", "j2"): "interview",
+                ("alice", "j3"): "pending", ("alice", "j4"): "submitted"}
+    monkeypatch.setattr(batch, "_status_rec",
+                        lambda pid, jid, cache: {"status": statuses.get((pid, jid), ""), "ts": ""})
 
-    def _rep(pid, jid, company, gated=False, age_days=0):
+    def _rep(pid, jid, company):
         d = root / pid / jid
         d.mkdir(parents=True, exist_ok=True)
-        p = d / "report.json"
-        p.write_text(_json.dumps({"company": company, "gated_out": gated}))
-        if age_days:
-            old = _time.time() - age_days * 86400
-            _os.utime(p, (old, old))
+        (d / "report.json").write_text(_json.dumps({"company": company}))
 
-    _rep("alice", "j1", "Acme")
-    _rep("alice", "j2", "Acme")
-    _rep("alice", "j3", "Acme", gated=True)     # gated_out -> not an application
-    _rep("alice", "j4", "Acme", age_days=200)   # outside the 180-day window
-    _rep("alice", "j5", "Globex")               # different employer
-    assert batch.application_count("alice", "Acme") == 2
-    assert batch.at_application_cap("alice", "Acme", cap=2) is True
-    assert batch.at_application_cap("alice", "Acme", cap=3) is False
-    assert batch.application_count("alice", "Globex") == 1
-    # aggregate scan agrees
+    _rep("alice", "j1", "OpenAI"); _rep("alice", "j2", "OpenAI")   # submitted + interview -> 2
+    _rep("alice", "j3", "OpenAI"); _rep("alice", "j4", "Cohere")   # pending excluded; Cohere sep.
+    assert batch.application_count("alice", "OpenAI") == 2          # only actually-sent count
+    assert batch.application_count("alice", "Cohere") == 1
+    assert batch.at_application_cap("alice", "OpenAI", cap=2) is True
+    assert batch.at_application_cap("alice", "OpenAI", cap=3) is False
     counts = batch.application_counts()
-    assert counts[("alice", "acme")] == 2 and counts[("alice", "globex")] == 1
+    assert counts[("alice", "openai")] == 2 and counts[("alice", "cohere")] == 1

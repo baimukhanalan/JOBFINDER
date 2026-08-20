@@ -5,7 +5,9 @@
     "ats": "ashby",
     "slug": "openai",
     "enabled": true,
-    "note": "729 jobs / ~471 online. Almost only eng / research. First-5 apply target."
+    "apply_cap": 5,
+    "apply_cap_window_days": 180,
+    "note": "729 jobs / ~471 online. Almost only eng / research. First-5 apply target. CAP: a candidate may apply <=5 times / 180 days (ATS policy)."
   },
   {
     "key": "cohere",
@@ -61,7 +63,8 @@
     "ats": "ashby",
     "slug": "salmon-group",
     "enabled": true,
-    "note": "Reference (эталон). 129 jobs / ~64 online. Fintech: ops / data / analyst / support."
+    "countries": ["kz"],
+    "note": "Reference (эталон). 129 jobs / ~64 online. Fintech: ops / data / analyst / support. Kazakhstani personas apply ONLY here; every other company gets US/CA."
   },
   {
     "key": "1password",

@@ -11,104 +11,116 @@
 > **This IS the live project** (`jobs.systeam.kz`, pm2 `jobfinder-alan-*`, Postgres `jobfinder_crm`).
 > The old lowercase `/home/projects/jobfinder` (repo `Abekemyn/jobfinder`, the `michael` persona,
 > `jobfinder.systeam.kz`) was **RETIRED & archived 2026-08-20** — its pm2 / nginx vhost / cron were
-> removed and the dir moved to `/home/projects/jobfinder.archive-2026-08-20-2158`. Treat any lingering
-> lowercase-`jobfinder` path, `jobfinder.systeam.kz`, `:8089` or display `:99` reference in the
-> sections below as STALE: the live stack is the Alan one — dash **:8099**, co-pilot **:8102**, noVNC
-> **:6090**, display **:98** (see the "Alan's co-pilot/noVNC" gotcha for the authoritative ports).
+> removed and the dir moved to `/home/projects/jobfinder.archive-2026-08-20-2158`. Backups of what was
+> removed live in `/home/projects/_retire-jobfinder-backup-2026-08-20-2158/`. Any `jobfinder.systeam.kz`
+> / `:8089` / display `:99` reference you see elsewhere is that dead project — ignore it here.
 
-Semi-automatic job-application engine for remote US/CA roles: scrapes openings, tailors a
-résumé per JD, **pre-fills** the ATS form (never submits), and a human reviews + clicks Submit.
-Three surfaces: a mobile review dashboard, a one-click browser extension, and a headful
-"co-pilot" Chromium watched over noVNC.
+Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
+It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
+form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
+per candidate. Surfaces: a server-rendered dashboard (candidate mail `/mail`, company/roles feeds
+`/roles` `/jobs` `/catalog`, review queue `/queue`, onboarding `/setup`), a one-click browser
+extension, and a headful "co-pilot" Chromium watched over noVNC.
 
-Stack: Python 3.12 · FastAPI · SQLAlchemy 2.0 async + asyncpg/Postgres · Playwright · aiogram
-(Telegram) · python-jobspy. Résumé tailoring + answer drafting use the **local Sumrak LLM**
-(`llm_*` in `config.py`), not the Anthropic API (key is empty).
+Stack: Python 3.12 · FastAPI · Playwright · **psycopg2 / Postgres `jobfinder_crm`** · Dovecot+Postfix
+Maildir · aiogram (Telegram) · python-jobspy. Résumé tailoring + answer drafting use the **local Sumrak
+LLM** (`llm_*` in `config.py`), not the Anthropic API (key is empty).
 
-## Deploy (pm2, NOT systemd)
-- `jobfinder-dash` → `uvicorn backend.dashboard_app:app` on **127.0.0.1:8089** — the real
-  user-facing app (mobile review queue + all extension endpoints). No DB, no auth: reads
-  `uploads/prefill/<profile>/*/report.json` + a `status.json` overlay + `uploads/inbox/*.json`.
-- `jobfinder-copilot` → `uvicorn backend.copilot:app` on **127.0.0.1:8096** with `DISPLAY=:99`
-  (headful Chromium the bot pre-fills; human watches via noVNC and submits).
-- `jobfinder-display` (stopped by default) → `vnc/copilot_display.sh`: Xvfb `:99` + fluxbox +
-  x11vnc `:5900` + websockify noVNC `:6080`. Bring up with `vnc/start_display.sh` if noVNC dies.
-- nginx vhost `jobfinder.systeam.kz` (certbot SSL): `/` → 8089, `/copilot/` → 8096, `/vnc/` →
-  6080. **basic-auth** (`/etc/nginx/.htpasswd-jobfinder`) on everything EXCEPT the extension
-  endpoints (`/assist /draft /profile_form /job_pack /resume_file /mark_ext /health`), which are
-  auth_basic off and guarded by `X-Assist-Token` instead (called cross-origin from job sites).
-- `backend.main:app` (jobs API + APScheduler) exists but is **not deployed / not in nginx**;
-  scraping runs from cron directly. Treat it as the legacy/DB layer.
+## Deploy (pm2, NOT systemd) — `jobs.systeam.kz`
+All four pm2 services launch via `cd /home/projects/JOBFINDER && sg mail -c '…'` (`sg mail` is
+mandatory — `programmer` isn't in the `mail` group interactively, and the Maildir is `vmail:mail 2770`).
+**Their `pm_cwd` MUST be `/home/projects/JOBFINDER`** — if it points at the retired lowercase
+`jobfinder` the service dies on reboot (that exact bug was fixed 2026-08-20; recreate with the correct
+`cwd`, never just `pm2 save`). `pm2 save` after any change.
+
+- `jobfinder-alan-dash` → `uvicorn backend.dashboard_app:app` on **127.0.0.1:8099** — the live CRM +
+  review app. `/` redirects to `/mail/candidates`. No in-app auth (nginx basic-auth sits in front).
+- `jobfinder-mail-indexer` → `python -m backend.tools.mail_indexer` — an **inotify watcher** over
+  `/var/mail/vhosts/takhet.com/*` (~1000 dirs) that upserts into Postgres `jobfinder_crm.mail_index`.
+  **This is what feeds `/mail`** (logs `watching N dirs …` on start).
+- `jobfinder-alan-copilot` → `uvicorn backend.copilot:app` on **127.0.0.1:8102** with `DISPLAY=:98` —
+  the headful Chromium the bot pre-fills; a **separate app** from the dashboard (own routes
+  `/ /load /release /mark_submitted /state`).
+- `jobfinder-alan-display` → `vnc/copilot_display.sh`: Xvfb **`:98`** + x11vnc **`:5901`** + websockify
+  noVNC **`:6090`**.
+- nginx vhost `jobs.systeam.kz` (certbot SSL): `/` → 8099, `/copilot/` → 8102, `/vnc/` → 6090.
+  **basic-auth on EVERYTHING** (`/etc/nginx/.htpasswd-jobs`, user `job2026`, realm "JobFinder CRM").
+  NOTE: unlike the retired lowercase deploy, the extension endpoints are NOT `auth_basic off` here, so
+  the cross-origin one-click extension flow won't reach them through nginx without basic-auth.
+- `backend.main:app` (legacy jobs API + APScheduler over the OLD `jobfinder` Postgres) exists but is
+  **not deployed / not in nginx.** Treat it as the legacy/DB layer.
+
+## Data stores
+- **`jobfinder_crm` Postgres** — the isolated CRM DB, reached via `CRM_PG_DSN` in `.env` with
+  **psycopg2 (sync, pooled)**. Explicitly NOT the shared `amasmail` MySQL and NOT the legacy `jobfinder`
+  Postgres. Tables: `mail_index` (fed live by `mail_indexer`), `job_catalog` (fed by
+  `tools/catalog_collector.py`, run **manually** — no cron/pm2 trigger).
+- **Per-candidate Maildirs** `/var/mail/vhosts/takhet.com/<local>` (Dovecot/Postfix, `vmail:mail 2770`).
+  Sending a reply goes out via Postfix SASL **as that candidate** (`mailcrm.send`, DKIM-signed).
+- `uploads/prefill/<profile>/*/report.json` (+ a `status.json` overlay) — the apply review queue
+  `/queue` reads these. All of `uploads/` is gitignored PII.
 
 ## Secrets & PII (all gitignored)
-- `backend/.env` — `DATABASE_URL`, `TELEGRAM_BOT_TOKEN/CHAT_ID`, `DO_API_KEY`, `PROXY_URL`,
-  `APPLY_PROXY`. `config.py` uses `extra="ignore"` (tolerates leftover archived keys).
-- `backend/.assist_token` — the `X-Assist-Token` value; **must match the hardcoded `ASSIST_TOKEN`
-  in `extension/background.js`** (both sides checked). Change one → change both.
-- Real identity lives in `extension/profile.js` + `extension/background.js`,
-  `backend/data/profiles.json`, `backend/data/facts/*`, `backend/data/etalons/*`, and `uploads/`.
-  Only `.example`/`.template`/`sample.json` are committed. Regenerating `background.js` from the
-  example loses the live token.
+- `backend/.env` — `CRM_PG_DSN` (live CRM Postgres), `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`,
+  `LLM_URL/LLM_KEY/LLM_MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, and legacy Mailgun
+  keys (`MAIL_PROVIDER`, `MAILGUN_*`, `MAIL_SEND_TRANSPORT`) that are superseded by the self-hosted
+  Maildir/Postfix path. `config.py` uses `extra="ignore"` (tolerates leftover keys).
+- `backend/.assist_token` — the `X-Assist-Token`; **must match the hardcoded `ASSIST_TOKEN` in
+  `extension/background.js`** (both sides checked). Change one → change both.
+- Real identity: `extension/profile.js` + `background.js`, `backend/data/{profiles.json,facts/*,etalons/*}`,
+  per-candidate `backend/data/mailbox_passwords.json`, and `uploads/`. Only `.example`/`.template`/
+  `sample.json` are committed.
 
-## Cron
-- `*/5` `sg mail -c 'python3 backend/inbox_index.py'` — classify each profile's Maildir → inbox feed.
-- `0 8,16` `python -m backend.apply_cli --batch --profile all --source both --limit 60 --draft --ai` — refill the review queue.
-- `0 7 * * 0` `--discover` (company/slug mining) · `30 6 * * *` `python -m backend.scrapers.manager` (scrape).
+## Cron (user `programmer`, exactly 3 JOBFINDER lines)
+- `*/2` `mail_sink --poll` — **LEGACY / dead-end.** Writes `uploads/inbox/mail_sink.json`, which nothing
+  reads; `/mail` is fed by `mail_indexer`→Postgres, not this. Safe to drop (left in place for now).
+- `30 4` `mail_retention --days 30` — prune old indexed mail → `logs/retention.log`.
+- `*/10` `mail_health check` — indexer/DB health probe → `logs/health.log`.
+- **No apply / scrape / discover cron in this deploy** (the retired lowercase one had them). The apply
+  batch is not scheduled here; `apply_cli` is a manual tool if used at all.
 
 ## Apply engine
-`applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved
-Playwright session) → pick ATS strategy → pre-fill every field → screenshot + `report.json`, then
-**stop**. Per-ATS strategies in `applier/strategies/` (greenhouse, lever, ashby, workable, workday,
-icims) + `base.GenericStrategy` fallback. `applier/batch.py` turns the roster into a review queue
-with cross-run dedup; postings in terminal statuses (`submitted`/`rejected`/`interview`) are never
-re-queued. Tailoring (`services/tailor/`) is strictly no-fabrication.
+`applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright
+session) → pick ATS strategy → pre-fill every field → screenshot + `report.json`, then **stop**. Per-ATS
+strategies in `applier/strategies/` (greenhouse, lever, ashby, workable, workday, icims) +
+`base.GenericStrategy` fallback. `applier/` is imported **live** by the dashboard extension endpoints
+(`analyzer`, `strategies.base.strip_review`, `profile_validator`) and by `copilot.py` — but **nothing
+schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strictly no-fabrication.
+`/queue` still defaults to `profile="michael"`.
 
 ## Gotchas
-- **Run from the repo ROOT** — imports are absolute `backend.*`. The old `cd backend && uvicorn
-  main:app` is BROKEN (`ModuleNotFoundError: backend`). Correct: `uvicorn backend.main:app` /
-  `python -m backend.apply_cli ...` from `/home/projects/JOBFINDER`.
-- **No auto-submit — by design.** The engine only pre-fills; a human reviews the screenshot, solves
-  CAPTCHAs/assessments, and submits. The auto-submit path was deliberately removed (commit
-  `a8ab56e`) — real submits from a datacenter IP get spam-flagged/banned. Do not re-add it.
-- **Profile reality gate.** `applier/profile_validator.py` blocks batch prefill AND dashboard
-  apply affordances for profiles with reserved-fictional phones (555-01xx) or placeholder emails —
-  applications from them are undeliverable by construction. A blocked profile logs
-  `Batch blocked for '<id>'` 2x/day and Telegram-nags until fixed in `/setup`. This is intentional:
-  do NOT bypass the gate; onboard a real person instead.
-- **Submit DETECTION is not submission.** `copilot.py`'s confirmation poller and the extension's
-  `installSubmitWatch` only *record* a human's submit into `status.json` (entries now carry `ts`;
-  `inbox_index.py` also auto-marks `submitted` on a matched ATS ack email, never downgrading a
-  status). None of these click anything — keep it that way. `CONFIRM_RE` lives in
-  `extension/content.js`; `copilot.py` carries a copy that must stay in sync.
-- **Alan's co-pilot/noVNC is its OWN stack** (this uppercase `/home/projects/JOBFINDER` deploy,
-  `jobs.systeam.kz`), physically separate from the lowercase `jobfinder` one. pm2:
-  `jobfinder-alan-copilot` → `uvicorn backend.copilot:app` on **127.0.0.1:8102** with `DISPLAY=:98`
-  (under `sg mail`, cwd uppercase); `jobfinder-alan-display` → `vnc/copilot_display.sh` = Xvfb `:98`
-  + x11vnc **5901** + websockify noVNC **6090**. nginx `jobs.systeam.kz`: `/copilot/ → 8102`,
-  `/vnc/ → 6090` (both behind the dash basic-auth; prefix-stripped by a trailing-slash `proxy_pass`).
-  The dashboard's "Open in co-pilot" button opens `/copilot/?profile=X` + POSTs `/copilot/load`.
-  Display/ports MUST differ from the lowercase stack (`:99`/5900/6080) — `copilot.py` and the vnc
-  scripts are per-deploy copies, so a shared display would clobber the other reviewer's browser.
-- **Pick host ports with `nginx -T`, not `grep -r sites-enabled`.** `grep -r` does NOT follow the
-  symlinks in `sites-enabled`, so it silently misses most vhosts. A port can have nothing listening
-  yet still be claimed by a live vhost whose backend is down (e.g. `lalafo-vnc.systeam.kz` proxies to
-  6081 → squatting it leaks that domain onto our noVNC). Always `nginx -T | grep -oE '127.0.0.1:PORT'`
-  for the authoritative in-use list before choosing.
-- **Queue staleness cutoff.** `batch.py` archives pending items whose `report.json` is older than
-  `STALE_DAYS=14` into `uploads/prefill/<profile>/archived.json`; archived URLs never re-enter as
-  "new". The Telegram digest deep-links to `/#job-<jid>` anchors rendered by the dashboard.
-- **`inbox_index.py` must run under `sg mail`** — the Maildir is `vmail:mail 2770`. It reuses the
-  amaskills CRM reader (`/home/projects/amaskills/crm/maildir_reader.py` on `sys.path`) and writes
-  `uploads/inbox/<profile>.json` so the dashboard (runs as `programmer`, no mail group) can read it.
-  Mailbox→profile mapping comes from the `mailbox` field in `profiles.json`; with none it falls back
-  to a hardcoded `michael` mailbox.
-- **The `[review]` prefix is a hard safety contract.** Behavioral / "describe a time" / specifics
-  answers must NEVER reach a live field unflagged — the whole trust model is "the human only
-  reviews flagged answers." The local model is small and drops the prefix, so `answers.py` re-adds
-  it deterministically (`_NEEDS_REVIEW`); `strategies/base.strip_review` strips it before fill and
-  reports the flag. Don't weaken either side.
+- **Run from the repo ROOT** — imports are absolute `backend.*`. Correct: `uvicorn
+  backend.dashboard_app:app` / `python -m backend.tools.mail_indexer` / `python -m backend.apply_cli …`
+  from `/home/projects/JOBFINDER`. `cd backend && uvicorn dashboard_app:app` is BROKEN.
+- **Mail: one live store, one dead one.** LIVE = `mail_indexer` (inotify) → Postgres `mail_index` →
+  `/mail` (`tools/mailcrm.py` reads DB-first with a live-Maildir fallback; `mailcrm_ui.py` renders;
+  `mail_db.py` is the psycopg2 layer). DEAD leftovers — do NOT wire them expecting `/mail` to change:
+  `mail_sink.py` / `mail_sink --poll` / `mail_sink.json` (Mailgun/Mailpit era),
+  `dashboard_app._start_mail_poller()` (defined, never invoked), `tools/mail_dashboard.py` (zero importers).
+- **`/roles` + `/jobs` are network-live; `/catalog` is DB.** `tools/roles_dashboard.py` + `jobs_feed.py`
+  read committed `backend/data/targets.json` and fetch each company's Ashby board API **per request**
+  (no DB; needs egress). `/catalog` is the only DB-backed listing (`catalog_db.py` →
+  `jobfinder_crm.job_catalog`). `online_roles.py` is NOT wired into any dashboard route (apply-side only).
+- **No auto-submit — by design** (commit `a8ab56e`). Real submits from a datacenter IP get
+  spam-flagged/banned. Do NOT re-add. **Submit DETECTION is not submission**: the extension's
+  `installSubmitWatch` and `copilot.py`'s confirmation poller only *record* a human's submit into
+  `status.json`; they never click. `CONFIRM_RE` lives in `extension/content.js` with a copy in
+  `copilot.py` that must stay in sync.
+- **Profile reality gate** (`applier/profile_validator.py`) blocks prefill/apply affordances for profiles
+  with reserved-fictional phones (555-01xx) or placeholder emails — such applications are undeliverable.
+  `michael` is the synthetic default persona and is gated. Do NOT bypass the gate; onboard a real person
+  in `/setup`.
+- **The `[review]` prefix is a hard safety contract.** Behavioral / "describe a time" / specifics answers
+  must NEVER reach a live field unflagged — the trust model is "the human only reviews flagged answers."
+  The small local model drops the prefix, so `answers.py` re-adds it deterministically (`_NEEDS_REVIEW`);
+  `strategies/base.strip_review` strips it before fill and reports the flag. Don't weaken either side.
+- **Co-pilot ports are per-deploy** (Xvfb `:98`, x11vnc `5901`, noVNC `6090`, copilot `8102`) — the
+  co-pilot is `backend/copilot.py`, a distinct app from the dashboard. **Pick host ports with
+  `nginx -T | grep -oE '127.0.0.1:PORT'`, not `grep -r sites-enabled`** (grep doesn't follow the symlinks,
+  so it misses most vhosts, and a port with nothing listening can still be claimed by a live vhost).
 - **Local LLM default.** `ANTHROPIC_API_KEY` is empty; résumé polish (`--ai`) and answer drafting
-  (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without
-  the key, tailoring falls back to the deterministic keyword path.
+  (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without the
+  key, tailoring falls back to the deterministic keyword path.
 - **`frontend/` (Vite/React) is not the deployed UI** — the live app is `dashboard_app.py`'s
-  server-rendered HTML. (Port 4001's next-server is janyl, not this project.)
+  server-rendered HTML. The React app is an old job-browser talking to `backend.main` `/api` with no
+  inbox/roles; not deployed.

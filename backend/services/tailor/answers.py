@@ -69,9 +69,18 @@ def _header(profile_form: dict, job: dict, resume_summary: str,
     role = job.get("title") or "the role"
     company = job.get("company") or "the company"
     focus = f" The résumé being submitted is focused on: {niche_label}." if niche_label else ""
+    # Fit the answers to THIS specific posting: give the model the job description so
+    # "why this role / why us / what interests you" answers reference the actual role,
+    # its mission and requirements — not a generic template. Grounding rules still bind
+    # (no invented facts); the JD only shapes tone/relevance, never adds candidate facts.
+    jd = re.sub(r"\s+", " ", (job.get("description") or "")).strip()
+    jd_block = (f"ROLE DESCRIPTION (tailor 'why this role/company/what interests you' "
+                f"answers to fit this — reference its real focus, but invent NO personal "
+                f"facts): {jd[:1200]}\n\n") if jd else ""
     return (
         f"You are drafting short job-application answers for a candidate applying to "
-        f"{role} at {company}.{focus} Use ONLY the candidate facts below. Rules:\n"
+        f"{role} at {company}.{focus} Use ONLY the candidate facts below; tailor relevance "
+        f"to the role description. Rules:\n"
         "- Use ONLY facts present in the profile/experience. Do NOT invent employers, "
         "dates, certifications, or specific numbers/metrics.\n"
         "- Each answer 1-3 sentences, professional, first person.\n"
@@ -85,7 +94,8 @@ def _header(profile_form: dict, job: dict, resume_summary: str,
         "contact info, links/usernames/IDs, certificates), write the best truthful answer "
         "and PREFIX it with '[review] ' so the human completes it with real specifics.\n"
         "- For simple/factual questions, answer directly and briefly.\n\n"
-        f"CANDIDATE FACTS: {json.dumps(candidate, default=str)}\n"
+        + jd_block
+        + f"CANDIDATE FACTS: {json.dumps(candidate, default=str)}\n"
         f"EXPERIENCE SUMMARY: {resume_summary[:1500]}\n\n"
     )
 

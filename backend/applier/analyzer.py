@@ -29,8 +29,13 @@ FIELD_PATTERNS = [
 
     # Work-auth / sponsorship — checked BEFORE location so a sponsorship question that
     # mentions "location" (e.g. "...sponsorship to remain in your location?") isn't mis-read.
-    (r"(?i)(require.{0,15}sponsor|need.{0,15}sponsor|sponsor.{0,15}(require|need)|visa sponsor|will you (now|ever).{0,40}sponsor)", "_sponsorship", "select_or_fill"),
-    (r"(?i)(authorized?.?to.?work|work.?auth|legally.?auth|right.?to.?work|eligible.?to.?work)", "_work_auth", "select_or_fill"),
+    (r"(?i)((require|need|will you|provide|commence|seek|obtain|maintain).{0,80}sponsor|sponsor.{0,30}(require|need|visa|immigration|employ)|visa sponsor|immigration (case|assistance|support|sponsorship))", "_sponsorship", "select_or_fill"),
+    (r"(?i)((authori[sz]\w*).{0,15}work|work.{0,15}(authori[sz]\w*)|legally.?(auth|eligible)|right.?to.?work|eligible.?to.?work)", "_work_auth", "select_or_fill"),
+    # Non-compete / restrictive agreement preventing this job -> No.
+    (r"(?i)(non.?compete|non.compete)", "_no", "select_or_fill"),
+    # I-9 status attestations with a clear universal answer (nuanced ones like
+    # "admitted under a nonimmigrant visa" are deliberately left for the human).
+    (r"(?i)(alien (illegally|unlawfully|residing unlawfully)|illegally.{0,20}united states|renounced.{0,20}citizenship)", "_no", "select_or_fill"),
 
     # --- fact-sheet driven (rules v2): values come from backend/data/facts/<profile>.json.
     # A missing fact resolves to None -> the question stays "unknown" and is handled by
@@ -122,7 +127,7 @@ _OPEN_ENDED = re.compile(
 # would be a false statement -> route to the human instead.
 _FOREIGN_AUTH = re.compile(
     r"(?i)\b(?:work in|authori[sz]ed in|right to work in|reside in|live in)\s+"
-    r"(?:the\s+)?(ireland|uk|united kingdom|england|scotland|canada|australia|new zealand|"
+    r"(?:the\s+)?(ireland|uk|united kingdom|england|scotland|australia|new zealand|"
     r"germany|france|spain|netherlands|poland|portugal|romania|india|philippines|singapore|"
     r"malaysia|europe|the eu|eu\b|emea|brazil|mexico)")
 

@@ -64,6 +64,20 @@ re-queued. Tailoring (`services/tailor/`) is strictly no-fabrication.
   `inbox_index.py` also auto-marks `submitted` on a matched ATS ack email, never downgrading a
   status). None of these click anything — keep it that way. `CONFIRM_RE` lives in
   `extension/content.js`; `copilot.py` carries a copy that must stay in sync.
+- **Alan's co-pilot/noVNC is its OWN stack** (this uppercase `/home/projects/JOBFINDER` deploy,
+  `jobs.systeam.kz`), physically separate from the lowercase `jobfinder` one. pm2:
+  `jobfinder-alan-copilot` → `uvicorn backend.copilot:app` on **127.0.0.1:8102** with `DISPLAY=:98`
+  (under `sg mail`, cwd uppercase); `jobfinder-alan-display` → `vnc/copilot_display.sh` = Xvfb `:98`
+  + x11vnc **5901** + websockify noVNC **6090**. nginx `jobs.systeam.kz`: `/copilot/ → 8102`,
+  `/vnc/ → 6090` (both behind the dash basic-auth; prefix-stripped by a trailing-slash `proxy_pass`).
+  The dashboard's "Open in co-pilot" button opens `/copilot/?profile=X` + POSTs `/copilot/load`.
+  Display/ports MUST differ from the lowercase stack (`:99`/5900/6080) — `copilot.py` and the vnc
+  scripts are per-deploy copies, so a shared display would clobber the other reviewer's browser.
+- **Pick host ports with `nginx -T`, not `grep -r sites-enabled`.** `grep -r` does NOT follow the
+  symlinks in `sites-enabled`, so it silently misses most vhosts. A port can have nothing listening
+  yet still be claimed by a live vhost whose backend is down (e.g. `lalafo-vnc.systeam.kz` proxies to
+  6081 → squatting it leaks that domain onto our noVNC). Always `nginx -T | grep -oE '127.0.0.1:PORT'`
+  for the authoritative in-use list before choosing.
 - **Queue staleness cutoff.** `batch.py` archives pending items whose `report.json` is older than
   `STALE_DAYS=14` into `uploads/prefill/<profile>/archived.json`; archived URLs never re-enter as
   "new". The Telegram digest deep-links to `/#job-<jid>` anchors rendered by the dashboard.

@@ -1,12 +1,15 @@
-"""Co-pilot daemon: a persistent HEADFUL Chromium on DISPLAY=:99 that the bot pre-fills
+"""Co-pilot daemon: a persistent HEADFUL Chromium on DISPLAY=:98 that the bot pre-fills
 on command; the human watches it via noVNC on the phone, does any video/test, and clicks
 Submit himself — a real browser + human click, so no re-typing and not spam-flagged.
 
-Reuses the apply strategies (fill + LLM-drafted answers). Runs on 127.0.0.1:8096, exposed
+Reuses the apply strategies (fill + LLM-drafted answers). Runs on 127.0.0.1:8102, exposed
 only via nginx + basic-auth alongside the dashboard. The résumé PDF is the one the batch
 already rendered (uploads/prefill/<profile>/<job>/resume.pdf).
 
-    DISPLAY=:99 uvicorn backend.copilot:app --host 127.0.0.1 --port 8096
+Own display/ports (:98 / vnc 5901 / novnc 6090) so it never collides with the lowercase
+jobfinder co-pilot (:99 / 5900 / 6080) or lalafo-vnc (6081) on the same host.
+
+    DISPLAY=:98 uvicorn backend.copilot:app --host 127.0.0.1 --port 8102
 """
 import asyncio
 import json
@@ -33,7 +36,7 @@ from backend.services.tailor.variants import variant_for
 
 logger = logging.getLogger(__name__)
 
-os.environ.setdefault("DISPLAY", ":99")
+os.environ.setdefault("DISPLAY", ":98")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 
@@ -41,7 +44,7 @@ PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 # would clobber the first person's mid-review form, so /load is owner-gated.
 BUSY_TTL = 15 * 60  # seconds before an abandoned session stops blocking others
 
-NOVNC_ADDR = ("127.0.0.1", 6080)  # websockify port the noVNC iframe talks to
+NOVNC_ADDR = ("127.0.0.1", int(os.environ.get("COPILOT_NOVNC_PORT", "6090")))  # websockify port the noVNC iframe talks to
 
 # COPIED from extension/content.js CONFIRM_RE — the two MUST stay in sync.
 CONFIRM_RE = re.compile(
@@ -84,7 +87,7 @@ async def _ensure_browser():
         # headful Chromium renders to no display (invisible to noVNC).
         _S["browser"] = await _S["pw"].chromium.launch(
             headless=False, args=["--start-maximized", "--no-sandbox", "--disable-dev-shm-usage"],
-            env={**os.environ, "DISPLAY": ":99"})
+            env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
         ctx = await _S["browser"].new_context(no_viewport=True)
         _S["page"] = await ctx.new_page()
         await _S["page"].goto("about:blank")

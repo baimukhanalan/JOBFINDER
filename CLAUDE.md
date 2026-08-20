@@ -53,8 +53,11 @@ mandatory — `programmer` isn't in the `mail` group interactively, and the Mail
 ## Data stores
 - **`jobfinder_crm` Postgres** — the isolated CRM DB, reached via `CRM_PG_DSN` in `.env` with
   **psycopg2 (sync, pooled)**. Explicitly NOT the shared `amasmail` MySQL and NOT the legacy `jobfinder`
-  Postgres. Tables: `mail_index` (fed live by `mail_indexer`), `job_catalog` (fed by
-  `tools/catalog_collector.py`, run **manually** — no cron/pm2 trigger).
+  Postgres. Tables: `mail_index` (fed live by `mail_indexer`), `job_catalog` (fed **nightly by cron**,
+  `tools/catalog_collector.py` over Ashby/Greenhouse/Lever/**Workable**, remote-only). `job_catalog`
+  carries per-job `regions text[]` ∈ `{US,CA,UK,OTHER}` (multi-eligibility) + `region_source`
+  (`rule`/`llm`/`unknown`), classified by `applier/regions.py` (deterministic-first, LLM residue);
+  `questions JSONB` per job (GH via API, Ashby/Lever/Workable via `tools/catalog_forms.py` Playwright).
 - **Per-candidate Maildirs** `/var/mail/vhosts/takhet.com/<local>` (Dovecot/Postfix, `vmail:mail 2770`).
   Sending a reply goes out via Postfix SASL **as that candidate** (`mailcrm.send`, DKIM-signed).
 - `uploads/prefill/<profile>/*/report.json` (+ a `status.json` overlay) — the apply review queue
@@ -71,13 +74,22 @@ mandatory — `programmer` isn't in the `mail` group interactively, and the Mail
   per-candidate `backend/data/mailbox_passwords.json`, and `uploads/`. Only `.example`/`.template`/
   `sample.json` are committed.
 
-## Cron (user `programmer`, exactly 3 JOBFINDER lines)
+## Cron (user `programmer`, JOBFINDER lines)
+Mail CRM:
 - `*/2` `mail_sink --poll` — **LEGACY / dead-end.** Writes `uploads/inbox/mail_sink.json`, which nothing
   reads; `/mail` is fed by `mail_indexer`→Postgres, not this. Safe to drop (left in place for now).
 - `30 4` `mail_retention --days 30` — prune old indexed mail → `logs/retention.log`.
 - `*/10` `mail_health check` — indexer/DB health probe → `logs/health.log`.
-- **No apply / scrape / discover cron in this deploy** (the retired lowercase one had them). The apply
-  batch is not scheduled here; `apply_cli` is a manual tool if used at all.
+
+Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
+- `30 5` `catalog_collector` — nightly collect Ashby/GH/Lever/Workable → `job_catalog` (remote-only,
+  tags `regions` at collect time, GH questions inline) → `logs/catalog.log`.
+- `15 6` `catalog_collector --backfill-regions` — LLM residue pass over `regions IS NULL` rows → `logs/regions.log`.
+- `45 6` `catalog_forms --limit 200` — Playwright question scrape for Ashby/Lever/Workable → `logs/forms.log`.
+- `0 7 * * 0` `applier.discovery` — weekly company/slug discovery refresh → `logs/discovery.log`.
+
+- **No apply/prefill batch cron in this deploy** — `apply_cli` is a manual tool if used at all (real
+  submits are human, from Alan's Mac; see the co-pilot/extension gotchas).
 
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright

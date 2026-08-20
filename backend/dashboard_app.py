@@ -276,7 +276,7 @@ def _last_review_days(profile: str) -> float | None:
 
 
 _CSS = """
-*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0f1216;color:#e7ebf0}
+*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0f1216;color:#e7ebf0;overflow-x:hidden}
 .wrap{max-width:680px;margin:0 auto;padding:14px}
 h1{font-size:18px;margin:6px 0 12px}
 .stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -310,7 +310,7 @@ a.btn,button.btn{flex:1;text-align:center;text-decoration:none;font-size:13px;fo
 .undo{background:#232a33;color:#8a94a3}
 details{margin-top:10px}summary{font-size:12px;color:#8a94a3;cursor:pointer}
 .ans{background:#0f1216;border:1px solid #232a33;border-radius:8px;padding:9px;margin-top:7px;font-size:12px}
-.ans .q{color:#7b8593}.ans .a{color:#dbe2ea;margin:3px 0 9px;white-space:pre-wrap}
+.ans .q{color:#7b8593}.ans .a{color:#dbe2ea;margin:3px 0 9px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 img.shot{width:100%;border-radius:8px;border:1px solid #232a33;margin-top:9px}
 .empty{color:#7b8593;text-align:center;padding:40px}
 .extbar{display:block;text-align:center;background:#10391f;color:#46d17f;border:1px solid #1c5e35;
@@ -514,7 +514,32 @@ def roles_page(company: str = ""):
                                                      rd.counts_by_company()))
         return HTMLResponse(rd.render_live_html(rd.fetch_jobs(company), company))
     except Exception as exc:
-        return HTMLResponse(f"<p>roles feed unavailable: {escape(str(exc))}</p>", status_code=502)
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Дашборд компаний недоступен: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+@app.get("/jobs", response_class=HTMLResponse)
+def jobs_page(company: str = "", q: str = "", remote: int = 0):
+    """Unified live "all jobs" feed across every tracked ATS board — mobile-first
+    card list with company chips + search. Status badges read from our tracker."""
+    from backend.tools import jobs_feed
+    try:
+        return HTMLResponse(jobs_feed.render_page(company=company, q=q, remote=bool(remote)))
+    except Exception as exc:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Лента вакансий недоступна: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+@app.get("/jobs/more", response_class=HTMLResponse)
+def jobs_more(company: str = "", q: str = "", offset: int = 0, remote: int = 0):
+    """Pagination fragment for the /jobs infinite scroll."""
+    from backend.tools import jobs_feed
+    try:
+        return HTMLResponse(jobs_feed.render_more(company=company, q=q, offset=offset, remote=bool(remote)))
+    except Exception:
+        return HTMLResponse("", status_code=200)
 
 
 @app.get("/roles/counts")
@@ -632,7 +657,8 @@ def mail_message(id: str = ""):
     from backend.tools import mailcrm, mailcrm_ui
     t = mailcrm.get_thread(id, mark=True)
     if not t:
-        return HTMLResponse("<p>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href='/mail'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            "<p style='font-family:sans-serif;padding:16px'>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href='/mail'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
     return HTMLResponse(mailcrm_ui.render_thread(t))
 
 

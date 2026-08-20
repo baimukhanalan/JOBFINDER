@@ -298,10 +298,10 @@ _TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   :root{{--bg:#0f1512;--card:#161d1a;--ink:#e7ede9;--ink2:#9fb0a8;--ink3:#6f7f77;
     --rule:#232d29;--accent:#4fbfa8;--sub:#5b9dd6;--acc:#4fbf7b;--rej:#e0796a}}
   *{{box-sizing:border-box}}
-  body{{margin:0;background:var(--bg);color:var(--ink);
+  body{{margin:0;background:var(--bg);color:var(--ink);overflow-x:hidden;
     font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}}
   .wrap{{max-width:1200px;margin:0 auto;padding:28px 18px 80px}}
-  h1{{font:600 26px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;margin:0 0 6px}}
+  h1{{font:600 26px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;word-break:break-word;margin:0 0 6px}}
   .back{{color:var(--ink3);text-decoration:none;font-size:13px}} .back:hover{{color:var(--accent)}}
   .live{{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--acc);
     margin-left:8px;vertical-align:middle;animation:pulse 1.6s infinite}}
@@ -340,6 +340,20 @@ _TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   .desc{{font-size:13.5px;background:#0c110f;border:1px solid var(--rule);border-radius:8px;
     padding:12px 14px;max-height:420px;overflow:auto}}
   .desc p{{margin:6px 0}} .desc ul{{margin:6px 0;padding-left:18px}} .desc li{{margin:3px 0}} .desc a{{color:var(--sub)}}
+  @media(max-width:640px){{
+    .wrap{{padding:18px 12px 60px}}
+    h1{{font-size:21px}}
+    .twrap{{border:0;border-radius:0}}
+    table{{min-width:0;display:block}}
+    thead{{display:none}}
+    tbody,tr,td{{display:block}}
+    tr.role{{border-bottom:1px solid var(--rule);padding:10px 2px}}
+    td{{border:0;padding:3px 0}}
+    .c-desc{{max-width:100%}}
+    .c-num{{display:none}}
+    .controls input[type=search]{{min-width:0;width:100%}}
+    .seg{{width:100%}} .seg button{{flex:1}}
+  }}
   @media(prefers-color-scheme:light){{:root{{--bg:#f3f6f4;--card:#fff;--ink:#12201b;
     --ink2:#4a5a52;--ink3:#7b8b83;--rule:#dde5e1}}.desc{{background:#f7faf8}}th{{background:#f3f6f4}}}}
 </style></head><body><div class="wrap">
@@ -436,15 +450,15 @@ _INDEX_TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   :root{{--bg:#0f1512;--card:#161d1a;--ink:#e7ede9;--ink2:#9fb0a8;--ink3:#6f7f77;
     --rule:#232d29;--accent:#4fbfa8;--sub:#5b9dd6;--acc:#4fbf7b;--rej:#e0796a}}
   *{{box-sizing:border-box}}
-  body{{margin:0;background:var(--bg);color:var(--ink);
+  body{{margin:0;background:var(--bg);color:var(--ink);overflow-x:hidden;
     font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}}
   .wrap{{max-width:1100px;margin:0 auto;padding:28px 18px 80px}}
-  h1{{font:600 26px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;margin:0 0 6px}}
+  h1{{font:600 26px/1.15 ui-monospace,Menlo,monospace;letter-spacing:-.02em;word-break:break-word;margin:0 0 6px}}
   .live{{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--acc);
     margin-left:8px;vertical-align:middle;animation:pulse 1.6s infinite}}
   @keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.25}}}}
   .sub{{color:var(--ink2);margin:0 0 22px}}
-  .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}}
+  .grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr));gap:14px}}
   .card{{display:block;background:var(--card);border:1px solid var(--rule);border-radius:12px;
     padding:16px 16px 14px;text-decoration:none;color:inherit;transition:border-color .15s,transform .1s}}
   .card:hover{{border-color:var(--accent);transform:translateY(-1px)}}

@@ -1,12 +1,16 @@
-"""Scrape application-form questions for ashby/lever catalog rows via Playwright.
+"""Scrape application-form questions for ashby/lever/workable catalog rows via Playwright.
 
 Their public APIs don't expose the apply-form questions (greenhouse does), so we
 render the apply page and read the field-level questions: text/select/textarea/file
 controls by their label, and radio/checkbox groups by their fieldset legend. Writes
 into job_catalog.questions via catalog_db.set_questions.
 
-    python -m backend.tools.catalog_forms            # ashby + lever, all missing
-    python -m backend.tools.catalog_forms ashby      # one ATS
+Workable is best-effort: the form generally scrapes fine (real apply page is the
+posting URL + /apply, see `_apply_url`), but treat 0 questions on any given board
+as an accepted outcome (odd markup, A/B'd layout, etc.), not a bug.
+
+    python -m backend.tools.catalog_forms              # ashby + lever + workable, all missing
+    python -m backend.tools.catalog_forms ashby         # one ATS
 """
 from __future__ import annotations
 
@@ -45,6 +49,12 @@ def _apply_url(ats: str, url: str) -> str:
         u += "/application"
     if ats == "lever" and not u.endswith("/apply"):
         u += "/apply"
+    if ats == "workable" and not u.endswith("/apply"):
+        # Brief assumed the posting URL itself was the apply form; live-verified
+        # that's just the description page (0 inputs) — the actual form is at
+        # the same URL + /apply (Workable 301-redirects to add the company slug
+        # + trailing slash, e.g. .../j/<code>/apply -> .../<co>/j/<code>/apply/).
+        u += "/apply"
     return u
 
 
@@ -63,7 +73,7 @@ def _scrape(page, url: str) -> list:
         return []
 
 
-def run(ats_list=("ashby", "lever"), limit: int = 0) -> int:
+def run(ats_list=("ashby", "lever", "workable"), limit: int = 0) -> int:
     catalog_db.ensure_schema()
     total = 0
     with sync_playwright() as p:
@@ -93,5 +103,6 @@ def run(ats_list=("ashby", "lever"), limit: int = 0) -> int:
 
 
 if __name__ == "__main__":
-    ats = tuple(a for a in sys.argv[1:] if a in ("ashby", "lever")) or ("ashby", "lever")
+    _KNOWN = ("ashby", "lever", "workable")
+    ats = tuple(a for a in sys.argv[1:] if a in _KNOWN) or _KNOWN
     run(ats_list=ats)

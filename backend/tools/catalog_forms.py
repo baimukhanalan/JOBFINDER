@@ -9,8 +9,13 @@ Workable is best-effort: the form generally scrapes fine (real apply page is the
 posting URL + /apply, see `_apply_url`), but treat 0 questions on any given board
 as an accepted outcome (odd markup, A/B'd layout, etc.), not a bug.
 
-    python -m backend.tools.catalog_forms                    # ashby + lever + workable, all missing
-    python -m backend.tools.catalog_forms ashby               # one ATS, all missing
+WARNING: --limit defaults to 0, which means UNBOUNDED — with no --limit, a run
+scrapes every missing-question row for the selected ATS(es), one Playwright page
+load per row. Always pass --limit for a manual or cron invocation unless you
+deliberately want a full unbounded scrape.
+
+    python -m backend.tools.catalog_forms                    # ashby + lever + workable, ALL missing (unbounded)
+    python -m backend.tools.catalog_forms ashby               # one ATS, all missing (unbounded)
     python -m backend.tools.catalog_forms --limit 200          # all three ATS, capped per-ATS
     python -m backend.tools.catalog_forms ashby lever --limit 50
 """
@@ -111,6 +116,8 @@ if __name__ == "__main__":
     ap.add_argument("ats", nargs="*", choices=_KNOWN, default=list(_KNOWN),
                      help="ATS(es) to scrape (default: all three)")
     ap.add_argument("--limit", type=int, default=0,
-                     help="cap rows scraped per ATS (bounded/cron runs)")
+                     help="cap rows scraped per ATS (bounded/cron runs). Default 0 = "
+                          "UNBOUNDED: scrapes ALL missing-question rows for the "
+                          "selected ATS(es), one page load each")
     args = ap.parse_args()
     run(ats_list=tuple(args.ats) or _KNOWN, limit=args.limit)

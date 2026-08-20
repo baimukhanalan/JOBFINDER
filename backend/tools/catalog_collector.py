@@ -2,14 +2,17 @@
 known ATS board into Postgres `job_catalog`.
 
 Boards come from backend/data/{targets.json, discovered_slugs.json}, restricted to
-the no-account ATS the app can read (ashby, greenhouse, lever). Threaded + resumable
-(upsert), so re-running just refreshes. Greenhouse job ids are pulled from the apply
-URL so we can fetch each posting's application questions via the public
-`?questions=true` endpoint.
+the no-account ATS the app can read (ashby, greenhouse, lever, workable). Threaded +
+resumable (upsert), so re-running just refreshes. Greenhouse job ids are pulled from
+the apply URL so we can fetch each posting's application questions via the public
+`?questions=true` endpoint (ashby/lever/workable questions are scraped separately,
+see catalog_forms.py).
 
-    python -m backend.tools.catalog_collector            # full run (remote-only + questions)
+    python -m backend.tools.catalog_collector                     # full run (remote-only + questions)
     python -m backend.tools.catalog_collector --no-questions
-    python -m backend.tools.catalog_collector --all      # include non-remote too
+    python -m backend.tools.catalog_collector --all                # include non-remote too
+    python -m backend.tools.catalog_collector --ats greenhouse --limit 20   # smoke run, capped
+    python -m backend.tools.catalog_collector --backfill-regions --no-llm  # classify rows missing regions
 """
 from __future__ import annotations
 
@@ -84,6 +87,8 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
         }
         regs, src = classify_with_source(row, use_llm=False)
         if regs:
+            # A deterministic rule hit on re-collect is authoritative and may narrow a
+            # prior LLM multi-region set (e.g. LLM US+CA -> rule US) — by design, not a bug.
             row["regions"], row["region_source"] = regs, src
         rows.append(row)
     return rows
@@ -213,8 +218,11 @@ def backfill_regions(limit: int = 0, use_llm: bool = True) -> dict:
     done = 0
     for r in rows:
         regs, src = classify_with_source(r, use_llm=use_llm)
-        # store [] (not NULL) so a resolved-empty row isn't re-processed forever
-        catalog_db.set_regions(r["ats"], r["company_key"], r["external_id"], regs, src)
+        # store [] (not NULL) so a resolved-empty row isn't re-processed forever;
+        # only_if_null guards against clobbering a tag a concurrent collect just set
+        # (no flock between the 05:30 collect and 06:15 backfill cron jobs)
+        catalog_db.set_regions(r["ats"], r["company_key"], r["external_id"], regs, src,
+                                only_if_null=True)
         done += 1
     return {"processed": done, **catalog_db.counts()}
 

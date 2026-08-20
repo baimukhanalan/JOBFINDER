@@ -187,11 +187,16 @@ def rows_missing_questions(ats: str) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
-def set_regions(ats: str, company_key: str, external_id: str, regions: list, source: str) -> int:
+def set_regions(ats: str, company_key: str, external_id: str, regions: list, source: str,
+                 only_if_null: bool = False) -> int:
+    """only_if_null=True guards a backfill write against clobbering a tag a concurrent
+    collect just set (no flock between the collect and backfill cron jobs)."""
+    sql = ("UPDATE job_catalog SET regions=%s, region_source=%s "
+           "WHERE ats=%s AND company_key=%s AND external_id=%s")
+    if only_if_null:
+        sql += " AND regions IS NULL"
     with _cur(False) as cur:
-        cur.execute("UPDATE job_catalog SET regions=%s, region_source=%s "
-                    "WHERE ats=%s AND company_key=%s AND external_id=%s",
-                    (regions, source, ats, company_key, external_id))
+        cur.execute(sql, (regions, source, ats, company_key, external_id))
         return cur.rowcount
 
 
@@ -208,13 +213,17 @@ def rows_missing_regions(limit: int = 0) -> list:
 def counts() -> dict:
     with _cur(False) as cur:
         cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE is_remote), "
-                    "COUNT(*) FILTER (WHERE q_count > 0) FROM job_catalog")
-        t, rem, wq = cur.fetchone()
+                    "COUNT(*) FILTER (WHERE q_count > 0), "
+                    "COUNT(*) FILTER (WHERE cardinality(regions) = 0) FROM job_catalog")
+        t, rem, wq, resolved_empty = cur.fetchone()
         by_region = {}
         for code in ("US", "CA", "UK", "OTHER"):
             cur.execute("SELECT COUNT(*) FROM job_catalog WHERE %s = ANY(regions)", (code,))
             by_region[code] = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM job_catalog WHERE regions IS NULL")
         untagged = cur.fetchone()[0]
+    # resolved_empty: rows backfilled to regions=[] (stored as '{}') match neither
+    # `%s = ANY(regions)` nor `regions IS NULL`, so without this bucket by_region +
+    # untagged don't reconcile to total and an "untagged: 0" log line is misleading.
     return {"total": t, "remote": rem, "with_questions": wq,
-            "by_region": by_region, "untagged": untagged}
+            "by_region": by_region, "untagged": untagged, "resolved_empty": resolved_empty}

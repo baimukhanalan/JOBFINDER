@@ -82,7 +82,9 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
             "questions": None, "q_count": 0,
             "_gh_id": ext if (ats == "greenhouse" and ext.isdigit()) else None,
         }
-        row["regions"], row["region_source"] = classify_with_source(row, use_llm=False)
+        regs, src = classify_with_source(row, use_llm=False)
+        if regs:
+            row["regions"], row["region_source"] = regs, src
         rows.append(row)
     return rows
 

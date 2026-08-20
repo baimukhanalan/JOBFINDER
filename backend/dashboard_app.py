@@ -486,8 +486,14 @@ def _render(profile: str) -> str:
         "</div></body></html>")
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(profile: str = "michael"):
+@app.get("/")
+def home():
+    # The candidate mail CRM is the primary surface; the apply queue lives at /queue.
+    return RedirectResponse("/mail")
+
+
+@app.get("/queue", response_class=HTMLResponse)
+def queue(profile: str = "michael"):
     return _render(_safe_id(profile) or "michael")
 
 
@@ -585,102 +591,87 @@ def _start_mail_poller():
     threading.Thread(target=loop, daemon=True).start()
 
 
+# --- Self-hosted candidate mail CRM (Gmail-style): reads the Dovecot Maildir on
+#     our own server, sends via our own Postfix. No Mailgun, no third party.
 @app.get("/mail", response_class=HTMLResponse)
-def mail_page(profile: str = ""):
-    """Live inbox for the candidate mailboxes — classified, durable, auto-refreshing."""
-    from backend.tools import mail_sink, mail_dashboard
-    _start_mail_poller()
-    try:
-        data = mail_sink.summary(_safe_id(profile) or None)
-        return HTMLResponse(mail_dashboard.render_html(data, mail_sink.address_map()))
-    except Exception as exc:
-        return HTMLResponse(f"<p>mail sink unavailable: {escape(str(exc))}</p>", status_code=502)
+def mail_page(q: str = "", mailbox: str = ""):
+    from backend.tools import mailcrm, mailcrm_ui
+    rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50)
+    counts = mailcrm.counts()
+    name = ""
+    if mailbox:
+        name = next((c["name"] for c in mailcrm.candidates() if c["email"] == mailbox.lower()), "")
+    return HTMLResponse(mailcrm_ui.render_inbox(rows, counts, q=q, mailbox=mailbox, mailbox_name=name))
 
 
-@app.get("/mail/data")
-def mail_data(profile: str = ""):
-    from backend.tools import mail_sink
-    return JSONResponse(mail_sink.summary(_safe_id(profile) or None))
+@app.get("/mail/more", response_class=HTMLResponse)
+def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = ""):
+    from backend.tools import mailcrm, mailcrm_ui
+    rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50,
+                                 before_ts=ts or None, before_id=id or None)
+    return HTMLResponse(mailcrm_ui.render_rows(rows))
 
 
-@app.get("/mail/message")
+@app.get("/mail/candidates", response_class=HTMLResponse)
+def mail_candidates():
+    import os as _os
+    from backend.tools import mailcrm, mailcrm_ui
+    cands = mailcrm.candidates()
+    for c in cands:
+        try:
+            c["unread"] = sum(1 for n in _os.listdir(_os.path.join(c["maildir"], "new"))
+                              if not n.startswith("."))
+        except OSError:
+            c["unread"] = 0
+    cands.sort(key=lambda c: (-c.get("unread", 0), c["name"]))
+    return HTMLResponse(mailcrm_ui.render_candidates(cands))
+
+
+@app.get("/mail/message", response_class=HTMLResponse)
 def mail_message(id: str = ""):
-    """Full body of one classified message — the inbox lazy-loads this when a row
-    is expanded, so the list/SSE stay lean. 404 if the id is unknown."""
-    from backend.tools import mail_sink
-    m = mail_sink.message(id)
+    from backend.tools import mailcrm, mailcrm_ui
+    m = mailcrm.get_message(id, mark=True)
     if not m:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    return JSONResponse(m)
-
-
-@app.get("/mail/draft")
-def mail_draft(id: str = ""):
-    """SUGGEST reply text for one message (interview-aware, same language) to pre-fill
-    the compose box — TEXT ONLY, never sent. The human edits it and clicks Отправить.
-    404 on unknown id."""
-    from backend.tools import mail_sink
-    res = mail_sink.draft_reply(id)
-    if not res.get("ok"):
-        return JSONResponse(res, status_code=404)
-    return JSONResponse(res)
+        return HTMLResponse("<p>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href=\'/mail\'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
+    return HTMLResponse(mailcrm_ui.render_message(m))
 
 
 @app.post("/mail/send")
-def mail_send(id: str = Form(...), text: str = Form(...), subject: str = Form("")):
-    """SEND the human's reply to a recruiter (Mailgun). Runs ONLY from the inbox's
-    Send button — there is no auto-reply. From is derived server-side from the
-    original message (the caller cannot spoof it). Returns {ok, ...} or {ok:False,
-    error} with 400 so the inbox can show the failure."""
-    from backend.tools import mail_sink
-    res = mail_sink.send_reply(id, text, subject or None)
+def mail_send(from_email: str = Form(...), to: str = Form(...),
+              subject: str = Form(""), body: str = Form(""),
+              in_reply_to: str = Form("")):
+    from backend.tools import mailcrm
+    res = mailcrm.send(from_email, to, subject, body, in_reply_to=in_reply_to)
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
-@app.post("/mail/inbound")
-async def mail_inbound(request: Request):
-    """Mailgun INBOUND webhook: a route's forward() POST delivers the fully-parsed
-    message (body included), which is the only way to get the body while message
-    retrieval is disabled for the domain. Rejects unsigned/forged posts. Public
-    endpoint — must be on the auth_basic-off list in nginx (like /assist)."""
-    from backend.tools import mail_sink
-    try:
-        form = await request.form()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "bad form"}, status_code=400)
-    fields = {k: (v if isinstance(v, str) else "") for k, v in form.items()}
-    if not mail_sink.mg_verify_webhook(fields.get("token", ""), fields.get("timestamp", ""),
-                                       fields.get("signature", "")):
-        return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
-    res = mail_sink.record_inbound(fields)
-    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+@app.get("/mail/count")
+def mail_count(q: str = "", mailbox: str = ""):
+    from backend.tools import mailcrm
+    return JSONResponse({"n": mailcrm.counts().get("unread", 0)})
 
 
 @app.get("/mail/events")
 async def mail_events():
-    """SSE: push the inbox the instant a new classified message lands."""
     import asyncio
-
-    from backend.tools import mail_sink
-    _start_mail_poller()
+    from backend.tools import mailcrm
 
     async def stream():
         last = None
         while True:
             try:
-                payload = json.dumps(mail_sink.summary())
+                n = mailcrm.counts().get("unread", 0)
             except Exception:
-                payload = None
-            if payload and payload != last:
-                last = payload
-                yield f"data: {payload}\n\n"
+                n = None
+            if n is not None and n != last:
+                last = n
+                yield f"data: {n}\n\n"
             else:
                 yield ": ping\n\n"
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.0)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/draft")

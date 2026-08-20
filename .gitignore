@@ -78,3 +78,4 @@ backend/data/facts.bak-*/
 backend/data/mail_addresses.json
 # Generated dashboards / screenshots can embed candidate data.
 outputs/
+backend/data/mailbox_passwords.json

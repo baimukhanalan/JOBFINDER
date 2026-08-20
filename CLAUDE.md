@@ -23,6 +23,17 @@ Stack: Python 3.12 · FastAPI · SQLAlchemy 2.0 async + asyncpg/Postgres · Play
   auth_basic off and guarded by `X-Assist-Token` instead (called cross-origin from job sites).
 - `backend.main:app` (jobs API + APScheduler) exists but is **not deployed / not in nginx**;
   scraping runs from cron directly. Treat it as the legacy/DB layer.
+- **Server instance (this shared Linux box, NOT the Mac):** pm2 `jobfinder-alan-dash` →
+  `uvicorn backend.dashboard_app:app` on **127.0.0.1:8099**, launched from the repo ROOT with the
+  system `/usr/bin/python3` (all deps already present; there is NO `.venv` here — `ecosystem.config.js`
+  is Mac-only). nginx vhost **`jobs.systeam.kz`** (certbot SSL, basic-auth `/etc/nginx/.htpasswd-jobfinder`)
+  → 8099. Surfaces in use: **`/mail`** (candidate inbox) + **`/roles`** (live ATS vacancy tables). The
+  inbox fills from the takhet.com Maildir via the poll cron `*/2 * * * * sg mail -c '… mail_sink --poll'`;
+  `/roles` fetches job rows live from the ATS APIs at request time (needs egress). Counts stay 0 and
+  attribution stays empty until `uploads/prefill/**` and a real `backend/data/profiles.json`
+  (+ `mail_sink --assign`) are seeded. **Two sibling dirs on this box, case-only-different — do not
+  confuse them:** `/home/projects/JOBFINDER` (THIS repo, baimukhanalan, jobs.systeam.kz:8099) vs
+  `/home/projects/jobfinder` (Abekemyn, jobfinder.systeam.kz:8089).
 
 ## Secrets & PII (all gitignored)
 - `backend/.env` — `DATABASE_URL`, `TELEGRAM_BOT_TOKEN/CHAT_ID`, `DO_API_KEY`, `PROXY_URL`,
@@ -46,6 +57,27 @@ Playwright session) → pick ATS strategy → pre-fill every field → screensho
 icims) + `base.GenericStrategy` fallback. `applier/batch.py` turns the roster into a review queue
 with cross-run dedup; postings in terminal statuses (`submitted`/`rejected`/`interview`) are never
 re-queued. Tailoring (`services/tailor/`) is strictly no-fabrication.
+
+## Mail (candidate mailboxes) — self-hosted, NOT Mailgun
+`backend/tools/mail_sink.py` gives each candidate a real address `<slug>@<MAIL_DOMAIN>`,
+keeps a durable classified inbox, and backs the human-reviewed reply UI (`/mail` in
+`dashboard_app.py`, rendered by `tools/mail_dashboard.py`). Two providers (`MAIL_PROVIDER`):
+- `mailpit` — local throwaway sink, dev only.
+- `selfhost` — our OWN Postfix/Dovecot/OpenDKIM server (no third party). **This replaced
+  the former Mailgun provider, which was removed entirely.**
+
+selfhost wiring (on the shared mail server, same stack amaskills uses):
+- **Inbound**: Postfix accepts the whole domain; a catch-all virtual alias
+  `@<MAIL_DOMAIN> → bot@<MAIL_DOMAIN>` funnels every `<slug>[+jid]@` into ONE Maildir.
+  `mail_sink._poll_maildir` reads it off disk via the vendored `tools/_maildir.py`
+  (stdlib only) and attributes each message by its original `To` header
+  (`resolve_application` handles the `+<jid>` per-application tag). No IMAP, no webhook.
+- **Outbound**: `send_reply` → `sh_send` submits to `127.0.0.1:587` (STARTTLS + SASL as
+  `MAIL_SMTP_LOGIN`); OpenDKIM signs. From = the candidate address (Postfix
+  `smtpd_sender_login_maps` is empty, so the one submission account sends as any `@domain`).
+- **Provisioning**: none per-candidate — the catch-all + one submission account (`bot@`)
+  cover every address. `mail_sink --assign` only generates the `<slug>` labels; `--poll`
+  merges the Maildir into the durable store; `--status` shows health.
 
 ## Gotchas
 - **Run from the repo ROOT** — imports are absolute `backend.*`. The old `cd backend && uvicorn
@@ -82,3 +114,13 @@ re-queued. Tailoring (`services/tailor/`) is strictly no-fabrication.
   the key, tailoring falls back to the deterministic keyword path.
 - **`frontend/` (Vite/React) is not the deployed UI** — the live app is `dashboard_app.py`'s
   server-rendered HTML. (Port 4001's next-server is janyl, not this project.)
+- **Self-hosted mail: catch-all + poll under `sg mail`.** Dovecot does NOT do a static-userdb
+  catch-all here — an unprovisioned address bounces `550 User doesn't exist`. Inbound therefore
+  relies on a Postfix catch-all alias `@<MAIL_DOMAIN> → bot@<MAIL_DOMAIN>` funnelling everything
+  into one Maildir. The poll must run where `/var/mail/vhosts` is readable (it is `vmail:mail 2770`):
+  `*/2 * * * * sg mail -c 'python -m backend.tools.mail_sink --poll'`, exactly like `inbox_index.py`.
+  The dashboard runs as `programmer` (no `mail` group) so it SKIPS its in-process poll for `selfhost`
+  and just reads the store the cron fills. Bringing up a NEW mail domain needs, on the server:
+  add it to Postfix `virtual_mailbox_domains` + a catch-all alias in `/etc/postfix/virtual`, an
+  OpenDKIM key (`opendkim-genkey` + SigningTable/KeyTable), one submission mailbox in a Dovecot
+  passwd-file (mode 640 root:dovecot); and in DNS: `MX`, `SPF`, `DKIM` (mail._domainkey), `DMARC`.

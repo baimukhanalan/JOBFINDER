@@ -553,8 +553,9 @@ class ApplyStrategy(ABC):
                 # behind a styled wrapper — the wrapper gets clicked instead.
                 return await check_input(page, sels[index])
             else:
-                await page.locator(q["selector"]).first.select_option(
-                    label=q["options"][index], timeout=4000)
+                from backend.applier.filler import select_dropdown
+                if not await select_dropdown(page, q["selector"], q["options"][index]):
+                    return False
             return True
         except Exception as e:
             logger.debug("choice fill failed for %r: %s",

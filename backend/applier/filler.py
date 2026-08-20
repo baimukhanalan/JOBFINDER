@@ -34,6 +34,78 @@ async def check_input(page: Page, selector: str) -> bool:
         return False
 
 
+_OVERLAY_SELECTORS = [
+    "#onetrust-accept-btn-handler",
+    "#hs-eu-confirmation-button",
+    "button[aria-label*='accept' i]",
+    "button:has-text('Accept all')",
+    "button:has-text('Accept All Cookies')",
+    "button:has-text('Accept cookies')",
+    "button:has-text('Allow all')",
+    "button:has-text('I agree')",
+    "button:has-text('Got it')",
+    "[id*='cookie' i] button:has-text('Accept')",
+    ".cookie-banner button, .cookie-consent button",
+]
+
+
+async def dismiss_overlays(page: Page) -> int:
+    """Best-effort: close cookie/consent banners that intercept clicks on form fields
+    (OneTrust, HubSpot EU, generic 'Accept'). Never raises. Returns count dismissed."""
+    dismissed = 0
+    for sel in _OVERLAY_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() and await loc.is_visible(timeout=500):
+                await loc.click(timeout=1500, force=True)
+                dismissed += 1
+                await page.wait_for_timeout(300)
+                if dismissed >= 2:
+                    break
+        except Exception:
+            continue
+    return dismissed
+
+
+async def select_dropdown(page: Page, selector: str, label: str) -> bool:
+    """Fill a native <select> OR a custom (React/div) dropdown by option label.
+    select_option only works on native <select>; modern ATS use custom comboboxes,
+    so fall back to open-and-click-the-option, then type-to-filter + Enter."""
+    loc = page.locator(selector).first
+    try:                                   # 1) native <select>
+        await loc.select_option(label=label, timeout=2500)
+        return True
+    except Exception:
+        pass
+    try:                                   # 2) custom dropdown: open it
+        await loc.click(timeout=2500, force=True)
+        await page.wait_for_timeout(400)
+        for finder in (
+            lambda: page.get_by_role("option", name=label, exact=True),
+            lambda: page.get_by_role("option", name=label, exact=False),
+            lambda: page.get_by_text(label, exact=True),
+        ):
+            try:
+                opt = finder().first
+                if await opt.count() and await opt.is_visible(timeout=900):
+                    await opt.click(timeout=1500, force=True)
+                    return True
+            except Exception:
+                continue
+        # react-select style: type to filter, then pick / Enter
+        await page.keyboard.type(str(label)[:40], delay=25)
+        await page.wait_for_timeout(500)
+        opt = page.get_by_role("option", name=label, exact=False).first
+        if await opt.count() and await opt.is_visible(timeout=900):
+            await opt.click(timeout=1200, force=True)
+            return True
+        await page.keyboard.press("Enter")
+        return True
+    except Exception as e:
+        logger.debug("select_dropdown failed for %s=%r: %s", selector, label, e)
+        return False
+
+
 async def fill_field(page: Page, field: dict) -> bool:
     """Fill a single form field based on analyzer output."""
     selector = field.get("selector", "")
@@ -98,7 +170,9 @@ async def fill_field(page: Page, field: dict) -> bool:
             logger.info("Filled '%s' = '%s'", selector, value[:50])
 
         elif action == "select":
-            await element.select_option(label=value)
+            if not await select_dropdown(page, selector, value):
+                logger.warning("Could not select '%s' = '%s'", selector, value)
+                return False
             logger.info("Selected '%s' = '%s'", selector, value)
 
         elif action == "check":

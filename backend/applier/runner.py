@@ -261,6 +261,14 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
         try:
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=45000)
             await page.wait_for_timeout(2500)
+            # Dismiss cookie/consent banners (OneTrust etc.) that otherwise intercept
+            # clicks on radios/dropdowns and leave required fields empty.
+            try:
+                from backend.applier.filler import dismiss_overlays
+                if await dismiss_overlays(page):
+                    await page.wait_for_timeout(500)
+            except Exception:
+                pass
 
             # A grounded cover letter for forms that have a cover-letter field
             # (the analyzer fills it verbatim; ignored on forms without one).

@@ -14,6 +14,7 @@ each one and click through to submit themselves.
 #
 import json
 import logging
+import os
 import time
 from html import escape
 from pathlib import Path
@@ -495,24 +496,102 @@ def _record_assignment(url: str, profile_id: str, ok: bool) -> None:
         tmp.replace(_ASSIGN_FILE)
 
 
+# ---- per-candidate application cap (ATS policy / anti-ban) ------------------
+# Many ATSes cap how many times ONE candidate may apply within a rolling window
+# — e.g. "Candidates may not apply more than 5 times in any 180-day span, across
+# roles." We enforce it at ASSIGNMENT time so a candidate's (cap+1)-th application
+# to a company is never even PREPARED inside the window (a human could otherwise
+# submit it). Scope is per (candidate, company): each employer counts its own roles.
+# Env: APPLY_CAP_PER_WINDOW (0 disables), APPLY_CAP_WINDOW_DAYS.
+APPLY_CAP = int(os.getenv("APPLY_CAP_PER_WINDOW", "5"))
+APPLY_CAP_WINDOW_DAYS = int(os.getenv("APPLY_CAP_WINDOW_DAYS", "180"))
+
+
+def _company_key(name: str | None) -> str:
+    return (name or "").strip().lower()
+
+
+def application_counts(within_days: int | None = None) -> dict[tuple[str, str], int]:
+    """{(profile_id, company_key): n} — how many non-gated applications each candidate
+    has to each company whose report.json is newer than the rolling window. Counts
+    PREFILLED applications (report.json, not gated_out): a prepared application can be
+    submitted, so it already consumes the candidate's per-company budget."""
+    within = APPLY_CAP_WINDOW_DAYS if within_days is None else within_days
+    cutoff = time.time() - within * 86400
+    counts: dict[tuple[str, str], int] = {}
+    for rep in OUT_ROOT.glob("*/*/report.json"):
+        try:
+            if rep.stat().st_mtime < cutoff:
+                continue
+            r = json.loads(rep.read_text())
+        except Exception:
+            continue
+        if r.get("gated_out"):
+            continue
+        comp = _company_key(r.get("company"))
+        if not comp:
+            continue
+        pid = rep.parents[1].name
+        counts[(pid, comp)] = counts.get((pid, comp), 0) + 1
+    return counts
+
+
+def application_count(profile_id: str, company: str, within_days: int | None = None) -> int:
+    """Non-gated applications one candidate has to one company in the window — scans only
+    that profile's dir (cheap for a single check, e.g. the bot picking one candidate)."""
+    within = APPLY_CAP_WINDOW_DAYS if within_days is None else within_days
+    cutoff = time.time() - within * 86400
+    comp = _company_key(company)
+    n = 0
+    for rep in (OUT_ROOT / profile_id).glob("*/report.json"):
+        try:
+            if rep.stat().st_mtime < cutoff:
+                continue
+            r = json.loads(rep.read_text())
+        except Exception:
+            continue
+        if not r.get("gated_out") and _company_key(r.get("company")) == comp:
+            n += 1
+    return n
+
+
+def at_application_cap(profile_id: str, company: str, cap: int | None = None,
+                       within_days: int | None = None) -> bool:
+    """True when this candidate has reached the per-company application cap in the window."""
+    cap = APPLY_CAP if cap is None else cap
+    if cap <= 0:
+        return False
+    return application_count(profile_id, company, within_days) >= cap
+
+
 def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
-                       ledger: dict[str, dict], k: int) -> dict[str, set[str]]:
+                       ledger: dict[str, dict], k: int,
+                       app_counts: dict[tuple[str, str], int] | None = None,
+                       cap: int | None = None) -> dict[str, set[str]]:
     """Give each online role up to `k` family-matched candidates, cycling profiles.
 
     A role needs (k - len(owners)) more genuine candidates; profiles already in the
     role's `tried` list (owned OR previously gated) are skipped, so a gated position
     flows to the NEXT untried profile instead of re-offering the one that gated it.
     A profile can be handed MANY roles in its family (one identity, many positions).
-    Returns {profile_id: {apply_url, ...}} — the per-profile assignment for this run.
+
+    Enforces the per-candidate application cap: a profile at/above the per-company cap
+    is skipped for that company's roles — counting BOTH prior runs (`app_counts`, keyed
+    (pid, company_key)) and assignments made in THIS run (`run_counts`). `cap<=0` (or an
+    empty company on the role) disables the cap. Returns {profile_id: {apply_url, ...}}.
     """
+    cap = APPLY_CAP if cap is None else cap
+    app_counts = app_counts or {}
     plan: dict[str, set[str]] = {}
     cursor: dict[str, int] = {}  # per-family rotation pointer
+    run_counts: dict[tuple[str, str], int] = {}  # (pid, company) assigned THIS run
     for role in roles:
         fam = role.get("family")
         pool = fam_profiles.get(fam or "", [])
         if not pool:
             continue
         url = role["apply_url"]
+        company = _company_key(role.get("company"))
         entry = ledger.get(url, {"owners": [], "tried": []})
         need = k - len(entry["owners"])
         if need <= 0:
@@ -526,8 +605,14 @@ def assign_round_robin(roles: list[dict], fam_profiles: dict[str, list[str]],
             loops += 1
             if pid in tried:
                 continue  # already owns or already gated this role -> next profile
+            if cap > 0 and company:
+                have = app_counts.get((pid, company), 0) + run_counts.get((pid, company), 0)
+                if have >= cap:
+                    continue  # candidate at the per-company application cap -> next profile
             plan.setdefault(pid, set()).add(url)
             tried.add(pid)
+            if company:
+                run_counts[(pid, company)] = run_counts.get((pid, company), 0) + 1
             picked += 1
         cursor[fam] = i
     return plan
@@ -563,7 +648,8 @@ async def batch_prefill_all(per_vacancy: int = 1, **kwargs) -> dict:
 
     roles = _online_roles()
     jobmap = {r["apply_url"]: r for r in roles}
-    plan = assign_round_robin(roles, fam_profiles, _load_assignments(), max(1, per_vacancy))
+    plan = assign_round_robin(roles, fam_profiles, _load_assignments(), max(1, per_vacancy),
+                              application_counts(), APPLY_CAP)
     role_fams = {r["family"] for r in roles}
     unassigned = sorted(f for f in role_fams if f and not fam_profiles.get(f))
     unclassified = sorted({r["apply_url"] for r in roles if not r.get("family")})

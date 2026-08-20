@@ -35,7 +35,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from backend.applier.batch import _load_assignments, _record_assignment
+from backend.applier.batch import _load_assignments, _record_assignment, at_application_cap
 from backend.applier.runner import ATS_GATE_MIN, MATCH_GATE_MIN, prefill_application
 from backend.applier.strategies.base import strip_review
 from backend.config import settings
@@ -638,6 +638,15 @@ async def _prefill_and_send(dest: Message, role: dict, kb_mode: str = "full") ->
     rep: dict | None = None
     for _ in range(MAX_CANDIDATE_TRIES):
         cand = _matched_candidate(title, apply_url or "")
+        if at_application_cap(cand.id, company):  # per-company application cap (≤5 / 180d)
+            # already at the company's application limit in the window — mark tried so the
+            # next pick advances, and skip (never prepare a candidate's over-limit apply).
+            if apply_url:
+                try:
+                    _record_assignment(apply_url, cand.id, ok=False)
+                except Exception:
+                    pass
+            continue
         if _base_fit(cand, job) < MATCH_GATE_MIN:  # sub-threshold — skip cheaply, mark tried
             if apply_url:
                 try:

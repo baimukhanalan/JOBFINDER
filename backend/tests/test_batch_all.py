@@ -129,3 +129,69 @@ def test_guard_sample_still_blocks_the_sample_profile(monkeypatch):
     a = argparse.Namespace(profile="sample", allow_sample=False, batch=True)
     with pytest.raises(SystemExit):
         _guard_sample(ap, a)
+
+
+# --- per-candidate application cap (ATS policy: <=5 per company per 180 days) -----
+def _acme_roles(n):
+    return [{"apply_url": f"https://acme/{i}", "title": "Data Analyst",
+             "family": "data", "company": "Acme"} for i in range(n)]
+
+
+def test_cap_skips_candidate_already_at_limit():
+    # alice already has 5 Acme applications -> she is at the cap and draws no new roles.
+    plan = batch.assign_round_robin(_acme_roles(4), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={("alice", "acme"): 5}, cap=5)
+    assert "alice" not in plan
+
+
+def test_cap_limits_assignments_within_one_run():
+    # One candidate, ten Acme roles, no prior history: she may take at most 5 this run.
+    plan = batch.assign_round_robin(_acme_roles(10), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={}, cap=5)
+    assert len(plan.get("alice", set())) == 5
+
+
+def test_cap_is_per_company_not_global():
+    # 4 Acme (alice at cap there) + 2 Globex roles; alice still eligible at Globex.
+    roles = _acme_roles(2) + [
+        {"apply_url": "https://globex/1", "title": "Data Analyst", "family": "data",
+         "company": "Globex"}]
+    plan = batch.assign_round_robin(roles, {"data": ["alice"]}, {}, k=1,
+                                    app_counts={("alice", "acme"): 5}, cap=5)
+    assert plan.get("alice") == {"https://globex/1"}  # only the Globex role
+
+
+def test_cap_disabled_when_zero():
+    plan = batch.assign_round_robin(_acme_roles(3), {"data": ["alice"]}, {}, k=1,
+                                    app_counts={("alice", "acme"): 99}, cap=0)
+    assert len(plan.get("alice", set())) == 3
+
+
+def test_application_count_windows_gating_and_company(tmp_path, monkeypatch):
+    import json as _json
+    import os as _os
+    import time as _time
+    root = tmp_path / "prefill"
+    monkeypatch.setattr(batch, "OUT_ROOT", root)
+
+    def _rep(pid, jid, company, gated=False, age_days=0):
+        d = root / pid / jid
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "report.json"
+        p.write_text(_json.dumps({"company": company, "gated_out": gated}))
+        if age_days:
+            old = _time.time() - age_days * 86400
+            _os.utime(p, (old, old))
+
+    _rep("alice", "j1", "Acme")
+    _rep("alice", "j2", "Acme")
+    _rep("alice", "j3", "Acme", gated=True)     # gated_out -> not an application
+    _rep("alice", "j4", "Acme", age_days=200)   # outside the 180-day window
+    _rep("alice", "j5", "Globex")               # different employer
+    assert batch.application_count("alice", "Acme") == 2
+    assert batch.at_application_cap("alice", "Acme", cap=2) is True
+    assert batch.at_application_cap("alice", "Acme", cap=3) is False
+    assert batch.application_count("alice", "Globex") == 1
+    # aggregate scan agrees
+    counts = batch.application_counts()
+    assert counts[("alice", "acme")] == 2 and counts[("alice", "globex")] == 1

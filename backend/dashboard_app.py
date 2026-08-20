@@ -640,15 +640,20 @@ def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = ""):
 
 @app.get("/mail/candidates", response_class=HTMLResponse)
 def mail_candidates():
-    import os as _os
-    from backend.tools import mailcrm, mailcrm_ui
+    from backend.tools import mail_db, mailcrm, mailcrm_ui
     cands = mailcrm.candidates()
-    for c in cands:
-        try:
-            c["unread"] = sum(1 for n in _os.listdir(_os.path.join(c["maildir"], "new"))
-                              if not n.startswith("."))
-        except OSError:
-            c["unread"] = 0
+    try:  # one query instead of scanning 261 Maildirs
+        unread = mail_db.unread_by_mailbox()
+        for c in cands:
+            c["unread"] = unread.get(c["email"], 0)
+    except Exception:
+        import os as _os
+        for c in cands:
+            try:
+                c["unread"] = sum(1 for n in _os.listdir(_os.path.join(c["maildir"], "new"))
+                                  if not n.startswith("."))
+            except OSError:
+                c["unread"] = 0
     cands.sort(key=lambda c: (-c.get("unread", 0), c["name"]))
     return HTMLResponse(mailcrm_ui.render_candidates(cands))
 

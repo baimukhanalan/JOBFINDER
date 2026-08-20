@@ -26,6 +26,8 @@ from email.utils import (formatdate, make_msgid, parseaddr,
 from pathlib import Path
 from typing import Any
 
+from backend.tools import mail_db
+
 ROOT = Path(__file__).resolve().parents[2]
 PROFILES = ROOT / "backend" / "data" / "profiles.json"
 ADDR_FILE = ROOT / "backend" / "data" / "mail_addresses.json"
@@ -167,11 +169,49 @@ def _snippet(msg) -> str:
     return text[:280]
 
 
+def build_index_row(path: str, seen: int) -> dict | None:
+    """Parse one Maildir file into the mail_index row shape (used by the indexer
+    and the retention job). Returns None for a file outside any candidate mailbox."""
+    box = _mailbox_of(path)
+    if not box:
+        return None
+    try:
+        with open(path, "rb") as f:
+            msg = BytesParser(policy=policy.default).parse(f)
+    except Exception:
+        return None
+    frm = str(msg["From"] or "")
+    subj = str(msg["Subject"] or "")
+    snip = _snippet(msg)
+    from_email = _email_only(frm)
+    return {
+        "mailbox": box["email"], "candidate": box["name"], "candidate_id": box["id"],
+        "path": path, "path_hash": _pid(path),
+        "from_name": _display_name(frm), "from_email": from_email,
+        "subject": subj, "snippet": snip,
+        "kind": classify(subj, snip), "thread_key": _norm_subject(subj),
+        "has_att": any(p.get_filename() for p in msg.walk()),
+        "outbound": from_email.lower() == box["email"],
+        "date_ts": _date_ts(msg, path), "seen": bool(seen),
+    }
+
+
 def list_messages(mailbox: str | None = None, q: str = "",
                   limit: int = 50, before_ts: int | None = None,
                   before_id: str | None = None) -> list[dict]:
-    """Newest-first message rows across candidate mailboxes (or one mailbox).
-    Keyset paginated by (date_ts, id). Live off disk — no index needed."""
+    """Newest-first message rows. Reads the Postgres index (fast); falls back to a
+    live Maildir scan if the index is unavailable."""
+    try:
+        return mail_db.list_messages(mailbox=mailbox, q=(q or None), limit=limit,
+                                     before_ts=before_ts, before_id=before_id)
+    except Exception:
+        return _scan_messages(mailbox, q, limit, before_ts, before_id)
+
+
+def _scan_messages(mailbox: str | None = None, q: str = "",
+                   limit: int = 50, before_ts: int | None = None,
+                   before_id: str | None = None) -> list[dict]:
+    """Fallback: newest-first rows straight off disk (keyset by date_ts,id)."""
     boxes = candidates()
     if mailbox:
         boxes = [c for c in boxes if c["email"] == mailbox.lower()]
@@ -272,19 +312,83 @@ def _parse_full(path: str, path_hash: str) -> dict | None:
     }
 
 
+def _resolve_path(path_hash: str) -> str | None:
+    """Absolute file path for a message id — from the Postgres index first, then a
+    live Maildir scan as a fallback."""
+    try:
+        row = mail_db.get_row(path_hash)
+        if row and row.get("path") and os.path.isfile(row["path"]):
+            return row["path"]
+    except Exception:
+        pass
+    return _find_by_id(path_hash)
+
+
 def get_message(path_hash: str, mark: bool = True) -> dict | None:
-    path = _find_by_id(path_hash)
+    path = _resolve_path(path_hash)
     if not path:
         return None
     if mark and (os.sep + "new" + os.sep) in path:
+        old_hash = path_hash
         path = _mark_read(path)
         path_hash = _pid(path)
+        try:
+            mail_db.mark_seen(old_hash, path, path_hash)
+        except Exception:
+            pass
     return _parse_full(path, path_hash)
 
 
 def get_thread(path_hash: str, mark: bool = True) -> dict | None:
-    """The whole conversation for a message: every mail in the SAME candidate
-    mailbox sharing the normalized subject, oldest-first (Gmail-style thread)."""
+    """The whole conversation for a message (Gmail-style). Uses the Postgres index;
+    falls back to a live Maildir scan if the index is unavailable."""
+    try:
+        row = mail_db.get_row(path_hash)
+    except Exception:
+        row = None
+    if row and row.get("mailbox") and row.get("thread_key") is not None:
+        t = _thread_from_index(row, mark)
+        if t is not None:
+            return t
+    return _scan_thread(path_hash, mark)
+
+
+def _thread_from_index(row: dict, mark: bool) -> dict | None:
+    """Build the conversation from the index: one query for the thread, then read
+    each message's file for its full body/attachments."""
+    box = _by_email().get(row["mailbox"])
+    try:
+        rows = mail_db.thread_rows(row["mailbox"], row["thread_key"])
+    except Exception:
+        return None
+    msgs = []
+    for r in rows:
+        p = r.get("path")
+        if not p or not os.path.isfile(p):
+            continue
+        full = _parse_full(p, r["path_hash"])
+        if not full:
+            continue
+        full["seen"] = bool(r.get("seen"))
+        if mark and (os.sep + "new" + os.sep) in p:
+            old_hash = r["path_hash"]
+            np = _mark_read(p)
+            full["path"], full["id"], full["seen"] = np, _pid(np), 1
+            try:
+                mail_db.mark_seen(old_hash, np, _pid(np))
+            except Exception:
+                pass
+        msgs.append(full)
+    if not msgs:
+        return None
+    msgs.sort(key=lambda m: m["date_ts"])
+    subject = next((m["subject"] for m in reversed(msgs) if m["subject"]), "")
+    name = box["name"] if box else (msgs[0].get("candidate") or "")
+    return {"subject": subject, "candidate": name, "mailbox": row["mailbox"], "messages": msgs}
+
+
+def _scan_thread(path_hash: str, mark: bool = True) -> dict | None:
+    """Fallback: rebuild the thread by scanning the candidate's Maildir."""
     path = _find_by_id(path_hash)
     if not path:
         return None
@@ -313,7 +417,7 @@ def get_thread(path_hash: str, mark: bool = True) -> dict | None:
 
 def get_attachment(path_hash: str, i: int):
     """Return (filename, content_type, bytes) for one attachment, or None."""
-    path = _find_by_id(path_hash)
+    path = _resolve_path(path_hash)
     if not path:
         return None
     try:
@@ -391,6 +495,14 @@ def _save_sent(maildir: str, msg) -> None:
 
 # ---- aggregate counts (nav badges) -----------------------------------------
 def counts() -> dict[str, int]:
+    """Nav badge counts — from the index; falls back to a live Maildir scan."""
+    try:
+        return mail_db.counts()
+    except Exception:
+        return _scan_counts()
+
+
+def _scan_counts() -> dict[str, int]:
     unread = 0
     mbx = 0
     for c in candidates():

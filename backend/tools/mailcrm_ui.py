@@ -110,6 +110,7 @@ button.primary:hover{background:var(--accent-deep);}
 .mitem.unread .msender,.mitem.unread .msubj{color:var(--ink);font-weight:700;}
 .mitem.unread .mdate{color:var(--accent);}
 .empty{text-align:center;padding:48px;color:var(--ink-mute);}
+.healthbar{background:#fef7e0;border:1px solid #fdd663;color:#7c5b00;border-radius:10px;padding:11px 14px;margin:0 0 14px;font-size:13.5px;font-weight:500;}
 .msg-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:20px;}
 .msg-toolbar .spacer{flex:1;}.msg-toolbar form{margin:0;}
 .msg-page{max-width:840px;}
@@ -212,7 +213,7 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
 
 
 def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
-                 mailbox_name: str = "", page_size: int = 50) -> str:
+                 mailbox_name: str = "", page_size: int = 50, warning: str = "") -> str:
     has_more = 1 if len(rows) == page_size else 0
     head = (
         '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
@@ -230,7 +231,8 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
     empty = '<div class="empty">Писем нет</div>' if not rows else ""
-    body = (head + fbar +
+    banner = f'<div class="healthbar">⚠️ {escape(warning)}</div>' if warning else ""
+    body = (banner + head + fbar +
             f'<div class="maillist" id="maillist">{render_rows(rows)}</div>{empty}'
             f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>')
     return _page("inbox", body, _COMPOSE_MODAL)

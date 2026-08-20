@@ -25,7 +25,7 @@ import struct
 import threading
 import time
 
-from backend.tools import mail_db, mailcrm
+from backend.tools import mail_db, mail_health, mailcrm
 
 _pid = mailcrm._pid
 MAILDIR_ROOT = mailcrm.MAILDIR_ROOT
@@ -79,6 +79,7 @@ def run_once():
         except Exception as e:
             print(f"upsert error {path}: {e}", flush=True)
     pruned = mail_db.delete_paths(known - on_disk)
+    mail_health.heartbeat()   # a full reconcile completed -> the backstop is alive
     return inserted, pruned
 
 

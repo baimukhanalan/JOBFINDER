@@ -169,6 +169,16 @@ def _snippet(msg) -> str:
     return text[:280]
 
 
+def _health_fallback(where: str) -> None:
+    """Signal (throttled Telegram) that a DB-first read dropped to a live scan, so a
+    dead index/indexer can't hide behind the fallback. Best-effort."""
+    try:
+        from backend.tools import mail_health
+        mail_health.record_fallback(where)
+    except Exception:
+        pass
+
+
 def build_index_row(path: str, seen: int) -> dict | None:
     """Parse one Maildir file into the mail_index row shape (used by the indexer
     and the retention job). Returns None for a file outside any candidate mailbox."""
@@ -205,6 +215,7 @@ def list_messages(mailbox: str | None = None, q: str = "",
         return mail_db.list_messages(mailbox=mailbox, q=(q or None), limit=limit,
                                      before_ts=before_ts, before_id=before_id)
     except Exception:
+        _health_fallback("list_messages")
         return _scan_messages(mailbox, q, limit, before_ts, before_id)
 
 
@@ -499,6 +510,7 @@ def counts() -> dict[str, int]:
     try:
         return mail_db.counts()
     except Exception:
+        _health_fallback("counts")
         return _scan_counts()
 
 

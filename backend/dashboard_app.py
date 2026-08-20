@@ -621,13 +621,18 @@ def _start_mail_poller():
 #     our own server, sends via our own Postfix. No Mailgun, no third party.
 @app.get("/mail", response_class=HTMLResponse)
 def mail_page(q: str = "", mailbox: str = ""):
-    from backend.tools import mailcrm, mailcrm_ui
+    from backend.tools import mail_health, mailcrm, mailcrm_ui
     rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50)
     counts = mailcrm.counts()
     name = ""
     if mailbox:
         name = next((c["name"] for c in mailcrm.candidates() if c["email"] == mailbox.lower()), "")
-    return HTMLResponse(mailcrm_ui.render_inbox(rows, counts, q=q, mailbox=mailbox, mailbox_name=name))
+    try:
+        warning = mail_health.dashboard_warning() or ""
+    except Exception:
+        warning = ""
+    return HTMLResponse(mailcrm_ui.render_inbox(rows, counts, q=q, mailbox=mailbox,
+                                                mailbox_name=name, warning=warning))
 
 
 @app.get("/mail/more", response_class=HTMLResponse)

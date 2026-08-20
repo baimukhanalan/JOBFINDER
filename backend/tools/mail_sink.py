@@ -313,12 +313,19 @@ def _poll_maildir(msgs: dict, ts: int) -> dict[str, Any]:
     if err:
         return {"new": 0, "total": len(msgs), "error": err}
     from backend.tools import _maildir
-    # Scope to candidate mailboxes only, so a shared domain's unrelated mailboxes
-    # (e.g. a business info@) are never read into the queue. Derived from the
-    # assigned candidate addresses on this domain; empty -> whole domain (dev/tests).
+    # Scope to candidate mailboxes, so a shared domain's unrelated mailboxes are not
+    # read blindly. Derived from the assigned candidate addresses on this domain,
+    # PLUS the catch-all submission mailbox: the documented prod topology aliases
+    # `@DOMAIN -> <SH_SMTP_LOGIN>` (ONE Maildir holding every candidate's mail via
+    # plus-addressing), so without it the poll would read NOTHING once addresses are
+    # assigned. resolve_application still attributes each message to a candidate
+    # (unmatched mail -> profile=None). Empty set -> whole domain (dev/tests with
+    # per-candidate Maildirs).
     boxes = {a.split("@", 1)[0].split("+", 1)[0].lower()
              for a in address_map().values()
              if "@" in a and a.rsplit("@", 1)[1].lower() == DOMAIN.lower()}
+    if boxes and SH_SMTP_LOGIN:  # the mailbox the catch-all actually delivers into
+        boxes.add(SH_SMTP_LOGIN.split("@", 1)[0].lower())
     new = 0
     try:
         for m in _maildir.iter_domain_messages(MAILDIR_BASE, DOMAIN, boxes or None):
@@ -349,21 +356,25 @@ def sh_send(to: str, subject: str, text: str, frm: str = "",
         return {"ok": False, "error": "MAIL_SMTP_LOGIN/PASSWORD not set"}
     if not frm:
         return {"ok": False, "error": "no From address"}
-    msg = EmailMessage()
-    msg["From"] = frm
-    msg["To"] = to
-    msg["Subject"] = subject
-    for k, v in (headers or {}).items():
-        if v:
-            msg[k] = v
-    msg.set_content(text)
-    # Loopback submission: the server cert is for its own hostname, not 127.0.0.1,
-    # so we do not verify it here (same as the amaskills sender). Point MAIL_SMTP_HOST
-    # at the real mail hostname if you ever submit over the network and want verify.
+    # TLS: verify by default; only skip verification for a LOOPBACK submission, where
+    # the server cert is for the mail hostname, not 127.0.0.1. A real remote
+    # MAIL_SMTP_HOST keeps full verification, so the SASL login is never sent over an
+    # unverified, MITM-able channel.
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if (SH_SMTP_HOST or "").strip().lower() in ("127.0.0.1", "::1", "localhost"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     try:
+        # Build the message inside the try so a bad header value (e.g. CR/LF the email
+        # lib rejects) returns {ok: False} instead of an uncaught 500 out of /mail/send.
+        msg = EmailMessage()
+        msg["From"] = frm
+        msg["To"] = to
+        msg["Subject"] = subject
+        for k, v in (headers or {}).items():
+            if v:
+                msg[k] = v
+        msg.set_content(text)
         with smtplib.SMTP(SH_SMTP_HOST, SH_SMTP_PORT, timeout=20) as s:
             s.starttls(context=ctx)
             s.login(SH_SMTP_LOGIN, SH_SMTP_PASSWORD)
@@ -653,9 +664,13 @@ def send_reply(mid: str, text: str, subject: str | None = None) -> dict[str, Any
         subj = f"Re: {subj}".strip()
     headers = {}
     orig = m.get("message_id")
-    if orig:
-        headers["In-Reply-To"] = orig
-        headers["References"] = orig
+    # Only thread on a REAL RFC Message-ID (angle-bracketed per RFC 5322). The Maildir
+    # reader strips the brackets, so re-add them; skip the synthetic `sha1:` fallback
+    # (a non-msgid no client will match).
+    if orig and not orig.startswith("sha1:"):
+        mid_hdr = orig if orig.startswith("<") else f"<{orig}>"
+        headers["In-Reply-To"] = mid_hdr
+        headers["References"] = mid_hdr
     res = _send(to, subj, text, frm=frm, headers=headers)
     if not res.get("ok"):
         return {"ok": False, "error": res.get("error") or res.get("body") or "send failed",

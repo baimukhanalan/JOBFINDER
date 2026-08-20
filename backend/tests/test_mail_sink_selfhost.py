@@ -69,6 +69,54 @@ def test_poll_maildir_requires_domain(monkeypatch):
     assert res["new"] == 0 and "MAIL_DOMAIN" in res["error"]
 
 
+def test_poll_maildir_reads_catch_all_mailbox(tmp_path, monkeypatch):
+    """PRODUCTION topology: Postfix aliases @DOMAIN -> <SH_SMTP_LOGIN> (bot@DOMAIN), so
+    every candidate's mail is funnelled into ONE `bot` Maildir, not per-slug boxes. Once
+    addresses are assigned the box-scope allowlist is populated with candidate slugs; it
+    MUST also include the catch-all `bot` mailbox or the poll reads nothing. Regression
+    for the inbox-scoping blocker."""
+    base = tmp_path / "vhosts"
+    domain = "jobs.test"
+    _write_maildir_msg(base, domain, "bot",            # <- the ONE catch-all mailbox
+                       frm="Recruiter <talent@acme.test>",
+                       to="alice+job-42@jobs.test",
+                       subject="Interview invitation",
+                       body="Hi Alice, please pick a time on our Calendly for a call.")
+    monkeypatch.setattr(mail_sink, "MAILDIR_BASE", str(base))
+    monkeypatch.setattr(mail_sink, "DOMAIN", domain)
+    monkeypatch.setattr(mail_sink, "SH_SMTP_LOGIN", "bot@jobs.test")
+    # address map populated post `--assign`, and it does NOT contain "bot"
+    monkeypatch.setattr(mail_sink, "address_map",
+                        lambda: {"alice": "alice@jobs.test", "bob": "bob@jobs.test"})
+
+    msgs: dict = {}
+    res = mail_sink._poll_maildir(msgs, 1000)
+    assert res["new"] == 1, "catch-all bot mailbox must be read even though it's not a candidate slug"
+    (rec,) = list(msgs.values())
+    assert rec["profile"] == "alice" and rec["jid"] == "job-42"  # attributed by resolve_application
+
+
+def test_poll_maildir_scopes_out_unrelated_mailbox(tmp_path, monkeypatch):
+    """A per-candidate topology still isolates unrelated mailboxes: a business `info`
+    mailbox (neither a candidate slug nor the submission login) is never read."""
+    base = tmp_path / "vhosts"
+    domain = "jobs.test"
+    _write_maildir_msg(base, domain, "alice", frm="talent@acme.test",
+                       to="alice@jobs.test", subject="Interview invitation", body="hi alice")
+    _write_maildir_msg(base, domain, "info", frm="spam@x.test",
+                       to="info@jobs.test", subject="Partnership offer", body="buy ads")
+    monkeypatch.setattr(mail_sink, "MAILDIR_BASE", str(base))
+    monkeypatch.setattr(mail_sink, "DOMAIN", domain)
+    monkeypatch.setattr(mail_sink, "SH_SMTP_LOGIN", "bot@jobs.test")
+    monkeypatch.setattr(mail_sink, "address_map", lambda: {"alice": "alice@jobs.test"})
+
+    msgs: dict = {}
+    res = mail_sink._poll_maildir(msgs, 2000)
+    assert res["new"] == 1
+    subjects = {m["subject"] for m in msgs.values()}
+    assert "Interview invitation" in subjects and "Partnership offer" not in subjects
+
+
 # ---------------------------------------------------------------------------
 # outbound: sh_send
 # ---------------------------------------------------------------------------

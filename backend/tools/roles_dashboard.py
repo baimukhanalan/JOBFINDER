@@ -233,12 +233,11 @@ def _row(job: dict) -> str:
     loc = html.escape(job.get("location") or "")
     dept = html.escape(job.get("department") or "")
     desc = job.get("descriptionHtml") or ("<p>" + html.escape(job.get("descriptionPlain", "")) + "</p>")
-    online = "1" if _is_online(job) else "0"
     wt_cls = {"remote": "wp-remote", "hybrid": "wp-hybrid"}.get(wt.lower(), "wp-onsite")
     blob = html.escape((job.get("title", "") + " " + dept + " " + loc + " " +
                         (job.get("descriptionPlain", "") or "")).lower())
     return f"""
-<tr class="role" data-online="{online}" data-wp="{wt.lower()}" data-url="{html.escape(url)}" data-search="{blob}">
+<tr class="role" data-url="{html.escape(url)}" data-search="{blob}">
   <td class="c-pos"><div class="pos">{title}</div>
     <div class="meta"><span class="wp {wt_cls}">{html.escape(wt)}</span>
       {f'<span class="loc">{loc}</span>' if loc else ''}
@@ -320,9 +319,6 @@ _TEMPLATE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
   .controls{{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px;align-items:center}}
   input[type=search]{{flex:1;min-width:220px;background:var(--card);border:1px solid var(--rule);
     border-radius:8px;padding:10px 12px;color:var(--ink);font-size:14px}}
-  .seg{{display:flex;border:1px solid var(--rule);border-radius:8px;overflow:hidden}}
-  .seg button{{background:var(--card);border:0;color:var(--ink2);padding:9px 13px;font:600 13px system-ui;cursor:pointer}}
-  .seg button.on{{background:var(--accent);color:#04120e}}
   .reset{{background:#2a1a18;border:1px solid #4a2b26;color:var(--rej);border-radius:8px;
     padding:9px 13px;font:600 13px system-ui;cursor:pointer}}
   .count{{color:var(--ink3);font-size:13px;margin-left:auto}}

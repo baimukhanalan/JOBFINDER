@@ -11,7 +11,7 @@ Two providers, same durable store and same dashboard:
               userdb) and delivers each message to a Maildir under MAILDIR_BASE.
               We read that Maildir straight off disk — no IMAP, no webhook. Replies
               go out through our own Postfix submission (127.0.0.1:587), OpenDKIM-
-              signed. This replaced the former Mailgun provider.
+              signed. No third-party mail service is involved.
 
     python -m backend.tools.mail_sink --assign     # give every profile an address
     python -m backend.tools.mail_sink --poll       # merge provider -> durable store once

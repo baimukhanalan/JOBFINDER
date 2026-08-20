@@ -1,6 +1,6 @@
 """Self-hosted mail provider: Maildir inbound read + local-Postfix outbound send.
 
-These replace the old Mailgun tests. No network, no real mail server: inbound is a
+Self-hosted mail tests. No network, no real mail server: inbound is a
 fake Maildir tree on tmp_path; outbound uses a fake smtplib.SMTP.
 """
 from email.message import EmailMessage

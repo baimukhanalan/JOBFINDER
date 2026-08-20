@@ -1,5 +1,21 @@
 # JobFinder
 
+> **Repo / GitHub — read first.** This project lives at **`baimukhanalan/JOBFINDER`**
+> (`https://github.com/baimukhanalan/JOBFINDER`). The account is **`baimukhanalan`**, NOT `Abekemyn`
+> like the other `/home/projects/*` repos. The PAT is embedded in the `origin` remote URL (see
+> `git remote -v`), so `git push` works as-is — do NOT paste the token into any tracked file.
+> **Convention: after any nontrivial change, `git add -A && git commit && git push` to this remote
+> straight away — don't let work sit uncommitted — and edit THIS `CLAUDE.md` in the same commit
+> whenever deploy / behavior / gotchas change.** Directory is uppercase `/home/projects/JOBFINDER`.
+>
+> **This IS the live project** (`jobs.systeam.kz`, pm2 `jobfinder-alan-*`, Postgres `jobfinder_crm`).
+> The old lowercase `/home/projects/jobfinder` (repo `Abekemyn/jobfinder`, the `michael` persona,
+> `jobfinder.systeam.kz`) was **RETIRED & archived 2026-08-20** — its pm2 / nginx vhost / cron were
+> removed and the dir moved to `/home/projects/jobfinder.archive-2026-08-20-2158`. Treat any lingering
+> lowercase-`jobfinder` path, `jobfinder.systeam.kz`, `:8089` or display `:99` reference in the
+> sections below as STALE: the live stack is the Alan one — dash **:8099**, co-pilot **:8102**, noVNC
+> **:6090**, display **:98** (see the "Alan's co-pilot/noVNC" gotcha for the authoritative ports).
+
 Semi-automatic job-application engine for remote US/CA roles: scrapes openings, tailors a
 résumé per JD, **pre-fills** the ATS form (never submits), and a human reviews + clicks Submit.
 Three surfaces: a mobile review dashboard, a one-click browser extension, and a headful
@@ -50,7 +66,7 @@ re-queued. Tailoring (`services/tailor/`) is strictly no-fabrication.
 ## Gotchas
 - **Run from the repo ROOT** — imports are absolute `backend.*`. The old `cd backend && uvicorn
   main:app` is BROKEN (`ModuleNotFoundError: backend`). Correct: `uvicorn backend.main:app` /
-  `python -m backend.apply_cli ...` from `/home/projects/jobfinder`.
+  `python -m backend.apply_cli ...` from `/home/projects/JOBFINDER`.
 - **No auto-submit — by design.** The engine only pre-fills; a human reviews the screenshot, solves
   CAPTCHAs/assessments, and submits. The auto-submit path was deliberately removed (commit
   `a8ab56e`) — real submits from a datacenter IP get spam-flagged/banned. Do not re-add it.

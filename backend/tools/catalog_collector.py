@@ -156,10 +156,54 @@ def run(remote_only: bool = True, with_questions: bool = True,
     return c
 
 
+def backfill_gh_questions(workers: int = 8) -> int:
+    """Fill greenhouse questions for rows that missed them (their apply URL had no
+    /jobs/<id>). Gets the real numeric id from the board's /jobs list, matched by URL."""
+    from collections import defaultdict
+    catalog_db.ensure_schema()
+    rows = catalog_db.rows_missing_questions("greenhouse")
+    by_slug = defaultdict(list)
+    for r in rows:
+        by_slug[r["company_key"]].append(r)
+    print(f"greenhouse backfill: {len(rows)} rows across {len(by_slug)} boards", flush=True)
+    total = 0
+    for slug, rws in by_slug.items():
+        try:
+            jl = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
+                           timeout=25).json().get("jobs", [])
+        except Exception:
+            continue
+        url2id = {(j.get("absolute_url") or ""): j.get("id") for j in jl}
+
+        def work(r):
+            jid = url2id.get(r["url"])
+            if not jid:
+                m = _GH_ID.search(r["url"] or "")
+                jid = m.group(1) if m else None
+            if not jid:
+                return None
+            qs = _gh_questions(slug, jid)
+            return (r["external_id"], qs) if qs is not None else None
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for f in as_completed([ex.submit(work, r) for r in rws]):
+                res = f.result()
+                if res:
+                    catalog_db.set_questions("greenhouse", slug, res[0], res[1])
+                    total += 1
+    print(f"DONE greenhouse backfill: +{total}", flush=True)
+    print("catalog counts ->", catalog_db.counts(), flush=True)
+    return total
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="include non-remote jobs too")
     ap.add_argument("--no-questions", action="store_true", help="skip greenhouse questions")
-    ap.add_argument("--limit-boards", type=int, default=0, help="cap boards (for a quick test)")
+    ap.add_argument("--backfill-gh", action="store_true",
+                    help="only backfill greenhouse questions for rows that miss them")
     args = ap.parse_args()
-    run(remote_only=not args.all, with_questions=not args.no_questions)
+    if args.backfill_gh:
+        backfill_gh_questions()
+    else:
+        run(remote_only=not args.all, with_questions=not args.no_questions)

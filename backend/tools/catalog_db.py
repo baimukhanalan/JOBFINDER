@@ -163,6 +163,24 @@ def companies(remote_only: bool = True) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def set_questions(ats: str, company_key: str, external_id: str, questions: list) -> int:
+    """Attach/refresh the application-form questions for one existing catalog row."""
+    with _cur(False) as cur:
+        cur.execute("UPDATE job_catalog SET questions=%s, q_count=%s "
+                    "WHERE ats=%s AND company_key=%s AND external_id=%s",
+                    (Json(questions), len(questions or []), ats, company_key, external_id))
+        return cur.rowcount
+
+
+def rows_missing_questions(ats: str) -> list:
+    """(external_id, company_key, url, title) for rows of this ATS that still have no
+    questions — the backfill work-list."""
+    with _cur() as cur:
+        cur.execute("SELECT external_id, company_key, url, title FROM job_catalog "
+                    "WHERE ats=%s AND (q_count=0 OR q_count IS NULL)", (ats,))
+        return [dict(r) for r in cur.fetchall()]
+
+
 def counts() -> dict:
     with _cur(False) as cur:
         cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE is_remote), "

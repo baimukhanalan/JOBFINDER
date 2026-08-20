@@ -134,6 +134,12 @@ button.primary:hover{background:var(--accent-deep);}
 .att:hover{background:#e8f0fe;border-color:var(--accent);text-decoration:none;}
 .att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
 .att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
+.funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
+.fbtn{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:var(--r-full);border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;min-height:38px;}
+.fbtn b{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink);}
+.fbtn:hover{border-color:var(--accent);text-decoration:none;}
+.fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.fbtn.active b{color:#fff;}
 .mbxlist{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
 .mbxrow{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--ink);}
 .mbxrow:last-child{border-bottom:0;}.mbxrow:hover{background:#f8fafd;text-decoration:none;}
@@ -302,7 +308,10 @@ def render_thread(t: dict) -> str:
     return _page("inbox", body, _COMPOSE_MODAL)
 
 
-def render_candidates(cands: list[dict]) -> str:
+def render_candidates(cands: list[dict], counts: dict | None = None,
+                      active_filter: str = "", total: int | None = None) -> str:
+    counts = counts or {}
+    total = total if total is not None else len(cands)
     rows = []
     for c in cands:
         n = c.get("unread", 0)
@@ -312,11 +321,25 @@ def render_candidates(cands: list[dict]) -> str:
             f'<span class="avatar" style="background:{_avatar_color(c["name"])};width:30px;height:30px;font-size:13px">{escape(_initial(c["name"]))}</span>'
             f'<span class="nm">{escape(c["name"])}</span>{badge}'
             f'<span class="em">{escape(c["email"])}</span></a>')
+
+    def fb(key, label, n):
+        cls = "fbtn" + (" active" if active_filter == key else "")
+        href = "/mail/candidates" + (f"?filter={key}" if key else "")
+        return f'<a class="{cls}" href="{href}">{label} <b>{n}</b></a>'
+    funnel = ('<div class="funnel">'
+              + fb("", "Все", total)
+              + fb("submitted", "📤 Отправлено", counts.get("submitted", 0))
+              + fb("ack", "✅ Принято", counts.get("ack", 0))
+              + fb("interview", "📞 Собеседование", counts.get("interview", 0))
+              + fb("offer", "🎉 Оффер", counts.get("offer", 0))
+              + fb("rejection", "✕ Отказ", counts.get("rejection", 0))
+              + '</div>')
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{len(cands)}</b></a>'
             '</div></div></div>')
-    body = head + f'<div class="mbxlist">{"".join(rows)}</div>'
+    empty = '<div class="empty">Никого в этой корзине</div>' if not cands else ""
+    body = head + funnel + f'<div class="mbxlist">{"".join(rows)}</div>{empty}'
     return _page("candidates", body)
 
 

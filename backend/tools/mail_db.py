@@ -214,6 +214,22 @@ def unread_by_mailbox() -> dict:
         return {r[0]: r[1] for r in cur.fetchall()}
 
 
+def kind_counts() -> dict:
+    """{kind: number of DISTINCT candidate mailboxes that have a message of that kind}
+    — powers the funnel buttons on the candidates page."""
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT kind, COUNT(DISTINCT mailbox) FROM mail_index "
+                    "WHERE NOT outbound GROUP BY kind")
+        return {k: n for k, n in cur.fetchall()}
+
+
+def mailboxes_with_kind(kind: str) -> set:
+    """Candidate emails that have at least one INBOUND message of this kind."""
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT DISTINCT mailbox FROM mail_index WHERE kind=%s AND NOT outbound", (kind,))
+        return {r[0] for r in cur.fetchall()}
+
+
 # ---- retention (cron) ----------------------------------------------------------
 def protected_thread_keys() -> set:
     """(mailbox, thread_key) pairs that must NEVER be auto-deleted: any thread that

@@ -488,8 +488,8 @@ def _render(profile: str) -> str:
 
 @app.get("/")
 def home():
-    # The candidate mail CRM is the primary surface; the apply queue lives at /queue.
-    return RedirectResponse("/mail")
+    # Candidate-first: land on the candidate list (+ funnel), not the merged inbox.
+    return RedirectResponse("/mail/candidates")
 
 
 @app.get("/queue", response_class=HTMLResponse)
@@ -666,24 +666,57 @@ def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = ""):
     return HTMLResponse(mailcrm_ui.render_rows(rows))
 
 
+def _submitted_mailboxes() -> set:
+    """Candidate emails with at least one application marked 'submitted' (status.json).
+    Empty until the apply engine runs; wired so the funnel lights up when it does."""
+    from backend import status_store
+    from backend.tools import mailcrm
+    out = set()
+    for c in mailcrm.candidates():
+        try:
+            st = status_store.load(c["id"]) or {}
+        except Exception:
+            continue
+        for entry in st.values():
+            if isinstance(entry, dict) and entry.get("status") == "submitted":
+                out.add(c["email"])
+                break
+    return out
+
+
 @app.get("/mail/candidates", response_class=HTMLResponse)
-def mail_candidates():
+def mail_candidates(filter: str = ""):
     from backend.tools import mail_db, mailcrm, mailcrm_ui
-    cands = mailcrm.candidates()
+    all_cands = mailcrm.candidates()
     try:  # one query instead of scanning 261 Maildirs
         unread = mail_db.unread_by_mailbox()
-        for c in cands:
-            c["unread"] = unread.get(c["email"], 0)
     except Exception:
-        import os as _os
-        for c in cands:
-            try:
-                c["unread"] = sum(1 for n in _os.listdir(_os.path.join(c["maildir"], "new"))
-                                  if not n.startswith("."))
-            except OSError:
-                c["unread"] = 0
+        unread = {}
+    for c in all_cands:
+        c["unread"] = unread.get(c["email"], 0)
+    # funnel counts (distinct candidates per bucket)
+    try:
+        kc = mail_db.kind_counts()
+    except Exception:
+        kc = {}
+    submitted = _submitted_mailboxes()
+    counts = {"submitted": len(submitted), "ack": kc.get("ack", 0),
+              "interview": kc.get("interview", 0), "offer": kc.get("offer", 0),
+              "rejection": kc.get("rejection", 0)}
+    # apply the clicked filter -> only candidates in that bucket
+    f = (filter or "").lower()
+    cands = all_cands
+    if f == "submitted":
+        cands = [c for c in all_cands if c["email"] in submitted]
+    elif f in ("ack", "interview", "offer", "rejection"):
+        try:
+            keep = mail_db.mailboxes_with_kind(f)
+        except Exception:
+            keep = set()
+        cands = [c for c in all_cands if c["email"] in keep]
     cands.sort(key=lambda c: (-c.get("unread", 0), c["name"]))
-    return HTMLResponse(mailcrm_ui.render_candidates(cands))
+    return HTMLResponse(mailcrm_ui.render_candidates(cands, counts=counts,
+                                                     active_filter=f, total=len(all_cands)))
 
 
 @app.get("/mail/message", response_class=HTMLResponse)

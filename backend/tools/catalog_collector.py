@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 
 from backend.applier import ats_boards
+from backend.applier.regions import classify_with_source
 from backend.tools import catalog_db
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -71,7 +72,7 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
             continue
         url = j.get("applyUrl") or j.get("jobUrl") or ""
         ext = _ext_id(ats, url)
-        rows.append({
+        row = {
             "ats": ats, "company_key": slug, "company": company, "external_id": ext,
             "title": j.get("title", ""), "location": j.get("location", ""),
             "department": j.get("department", ""), "workplace": j.get("workplaceType", ""),
@@ -80,7 +81,9 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
             "description_html": j.get("descriptionHtml", ""),
             "questions": None, "q_count": 0,
             "_gh_id": ext if (ats == "greenhouse" and ext.isdigit()) else None,
-        })
+        }
+        row["regions"], row["region_source"] = classify_with_source(row, use_llm=False)
+        rows.append(row)
     return rows
 
 
@@ -196,14 +199,35 @@ def backfill_gh_questions(workers: int = 8) -> int:
     return total
 
 
+def backfill_regions(limit: int = 0, use_llm: bool = True) -> dict:
+    """Classify every row whose regions IS NULL. Deterministic first; LLM on residue."""
+    catalog_db.ensure_schema()
+    rows = catalog_db.rows_missing_regions(limit)
+    done = 0
+    for r in rows:
+        regs, src = classify_with_source(r, use_llm=use_llm)
+        # store [] (not NULL) so a resolved-empty row isn't re-processed forever
+        catalog_db.set_regions(r["ats"], r["company_key"], r["external_id"], regs, src)
+        done += 1
+    return {"processed": done, **catalog_db.counts()}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="include non-remote jobs too")
     ap.add_argument("--no-questions", action="store_true", help="skip greenhouse questions")
     ap.add_argument("--backfill-gh", action="store_true",
                     help="only backfill greenhouse questions for rows that miss them")
+    ap.add_argument("--backfill-regions", action="store_true",
+                    help="classify regions for rows whose regions IS NULL")
+    ap.add_argument("--no-llm", action="store_true",
+                    help="with --backfill-regions, skip the LLM fallback (deterministic only)")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="with --backfill-regions, cap the number of rows processed")
     args = ap.parse_args()
     if args.backfill_gh:
         backfill_gh_questions()
+    elif args.backfill_regions:
+        print(backfill_regions(limit=args.limit, use_llm=not args.no_llm), flush=True)
     else:
         run(remote_only=not args.all, with_questions=not args.no_questions)

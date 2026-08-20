@@ -543,6 +543,29 @@ def jobs_more(company: str = "", q: str = "", offset: int = 0, allpos: int = 0):
         return HTMLResponse("", status_code=200)
 
 
+@app.get("/catalog", response_class=HTMLResponse)
+def catalog_page(company: str = "", q: str = ""):
+    """Persisted remote-job catalog (Postgres) with descriptions + application-form
+    questions, collected across every known ATS board."""
+    from backend.tools import catalog_ui
+    try:
+        return HTMLResponse(catalog_ui.render_page(company=company, q=q))
+    except Exception as exc:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Каталог недоступен: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+@app.get("/catalog/more", response_class=HTMLResponse)
+def catalog_more(company: str = "", q: str = "", offset: int = 0):
+    """Pagination fragment for the /catalog infinite scroll."""
+    from backend.tools import catalog_ui
+    try:
+        return HTMLResponse(catalog_ui.render_more(company=company, q=q, offset=offset))
+    except Exception:
+        return HTMLResponse("", status_code=200)
+
+
 @app.get("/roles/counts")
 def roles_counts(company: str = ""):
     from backend.tools import roles_dashboard as rd

@@ -497,6 +497,50 @@ def queue(profile: str = "michael"):
     return _render(_safe_id(profile) or "michael")
 
 
+@app.get("/apply", response_class=HTMLResponse)
+def apply_index():
+    """Candidate-first index of pre-filled applications ready to submit — a jump-off
+    to each candidate's review queue (where the co-pilot / submit lives)."""
+    from html import escape as esc
+
+    from backend.tools import mailcrm, mailcrm_ui
+    names = {c["id"]: c["name"] for c in mailcrm.candidates()}
+    rows = []
+    total_ready = total_apps = 0
+    if PREFILL_ROOT.exists():
+        for pdir in sorted(PREFILL_ROOT.iterdir()):
+            if not pdir.is_dir():
+                continue
+            profile = pdir.name
+            jobs = _load_jobs(profile)
+            apps = [j for j in jobs if j.get("page_type") == "application_form"
+                    and j.get("_status") != "submitted"]
+            if not apps:
+                continue
+            ready = sum(1 for j in apps if _tab_of(j) == "ready")
+            total_apps += len(apps)
+            total_ready += ready
+            rows.append((profile, names.get(profile, profile), ready, len(apps)))
+    rows.sort(key=lambda r: (-r[2], -r[3]))
+    cards = "".join(
+        f'<a class="approw" href="/queue?profile={esc(p)}">'
+        f'<span class="apn">{esc(nm)}</span>'
+        f'<span class="apc">{"✅ " + str(r) + " готовы · " if r else ""}{t} заявок →</span></a>'
+        for p, nm, r, t in rows
+    ) or '<div class="empty">Пока нет пре-заполненных заявок. Запусти прогон apply.</div>'
+    css = ("<style>.apphead{font-size:19px;font-weight:700;margin:0 0 14px;color:var(--ink)}"
+           ".apphead b{color:var(--accent)}.applist{display:flex;flex-direction:column;gap:9px}"
+           ".approw{display:flex;justify-content:space-between;align-items:center;gap:12px;"
+           "background:var(--panel);border:1px solid var(--line);border-radius:var(--r);"
+           "padding:14px 16px;text-decoration:none;color:var(--ink);min-height:54px}"
+           ".approw:hover{border-color:var(--accent);text-decoration:none}.apn{font-weight:600}"
+           ".apc{font-size:13px;color:var(--ink-mute);white-space:nowrap}"
+           ".empty{color:var(--ink-mute);text-align:center;padding:40px}</style>")
+    body = (css + f'<div class="apphead">Заявки к отправке — <b>{total_ready}</b> готовы из {total_apps}</div>'
+            f'<div class="applist">{cards}</div>')
+    return HTMLResponse(mailcrm_ui._page("apply", body))
+
+
 @app.get("/health")
 def health():
     return {"ok": True}

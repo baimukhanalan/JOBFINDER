@@ -172,9 +172,11 @@ def _sidebar(active: str) -> str:
     roles_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 21V9"/></svg>'
     jobs_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>'
     catalog_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
+    apply_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
     return (f'<aside class="sidebar"><div class="brand">JF</div><div class="nav">'
             + item("/mail", "inbox", "Инбокс", inbox_ic)
             + item("/mail/candidates", "candidates", "Кандидаты", box_ic)
+            + item("/apply", "apply", "Заявки", apply_ic)
             + item("/jobs", "jobs", "Вакансии", jobs_ic)
             + item("/catalog", "catalog", "Каталог", catalog_ic)
             + item("/roles", "roles", "Компании", roles_ic)

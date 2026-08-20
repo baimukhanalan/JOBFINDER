@@ -9,12 +9,12 @@ Workable is best-effort: the form generally scrapes fine (real apply page is the
 posting URL + /apply, see `_apply_url`), but treat 0 questions on any given board
 as an accepted outcome (odd markup, A/B'd layout, etc.), not a bug.
 
-    python -m backend.tools.catalog_forms              # ashby + lever + workable, all missing
-    python -m backend.tools.catalog_forms ashby         # one ATS
+    python -m backend.tools.catalog_forms                    # ashby + lever + workable, all missing
+    python -m backend.tools.catalog_forms ashby               # one ATS, all missing
+    python -m backend.tools.catalog_forms --limit 200          # all three ATS, capped per-ATS
+    python -m backend.tools.catalog_forms ashby lever --limit 50
 """
 from __future__ import annotations
-
-import sys
 
 from playwright.sync_api import sync_playwright
 
@@ -103,6 +103,14 @@ def run(ats_list=("ashby", "lever", "workable"), limit: int = 0) -> int:
 
 
 if __name__ == "__main__":
+    import argparse
+
     _KNOWN = ("ashby", "lever", "workable")
-    ats = tuple(a for a in sys.argv[1:] if a in _KNOWN) or _KNOWN
-    run(ats_list=ats)
+    ap = argparse.ArgumentParser(
+        description="Scrape ATS apply-form questions into job_catalog.questions.")
+    ap.add_argument("ats", nargs="*", choices=_KNOWN, default=list(_KNOWN),
+                     help="ATS(es) to scrape (default: all three)")
+    ap.add_argument("--limit", type=int, default=0,
+                     help="cap rows scraped per ATS (bounded/cron runs)")
+    args = ap.parse_args()
+    run(ats_list=tuple(args.ats) or _KNOWN, limit=args.limit)

@@ -8,9 +8,10 @@ backend/data/discovered_slugs.json, which boards.collect() merges into its
 company universe — every future batch then fetches those companies' live
 openings straight from the ATS (fresh postings, correct apply URLs).
 
-Probing is hundreds of HTTP calls -> run via `apply_cli --discover` on a weekly
-cron, never in the batch path. The cache only grows (slugs are kept once seen);
-a company with zero openings today is exactly the one we want to re-check daily.
+Probing is hundreds of HTTP calls -> run via `apply_cli --discover` (or directly as
+`python -m backend.applier.discovery`) on a weekly cron, never in the batch path.
+The cache only grows (slugs are kept once seen); a company with zero openings today
+is exactly the one we want to re-check daily.
 """
 import asyncio
 import json
@@ -160,3 +161,14 @@ async def refresh_discovered_slugs() -> dict:
              "total_cached": {ats: len(s) for ats, s in out.items()}}
     logger.info("slug discovery: %s", stats)
     return stats
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="Refresh backend/data/discovered_slugs.json from remote-job aggregators "
+                     "(Remotive/Jobicy/Himalayas) by probing likely ATS slugs. Hundreds of HTTP "
+                     "calls; intended for a weekly cron, not the batch path.")
+    ap.parse_args()
+    print(asyncio.run(refresh_discovered_slugs()), flush=True)

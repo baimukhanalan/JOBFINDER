@@ -1,0 +1,44 @@
+# JobFinder Phase 1 catalog pipeline — cron lines (Task 7)
+#
+# Verified against the real CLI (backend/tools/catalog_collector.py __main__,
+# backend/tools/catalog_forms.py __main__, backend/applier/discovery.py __main__)
+# on 2026-08-20 via `--help` and bounded smoke runs. Deviations from the task-7
+# brief's guessed flags:
+#   - `--with-questions` does NOT exist on catalog_collector. Greenhouse questions
+#     are fetched by default; pass `--no-questions` to skip them. So the daily
+#     full collect line below takes NO extra flag.
+#   - catalog_forms had no CLI flags at all before this task (a bare
+#     `python -m backend.tools.catalog_forms --help` silently ran an UNBOUNDED
+#     scrape of all ashby+lever+workable rows, since unknown argv tokens were
+#     ignored and it fell back to "all ATS, no limit" — a real footgun, caught
+#     live during this task). Added a proper argparse CLI with `--limit`
+#     (per-ATS cap) so a nightly cron run is bounded.
+#   - backend/applier/discovery.py had no `__main__` at all (only importable via
+#     `apply_cli --discover`). Added a minimal argparse-guarded `__main__` so
+#     `python -m backend.applier.discovery` runs `refresh_discovered_slugs()`
+#     directly (and `--help` is now safe: it prints usage instead of running the
+#     real weekly probe sweep).
+#
+# None of these three modules touch the Maildir, so — unlike mail_sink /
+# mail_retention / mail_health — they must NOT be wrapped in `sg mail`.
+
+# JobFinder (Alan) — catalog collect: all ATS boards (ashby/greenhouse/lever/workable)
+# + greenhouse apply-form questions (on by default), tags regions at collect time.
+# Daily 05:30.
+30 5 * * * cd /home/projects/JOBFINDER && /usr/bin/python3 -m backend.tools.catalog_collector >> /home/projects/JOBFINDER/logs/catalog.log 2>&1
+
+# JobFinder (Alan) — region backfill: classify regions for any row left untagged
+# by collect (deterministic first, local-LLM residue by default). Daily 06:15,
+# after the collect above.
+15 6 * * * cd /home/projects/JOBFINDER && /usr/bin/python3 -m backend.tools.catalog_collector --backfill-regions >> /home/projects/JOBFINDER/logs/regions.log 2>&1
+
+# JobFinder (Alan) — ashby/lever/workable apply-form question scraping (headless
+# Playwright; greenhouse questions already come from the collect step above).
+# Bounded with --limit 200 per ATS (Ruling 6) so a nightly run stays short even
+# with a large rows_missing_questions backlog. Daily 06:45, after region backfill.
+45 6 * * * cd /home/projects/JOBFINDER && /usr/bin/python3 -m backend.tools.catalog_forms --limit 200 >> /home/projects/JOBFINDER/logs/forms.log 2>&1
+
+# JobFinder (Alan) — company discovery refresh: mine new ATS slugs from remote-job
+# aggregators (Remotive/Jobicy/Himalayas). Hundreds of HTTP calls, so weekly only,
+# not daily. Sun 07:00.
+0 7 * * 0 cd /home/projects/JOBFINDER && /usr/bin/python3 -m backend.applier.discovery >> /home/projects/JOBFINDER/logs/discovery.log 2>&1

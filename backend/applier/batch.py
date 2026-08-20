@@ -412,16 +412,20 @@ def _board_online_roles(tgt: dict, family_for_role) -> list[dict]:
     tagged with company + archetype family. ATS-agnostic: `ats_boards.fetch_board`
     normalizes each ATS's JSON to a common shape, so the same code serves every
     platform. Hybrid/onsite excluded (online == Remote per the product decision)."""
-    from backend.applier import ats_boards
+    from backend.applier import ats_boards, geo
     jobs = ats_boards.fetch_board(tgt.get("ats", "ashby"), tgt["slug"])
+    company = tgt.get("company", tgt.get("slug", ""))
     out = []
     for j in jobs:
         if (j.get("workplaceType") or "").lower() != "remote":
             continue
+        loc = j.get("location", "")
+        if not geo.is_highpay(loc, company):
+            continue  # low-pay region (LatAm / India / SE-Asia / E-EU …) — skip, not worth applying
         apply_url = (j.get("applyUrl") or j.get("jobUrl") or "").split("?")[0]
         if apply_url:
             out.append({"apply_url": apply_url, "title": j.get("title", ""),
-                        "company": tgt.get("company", tgt.get("slug", "")),
+                        "company": company, "location": loc,
                         "target": tgt.get("key", ""),
                         "family": family_for_role(j.get("title", "")),
                         "description": j.get("descriptionPlain", "")})

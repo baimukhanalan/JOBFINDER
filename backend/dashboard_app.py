@@ -431,6 +431,28 @@ def _blocked_banner(profile: str, problems: list[str]) -> str:
             f"<a href='/setup?profile={escape(profile)}'>Fix in Setup →</a></div>")
 
 
+_NAV_BTN = ("text-decoration:none;padding:8px 14px;border-radius:8px;"
+            "background:#1f2937;color:#e5e7eb;font-weight:600;font-size:14px")
+# Cross-surface nav injected into every page so the inbox, the company tables
+# and the review queue are one click apart — one dashboard, not three URLs.
+_NAV = (
+    '<nav style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;padding:8px;'
+    'border-radius:10px;background:#111827">'
+    f'<a href="/mail" style="{_NAV_BTN}">📥 Инбокс</a>'
+    f'<a href="/roles" style="{_NAV_BTN}">🏢 Компании</a>'
+    f'<a href="/" style="{_NAV_BTN}">🗂 Очередь</a>'
+    '</nav>'
+)
+
+
+def _inject_nav(html: str) -> str:
+    """Insert the cross-surface nav as the first child of the page's .wrap."""
+    for anchor in ('<div class="wrap">', "<div class='wrap'>"):
+        if anchor in html:
+            return html.replace(anchor, anchor + _NAV, 1)
+    return _NAV + html
+
+
 def _render(profile: str) -> str:
     jobs = _load_jobs(profile)
     prof = _profiles().get(profile)
@@ -468,6 +490,7 @@ def _render(profile: str) -> str:
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Apply — {escape(profile)}</title><style>{_CSS}</style></head><body><div class='wrap'>"
+        f"{_NAV}"
         f"<h1>Apply queue — {escape(profile)}</h1>"
         + (_blocked_banner(profile, problems) if blocked else "") +
         "<div class='stats'>"
@@ -504,9 +527,9 @@ def roles_page(company: str = ""):
     from backend.tools import roles_dashboard as rd
     try:
         if not company:
-            return HTMLResponse(rd.render_index_html(rd.supported_targets(),
-                                                     rd.counts_by_company()))
-        return HTMLResponse(rd.render_live_html(rd.fetch_jobs(company), company))
+            return HTMLResponse(_inject_nav(rd.render_index_html(rd.supported_targets(),
+                                                                 rd.counts_by_company())))
+        return HTMLResponse(_inject_nav(rd.render_live_html(rd.fetch_jobs(company), company)))
     except Exception as exc:
         return HTMLResponse(f"<p>roles feed unavailable: {escape(str(exc))}</p>", status_code=502)
 
@@ -597,7 +620,7 @@ def mail_page(profile: str = ""):
     _start_mail_poller()
     try:
         data = mail_sink.summary(_safe_id(profile) or None)
-        return HTMLResponse(mail_dashboard.render_html(data, mail_sink.address_map()))
+        return HTMLResponse(_inject_nav(mail_dashboard.render_html(data, mail_sink.address_map())))
     except Exception as exc:
         return HTMLResponse(f"<p>mail sink unavailable: {escape(str(exc))}</p>", status_code=502)
 

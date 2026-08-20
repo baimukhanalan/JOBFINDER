@@ -313,9 +313,15 @@ def _poll_maildir(msgs: dict, ts: int) -> dict[str, Any]:
     if err:
         return {"new": 0, "total": len(msgs), "error": err}
     from backend.tools import _maildir
+    # Scope to candidate mailboxes only, so a shared domain's unrelated mailboxes
+    # (e.g. a business info@) are never read into the queue. Derived from the
+    # assigned candidate addresses on this domain; empty -> whole domain (dev/tests).
+    boxes = {a.split("@", 1)[0].split("+", 1)[0].lower()
+             for a in address_map().values()
+             if "@" in a and a.rsplit("@", 1)[1].lower() == DOMAIN.lower()}
     new = 0
     try:
-        for m in _maildir.iter_domain_messages(MAILDIR_BASE, DOMAIN):
+        for m in _maildir.iter_domain_messages(MAILDIR_BASE, DOMAIN, boxes or None):
             mid = "md:" + m["message_id"]
             if mid in msgs:
                 continue

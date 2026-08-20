@@ -80,16 +80,23 @@ def _stable_id(msg, raw: bytes) -> str:
     return "sha1:" + hashlib.sha1(raw).hexdigest()
 
 
-def iter_domain_messages(base: str, domain: str) -> Iterator[dict]:
+def iter_domain_messages(base: str, domain: str, mailboxes=None) -> Iterator[dict]:
     """Yield one parsed message dict for every mail under `<base>/<domain>/*/{new,cur}`.
 
     Each dict: {message_id, from, to (list[str]), subject, body, received, unread,
     path}. `to` unions To/Cc/Delivered-To/X-Original-To so plus-addressing resolves.
-    A file that cannot be read/parsed is skipped, never fatal."""
+    A file that cannot be read/parsed is skipped, never fatal.
+
+    `mailboxes`, when given, is an allowlist of local-parts: only those mailbox
+    directories are read. This keeps a shared domain safe — unrelated mailboxes
+    (e.g. a business `info@`) are never opened, only the candidate mailboxes."""
     ddir = os.path.join(base, domain)
     if not os.path.isdir(ddir):
         return
+    allow = {m.lower() for m in mailboxes} if mailboxes else None
     for local in sorted(os.listdir(ddir)):
+        if allow is not None and local.lower() not in allow:
+            continue
         for sub in ("new", "cur"):
             mdir = os.path.join(ddir, local, sub)
             if not os.path.isdir(mdir):

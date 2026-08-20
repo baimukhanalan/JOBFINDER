@@ -218,11 +218,16 @@ def backfill_regions(limit: int = 0, use_llm: bool = True) -> dict:
     done = 0
     for r in rows:
         regs, src = classify_with_source(r, use_llm=use_llm)
-        # store [] (not NULL) so a resolved-empty row isn't re-processed forever;
-        # only_if_null guards against clobbering a tag a concurrent collect just set
-        # (no flock between the 05:30 collect and 06:15 backfill cron jobs)
-        catalog_db.set_regions(r["ats"], r["company_key"], r["external_id"], regs, src,
-                                only_if_null=True)
+        if regs or use_llm:
+            # store [] (not NULL) so a resolved-empty row isn't re-processed forever —
+            # but only once the LLM has had a shot at it (use_llm=True), otherwise a
+            # rule-miss on a --no-llm pass would go NULL -> [] and permanently escape
+            # the nightly LLM residue pass that's supposed to classify it later.
+            # only_if_null guards against clobbering a tag a concurrent collect just set
+            # (no flock between the 05:30 collect and 06:15 backfill cron jobs)
+            catalog_db.set_regions(r["ats"], r["company_key"], r["external_id"], regs, src,
+                                    only_if_null=True)
+        # else: deterministic-only pass + rule miss -> leave regions NULL for the LLM cron
         done += 1
     return {"processed": done, **catalog_db.counts()}
 

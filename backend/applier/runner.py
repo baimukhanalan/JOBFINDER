@@ -235,15 +235,11 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
         logger.warning("match gate scoring failed (%s) — allowing through", exc)
         report["match_gate"] = {"passed": True, "error": str(exc)}
 
-    # skip_gate: the caller is RE-opening an already-approved application for the human
-    # to submit (open_for_submit) — never re-reject it (esp. if the JD isn't re-supplied).
-    if not skip_gate and not report["match_gate"].get("passed", True):
-        report["gated_out"] = True
-        (out_dir / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-        logger.info("Match gate: %s @ %s fit=%s/%s ats=%s/%s — not pre-filled (no browser/PDF)",
-                    report["job_title"], report["company"], report.get("fit_score"),
-                    MATCH_GATE_MIN, report.get("ats_score"), ATS_GATE_MIN)
-        return report
+    # Match gate REMOVED as a filter (per product decision): the engine tailors ANY JD
+    # and pre-fills EVERY job regardless of fit — the human decides what to submit at
+    # review. fit_score / ats_score above are kept purely as informational relevance
+    # signals on the bot card; they never block. (`skip_gate` is retained for callers
+    # like open_for_submit but is now a no-op.)
 
     bm = BrowserManager(headless=headless)
     await bm.start()

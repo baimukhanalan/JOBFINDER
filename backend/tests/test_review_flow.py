@@ -143,7 +143,7 @@ def test_ready_tab_holds_only_clean_filled_forms(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
     env.add("vera", "beta-2", _report("BetaCo", "https://x.test/2", filled=0))
     env.add("vera", "gamma-3", _report("GammaCo", "https://x.test/3", failed=2))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "Ready (1)" in html and "Needs info (2)" in html
     ready, info = _panes(html)
     assert "AcmeCo" in ready and "AcmeCo" not in info
@@ -155,7 +155,7 @@ def test_junk_page_types_in_neither_tab_only_counted(env):
     env.add("vera", "dead-2", _report("DeadCo", "https://x.test/2", page_type="expired"))
     env.add("vera", "list-3", _report("ListCo", "https://x.test/3", page_type="job_listing"))
     env.add("vera", "mist-4", _report("MistCo", "https://x.test/4", page_type="unknown"))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     for co in ("DeadCo", "ListCo", "MistCo"):
         assert co not in html
     assert "<b>3</b><span>skipped: no form</span>" in html
@@ -166,7 +166,7 @@ def test_terminal_status_never_in_ready_tab(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
     (env.prefill / "vera" / "status.json").write_text(
         json.dumps({"acme-1": {"status": "submitted"}}), encoding="utf-8")
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "Ready (0)" in html
     ready, info = _panes(html)
     assert "AcmeCo" in info and "AcmeCo" not in ready
@@ -174,13 +174,13 @@ def test_terminal_status_never_in_ready_tab(env):
 
 def test_card_anchor_present_for_deep_links(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "id='job-acme-1'" in html
 
 
 def test_valid_profile_has_apply_affordances_no_banner(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "Applications are paused" not in html
     assert "Apply (1-click)" in html
     assert "Open form" in html
@@ -190,7 +190,7 @@ def test_valid_profile_has_apply_affordances_no_banner(env):
 
 def test_invalid_profile_banner_and_no_apply_affordances(env):
     env.add("kate", "acme-1", _report("AcmeCo", "https://x.test/1"))
-    html = env.client.get("/?profile=kate").text
+    html = env.client.get("/queue?profile=kate").text
     assert "Applications are paused" in html
     assert "reserved-fictional" in html         # the phone problem, spelled out
     assert "placeholder" in html                # the email problem
@@ -205,14 +205,14 @@ def test_invalid_profile_banner_and_no_apply_affordances(env):
 
 def test_unknown_profile_is_blocked_too(env):
     env.add("ghost", "acme-1", _report("AcmeCo", "https://x.test/1"))
-    html = env.client.get("/?profile=ghost").text
+    html = env.client.get("/queue?profile=ghost").text
     assert "Applications are paused" in html
     assert "Apply (1-click)" not in html
 
 
 def test_last_review_never_without_status_file(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "<b>never</b><span>last review</span>" in html
     assert "stat alert" not in html
 
@@ -223,7 +223,7 @@ def test_last_review_stale_goes_red(env):
     st.write_text(json.dumps({"old-jid": {"status": "submitted"}}), encoding="utf-8")
     stale = time.time() - 4 * 86400
     os.utime(st, (stale, stale))
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "<b>4d ago</b><span>last review</span>" in html
     assert "class='stat alert'" in html
 
@@ -232,6 +232,6 @@ def test_last_review_fresh_not_red(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
     (env.prefill / "vera" / "status.json").write_text(
         json.dumps({"old-jid": {"status": "submitted"}}), encoding="utf-8")
-    html = env.client.get("/?profile=vera").text
+    html = env.client.get("/queue?profile=vera").text
     assert "<b>today</b><span>last review</span>" in html
     assert "stat alert" not in html

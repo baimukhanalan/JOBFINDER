@@ -98,11 +98,14 @@ def ensure_schema() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS jc_fts ON job_catalog USING gin "
                     "(to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
                     "||' '||coalesce(description,'')));")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS regions TEXT[]")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS region_source TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS jc_regions ON job_catalog USING GIN (regions)")
 
 
 _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
             "department", "workplace", "is_remote", "url", "description",
-            "description_html", "questions", "q_count")
+            "description_html", "questions", "q_count", "regions", "region_source")
 _QI = _UP_COLS.index("questions")
 
 
@@ -124,7 +127,10 @@ def upsert_jobs(rows: list[dict]) -> int:
            "workplace=EXCLUDED.workplace, is_remote=EXCLUDED.is_remote, url=EXCLUDED.url, "
            "description=EXCLUDED.description, description_html=EXCLUDED.description_html, "
            "questions=COALESCE(EXCLUDED.questions, job_catalog.questions), "
-           "q_count=GREATEST(EXCLUDED.q_count, job_catalog.q_count), last_seen=now()")
+           "q_count=GREATEST(EXCLUDED.q_count, job_catalog.q_count), "
+           "regions=COALESCE(EXCLUDED.regions, job_catalog.regions), "
+           "region_source=COALESCE(EXCLUDED.region_source, job_catalog.region_source), "
+           "last_seen=now()")
     with _cur(False) as cur:
         cur.executemany(sql, vals)
         return cur.rowcount
@@ -181,9 +187,34 @@ def rows_missing_questions(ats: str) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
+def set_regions(ats: str, company_key: str, external_id: str, regions: list, source: str) -> int:
+    with _cur(False) as cur:
+        cur.execute("UPDATE job_catalog SET regions=%s, region_source=%s "
+                    "WHERE ats=%s AND company_key=%s AND external_id=%s",
+                    (regions, source, ats, company_key, external_id))
+        return cur.rowcount
+
+
+def rows_missing_regions(limit: int = 0) -> list:
+    sql = ("SELECT ats, company_key, external_id, title, location, description "
+           "FROM job_catalog WHERE regions IS NULL")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
 def counts() -> dict:
     with _cur(False) as cur:
         cur.execute("SELECT COUNT(*), COUNT(*) FILTER (WHERE is_remote), "
                     "COUNT(*) FILTER (WHERE q_count > 0) FROM job_catalog")
         t, rem, wq = cur.fetchone()
-    return {"total": t, "remote": rem, "with_questions": wq}
+        by_region = {}
+        for code in ("US", "CA", "UK", "OTHER"):
+            cur.execute("SELECT COUNT(*) FROM job_catalog WHERE %s = ANY(regions)", (code,))
+            by_region[code] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM job_catalog WHERE regions IS NULL")
+        untagged = cur.fetchone()[0]
+    return {"total": t, "remote": rem, "with_questions": wq,
+            "by_region": by_region, "untagged": untagged}

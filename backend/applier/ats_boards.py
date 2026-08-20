@@ -22,6 +22,7 @@ Supported today (all no-account, all with a similar prefill-and-submit form):
   * ashby       — https://api.ashbyhq.com/posting-api/job-board/<slug>
   * greenhouse  — https://boards-api.greenhouse.io/v1/boards/<slug>/jobs?content=true
   * lever       — https://api.lever.co/v0/postings/<slug>?mode=json
+  * workable    — https://apply.workable.com/api/v1/widget/accounts/<slug>?details=true
 
 Deliberately EXCLUDED: Workday and iCIMS — they force candidates to create an
 account before applying, which breaks the "no registration" requirement.
@@ -34,7 +35,7 @@ import httpx
 
 from backend.applier.boards import _strip_html
 
-SUPPORTED = ("ashby", "greenhouse", "lever")
+SUPPORTED = ("ashby", "greenhouse", "lever", "workable")
 _TIMEOUT = 30
 
 
@@ -129,10 +130,35 @@ def _fetch_lever(slug: str) -> list[dict]:
     return out
 
 
+# ---- Workable ------------------------------------------------------------------
+def _fetch_workable(slug: str) -> list[dict]:
+    url = f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
+    r = httpx.get(url, timeout=_TIMEOUT)
+    r.raise_for_status()
+    out = []
+    for j in r.json().get("jobs", []):
+        loc = j.get("location") or {}
+        loc_str = loc.get("location_str") or loc.get("city") or ""
+        remote = bool(j.get("telecommuting"))
+        out.append({
+            "title": j.get("title", ""),
+            "applyUrl": j.get("url", ""),
+            "jobUrl": j.get("url", ""),
+            "workplaceType": "Remote" if remote else "OnSite",
+            "isRemote": remote,
+            "location": loc_str,
+            "department": j.get("department", "") or "",
+            "descriptionHtml": j.get("description", "") or "",
+            "descriptionPlain": _strip_html(j.get("description", "") or ""),
+        })
+    return out
+
+
 _FETCHERS = {
     "ashby": _fetch_ashby,
     "greenhouse": _fetch_greenhouse,
     "lever": _fetch_lever,
+    "workable": _fetch_workable,
 }
 
 

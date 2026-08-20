@@ -105,9 +105,14 @@ def _gh_questions(slug: str, jid: str):
 
 
 def run(remote_only: bool = True, with_questions: bool = True,
-        workers: int = 8, q_workers: int = 6) -> dict:
+        workers: int = 8, q_workers: int = 6,
+        ats_filter: str | None = None, limit: int = 0) -> dict:
     catalog_db.ensure_schema()
     slugs = _slugs()
+    if ats_filter:
+        slugs = {ats_filter: slugs.get(ats_filter, {})}
+    if limit:
+        slugs = {a: dict(list(v.items())[:limit]) for a, v in slugs.items()}
     boards = [(a, s, name) for a in slugs for s, name in slugs[a].items()]
     print(f"collecting {len(boards)} boards {[f'{a}:{len(v)}' for a, v in slugs.items()]}",
           flush=True)
@@ -225,11 +230,15 @@ if __name__ == "__main__":
     ap.add_argument("--no-llm", action="store_true",
                     help="with --backfill-regions, skip the LLM fallback (deterministic only)")
     ap.add_argument("--limit", type=int, default=0,
-                    help="with --backfill-regions, cap the number of rows processed")
+                    help="with --backfill-regions, cap rows processed; otherwise cap "
+                         "boards per ATS (smoke runs)")
+    ap.add_argument("--ats", choices=ats_boards.SUPPORTED, default=None,
+                    help="only collect this ATS (smoke runs)")
     args = ap.parse_args()
     if args.backfill_gh:
         backfill_gh_questions()
     elif args.backfill_regions:
         print(backfill_regions(limit=args.limit, use_llm=not args.no_llm), flush=True)
     else:
-        run(remote_only=not args.all, with_questions=not args.no_questions)
+        run(remote_only=not args.all, with_questions=not args.no_questions,
+            ats_filter=args.ats, limit=args.limit)

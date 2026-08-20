@@ -66,9 +66,9 @@ def fetch_all(force: bool = False) -> list[dict]:
     return out
 
 
-def _dataset(company: str, q: str, remote: bool) -> list[dict]:
+def _dataset(company: str, q: str, remote_only: bool) -> list[dict]:
     jobs = fetch_company(company) if company else fetch_all()
-    if remote:
+    if remote_only:  # strictly Remote — excludes Hybrid/OnSite (no point applying)
         jobs = [j for j in jobs if rd._is_remote(j)]
     if q:
         ql = q.lower()
@@ -86,14 +86,15 @@ def _status_map() -> dict:
 
 
 # ---- rendering -----------------------------------------------------------------
-def _qs(company: str = "", q: str = "", remote: bool = False, **extra) -> str:
+def _qs(company: str = "", q: str = "", allpos: int = 0, **extra) -> str:
+    # allpos=1 turns OFF the default remote-only filter (show every workplace type).
     d: dict = {}
     if company:
         d["company"] = company
     if q:
         d["q"] = q
-    if remote:
-        d["remote"] = "1"
+    if allpos:
+        d["allpos"] = "1"
     for k, v in extra.items():
         if v:
             d[k] = v
@@ -145,10 +146,11 @@ def _card(j: dict, smap: dict) -> str:
         "</article>")
 
 
-def _chips(active: str, q: str, remote: bool) -> str:
+def _chips(active: str, q: str, remote_only: bool) -> str:
+    allpos = 0 if remote_only else 1
     def chip(key: str, label: str, on: bool) -> str:
         cls = "chip on" if on else "chip"
-        href = "/jobs" + _qs(company=key, q=q, remote=remote)
+        href = "/jobs" + _qs(company=key, q=q, allpos=allpos)
         return f'<a class="{cls}" href="{href}">{esc(label)}</a>'
     out = [chip("", "Все", not active)]
     for t in companies():
@@ -157,23 +159,25 @@ def _chips(active: str, q: str, remote: bool) -> str:
     return f'<div class="chips">{"".join(out)}</div>'
 
 
-def render_page(company: str = "", q: str = "", remote: bool = False) -> str:
+def render_page(company: str = "", q: str = "", remote_only: bool = True) -> str:
     company = (company or "").lower()
-    jobs = _dataset(company, q, remote)
+    jobs = _dataset(company, q, remote_only)
     total = len(jobs)
     smap = _status_map()
     cards = "".join(_card(j, smap) for j in jobs[:PAGE])
     has_more = 1 if total > PAGE else 0
-    title_txt = "Все вакансии" if not company else esc(rd._target(company).get("company", company))
-    rem_href = "/jobs" + _qs(company=company, q=q, remote=not remote)
-    rem_cls = "rtoggle on" if remote else "rtoggle"
+    title_txt = "Вакансии (Remote)" if not company else esc(rd._target(company).get("company", company))
+    allpos = 0 if remote_only else 1
+    # toggle target = the opposite filter state
+    rem_href = "/jobs" + _qs(company=company, q=q, allpos=(1 if remote_only else 0))
+    rem_cls = "rtoggle on" if remote_only else "rtoggle"
     search = (
         '<form class="jsearch" method="get" action="/jobs">'
         + (f'<input type="hidden" name="company" value="{esc(company)}">' if company else "")
-        + (f'<input type="hidden" name="remote" value="1">' if remote else "")
+        + ('<input type="hidden" name="allpos" value="1">' if not remote_only else "")
         + f'<input type="search" name="q" value="{esc(q)}" placeholder="Поиск: должность, компания, локация…">'
         + '<button class="ghost" type="submit">Найти</button>'
-        + (f'<a class="ghost" href="/jobs{_qs(company=company, remote=remote)}">Сброс</a>' if q else "")
+        + (f'<a class="ghost" href="/jobs{_qs(company=company, allpos=allpos)}">Сброс</a>' if q else "")
         + "</form>")
     head = (
         '<div class="jhead"><div class="jh-row1">'
@@ -182,20 +186,20 @@ def render_page(company: str = "", q: str = "", remote: bool = False) -> str:
         f"{search}</div>")
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
-        _JOBS_CSS + head + _chips(company, q, remote)
+        _JOBS_CSS + head + _chips(company, q, remote_only)
         + f'<div class="joblist" id="joblist">{cards}</div>{empty}'
         + f'<div id="jobmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _JOBS_JS)
     return mailcrm_ui._page("jobs", body)
 
 
-def render_more(company: str = "", q: str = "", offset: int = 0, remote: bool = False) -> str:
+def render_more(company: str = "", q: str = "", offset: int = 0, remote_only: bool = True) -> str:
     company = (company or "").lower()
     try:
         offset = int(offset)
     except (TypeError, ValueError):
         offset = 0
-    jobs = _dataset(company, q, remote)
+    jobs = _dataset(company, q, remote_only)
     smap = _status_map()
     return "".join(_card(j, smap) for j in jobs[offset:offset + PAGE])
 

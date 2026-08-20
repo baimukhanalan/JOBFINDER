@@ -520,12 +520,13 @@ def roles_page(company: str = ""):
 
 
 @app.get("/jobs", response_class=HTMLResponse)
-def jobs_page(company: str = "", q: str = "", remote: int = 0):
+def jobs_page(company: str = "", q: str = "", allpos: int = 0):
     """Unified live "all jobs" feed across every tracked ATS board — mobile-first
-    card list with company chips + search. Status badges read from our tracker."""
+    card list with company chips + search. Remote-only by default (allpos=1 shows
+    every workplace type). Status badges read from our tracker."""
     from backend.tools import jobs_feed
     try:
-        return HTMLResponse(jobs_feed.render_page(company=company, q=q, remote=bool(remote)))
+        return HTMLResponse(jobs_feed.render_page(company=company, q=q, remote_only=(allpos == 0)))
     except Exception as exc:
         return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
                             f"<p style='font-family:sans-serif;padding:16px'>Лента вакансий недоступна: {escape(str(exc))}</p>",
@@ -533,11 +534,11 @@ def jobs_page(company: str = "", q: str = "", remote: int = 0):
 
 
 @app.get("/jobs/more", response_class=HTMLResponse)
-def jobs_more(company: str = "", q: str = "", offset: int = 0, remote: int = 0):
+def jobs_more(company: str = "", q: str = "", offset: int = 0, allpos: int = 0):
     """Pagination fragment for the /jobs infinite scroll."""
     from backend.tools import jobs_feed
     try:
-        return HTMLResponse(jobs_feed.render_more(company=company, q=q, offset=offset, remote=bool(remote)))
+        return HTMLResponse(jobs_feed.render_more(company=company, q=q, offset=offset, remote_only=(allpos == 0)))
     except Exception:
         return HTMLResponse("", status_code=200)
 

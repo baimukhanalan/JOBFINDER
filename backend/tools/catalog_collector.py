@@ -30,7 +30,9 @@ from backend.applier.regions import classify_with_source
 from backend.tools import catalog_db
 
 DATA = Path(__file__).resolve().parents[1] / "data"
-_GH_ID = re.compile(r"/jobs/(\d+)")
+# Greenhouse job id: standard boards URL (/jobs/<id>) OR a company career-site URL
+# that carries it as ?gh_jid=<id> (e.g. careers.datadoghq.com/detail/…?gh_jid=…).
+_GH_ID = re.compile(r"(?:/jobs/|[?&]gh_jid=)(\d+)")
 
 
 def _slugs() -> dict:

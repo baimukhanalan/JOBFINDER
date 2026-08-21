@@ -641,7 +641,7 @@ def _submitted_mailboxes() -> set:
 
 
 @app.get("/mail/candidates", response_class=HTMLResponse)
-def mail_candidates(filter: str = ""):
+def mail_candidates(filter: str = "", q: str = ""):
     from backend.tools import mail_db, mailcrm, mailcrm_ui
     all_cands = mailcrm.candidates()
     try:  # one query instead of scanning 261 Maildirs
@@ -670,6 +670,11 @@ def mail_candidates(filter: str = ""):
         except Exception:
             keep = set()
         cands = [c for c in all_cands if c["email"] in keep]
+    # Gmail-pill search: narrow by candidate name / email
+    ql = (q or "").strip().lower()
+    if ql:
+        cands = [c for c in cands if ql in (c.get("name") or "").lower()
+                 or ql in (c.get("email") or "").lower()]
     cands.sort(key=lambda c: (-c.get("unread", 0), c["name"]))
     return HTMLResponse(mailcrm_ui.render_candidates(cands, counts=counts,
                                                      active_filter=f, total=len(all_cands)))

@@ -30,8 +30,12 @@ but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) a
 DELETED** 2026-08-21 (with `backend/tools/jobs_feed.py`) — `/catalog` is the single job-browsing surface.
 `backend/tools/roles_dashboard.py` was **kept** (its `_is_remote` / `_workplace` helpers are imported by
 `applier`/`apply_bot` + `online_roles`), it's just no longer routed. Plus a one-click browser extension
-and a headful "co-pilot" Chromium watched over noVNC. Nav is defined in
-`backend/tools/mailcrm_ui.py:_sidebar`.
+and a headful "co-pilot" Chromium watched over noVNC. Nav lives in
+`backend/tools/mailcrm_ui.py`: `_sidebar` is the desktop left rail; on mobile (≤760px) it's
+hidden and `_topbar`+`_drawer` render a **Gmail-style search pill** (☰ opens a slide-out menu with
+the 3 tabs · a context-aware search box whose route/placeholder come from `_SEARCH_CTX` · a
+decorative JF avatar). The per-screen inline search toolbars (`.toolbar`/`.cat-search`) are hidden on
+mobile since the pill covers search there.
 
 Stack: Python 3.12 · FastAPI · Playwright · **psycopg2 / Postgres `jobfinder_crm`** · Dovecot+Postfix
 Maildir · aiogram (Telegram) · python-jobspy. Résumé tailoring + answer drafting use the **local Sumrak

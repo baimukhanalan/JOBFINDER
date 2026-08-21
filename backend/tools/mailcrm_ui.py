@@ -155,6 +155,31 @@ button.primary:hover{background:var(--accent-deep);}
 .modal-actions{margin-top:16px;}.modal-actions .primary{width:100%;}
 .sendmsg{margin-top:10px;font-size:13px;}
 @media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;}.sidebar{justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
+/* Gmail-style mobile top bar + slide-out drawer (mobile only; desktop keeps .sidebar) */
+.gm-topbar{display:none;padding:8px 12px 4px;}
+.gm-pill{display:flex;align-items:center;gap:4px;background:var(--panel-2);border-radius:var(--r-full);padding:4px 6px 4px 4px;}
+.gm-burger{background:none;border:0;padding:0;width:40px;height:40px;min-width:40px;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);cursor:pointer;border-radius:50%;}
+.gm-burger:hover{background:rgba(60,64,67,.08);}
+.gm-burger svg{width:22px;height:22px;}
+.gm-search{flex:1;min-width:0;margin:0;display:flex;}
+.gm-search input[type=search]{flex:1;width:100%;min-width:0;border:0;background:transparent;padding:9px 4px;font-size:16px;border-radius:0;}
+.gm-search input[type=search]:focus{outline:none;box-shadow:none;border:0;}
+.gm-title{flex:1;font-weight:600;color:var(--ink-soft);font-size:16px;padding-left:6px;}
+.gm-ava{flex:0 0 auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;margin-right:2px;}
+.gm-scrim{position:fixed;inset:0;background:rgba(32,33,36,.5);z-index:60;opacity:0;visibility:hidden;transition:opacity .2s;}
+.gm-scrim.open{opacity:1;visibility:visible;}
+.gm-drawer{position:fixed;top:0;left:0;bottom:0;width:284px;max-width:82vw;background:var(--panel);z-index:61;transform:translateX(-102%);transition:transform .22s ease;box-shadow:0 0 40px -8px rgba(32,33,36,.45);display:flex;flex-direction:column;padding:6px 0;}
+.gm-drawer.open{transform:translateX(0);}
+.gm-drawer-head{display:flex;align-items:center;gap:12px;padding:16px 18px 14px;}
+.gm-drawer-head .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;}
+.gm-drawer-head b{font-size:17px;color:var(--ink);}
+.gm-drawer-nav{display:flex;flex-direction:column;padding:6px 8px;gap:2px;}
+.gm-drawer-nav a{display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:var(--r-full);color:var(--ink-soft);font-weight:600;font-size:15px;}
+.gm-drawer-nav a svg{width:22px;height:22px;flex:0 0 auto;}
+.gm-drawer-nav a span{flex:1;}
+.gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
+.gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
+@media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar,.cat-search{display:none;}}
 """
 
 _FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -163,24 +188,65 @@ _FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
           '&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">')
 
 
+# Navigation is intentionally reduced to the 3 tabs that matter (per Alan,
+# 2026-08-20): Кандидаты (mail/CRM entry — the general Инбокс stays reachable via
+# the in-page tab strip), Каталог (the single remote-only source of jobs + form
+# questions), Заявки (the one-click submit queue). The old Инбокс/Вакансии (/jobs)
+# / Компании (/roles) sidebar items were duplicate job-browsing surfaces and were
+# removed. Routes still exist; they're just no longer in the nav. One list drives
+# both the desktop rail (_sidebar) and the mobile drawer (_drawer).
+_IC_CANDIDATES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>'
+_IC_CATALOG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
+_IC_APPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
+_NAV = [
+    ("/mail/candidates", "candidates", "Кандидаты", _IC_CANDIDATES),
+    ("/catalog", "catalog", "Каталог", _IC_CATALOG),
+    ("/apply", "apply", "Заявки", _IC_APPLY),
+]
+# Per-screen context for the Gmail-style mobile search pill: active -> (route,
+# placeholder). Screens absent here (e.g. Заявки) show a title instead of a field.
+_SEARCH_CTX = {
+    "inbox": ("/mail", "Поиск в почте"),
+    "candidates": ("/mail/candidates", "Поиск кандидата"),
+    "catalog": ("/catalog", "Поиск вакансий"),
+}
+
+
+def _nav_links(active: str) -> str:
+    return "".join(
+        f'<a class="{"active" if active == key else ""}" href="{href}">{svg}<span>{label}</span></a>'
+        for href, key, label, svg in _NAV)
+
+
 def _sidebar(active: str) -> str:
-    def item(href, key, label, svg):
-        cls = " active" if active == key else ""
-        return f'<a class="{cls.strip()}" href="{href}">{svg}<span>{label}</span></a>'
-    box_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>'
-    catalog_ic ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
-    apply_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
-    # Navigation is intentionally reduced to the 3 tabs that matter (per Alan,
-    # 2026-08-20): Кандидаты (mail/CRM entry — the general Инбокс stays reachable
-    # via the in-page tab strip), Каталог (the single remote-only source of jobs +
-    # form questions), Заявки (the one-click submit queue). The old Инбокс/Вакансии
-    # (/jobs) / Компании (/roles) sidebar items were duplicate job-browsing surfaces
-    # and were removed. Routes still exist; they're just no longer in the nav.
-    return (f'<aside class="sidebar"><div class="brand">JF</div><div class="nav">'
-            + item("/mail/candidates", "candidates", "Кандидаты", box_ic)
-            + item("/catalog", "catalog", "Каталог", catalog_ic)
-            + item("/apply", "apply", "Заявки", apply_ic)
-            + '</div></aside>')
+    """Desktop left rail. Hidden ≤760px, where _topbar + _drawer take over."""
+    return (f'<aside class="sidebar"><div class="brand">JF</div>'
+            f'<div class="nav">{_nav_links(active)}</div></aside>')
+
+
+def _topbar(active: str) -> str:
+    """Gmail-style mobile top pill: ☰ (opens the drawer) + a context-aware search
+    box + a decorative JF avatar. Shown only ≤760px via CSS; desktop keeps the rail."""
+    burger = ('<button type="button" class="gm-burger" aria-label="Меню" onclick="gmDrawer(true)">'
+              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+              'stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>')
+    ctx = _SEARCH_CTX.get(active)
+    if ctx:
+        route, ph = ctx
+        mid = (f'<form class="gm-search" method="get" action="{route}" role="search">'
+               f'<input type="search" name="q" placeholder="{ph}" autocomplete="off"></form>')
+    else:
+        mid = '<span class="gm-title">Заявки</span>'
+    return (f'<div class="gm-topbar"><div class="gm-pill">{burger}{mid}'
+            '<span class="gm-ava">JF</span></div></div>')
+
+
+def _drawer(active: str) -> str:
+    """Slide-out menu behind the ☰ — the same 3 nav tabs. Mobile only."""
+    return ('<div class="gm-scrim" onclick="gmDrawer(false)"></div>'
+            '<aside class="gm-drawer"><div class="gm-drawer-head">'
+            '<span class="brand">JF</span><b>JobFinder</b></div>'
+            f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav></aside>')
 
 
 def _page(active: str, body: str, modal: str = "") -> str:
@@ -189,6 +255,7 @@ def _page(active: str, body: str, modal: str = "") -> str:
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>JobFinder — почта кандидатов</title>" + _FONTS +
         f"<style>{_CSS}</style></head><body>"
+        f"{_topbar(active)}{_drawer(active)}"
         f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}"
         + _JS + "</body></html>")
 
@@ -402,5 +469,9 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   function startPoll(){if(pollTimer)return;pollTimer=setInterval(async function(){if(document.hidden||document.querySelector('.modal.open'))return;try{var r=await fetch('/mail/count'+location.search);if(!r.ok)return;var j=await r.json();if(j.n!==last){if(last!==null)await refreshList();last=j.n;}}catch(e){}},10000);}
   if(window.EventSource){try{var es=new EventSource('/mail/events');es.onmessage=function(){refreshList();};es.onerror=function(){startPoll();};}catch(e){startPoll();}}else{startPoll();}
 })();
+// Gmail-style mobile drawer + search-pill wiring
+function gmDrawer(open){var d=document.querySelector('.gm-drawer'),s=document.querySelector('.gm-scrim');if(!d||!s)return;if(open){d.classList.add('open');s.classList.add('open');document.body.style.overflow='hidden';}else{d.classList.remove('open');s.classList.remove('open');document.body.style.overflow='';}}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')gmDrawer(false);});
+(function(){try{var q=new URLSearchParams(location.search).get('q');if(q){var i=document.querySelector('.gm-search input[name=q]');if(i)i.value=q;}}catch(e){}})();
 </script>
 """

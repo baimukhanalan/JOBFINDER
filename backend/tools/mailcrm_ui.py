@@ -167,19 +167,19 @@ def _sidebar(active: str) -> str:
     def item(href, key, label, svg):
         cls = " active" if active == key else ""
         return f'<a class="{cls.strip()}" href="{href}">{svg}<span>{label}</span></a>'
-    inbox_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z"/></svg>'
     box_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>'
-    roles_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 3h18v18H3z"/><path d="M3 9h18M9 21V9"/></svg>'
-    jobs_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>'
-    catalog_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
+    catalog_ic ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
     apply_ic = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
+    # Navigation is intentionally reduced to the 3 tabs that matter (per Alan,
+    # 2026-08-20): Кандидаты (mail/CRM entry — the general Инбокс stays reachable
+    # via the in-page tab strip), Каталог (the single remote-only source of jobs +
+    # form questions), Заявки (the one-click submit queue). The old Инбокс/Вакансии
+    # (/jobs) / Компании (/roles) sidebar items were duplicate job-browsing surfaces
+    # and were removed. Routes still exist; they're just no longer in the nav.
     return (f'<aside class="sidebar"><div class="brand">JF</div><div class="nav">'
-            + item("/mail", "inbox", "Инбокс", inbox_ic)
             + item("/mail/candidates", "candidates", "Кандидаты", box_ic)
-            + item("/apply", "apply", "Заявки", apply_ic)
-            + item("/jobs", "jobs", "Вакансии", jobs_ic)
             + item("/catalog", "catalog", "Каталог", catalog_ic)
-            + item("/roles", "roles", "Компании", roles_ic)
+            + item("/apply", "apply", "Заявки", apply_ic)
             + '</div></aside>')
 
 

@@ -603,6 +603,9 @@ def mail_page(q: str = "", mailbox: str = ""):
     from backend.tools import mail_health, mailcrm, mailcrm_ui
     rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50)
     counts = mailcrm.counts()
+    # counts["mailboxes"] is only the mailboxes that already have indexed mail (~3);
+    # the Кандидаты tab means ALL provisioned candidates, so expose the real total.
+    counts["candidates"] = len(mailcrm.candidates())
     name = ""
     if mailbox:
         name = next((c["name"] for c in mailcrm.candidates() if c["email"] == mailbox.lower()), "")

@@ -141,9 +141,10 @@ button.primary:hover{background:var(--accent-deep);}
 .fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 .fbtn.active b{color:#fff;}
 .mbxlist{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
-.mbxrow{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--ink);}
+.mbxrow{display:flex;align-items:center;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--ink);overflow:hidden;}
 .mbxrow:last-child{border-bottom:0;}.mbxrow:hover{background:#f8fafd;text-decoration:none;}
-.mbxrow .nm{font-weight:600;}.mbxrow .em{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);margin-left:auto;}
+.mbxrow .nm{font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mbxrow .em{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);margin-left:auto;flex:0 1 auto;min-width:0;max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:10px;}
 .mbxrow .cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;}
 .modal{position:fixed;inset:0;z-index:50;display:none;align-items:flex-start;justify-content:center;padding:8vh 16px;background:rgba(32,33,36,.5);overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .modal.open{display:flex;}
@@ -292,10 +293,13 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
 def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
                  mailbox_name: str = "", page_size: int = 50, warning: str = "") -> str:
     has_more = 1 if len(rows) == page_size else 0
+    unread = counts.get("unread", 0)
+    ncand = counts.get("candidates", counts.get("mailboxes", 0))  # ALL candidates, not just those with mail
+    inbox_badge = f' <b>{unread}</b>' if unread else ''
     head = (
         '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
-        f'<a class="active" href="/mail">Инбокс <b>{counts.get("unread",0)}</b></a>'
-        f'<a href="/mail/candidates">Кандидаты <b>{counts.get("mailboxes",0)}</b></a>'
+        f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
+        f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
         '</div><div class="head-actions">'
         '<button class="hbtn" onclick="openCompose()">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
@@ -405,7 +409,7 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
               + '</div>')
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
-            f'<a class="active" href="/mail/candidates">Кандидаты <b>{len(cands)}</b></a>'
+            f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
             '</div></div></div>')
     empty = '<div class="empty">Никого в этой корзине</div>' if not cands else ""
     body = head + funnel + f'<div class="mbxlist">{"".join(rows)}</div>{empty}'

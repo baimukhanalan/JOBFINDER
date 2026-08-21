@@ -64,11 +64,13 @@ BATCH_SIZE = 5  # how many applications the "➕ N заявок" button prepares
 # then posts the remaining required fields to the chat as a checklist and the human fills
 # them in. This is the intended flow ("push the résumé once, hand the rest to the human")
 # AND it avoids the machine-gun field-fill that trips ATS spam detection, so it is
-# ON BY DEFAULT. Set RESUME_PARSER_ONLY=0 (or flip the 📎 menu button) to get the old
-# full auto-fill instead. In-memory dict so handlers mutate it live without `global`;
-# note a bot restart re-reads this default, so the env is the durable setting.
-_PARSER_ONLY = {"on": os.getenv("RESUME_PARSER_ONLY", "1").strip().lower()
-                in ("1", "true", "yes", "on")}
+# HARD BOUNDARY (bot only, for now): the bot ONLY feeds the generated résumé to the ATS's
+# autofill/parser and TYPES NOTHING ELSE — no other fields at all. The machine-gun
+# field-fill is what trips ATS spam detection, so for the bot this is LOCKED ON and cannot
+# be toggled off (a future automation pass may relax it). Everything downstream inherits
+# it: the headless prefill, the reopened single/batch submit tabs (RESUME_PARSER_ONLY=1 in
+# their env + open_batch's own leftovers-skip).
+_PARSER_ONLY = {"on": True}  # locked; do not read the env / do not toggle for the bot
 # Optional HARD cap on applications to ONE posting, shared with the cron batch via
 # uploads/prefill/_assignments.json. Default 0 = no numeric cap. Regardless of the cap,
 # the ledger guarantees NO CANDIDATE REPEATS A POSITION: distinct family-matched
@@ -301,7 +303,7 @@ def _enabled_companies() -> str:
 
 
 def _menu() -> InlineKeyboardMarkup:
-    po = "вкл ✅" if _PARSER_ONLY["on"] else "выкл"
+    po = "🔒 вкл (анти-спам)"  # locked ON for the bot
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Новая заявка", callback_data="new"),
          InlineKeyboardButton(text=f"➕ {BATCH_SIZE} заявок", callback_data="new5")],
@@ -419,20 +421,12 @@ async def cb_table(c: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == "toggle_parser")
 async def cb_toggle_parser(c: CallbackQuery) -> None:
-    """Flip résumé-parser-only (anti-spam) mode on/off for subsequent pre-fills."""
+    """Résumé-parser-only is LOCKED ON for the bot (anti-spam) — it cannot be turned off."""
     if not await _guard(c):
         return
-    _PARSER_ONLY["on"] = not _PARSER_ONLY["on"]
-    if _PARSER_ONLY["on"]:
-        await c.answer("Режим «только résumé-парсер» включён: заявки будут только "
-                       "подгружать résumé в парсер ATS; остальное заполняешь сам.",
-                       show_alert=True)
-    else:
-        await c.answer("Режим «только résumé-парсер» выключен: полное авто-заполнение.")
-    try:  # reflect the new state in the menu button label
-        await c.message.edit_reply_markup(reply_markup=_menu())
-    except Exception:
-        pass
+    _PARSER_ONLY["on"] = True  # locked
+    await c.answer("🔒 Зафиксировано: бот вставляет résumé только в автофилл ATS и НЕ "
+                   "заполняет другие поля (анти-спам). Отключить нельзя.", show_alert=True)
 
 
 @dp.callback_query(F.data == "menu")
@@ -677,7 +671,7 @@ async def _prefill_and_send(dest: Message, role: dict, kb_mode: str = "full") ->
             continue
         r = await prefill_application(job, cand, headless=True, use_ai=True,
                                       draft_answers=True, use_variants=False,
-                                      resume_parser_only=_PARSER_ONLY["on"])
+                                      resume_parser_only=True)  # LOCKED: résumé -> autofill only
         # Ledger: passed → owns the slot; gated (e.g. tailored ATS below bar) → tried only.
         if apply_url:
             try:
@@ -843,8 +837,7 @@ async def _open_batch(dest: Message, bid: str) -> None:
     specfile.write_text(json.dumps(spec), encoding="utf-8")
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = "."
-    if _PARSER_ONLY["on"]:  # keep the tabs résumé-parser-only too (anti-spam)
-        child_env["RESUME_PARSER_ONLY"] = "1"
+    child_env["RESUME_PARSER_ONLY"] = "1"  # LOCKED: reopened tabs stay résumé-parser-only (anti-spam)
     proc = await asyncio.create_subprocess_exec(
         ".venv/bin/python", "-m", "backend.tools.open_batch", "--spec", str(specfile), "--draft",
         cwd=str(PROJECT_ROOT), env=child_env,
@@ -882,8 +875,7 @@ async def _open_single(dest: Message, token: str) -> None:
     import os
     child_env = os.environ.copy()
     child_env["PYTHONPATH"] = "."  # HOME/PATH/etc inherited so Playwright finds Chromium
-    if _PARSER_ONLY["on"]:  # keep the form résumé-parser-only too (anti-spam)
-        child_env["RESUME_PARSER_ONLY"] = "1"
+    child_env["RESUME_PARSER_ONLY"] = "1"  # LOCKED: reopened form stays résumé-parser-only (anti-spam)
     proc = await asyncio.create_subprocess_exec(
         ".venv/bin/python", "-m", "backend.tools.open_for_submit",
         "--profile", ctx["profile"], "--url", ctx["url"],

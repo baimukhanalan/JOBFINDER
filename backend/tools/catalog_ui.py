@@ -233,7 +233,10 @@ _CAT_CSS = """<style>
 .cat-req{color:#d93025;font-weight:700;margin-left:3px}
 .cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-@media(max-width:760px){.cat-h-title{font-size:17px}.cat-title{font-size:15px}}
+/* Hide the inline catalog search on mobile — the Gmail top pill already searches
+   the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
+   the later .cat-search{display:flex} in this same stylesheet). */
+@media(max-width:760px){.cat-h-title{font-size:17px}.cat-title{font-size:15px}.cat-search{display:none}}
 </style>"""
 
 _CAT_JS = """<script>

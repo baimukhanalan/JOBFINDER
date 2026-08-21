@@ -180,7 +180,9 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a span{flex:1;}
 .gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
-@media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar,.cat-search{display:none;}}
+@media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
+/* NB: the catalog's own .cat-search is hidden inside catalog_ui _CAT_CSS, whose
+   later .cat-search{display:flex} would otherwise override a rule placed here. */
 """
 
 _FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'

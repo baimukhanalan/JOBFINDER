@@ -181,12 +181,14 @@ def set_questions(ats: str, company_key: str, external_id: str, questions: list)
         return cur.rowcount
 
 
-def rows_missing_questions(ats: str) -> list:
-    """(external_id, company_key, url, title) for rows of this ATS that still have no
-    questions — the backfill work-list."""
+def rows_missing_questions(ats: str, missing_only: bool = True) -> list:
+    """(external_id, company_key, url, title) for rows of this ATS. Default: only rows
+    still missing questions (the backfill work-list). missing_only=False returns ALL
+    rows of the ATS — used to REFRESH already-stored questions (e.g. to add options)."""
+    where = "ats=%s" + (" AND (q_count=0 OR q_count IS NULL)" if missing_only else "")
     with _cur() as cur:
         cur.execute("SELECT external_id, company_key, url, title FROM job_catalog "
-                    "WHERE ats=%s AND (q_count=0 OR q_count IS NULL)", (ats,))
+                    "WHERE " + where, (ats,))
         return [dict(r) for r in cur.fetchall()]
 
 

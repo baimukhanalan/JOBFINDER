@@ -102,8 +102,16 @@ def _gh_questions(slug: str, jid: str):
         out = []
         for q in qs:
             fields = q.get("fields") or []
-            out.append({"label": q.get("label", ""), "required": bool(q.get("required")),
-                        "type": (fields[0].get("type") if fields else "")})
+            f0 = fields[0] if fields else {}
+            item = {"label": q.get("label", ""), "required": bool(q.get("required")),
+                    "type": f0.get("type", "")}
+            # Capture the select/radio choices so answers can be pre-drafted against
+            # the REAL allowed values (e.g. Ruby skill "0..4 (expert)", the sponsorship
+            # visa list), not free text a dropdown can't accept.
+            vals = f0.get("values") or []
+            if vals:
+                item["options"] = [(v.get("label") if isinstance(v, dict) else v) for v in vals]
+            out.append(item)
         return out
     except Exception:
         return None
@@ -171,12 +179,14 @@ def run(remote_only: bool = True, with_questions: bool = True,
     return c
 
 
-def backfill_gh_questions(workers: int = 8) -> int:
-    """Fill greenhouse questions for rows that missed them (their apply URL had no
-    /jobs/<id>). Gets the real numeric id from the board's /jobs list, matched by URL."""
+def backfill_gh_questions(workers: int = 8, refresh_all: bool = False) -> int:
+    """Fill greenhouse questions from the API. Default: only rows that missed them.
+    refresh_all=True re-fetches ALL greenhouse rows to REFRESH stored questions (used
+    to add the select `options` we now capture). Gets the real numeric id from the
+    board's /jobs list, matched by URL."""
     from collections import defaultdict
     catalog_db.ensure_schema()
-    rows = catalog_db.rows_missing_questions("greenhouse")
+    rows = catalog_db.rows_missing_questions("greenhouse", missing_only=not refresh_all)
     by_slug = defaultdict(list)
     for r in rows:
         by_slug[r["company_key"]].append(r)
@@ -238,6 +248,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-questions", action="store_true", help="skip greenhouse questions")
     ap.add_argument("--backfill-gh", action="store_true",
                     help="only backfill greenhouse questions for rows that miss them")
+    ap.add_argument("--refresh-gh", action="store_true",
+                    help="re-fetch ALL greenhouse questions to refresh stored ones "
+                         "(adds the select options we now capture)")
     ap.add_argument("--backfill-regions", action="store_true",
                     help="classify regions for rows whose regions IS NULL")
     ap.add_argument("--no-llm", action="store_true",
@@ -248,7 +261,9 @@ if __name__ == "__main__":
     ap.add_argument("--ats", choices=ats_boards.SUPPORTED, default=None,
                     help="only collect this ATS (smoke runs)")
     args = ap.parse_args()
-    if args.backfill_gh:
+    if args.refresh_gh:
+        backfill_gh_questions(refresh_all=True)
+    elif args.backfill_gh:
         backfill_gh_questions()
     elif args.backfill_regions:
         print(backfill_regions(limit=args.limit, use_llm=not args.no_llm), flush=True)

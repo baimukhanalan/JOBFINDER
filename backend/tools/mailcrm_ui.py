@@ -381,19 +381,26 @@ def render_thread(t: dict) -> str:
     return _page("inbox", body, _COMPOSE_MODAL)
 
 
-def render_candidates(cands: list[dict], counts: dict | None = None,
-                      active_filter: str = "", total: int | None = None) -> str:
-    counts = counts or {}
-    total = total if total is not None else len(cands)
-    rows = []
+def render_candidate_rows(cands: list[dict]) -> str:
+    """One <a.mbxrow> per candidate — shared by the full page and the
+    /mail/candidates/more infinite-scroll fragment."""
+    out = []
     for c in cands:
         n = c.get("unread", 0)
         badge = f'<span class="cnt">{n}</span>' if n else ""
-        rows.append(
+        out.append(
             f'<a class="mbxrow" href="/mail?mailbox={escape(c["email"])}">'
             f'<span class="avatar" style="background:{_avatar_color(c["name"])};width:30px;height:30px;font-size:13px">{escape(_initial(c["name"]))}</span>'
             f'<span class="nm">{escape(c["name"])}</span>{badge}'
             f'<span class="em">{escape(c["email"])}</span></a>')
+    return "".join(out)
+
+
+def render_candidates(cands: list[dict], counts: dict | None = None,
+                      active_filter: str = "", total: int | None = None,
+                      has_more: int = 0) -> str:
+    counts = counts or {}
+    total = total if total is not None else len(cands)
 
     def fb(key, label, n):
         # Hide empty stage filters (they reappear once populated). Always keep
@@ -416,7 +423,9 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
             '</div></div></div>')
     empty = '<div class="empty">Никого в этой корзине</div>' if not cands else ""
-    body = head + funnel + f'<div class="mbxlist">{"".join(rows)}</div>{empty}'
+    body = (head + funnel
+            + f'<div class="mbxlist" id="mbxlist">{render_candidate_rows(cands)}</div>{empty}'
+            + f'<div id="mbxmore" data-more="{has_more}" style="height:1px"></div>')
     return _page("candidates", body)
 
 
@@ -476,6 +485,23 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   var last=null,pollTimer=null;
   function startPoll(){if(pollTimer)return;pollTimer=setInterval(async function(){if(document.hidden||document.querySelector('.modal.open'))return;try{var r=await fetch('/mail/count'+location.search);if(!r.ok)return;var j=await r.json();if(j.n!==last){if(last!==null)await refreshList();last=j.n;}}catch(e){}},10000);}
   if(window.EventSource){try{var es=new EventSource('/mail/events');es.onmessage=function(){refreshList();};es.onerror=function(){startPoll();};}catch(e){startPoll();}}else{startPoll();}
+})();
+// Candidates list — offset-based infinite scroll (mirrors the inbox #maillist one)
+(function(){
+  var list=document.getElementById('mbxlist'), more=document.getElementById('mbxmore');
+  if(!list||!more)return;
+  var loading=false,PAGE=50;
+  async function loadMore(){
+    if(loading||more.dataset.more!=='1')return;
+    loading=true;
+    try{
+      var sp=new URLSearchParams(location.search);
+      sp.set('offset', list.querySelectorAll('.mbxrow').length);
+      var r=await fetch('/mail/candidates/more?'+sp.toString());
+      if(r.ok){var html=await r.text();var added=(html.match(/class=.mbxrow/g)||[]).length;if(added)list.insertAdjacentHTML('beforeend',html);if(added<PAGE)more.dataset.more='0';}
+    }catch(e){}finally{loading=false;}
+  }
+  window.addEventListener('scroll',function(){if(window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-400)loadMore();},{passive:true});
 })();
 // Gmail-style mobile drawer + search-pill wiring
 function gmDrawer(open){var d=document.querySelector('.gm-drawer'),s=document.querySelector('.gm-scrim');if(!d||!s)return;if(open){d.classList.add('open');s.classList.add('open');document.body.style.overflow='hidden';}else{d.classList.remove('open');s.classList.remove('open');document.body.style.overflow='';}}

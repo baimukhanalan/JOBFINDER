@@ -643,44 +643,65 @@ def _submitted_mailboxes() -> set:
     return out
 
 
-@app.get("/mail/candidates", response_class=HTMLResponse)
-def mail_candidates(filter: str = "", q: str = ""):
-    from backend.tools import mail_db, mailcrm, mailcrm_ui
+CANDIDATES_PAGE = 50
+
+
+def _filtered_candidates(filter: str, q: str):
+    """All candidates for the given funnel filter + Gmail-pill search, sorted
+    (unread first, then name). Returns (sorted_list, total_all_candidates).
+    Shared by the page and the /mail/candidates/more infinite-scroll fragment."""
+    from backend.tools import mail_db, mailcrm
     all_cands = mailcrm.candidates()
-    try:  # one query instead of scanning 261 Maildirs
+    try:  # one query instead of scanning every Maildir
         unread = mail_db.unread_by_mailbox()
     except Exception:
         unread = {}
     for c in all_cands:
         c["unread"] = unread.get(c["email"], 0)
-    # funnel counts (distinct candidates per bucket)
-    try:
-        kc = mail_db.kind_counts()
-    except Exception:
-        kc = {}
-    submitted = _submitted_mailboxes()
-    counts = {"submitted": len(submitted), "ack": kc.get("ack", 0),
-              "interview": kc.get("interview", 0), "offer": kc.get("offer", 0),
-              "rejection": kc.get("rejection", 0)}
-    # apply the clicked filter -> only candidates in that bucket
     f = (filter or "").lower()
     cands = all_cands
     if f == "submitted":
-        cands = [c for c in all_cands if c["email"] in submitted]
+        cands = [c for c in all_cands if c["email"] in _submitted_mailboxes()]
     elif f in ("ack", "interview", "offer", "rejection"):
         try:
             keep = mail_db.mailboxes_with_kind(f)
         except Exception:
             keep = set()
         cands = [c for c in all_cands if c["email"] in keep]
-    # Gmail-pill search: narrow by candidate name / email
     ql = (q or "").strip().lower()
     if ql:
         cands = [c for c in cands if ql in (c.get("name") or "").lower()
                  or ql in (c.get("email") or "").lower()]
     cands.sort(key=lambda c: (-c.get("unread", 0), c["name"]))
-    return HTMLResponse(mailcrm_ui.render_candidates(cands, counts=counts,
-                                                     active_filter=f, total=len(all_cands)))
+    return cands, len(all_cands)
+
+
+@app.get("/mail/candidates", response_class=HTMLResponse)
+def mail_candidates(filter: str = "", q: str = ""):
+    from backend.tools import mail_db, mailcrm_ui
+    cands, total = _filtered_candidates(filter, q)
+    # funnel counts (distinct candidates per bucket)
+    try:
+        kc = mail_db.kind_counts()
+    except Exception:
+        kc = {}
+    counts = {"submitted": len(_submitted_mailboxes()), "ack": kc.get("ack", 0),
+              "interview": kc.get("interview", 0), "offer": kc.get("offer", 0),
+              "rejection": kc.get("rejection", 0)}
+    page = cands[:CANDIDATES_PAGE]
+    has_more = 1 if len(cands) > CANDIDATES_PAGE else 0
+    return HTMLResponse(mailcrm_ui.render_candidates(
+        page, counts=counts, active_filter=(filter or "").lower(),
+        total=total, has_more=has_more))
+
+
+@app.get("/mail/candidates/more", response_class=HTMLResponse)
+def mail_candidates_more(filter: str = "", q: str = "", offset: int = 0):
+    """Infinite-scroll fragment: the next CANDIDATES_PAGE rows past ``offset``."""
+    from backend.tools import mailcrm_ui
+    cands, _ = _filtered_candidates(filter, q)
+    rows = cands[max(offset, 0):max(offset, 0) + CANDIDATES_PAGE]
+    return HTMLResponse(mailcrm_ui.render_candidate_rows(rows))
 
 
 @app.get("/mail/message", response_class=HTMLResponse)

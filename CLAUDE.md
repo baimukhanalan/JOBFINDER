@@ -6,32 +6,42 @@
 > `git remote -v`), so `git push` works as-is — do NOT paste the token into any tracked file.
 > **Convention: after any nontrivial change, `git add -A && git commit && git push` to this remote
 > straight away — don't let work sit uncommitted — and edit THIS `CLAUDE.md` in the same commit
-> whenever deploy / behavior / gotchas change.** Directory is uppercase `/home/projects/JOBFINDER`.
+> whenever deploy / behavior / gotchas change.** **Live deploy dir is now lowercase
+> `/home/projects/jobfinder`** (the working checkout of `baimukhanalan/JOBFINDER`, branch
+> `feat/jobs-feed-mobile`), NOT uppercase `/home/projects/JOBFINDER`. Repointed 2026-08-21 — see Deploy.
 >
 > **This IS the live project** (`jobs.systeam.kz`, pm2 `jobfinder-alan-*`, Postgres `jobfinder_crm`).
-> The old lowercase `/home/projects/jobfinder` (repo `Abekemyn/jobfinder`, the `michael` persona,
-> `jobfinder.systeam.kz`) was **RETIRED & archived 2026-08-20** — its pm2 / nginx vhost / cron were
-> removed and the dir moved to `/home/projects/jobfinder.archive-2026-08-20-2158`. Backups of what was
-> removed live in `/home/projects/_retire-jobfinder-backup-2026-08-20-2158/`. Any `jobfinder.systeam.kz`
-> / `:8089` / display `:99` reference you see elsewhere is that dead project — ignore it here.
+> **Dir map — there are THREE `jobfinder*` dirs, don't get them confused:**
+> - `/home/projects/jobfinder` (lowercase) — **THE LIVE CODE**, checkout of `baimukhanalan/JOBFINDER`.
+>   pm2 `jobfinder-alan-*` run from here since 2026-08-21. Has `backend/ .env data/ uploads/ vnc/`.
+> - `/home/projects/JOBFINDER` (uppercase) — **dead husk**: only a stale `uploads/`, no `backend/`.
+>   pm2 pointed here until 2026-08-21 (served stale in-memory code + read an empty `uploads/`). Ignore.
+> - `/home/projects/jobfinder.archive-2026-08-20-2158` — the OLDER retired `Abekemyn/jobfinder`
+>   `michael` project (`jobfinder.systeam.kz`, `:8089`, display `:99`). Fully dead — ignore any such ref.
 
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard (candidate mail `/mail`, company/roles feeds
-`/roles` `/jobs` `/catalog`, review queue `/queue`, onboarding `/setup`), a one-click browser
-extension, and a headful "co-pilot" Chromium watched over noVNC.
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 3 tabs** (Кандидаты
+`/mail/candidates`, Каталог `/catalog`, Заявки `/apply` — reduced from 6 on 2026-08-21; the general
+Инбокс `/mail` is still reachable via the in-page mail tab strip, and `/jobs` `/roles` `/queue`
+`/setup` routes still exist but were dropped from the nav as duplicate/unused surfaces), a one-click
+browser extension, and a headful "co-pilot" Chromium watched over noVNC. Nav is defined in
+`backend/tools/mailcrm_ui.py:_sidebar`.
 
 Stack: Python 3.12 · FastAPI · Playwright · **psycopg2 / Postgres `jobfinder_crm`** · Dovecot+Postfix
 Maildir · aiogram (Telegram) · python-jobspy. Résumé tailoring + answer drafting use the **local Sumrak
 LLM** (`llm_*` in `config.py`), not the Anthropic API (key is empty).
 
 ## Deploy (pm2, NOT systemd) — `jobs.systeam.kz`
-All four pm2 services launch via `cd /home/projects/JOBFINDER && sg mail -c '…'` (`sg mail` is
+All four pm2 services launch via `cd /home/projects/jobfinder && sg mail -c '…'` (`sg mail` is
 mandatory — `programmer` isn't in the `mail` group interactively, and the Maildir is `vmail:mail 2770`).
-**Their `pm_cwd` MUST be `/home/projects/JOBFINDER`** — if it points at the retired lowercase
-`jobfinder` the service dies on reboot (that exact bug was fixed 2026-08-20; recreate with the correct
-`cwd`, never just `pm2 save`). `pm2 save` after any change.
+**Their `pm_cwd` MUST be `/home/projects/jobfinder`** (lowercase — the live checkout). They used to
+point at uppercase `/home/projects/JOBFINDER`, but that dir was emptied to just `uploads/`, so the
+running processes served stale in-memory code and read an empty `uploads/`; on **2026-08-21** all four
+were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2 start /usr/bin/bash
+--name <name> --cwd /home/projects/jobfinder -- -c "cd /home/projects/jobfinder && exec sg mail -c
+'<cmd>'"`, then `pm2 save`). Recreate with the correct `cwd`, never just `pm2 save`.
 
 - `jobfinder-alan-dash` → `uvicorn backend.dashboard_app:app` on **127.0.0.1:8099** — the live CRM +
   review app. `/` redirects to `/mail/candidates`. No in-app auth (nginx basic-auth sits in front).

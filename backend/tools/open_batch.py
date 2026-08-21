@@ -57,11 +57,15 @@ async def _open_one(ctx, app: dict, draft: bool) -> None:
         cover = ""
     try:
         strategy = _pick_strategy(app["url"])
-        await strategy.prefill(page, form, resume_pdf, cover_letter=cover, job=job,
-                               draft=draft, resume_summary=resume_text,
-                               facts=load_facts(app["profile"]),
-                               profile_id=app["profile"], niche="")
-        await _fill_leftovers(page, form)
+        fill_report = await strategy.prefill(page, form, resume_pdf, cover_letter=cover, job=job,
+                                             draft=draft, resume_summary=resume_text,
+                                             facts=load_facts(app["profile"]),
+                                             profile_id=app["profile"], niche="")
+        # In résumé-parser-only mode (RESUME_PARSER_ONLY=1) prefill types NOTHING beyond the
+        # résumé autofill — so do NOT fill leftovers either, or the reopened tab the human
+        # submits would fill other fields (the spam signal we're avoiding).
+        if (fill_report or {}).get("mode") != "resume_parser_only":
+            await _fill_leftovers(page, form)
     except Exception as exc:  # one tab failing must not sink the batch
         print(f"fill error on {app.get('title')}: {exc}")
 

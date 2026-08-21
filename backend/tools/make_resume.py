@@ -69,7 +69,7 @@ async def _run(profile_id: str, job_url: str, use_ai: bool) -> Path:
     bm = BrowserManager(headless=True)
     await bm.start()
     try:
-        await _html_to_pdf(bm, html, out)
+        await _html_to_pdf(bm, html, out, title=profile.full_name, author=profile.full_name)
     finally:
         await bm.close()
     return out, tailored.get("match_score"), job.get("title", "")

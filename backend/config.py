@@ -21,20 +21,20 @@ class Settings(BaseSettings):
     llm_url: str = "http://127.0.0.1:8080/v1"
     llm_key: str = "sk-sumrak-ai"
     llm_model: str = "sumrak-smart"
-    # Candidate mailboxes.  "mailpit" = local throwaway sink (nothing real arrives);
-    # "mailgun" = real inbound mail via a Mailgun catch-all route + stored messages.
+    # Candidate mailboxes.  "mailpit" = local throwaway sink (nothing real arrives,
+    # dev only); "selfhost" = real inbound/outbound mail on OUR OWN Postfix/Dovecot
+    # server — no third-party service.
     mail_provider: str = "mailpit"
-    mailgun_api_key: str = ""
-    mailgun_domain: str = ""  # the Mailgun domain that owns the addresses
-    mailgun_base: str = "https://api.mailgun.net"
-    mail_domain: str = ""  # address domain; defaults to mailgun_domain (or mail.kz on mailpit)
-    # Outbound: HTTP API (default) needs only mailgun_api_key; SMTP is an alternative
-    # transport using a per-domain SMTP credential from the Mailgun panel.
-    mail_send_transport: str = "api"  # "api" | "smtp"
-    mailgun_smtp_host: str = "smtp.mailgun.org"
-    mailgun_smtp_port: int = 587
-    mailgun_smtp_login: str = ""
-    mailgun_smtp_password: str = ""
+    mail_domain: str = ""  # address domain (e.g. takhet.com); label only on mailpit
+    # selfhost inbound: read the Maildir our Postfix delivers into.
+    mail_maildir_base: str = "/var/mail/vhosts"
+    # selfhost outbound: submit through our own Postfix (127.0.0.1:587, STARTTLS +
+    # SASL); OpenDKIM signs on the way out. mail_smtp_login/password is the domain's
+    # submission account created on the mail server.
+    mail_smtp_host: str = "127.0.0.1"
+    mail_smtp_port: int = 587
+    mail_smtp_login: str = ""
+    mail_smtp_password: str = ""
 
     class Config:
         env_file = str(ENV_FILE)

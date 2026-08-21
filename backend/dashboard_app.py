@@ -431,6 +431,28 @@ def _blocked_banner(profile: str, problems: list[str]) -> str:
             f"<a href='/setup?profile={escape(profile)}'>Fix in Setup →</a></div>")
 
 
+_NAV_BTN = ("text-decoration:none;padding:8px 14px;border-radius:8px;"
+            "background:#1f2937;color:#e5e7eb;font-weight:600;font-size:14px")
+# Cross-surface nav injected into every page so the inbox, the company tables
+# and the review queue are one click apart — one dashboard, not three URLs.
+_NAV = (
+    '<nav style="display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;padding:8px;'
+    'border-radius:10px;background:#111827">'
+    f'<a href="/mail" style="{_NAV_BTN}">📥 Инбокс</a>'
+    f'<a href="/roles" style="{_NAV_BTN}">🏢 Компании</a>'
+    f'<a href="/" style="{_NAV_BTN}">🗂 Очередь</a>'
+    '</nav>'
+)
+
+
+def _inject_nav(html: str) -> str:
+    """Insert the cross-surface nav as the first child of the page's .wrap."""
+    for anchor in ('<div class="wrap">', "<div class='wrap'>"):
+        if anchor in html:
+            return html.replace(anchor, anchor + _NAV, 1)
+    return _NAV + html
+
+
 def _render(profile: str) -> str:
     jobs = _load_jobs(profile)
     prof = _profiles().get(profile)
@@ -468,6 +490,7 @@ def _render(profile: str) -> str:
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Apply — {escape(profile)}</title><style>{_CSS}</style></head><body><div class='wrap'>"
+        f"{_NAV}"
         f"<h1>Apply queue — {escape(profile)}</h1>"
         + (_blocked_banner(profile, problems) if blocked else "") +
         "<div class='stats'>"
@@ -504,9 +527,9 @@ def roles_page(company: str = ""):
     from backend.tools import roles_dashboard as rd
     try:
         if not company:
-            return HTMLResponse(rd.render_index_html(rd.supported_targets(),
-                                                     rd.counts_by_company()))
-        return HTMLResponse(rd.render_live_html(rd.fetch_jobs(company), company))
+            return HTMLResponse(_inject_nav(rd.render_index_html(rd.supported_targets(),
+                                                                 rd.counts_by_company())))
+        return HTMLResponse(_inject_nav(rd.render_live_html(rd.fetch_jobs(company), company)))
     except Exception as exc:
         return HTMLResponse(f"<p>roles feed unavailable: {escape(str(exc))}</p>", status_code=502)
 
@@ -558,29 +581,34 @@ def roles_reset(company: str = ""):
     return JSONResponse({"ok": True, "company": company, "epoch": rd.reset(company)})
 
 
-# ---- Candidate mailboxes (Mailgun inbound, or the local Mailpit sink) ------
+# ---- Candidate mailboxes (self-hosted Maildir, or the local Mailpit sink) --
 _mail_poller_started = False
 
 
 def _start_mail_poller():
     """Background thread: merge the mail provider -> durable store on a loop so the
-    inbox survives restarts and nothing is lost. Soft no-op if the provider is down."""
+    inbox survives restarts and nothing is lost. Soft no-op if the provider is down.
+
+    On 'selfhost' the Maildir under /var/mail/vhosts is vmail:mail 2770, which this
+    dashboard (running as `programmer`, no mail group) cannot read — the durable
+    store is filled instead by the cron `sg mail -c '... mail_sink --poll'`, exactly
+    like inbox_index.py. So the in-process poller only runs for the local providers."""
     global _mail_poller_started
     if _mail_poller_started:
+        return
+    from backend.tools import mail_sink
+    if mail_sink.PROVIDER == "selfhost":
+        _mail_poller_started = True  # cron owns the poll; nothing to do in-process
         return
     _mail_poller_started = True
 
     def loop():
-        from backend.tools import mail_sink
-        # Mailpit is local and free to hammer; Mailgun's events API is a remote
-        # rate-limited endpoint, so poll it far less often.
-        every = 20.0 if mail_sink.PROVIDER == "mailgun" else 4.0
         while True:
             try:
                 mail_sink.poll_once(int(time.time()))
             except Exception:
                 pass
-            time.sleep(every)
+            time.sleep(4.0)
 
     threading.Thread(target=loop, daemon=True).start()
 
@@ -592,7 +620,7 @@ def mail_page(profile: str = ""):
     _start_mail_poller()
     try:
         data = mail_sink.summary(_safe_id(profile) or None)
-        return HTMLResponse(mail_dashboard.render_html(data, mail_sink.address_map()))
+        return HTMLResponse(_inject_nav(mail_dashboard.render_html(data, mail_sink.address_map())))
     except Exception as exc:
         return HTMLResponse(f"<p>mail sink unavailable: {escape(str(exc))}</p>", status_code=502)
 
@@ -628,31 +656,12 @@ def mail_draft(id: str = ""):
 
 @app.post("/mail/send")
 def mail_send(id: str = Form(...), text: str = Form(...), subject: str = Form("")):
-    """SEND the human's reply to a recruiter (Mailgun). Runs ONLY from the inbox's
+    """SEND the human's reply to a recruiter (via our own Postfix). Runs ONLY from the inbox's
     Send button — there is no auto-reply. From is derived server-side from the
     original message (the caller cannot spoof it). Returns {ok, ...} or {ok:False,
     error} with 400 so the inbox can show the failure."""
     from backend.tools import mail_sink
     res = mail_sink.send_reply(id, text, subject or None)
-    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
-
-
-@app.post("/mail/inbound")
-async def mail_inbound(request: Request):
-    """Mailgun INBOUND webhook: a route's forward() POST delivers the fully-parsed
-    message (body included), which is the only way to get the body while message
-    retrieval is disabled for the domain. Rejects unsigned/forged posts. Public
-    endpoint — must be on the auth_basic-off list in nginx (like /assist)."""
-    from backend.tools import mail_sink
-    try:
-        form = await request.form()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "bad form"}, status_code=400)
-    fields = {k: (v if isinstance(v, str) else "") for k, v in form.items()}
-    if not mail_sink.mg_verify_webhook(fields.get("token", ""), fields.get("timestamp", ""),
-                                       fields.get("signature", "")):
-        return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
-    res = mail_sink.record_inbound(fields)
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 

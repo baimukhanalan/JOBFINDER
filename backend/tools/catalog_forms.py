@@ -36,13 +36,23 @@ _JS = r"""()=>{
   const groups={};
   document.querySelectorAll('input[type=radio],input[type=checkbox]').forEach(el=>{
     const n=el.name||''; if(!n)return;
-    if(!(n in groups)){const fs=el.closest('fieldset');let q='';if(fs){const lg=fs.querySelector('legend');if(lg)q=lg.innerText.trim();}groups[n]=q;}
+    if(!(n in groups)){const fs=el.closest('fieldset');let q='';if(fs){const lg=fs.querySelector('legend');if(lg)q=lg.innerText.trim();}groups[n]={q:q,opts:[]};}
+    const ol=lf(el); if(ol) groups[n].opts.push(ol);  // each radio's own label is a choice
   });
-  Object.values(groups).forEach(q=>{if(q&&!seen.has(q)){seen.add(q);out.push({label:q,type:'choice',required:false});}});
+  Object.values(groups).forEach(g=>{if(g.q&&!seen.has(g.q)){seen.add(g.q);const it={label:g.q,type:'choice',required:false};if(g.opts.length)it.options=g.opts;out.push(it);}});
   document.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not([type=submit]):not([type=button]),select,textarea').forEach(el=>{
     const q=lf(el); const tag=el.tagName.toLowerCase();
     const t = tag==='select'?'select':(tag==='textarea'?'textarea':(el.type||'text'));
-    if(q && !seen.has(q)){seen.add(q); out.push({label:q, type:t, required:!!(el.required||el.getAttribute('aria-required')==='true')});}
+    if(q && !seen.has(q)){
+      seen.add(q);
+      const it={label:q, type:t, required:!!(el.required||el.getAttribute('aria-required')==='true')};
+      if(tag==='select'){
+        const opts=[...el.options].map(o=>(o.textContent||'').trim())
+          .filter(x=>x && !/^(select|choose|--|please|pick)/i.test(x));
+        if(opts.length) it.options=opts;  // dropdown <option> labels
+      }
+      out.push(it);
+    }
   });
   return out;
 }"""
@@ -78,14 +88,17 @@ def _scrape(page, url: str) -> list:
         return []
 
 
-def run(ats_list=("ashby", "lever", "workable"), limit: int = 0) -> int:
+def run(ats_list=("ashby", "lever", "workable"), limit: int = 0,
+        refresh_all: bool = False) -> int:
     catalog_db.ensure_schema()
     total = 0
     with sync_playwright() as p:
         b = p.chromium.launch()
         page = b.new_context().new_page()
         for ats in ats_list:
-            rows = catalog_db.rows_missing_questions(ats)
+            # refresh_all=True re-scrapes rows that already have questions, to add the
+            # select/radio options we now capture (mirrors catalog_collector --refresh-gh).
+            rows = catalog_db.rows_missing_questions(ats, missing_only=not refresh_all)
             if limit:
                 rows = rows[:limit]
             print(f"{ats}: {len(rows)} rows to scrape", flush=True)
@@ -94,7 +107,9 @@ def run(ats_list=("ashby", "lever", "workable"), limit: int = 0) -> int:
                 fields = _scrape(page, _apply_url(ats, r["url"]))
                 if fields:
                     qs = [{"label": f["label"][:300], "required": bool(f.get("required")),
-                           "type": f.get("type", "")} for f in fields]
+                           "type": f.get("type", ""),
+                           **({"options": f["options"]} if f.get("options") else {})}
+                          for f in fields]
                     catalog_db.set_questions(ats, r["company_key"], r["external_id"], qs)
                     got += 1
                     total += 1
@@ -119,5 +134,8 @@ if __name__ == "__main__":
                      help="cap rows scraped per ATS (bounded/cron runs). Default 0 = "
                           "UNBOUNDED: scrapes ALL missing-question rows for the "
                           "selected ATS(es), one page load each")
+    ap.add_argument("--refresh", action="store_true",
+                     help="re-scrape ALL rows (not just missing) to add options to "
+                          "already-collected questions")
     args = ap.parse_args()
-    run(ats_list=tuple(args.ats) or _KNOWN, limit=args.limit)
+    run(ats_list=tuple(args.ats) or _KNOWN, limit=args.limit, refresh_all=args.refresh)

@@ -142,13 +142,16 @@ _LIST_COLS = ("id", "ats", "company_key", "company", "title", "location", "depar
 
 
 def list_jobs(company: str | None = None, q: str | None = None, remote_only: bool = True,
-              limit: int = 30, offset: int = 0) -> list:
+              limit: int = 30, offset: int = 0, region: str | None = None) -> list:
     where, args = ["TRUE"], []
     if remote_only:
         where.append("is_remote=TRUE")
     if company:
         where.append("company_key=%s")
         args.append(company)
+    if region:
+        where.append("%s = ANY(regions)")
+        args.append(region)
     if q:
         where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
                      "||' '||coalesce(description,'')) @@ plainto_tsquery('simple', %s)")

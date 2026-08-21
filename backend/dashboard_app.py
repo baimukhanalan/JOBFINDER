@@ -547,12 +547,13 @@ def health():
 
 
 @app.get("/catalog", response_class=HTMLResponse)
-def catalog_page(company: str = "", q: str = ""):
+def catalog_page(company: str = "", q: str = "", region: str = ""):
     """Persisted remote-job catalog (Postgres) with descriptions + application-form
-    questions, collected across every known ATS board."""
+    questions, collected across every known ATS board. `region` ∈ {US,CA,UK,OTHER}
+    filters by a job's eligibility tags."""
     from backend.tools import catalog_ui
     try:
-        return HTMLResponse(catalog_ui.render_page(company=company, q=q))
+        return HTMLResponse(catalog_ui.render_page(company=company, q=q, region=region))
     except Exception as exc:
         return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
                             f"<p style='font-family:sans-serif;padding:16px'>Каталог недоступен: {escape(str(exc))}</p>",
@@ -560,11 +561,11 @@ def catalog_page(company: str = "", q: str = ""):
 
 
 @app.get("/catalog/more", response_class=HTMLResponse)
-def catalog_more(company: str = "", q: str = "", offset: int = 0):
+def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = ""):
     """Pagination fragment for the /catalog infinite scroll."""
     from backend.tools import catalog_ui
     try:
-        return HTMLResponse(catalog_ui.render_more(company=company, q=q, offset=offset))
+        return HTMLResponse(catalog_ui.render_more(company=company, q=q, offset=offset, region=region))
     except Exception:
         return HTMLResponse("", status_code=200)
 

@@ -125,31 +125,41 @@ def _card(j: dict) -> str:
         "</article>")
 
 
-def _chips(active: str, q: str) -> str:
-    def chip(key: str, label: str, on: bool) -> str:
-        cls = "cat-chip on" if on else "cat-chip"
-        href = "/catalog" + _qs(company=key, q=q)
-        return f'<a class="{cls}" href="{href}">{esc(label)}</a>'
-    out = [chip("", "Все", not active)]
-    for c in catalog_db.companies(remote_only=True)[:40]:
-        k = c.get("company_key") or ""
-        name = c.get("company") or k
-        out.append(chip(k, name, active == k))
-    return f'<div class="cat-chips">{"".join(out)}</div>'
+# Region axis for the catalog — a job's regions[] ∈ {US,CA,UK,OTHER} (multi). This is
+# the primary filter for the agency flow: pick a country, apply with a candidate who is
+# actually authorized there.
+_REGIONS = [("US", "🇺🇸 США"), ("CA", "🇨🇦 Канада"), ("UK", "🇬🇧 UK"), ("OTHER", "🌍 Другие")]
 
 
-def render_page(company: str = "", q: str = "") -> str:
+def _region_bar(active: str, q: str, company: str, by_region: dict, total: int) -> str:
+    def pill(key: str, label: str, n: int, on: bool) -> str:
+        cls = "cat-reg on" if on else "cat-reg"
+        href = "/catalog" + _qs(company=company, q=q, region=key)
+        return f'<a class="{cls}" href="{href}">{label} <b>{n}</b></a>'
+    out = [pill("", "Все", total, not active)]
+    for code, label in _REGIONS:
+        out.append(pill(code, label, by_region.get(code, 0), active == code))
+    return f'<div class="cat-regions">{"".join(out)}</div>'
+
+
+def render_page(company: str = "", q: str = "", region: str = "") -> str:
     company = (company or "").strip()
     q = (q or "").strip()
+    region = (region or "").strip().upper()
+    if region not in ("US", "CA", "UK", "OTHER"):
+        region = ""
     jobs = catalog_db.list_jobs(company=company or None, q=q or None,
-                                remote_only=True, limit=PAGE, offset=0)
+                                remote_only=True, limit=PAGE, offset=0,
+                                region=region or None)
     cards = "".join(_card(j) for j in jobs)
     has_more = 1 if len(jobs) == PAGE else 0
 
     try:
-        remote_total = catalog_db.counts().get("remote", 0)
+        cnt = catalog_db.counts()
+        remote_total = cnt.get("remote", 0)
+        by_region = cnt.get("by_region", {})
     except Exception:
-        remote_total = 0
+        remote_total, by_region = 0, {}
 
     if company:
         # use the active company's display name if we can find it
@@ -161,15 +171,17 @@ def render_page(company: str = "", q: str = "") -> str:
         title_txt = esc(cname)
         head_n = ""
     else:
-        title_txt = "Каталог (Remote)"
-        head_n = f'<span class="cat-h-n">{remote_total}</span>'
+        title_txt = "Каталог"
+        n = by_region.get(region, 0) if region else remote_total
+        head_n = f'<span class="cat-h-n">{n}</span>'
 
     search = (
         '<form class="cat-search" method="get" action="/catalog">'
         + (f'<input type="hidden" name="company" value="{esc(company)}">' if company else "")
+        + (f'<input type="hidden" name="region" value="{esc(region)}">' if region else "")
         + f'<input type="search" name="q" value="{esc(q)}" placeholder="Поиск: должность, компания, описание…">'
         + '<button class="ghost" type="submit">Найти</button>'
-        + (f'<a class="ghost" href="/catalog{_qs(company=company)}">Сброс</a>' if q else "")
+        + (f'<a class="ghost" href="/catalog{_qs(company=company, region=region)}">Сброс</a>' if q else "")
         + "</form>")
     head = (
         '<div class="cat-head"><div class="cat-h-row">'
@@ -177,22 +189,27 @@ def render_page(company: str = "", q: str = "") -> str:
         f"{search}</div>")
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
-        _CAT_CSS + head + _chips(company, q)
+        _CAT_CSS + head
+        + _region_bar(region, q, company, by_region, remote_total)
         + f'<div class="cat-list" id="catlist">{cards}</div>{empty}'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _CAT_JS)
     return mailcrm_ui._page("catalog", body)
 
 
-def render_more(company: str = "", q: str = "", offset: int = 0) -> str:
+def render_more(company: str = "", q: str = "", offset: int = 0, region: str = "") -> str:
     company = (company or "").strip()
     q = (q or "").strip()
+    region = (region or "").strip().upper()
+    if region not in ("US", "CA", "UK", "OTHER"):
+        region = ""
     try:
         offset = int(offset)
     except (TypeError, ValueError):
         offset = 0
     jobs = catalog_db.list_jobs(company=company or None, q=q or None,
-                                remote_only=True, limit=PAGE, offset=offset)
+                                remote_only=True, limit=PAGE, offset=offset,
+                                region=region or None)
     return "".join(_card(j) for j in jobs)
 
 
@@ -203,10 +220,13 @@ _CAT_CSS = """<style>
 .cat-h-n{color:var(--ink-mute);font-weight:600;font-size:14px;margin-left:4px}
 .cat-search{display:flex;gap:8px;flex-wrap:wrap}
 .cat-search input[type=search]{flex:1;min-width:0}
-.cat-chips{display:flex;gap:7px;overflow-x:auto;padding:2px 0 12px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-.cat-chips::-webkit-scrollbar{display:none}
-.cat-chip{white-space:nowrap;padding:7px 13px;border-radius:999px;border:1px solid var(--line);color:var(--ink-mute);background:var(--panel);font-size:13px;font-weight:600;text-decoration:none;min-height:36px;display:flex;align-items:center}
-.cat-chip.on{background:#1a73e8;border-color:#1a73e8;color:#fff}
+.cat-regions{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.cat-regions::-webkit-scrollbar{display:none}
+.cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}
+.cat-reg b{font-family:var(--ff-mono,monospace);font-weight:500;font-size:12px;color:var(--ink-mute)}
+.cat-reg:hover{border-color:var(--accent);text-decoration:none}
+.cat-reg.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
+.cat-reg.on b{color:rgba(255,255,255,.85)}
 .cat-list{display:flex;flex-direction:column;gap:10px}
 .cat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px}
 .cat-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px}

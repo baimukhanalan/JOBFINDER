@@ -396,6 +396,10 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
             f'<span class="em">{escape(c["email"])}</span></a>')
 
     def fb(key, label, n):
+        # Hide empty stage filters (they reappear once populated). Always keep
+        # "Все" (key == "") and whichever filter is currently active.
+        if n == 0 and key and active_filter != key:
+            return ""
         cls = "fbtn" + (" active" if active_filter == key else "")
         href = "/mail/candidates" + (f"?filter={key}" if key else "")
         return f'<a class="{cls}" href="{href}">{label} <b>{n}</b></a>'

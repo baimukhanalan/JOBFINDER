@@ -149,14 +149,33 @@ def _matched_candidate(role_title: str, apply_url: str = "") -> Profile:
     return Profile.from_dict(pd)
 
 
+# Which companies the BOT applies to. Default "salmon" — for now the bot only submits
+# to Salmon (user's decision). Comma-list of target keys/company names to widen it, or
+# "all"/"" for every enabled target. Independent of the dashboard/registry `enabled` flag.
+BOT_TARGETS = os.getenv("BOT_TARGETS", "salmon")
+
+
+def _bot_target_keys() -> set[str]:
+    raw = (BOT_TARGETS or "").strip().lower()
+    if raw in ("", "all", "*"):
+        return set()  # no restriction
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
 async def _online_roles_cached() -> list[dict]:
-    """All strictly-REMOTE roles across ENABLED targets (family+company-tagged), cached ~10 min."""
+    """Strictly-REMOTE roles the bot may apply to. Restricted to BOT_TARGETS (default:
+    Salmon only) out of all enabled targets; family+company-tagged; cached ~10 min."""
     global _jobs_cache, _jobs_ts
     if _jobs_cache and (time.time() - _jobs_ts) < _JOBS_TTL:
         return _jobs_cache
     from backend.applier.batch import _online_roles
-    _jobs_cache = await asyncio.get_running_loop().run_in_executor(None, _online_roles)
-    _jobs_ts = time.time()
+    roles = await asyncio.get_running_loop().run_in_executor(None, _online_roles)
+    keys = _bot_target_keys()
+    if keys:  # keep only roles at the allowed companies (by target key OR company name)
+        roles = [r for r in roles
+                 if (r.get("target") or "").strip().lower() in keys
+                 or (r.get("company") or "").strip().lower() in keys]
+    _jobs_cache, _jobs_ts = roles, time.time()
     return _jobs_cache
 
 

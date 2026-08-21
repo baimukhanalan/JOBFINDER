@@ -1,8 +1,8 @@
 """Каталог tab — server-rendered browser over the Postgres `job_catalog`, served
 at /catalog.
 
-Sibling of ``jobs_feed`` (the live "Вакансии" feed), but backed by the persisted
-catalog instead of live ATS boards. The whole point of this table is that each row
+Backed by the persisted catalog (Postgres) rather than live ATS boards — it replaced
+the old live "Вакансии" feed, which was removed. The whole point of this table is that each row
 carries not just a description but the application-form *questions* — so cards
 surface a "❓ N вопросов" badge and expand into a readable question list (label,
 required `*`, field type).

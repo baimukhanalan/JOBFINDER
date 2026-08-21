@@ -546,47 +546,6 @@ def health():
     return {"ok": True}
 
 
-@app.get("/roles", response_class=HTMLResponse)
-def roles_page(company: str = ""):
-    """Live roles dashboard. No `company` -> index of every tracked company; a
-    `company` key -> that company's Salmon-style table (job list from Ashby, counts
-    polled from our tracker)."""
-    from backend.tools import roles_dashboard as rd
-    try:
-        if not company:
-            return HTMLResponse(rd.render_index_html(rd.supported_targets(),
-                                                     rd.counts_by_company()))
-        return HTMLResponse(rd.render_live_html(rd.fetch_jobs(company), company))
-    except Exception as exc:
-        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
-                            f"<p style='font-family:sans-serif;padding:16px'>Дашборд компаний недоступен: {escape(str(exc))}</p>",
-                            status_code=502)
-
-
-@app.get("/jobs", response_class=HTMLResponse)
-def jobs_page(company: str = "", q: str = "", allpos: int = 0):
-    """Unified live "all jobs" feed across every tracked ATS board — mobile-first
-    card list with company chips + search. Remote-only by default (allpos=1 shows
-    every workplace type). Status badges read from our tracker."""
-    from backend.tools import jobs_feed
-    try:
-        return HTMLResponse(jobs_feed.render_page(company=company, q=q, remote_only=(allpos == 0)))
-    except Exception as exc:
-        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
-                            f"<p style='font-family:sans-serif;padding:16px'>Лента вакансий недоступна: {escape(str(exc))}</p>",
-                            status_code=502)
-
-
-@app.get("/jobs/more", response_class=HTMLResponse)
-def jobs_more(company: str = "", q: str = "", offset: int = 0, allpos: int = 0):
-    """Pagination fragment for the /jobs infinite scroll."""
-    from backend.tools import jobs_feed
-    try:
-        return HTMLResponse(jobs_feed.render_more(company=company, q=q, offset=offset, remote_only=(allpos == 0)))
-    except Exception:
-        return HTMLResponse("", status_code=200)
-
-
 @app.get("/catalog", response_class=HTMLResponse)
 def catalog_page(company: str = "", q: str = ""):
     """Persisted remote-job catalog (Postgres) with descriptions + application-form
@@ -608,53 +567,6 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0):
         return HTMLResponse(catalog_ui.render_more(company=company, q=q, offset=offset))
     except Exception:
         return HTMLResponse("", status_code=200)
-
-
-@app.get("/roles/counts")
-def roles_counts(company: str = ""):
-    from backend.tools import roles_dashboard as rd
-    return JSONResponse(rd.counts_by_url(company))
-
-
-@app.get("/roles/summary")
-def roles_summary():
-    """Network-free per-company counts for the index cards."""
-    from backend.tools import roles_dashboard as rd
-    return JSONResponse(rd.counts_by_company())
-
-
-@app.get("/roles/events")
-async def roles_events(company: str = ""):
-    """Server-Sent Events: push the counts the instant they change (checked every
-    ~1s server-side), so the dashboard reflects the bot's work near-instantly instead
-    of waiting for a poll. Scoped to one `company` when given."""
-    import asyncio
-
-    from backend.tools import roles_dashboard as rd
-
-    async def stream():
-        last = None
-        while True:
-            try:
-                payload = json.dumps(rd.counts_by_url(company))
-            except Exception:
-                payload = None
-            if payload and payload != last:
-                last = payload
-                yield f"data: {payload}\n\n"
-            else:
-                yield ": ping\n\n"  # heartbeat keeps the connection open
-            await asyncio.sleep(1.0)
-
-    return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache",
-                                      "X-Accel-Buffering": "no"})
-
-
-@app.post("/roles/reset")
-def roles_reset(company: str = ""):
-    from backend.tools import roles_dashboard as rd
-    return JSONResponse({"ok": True, "company": company, "epoch": rd.reset(company)})
 
 
 # ---- Candidate mailboxes (Mailgun inbound, or the local Mailpit sink) ------

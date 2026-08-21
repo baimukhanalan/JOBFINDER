@@ -23,10 +23,14 @@ Semi-automatic job-application engine for remote US/CA roles, plus a **self-host
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
 per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 3 tabs** (Кандидаты
-`/mail/candidates`, Каталог `/catalog`, Заявки `/apply` — reduced from 6 on 2026-08-21; the general
-Инбокс `/mail` is still reachable via the in-page mail tab strip, and `/jobs` `/roles` `/queue`
-`/setup` routes still exist but were dropped from the nav as duplicate/unused surfaces), a one-click
-browser extension, and a headful "co-pilot" Chromium watched over noVNC. Nav is defined in
+`/mail/candidates`, Каталог `/catalog`, Заявки `/apply` — reduced from 6 on 2026-08-21). The general
+Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
+the target of the Заявки cards → `/queue?profile=…`) and `/setup` (onboard a real candidate) still exist
+but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
+DELETED** 2026-08-21 (with `backend/tools/jobs_feed.py`) — `/catalog` is the single job-browsing surface.
+`backend/tools/roles_dashboard.py` was **kept** (its `_is_remote` / `_workplace` helpers are imported by
+`applier`/`apply_bot` + `online_roles`), it's just no longer routed. Plus a one-click browser extension
+and a headful "co-pilot" Chromium watched over noVNC. Nav is defined in
 `backend/tools/mailcrm_ui.py:_sidebar`.
 
 Stack: Python 3.12 · FastAPI · Playwright · **psycopg2 / Postgres `jobfinder_crm`** · Dovecot+Postfix
@@ -119,10 +123,12 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `mail_db.py` is the psycopg2 layer). DEAD leftovers — do NOT wire them expecting `/mail` to change:
   `mail_sink.py` / `mail_sink --poll` / `mail_sink.json` (Mailgun/Mailpit era),
   `dashboard_app._start_mail_poller()` (defined, never invoked), `tools/mail_dashboard.py` (zero importers).
-- **`/roles` + `/jobs` are network-live; `/catalog` is DB.** `tools/roles_dashboard.py` + `jobs_feed.py`
-  read committed `backend/data/targets.json` and fetch each company's Ashby board API **per request**
-  (no DB; needs egress). `/catalog` is the only DB-backed listing (`catalog_db.py` →
-  `jobfinder_crm.job_catalog`). `online_roles.py` is NOT wired into any dashboard route (apply-side only).
+- **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
+  routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
+  `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no
+  per-request egress. `tools/roles_dashboard.py` **stays but is unrouted** — it still holds the
+  `_is_remote` / `_workplace` helpers that `apply_bot` + `online_roles` import. `online_roles.py` is NOT
+  wired into any dashboard route (apply-side only).
 - **No auto-submit — by design** (commit `a8ab56e`). Real submits from a datacenter IP get
   spam-flagged/banned. Do NOT re-add. **Submit DETECTION is not submission**: the extension's
   `installSubmitWatch` and `copilot.py`'s confirmation poller only *record* a human's submit into

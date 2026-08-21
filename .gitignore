@@ -79,3 +79,6 @@ backend/data/mail_addresses.json
 # Generated dashboards / screenshots can embed candidate data.
 outputs/
 backend/data/mailbox_passwords.json
+
+# local logs + crontab backups (never commit — may contain other projects secrets)
+logs/

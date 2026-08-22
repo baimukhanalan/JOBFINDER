@@ -277,21 +277,26 @@ _CAT_JS = """<script>
 window.fillJob = async function(btn){
   var id=btn.dataset.id, res=btn.parentNode.querySelector('.cat-fill-res');
   if(btn.disabled) return;
-  btn.disabled=true; btn.textContent='⏳ Готовлю и заполняю… (до ~1.5 мин)';
-  if(res) res.textContent='';
+  var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
+  btn.disabled=true; btn.textContent='⏳ Запускаю…'; if(res) res.textContent='';
   try{
-    var r=await fetch('/catalog/'+id+'/fill',{method:'POST'});
-    var j=await r.json();
-    if(j.ok){
-      btn.textContent='✅ Заполнено '+(j.filled||0)+' полей'+
-        (j.unfilled?(' · '+j.unfilled+' вручную'):'');
-      if(res) res.innerHTML=' <a href="'+j.novnc+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
-      try{ window.open(j.novnc,'_blank'); }catch(e){}
-    } else {
-      btn.textContent='⚠ '+((j.error||'ошибка').slice(0,60)); btn.disabled=false;
-      if(res && j.novnc) res.innerHTML=' <a href="'+j.novnc+'" target="_blank">noVNC ↗</a>';
-    }
-  }catch(e){ btn.textContent='⚠ ошибка сети — повторить'; btn.disabled=false; }
+    var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST'})).json();
+    var novnc=j.novnc||NOVNC;
+    // open noVNC right away so you WATCH it navigate + fill live
+    try{ window.open(novnc,'_blank'); }catch(e){}
+    if(res) res.innerHTML=' <a href="'+novnc+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
+    btn.textContent='⏳ Готовлю и заполняю… (~50с)';
+    // poll status — the fill runs in the background, so no long-held request to drop
+    var poll=setInterval(async function(){
+      try{
+        var s=await (await fetch('/catalog/'+id+'/fill_status')).json();
+        if(s.state==='done'){ clearInterval(poll);
+          btn.textContent='✅ Заполнено '+(s.filled||0)+' полей'+(s.unfilled?(' · '+s.unfilled+' вручную'):''); }
+        else if(s.state==='error'){ clearInterval(poll);
+          btn.textContent='⚠ '+((s.error||'ошибка').slice(0,55)); btn.disabled=false; }
+      }catch(e){/* keep polling */}
+    },2500);
+  }catch(e){ btn.textContent='⚠ не удалось запустить — повторить'; btn.disabled=false; }
 };
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');

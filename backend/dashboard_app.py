@@ -570,38 +570,64 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
         return HTMLResponse("", status_code=200)
 
 
-@app.post("/catalog/{job_id}/fill")
-def catalog_fill(job_id: int):
-    """One-click: generate the ideal draft (if missing), wire it into the co-pilot, and
-    fill the LIVE ATS form in the headful browser (watch in noVNC). Never submits."""
+# Autoconnecting noVNC client URL. The bare /vnc/ doesn't autoconnect and noVNC's
+# default ws path (`websockify`) resolves to /websockify -> the dashboard, not the VNC
+# proxy. vnc_lite.html + path=vnc/websockify routes the ws through the /vnc/ nginx
+# location to websockify (:6090) correctly.
+_NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
+# job_id -> {state: running|done|error, ...}. Fill is done in a background thread and
+# polled via /fill_status: an on-demand generation takes ~50s, and holding the HTTP
+# request that long makes the browser fetch drop ("ошибка сети"). Fire-and-poll fixes it.
+_FILL_JOBS: dict[int, dict] = {}
+
+
+def _do_fill(job_id: int) -> None:
     import httpx
 
     from backend.tools import catalog_drafts
-    # Autoconnecting noVNC client URL. The bare /vnc/ doesn't autoconnect and noVNC's
-    # default ws path (`websockify`) resolves to /websockify -> the dashboard, not the
-    # VNC proxy. vnc_lite.html + path=vnc/websockify routes the ws through the /vnc/
-    # nginx location to websockify (:6090) correctly.
-    novnc = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
     try:
         pid, jid, generated = catalog_drafts.ensure_and_wire(job_id)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
+        return
+    _FILL_JOBS[job_id] = {"state": "running", "phase": "filling",
+                          "generated": generated, "profile": pid}
     try:
         httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
         r = httpx.post("http://127.0.0.1:8102/load",
-                       data={"jobid": jid, "profile": pid}, timeout=200)
-        res = r.json()
+                       data={"jobid": jid, "profile": pid}, timeout=240)
+        res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
     except Exception as exc:
-        return JSONResponse({"error": f"co-pilot: {exc}", "generated": generated},
-                            status_code=502)
+        _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {exc}"[:200],
+                              "novnc": _NOVNC_URL}
+        return
     if r.status_code != 200:
-        return JSONResponse({"error": res.get("error", "co-pilot load failed"),
-                             "novnc": novnc, "generated": generated},
-                            status_code=r.status_code)
-    return JSONResponse({"ok": True, "generated": generated, "novnc": novnc,
-                         "profile": pid, "filled": res.get("filled"),
-                         "unfilled": res.get("unfilled"),
-                         "company": res.get("company"), "title": res.get("title")})
+        _FILL_JOBS[job_id] = {"state": "error",
+                              "error": res.get("error", "co-pilot load failed"),
+                              "novnc": _NOVNC_URL}
+        return
+    _FILL_JOBS[job_id] = {"state": "done", "generated": generated, "novnc": _NOVNC_URL,
+                          "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+                          "company": res.get("company"), "title": res.get("title")}
+
+
+@app.post("/catalog/{job_id}/fill")
+def catalog_fill(job_id: int):
+    """Start the one-click fill in the background and return immediately (poll
+    /catalog/{id}/fill_status). Generates the ideal draft if missing, wires it into the
+    co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC).
+    Never submits."""
+    import threading
+    st = _FILL_JOBS.get(job_id)
+    if not (st and st.get("state") == "running"):
+        _FILL_JOBS[job_id] = {"state": "running", "phase": "generating"}
+        threading.Thread(target=_do_fill, args=(job_id,), daemon=True).start()
+    return JSONResponse({"started": True, "novnc": _NOVNC_URL})
+
+
+@app.get("/catalog/{job_id}/fill_status")
+def catalog_fill_status(job_id: int):
+    return JSONResponse(_FILL_JOBS.get(job_id, {"state": "idle"}))
 
 
 # ---- Application drafts review (job_catalog.draft) --------------------------

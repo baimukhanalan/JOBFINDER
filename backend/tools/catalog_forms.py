@@ -31,6 +31,19 @@ _JS = r"""()=>{
     if(el.id){const l=document.querySelector('label[for="'+CSS.escape(el.id)+'"]');if(l)return l.innerText.trim();}
     const wl=el.closest('label'); if(wl)return wl.innerText.trim();
     if(el.getAttribute('aria-label'))return el.getAttribute('aria-label').trim();
+    // Lever/Workable custom questions label the control via a sibling
+    // .application-label (not a <label for>) — climb to the question card and read it.
+    const card=el.closest('.application-question,[class*=application-question],[class*=question],fieldset,li');
+    if(card){
+      const ll=card.querySelector('.application-label,label,legend,[class*=label]');
+      if(ll){
+        // take the label text WITHOUT the option text a <select> would add
+        const clone=ll.cloneNode(true);
+        clone.querySelectorAll('select,option,input,textarea').forEach(n=>n.remove());
+        const t=clone.innerText.trim();
+        if(t) return t;
+      }
+    }
     return '';
   };
   const groups={};

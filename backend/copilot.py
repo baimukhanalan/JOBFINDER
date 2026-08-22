@@ -224,6 +224,8 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
             return JSONResponse({"loaded": jobid, "company": company, "title": title,
                                  "filled": result.get("filled"),
                                  "unfilled": len(result.get("unfilled") or []),
+                                 "unfilled_list": result.get("unfilled") or [],
+                                 "choice_picks": result.get("choice_picks") or {},
                                  "review_items": result.get("review_items") or [],
                                  "answer_sources": result.get("answer_sources") or {},
                                  "page_type": result.get("page_type")})

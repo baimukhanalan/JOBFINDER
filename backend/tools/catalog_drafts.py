@@ -101,7 +101,13 @@ def _education_value(key: str, resume: dict) -> str:
 # closed eligibility selects answered deterministically from the profile
 _AUTH_RE = re.compile(r"(?i)authoriz|legally (?:allowed|eligible|authorized)|"
                       r"eligible to work|right to work|work permit|permitted to work")
-_SPONSOR_RE = re.compile(r"(?i)sponsor|visa support|require.*visa|now or in the future require")
+# PRECISE: only a real "do/will you require|need sponsorship/visa" question — NOT any
+# mention of "sponsor/visa" (an authorization question often explains "we don't offer
+# sponsorship", which must still be answered YES via _AUTH_RE, not No).
+_SPONSOR_RE = re.compile(
+    r"(?i)(?:will|do|would|are)\s+you\b.{0,45}\b(?:require|need|sponsor)\w*\b.{0,30}(?:sponsor|visa|work permit)"
+    r"|require[sd]? (?:visa |work )?sponsorship|need (?:visa )?sponsorship|visa sponsorship"
+    r"|sponsorship (?:now or in the future|is required|to work)")
 _COUNTRY_RE = re.compile(r"(?i)country (?:of )?(?:residence|residency|location|based)|"
                          r"which country|country (?:in which|where)|in which country|"
                          r"your country|country are you")
@@ -191,7 +197,11 @@ _AFFIRM_YES_RE = re.compile(
 _AFFIRM_NO_RE = re.compile(
     r"(?i)sponsor|\bvisa\b|criminal|felony|convict|non-?compete|garden leave|"
     r"restrict|debarr|conflict of interest|do you require|are you subject to|"
-    r"employment agreement|post-?employment")
+    r"employment agreement|post-?employment|"
+    r"previously (?:worked|employed|applied)|former(?:ly)? (?:employ|work)|"
+    r"worked (?:with|at|for) (?:us|our|your|this)\b|ever worked (?:with|for|at) (?:us|our)|"
+    r"worked (?:here|with us).{0,20}(?:before|previously)|current or (?:previous|former) employee|"
+    r"hired (?:through|by)")
 
 
 def _affirm_override(label: str, options: list[str]) -> int | None:
@@ -625,29 +635,44 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
     return profile_id, jobid
 
 
+# Bump when the scraper/generator changes in a way that should force a fresh draft on
+# the next click (so stale drafts from before the fix are regenerated, not reused).
+_SCRAPE_V = 2
+
+
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
-    """One-click backend for the /catalog "Заполнить" button: generate the ideal draft
-    if this job has none (region-matched candidate, 100% fill), then materialize it for
-    the co-pilot. Returns (profile_id, jobid, was_generated). The dashboard route then
-    POSTs the co-pilot /load to fill the live form."""
+    """One-click backend for the /catalog "Заполнить" button. Generates the ideal draft
+    (100% fill, region-matched candidate) unless a CURRENT one (_scrape_v) already
+    exists. For custom ATS (ashby/lever/workable) it re-scrapes THIS job's questions
+    live first — their screeners are DOM-scraped (not from an API), so a fresh scrape
+    guarantees every question (selects/comboboxes/capability) is captured. Then
+    materializes for the co-pilot. Returns (profile_id, jobid, was_generated)."""
     job = catalog_db.get_job(job_id)
     if not job:
         raise ValueError("job not found")
-    generated = False
-    if not job.get("draft"):
-        # on-demand generation must use the FAST tier, not the .env default (which is a
-        # slow model) — otherwise a click blocks ~2 min instead of ~40s.
-        from backend.config import settings
-        if settings.llm_model != "gpt-5.6-luna":
-            settings.llm_model = "gpt-5.6-luna"
-        roster, pools = roster_cached()
-        cand = pick_candidate(job.get("regions") or [], roster, pools)
-        if not cand:
-            raise ValueError("no candidate for this region")
-        catalog_db.set_draft(job_id, generate_draft(job, cand, use_ai=True, ideal=True))
-        generated = True
+    draft = job.get("draft")
+    if draft and draft.get("_scrape_v") == _SCRAPE_V:
+        pid, jid = materialize_prefill(job_id)
+        return pid, jid, False
+
+    from backend.config import settings
+    if settings.llm_model != "gpt-5.6-luna":  # fast tier for on-demand gen
+        settings.llm_model = "gpt-5.6-luna"
+    if job.get("ats") in ("ashby", "lever", "workable"):
+        from backend.tools import catalog_forms
+        qs = catalog_forms.scrape_one(job["ats"], job.get("url", ""))
+        if qs:
+            catalog_db.set_questions(job["ats"], job["company_key"], job["external_id"], qs)
+            job = catalog_db.get_job(job_id)
+    roster, pools = roster_cached()
+    cand = pick_candidate(job.get("regions") or [], roster, pools)
+    if not cand:
+        raise ValueError("no candidate for this region")
+    d = generate_draft(job, cand, use_ai=True, ideal=True)
+    d["_scrape_v"] = _SCRAPE_V
+    catalog_db.set_draft(job_id, d)
     pid, jid = materialize_prefill(job_id)
-    return pid, jid, generated
+    return pid, jid, True
 
 
 # ---- batch runner -----------------------------------------------------------

@@ -6,7 +6,10 @@ import backend.services.tailor.choices as choices
 
 QS = [
     {"question_text": "Which shift do you prefer?", "options": ["Day", "Night", "Either"]},
-    {"question_text": "Do you have call-center experience?", "options": ["Yes", "No"]},
+    # a neutral yes/no (NOT capability/eligibility/suitability) so the parse-robustness
+    # tests below exercise the LLM parse path without a deterministic override firing.
+    {"question_text": "Would you like to receive updates about this role?",
+     "options": ["Yes", "No"]},
 ]
 
 FACTS = {"shifts_nights": "Yes"}
@@ -164,10 +167,28 @@ def test_deterministic_choices_english_backed_by_fact():
     assert ENG_Q["options"][out[0]["index"]].startswith("C1") and out[0]["backed"]
 
 
-def test_deterministic_choices_defers_capability_question():
-    """A capability/experience yes-no must NOT be auto-answered affirmatively."""
+def test_deterministic_choices_answers_capability_yes_unbacked():
+    """Capability/experience yes-no -> Yes for the ideal candidate, but UNBACKED so it
+    stays review-flagged (answering No here is the grave error we must avoid)."""
     q = {"question_text": "Do you have call-center experience?", "options": ["Yes", "No"]}
-    assert choices.deterministic_choices([q], {}) == [{"index": None, "backed": False}]
+    out = choices.deterministic_choices([q], {})
+    assert out == [{"index": 0, "backed": False}]  # index 0 == "Yes", unbacked
+
+
+def test_capability_no_direction_deferred():
+    """Prior-employer / sponsorship yes-no must NOT be forced to Yes."""
+    for qt in ("Have you ever worked with our company before?",
+               "Will you now or in the future require sponsorship?"):
+        q = {"question_text": qt, "options": ["Yes", "No"]}
+        assert choices.deterministic_choices([q], {})[0]["index"] is None
+
+
+def test_choose_options_forces_capability_yes_over_llm_no(monkeypatch):
+    """Even if the weak LLM picks No for a capability question, the override forces Yes."""
+    q = {"question_text": "Do you have SaaS experience?", "options": ["Yes", "No"]}
+    _patch(monkeypatch, [json.dumps([{"q": 0, "choice": 1, "backed": False}])])  # LLM: No
+    out = choices.choose_options([q], {}, {})
+    assert out[0] == {"index": 0, "backed": False}  # forced to Yes, unbacked
 
 
 def test_deterministic_choices_referral_default_unbacked_without_fact():

@@ -128,6 +128,43 @@ def _yesno_pick(question_text: str, options: list[str]) -> int | None:
     return None
 
 
+# Capability / experience yes-no questions ("Do you have SaaS experience?"). An ideal
+# candidate answers YES — but a "yes" here is UNBACKED (no fact proves it), so it stays
+# review-flagged (the human's [review] safety gate). This mirrors the generator's
+# _affirm_override so the co-pilot's own draft pass can't flip it back to No/null.
+_CAPABILITY_RE = re.compile(
+    r"(?i)do you have .{0,30}experience|are you experienced|have you (?:ever )?(?:used|worked)"
+    r"|proficien\w* (?:in|with)|familiar with|comfortable (?:using|with)|hands[- ]on"
+    r"|\d+\+? ?years? (?:of )?experience|experience (?:in|with|using)|background in"
+    r"|knowledge of|do you have (?:a |an )?(?:degree|background|start-?up|saas)")
+# ...but NOT the negative-direction yes/no (sponsorship/criminal/restrictions) and NOT
+# prior-relationship-with-THIS-employer questions (a fresh applicant answers those No).
+_CAPABILITY_NO_RE = re.compile(
+    r"(?i)sponsor|\bvisa\b|criminal|felony|convict|non-?compete|restrict|conflict of interest"
+    r"|are you subject to|employment agreement|post-?employment"
+    r"|previously (?:worked|employed|applied)|former(?:ly)? (?:employ|work)"
+    r"|worked (?:with|at|for) (?:us|our|your|this)\b|ever worked (?:with|for|at) (?:us|our)"
+    r"|worked (?:here|with us).{0,20}(?:before|previously)|current or (?:previous|former) employee"
+    r"|hired (?:through|by)")
+
+
+def _capability_pick(question_text: str, options: list[str]) -> int | None:
+    """Yes for a capability/experience 2-option yes-no question; None otherwise."""
+    q = question_text or ""
+    if _CAPABILITY_NO_RE.search(q) or not _CAPABILITY_RE.search(q):
+        return None
+    norm = [(o or "").strip().lower() for o in options]
+    if len(norm) != 2 or not ({"yes", "no"} <= {n[:3] if n in ("yes", "no") else n for n in norm}):
+        # accept a clean Yes/No pair only
+        if not (len(norm) == 2 and any(n.startswith("yes") for n in norm)
+                and any(n.startswith("no") for n in norm)):
+            return None
+    for i, o in enumerate(norm):
+        if o == "yes" or o.startswith("yes"):
+            return i
+    return None
+
+
 # --- English-level self-assessment ----------------------------------------------
 _ENGLISH_RE = re.compile(
     r"(?i)english (?:level|proficiency|language level)|level of english"
@@ -182,6 +219,8 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
             idx, backed = _language_pick(qt, opts, facts)
         if idx is None:
             idx = _yesno_pick(qt, opts)  # unbacked affirmative default
+        if idx is None:
+            idx = _capability_pick(qt, opts)  # capability -> Yes, UNBACKED (review)
         out.append({"index": idx, "backed": bool(backed) if idx is not None else False})
     return out
 
@@ -279,4 +318,10 @@ def choose_options(questions: list[dict], facts: dict, job: dict,
         pick = _eligibility_pick(q.get("question_text", ""), q.get("options", []), facts)
         if pick is not None:
             results[i] = {"index": pick, "backed": True}
+    # Capability/experience yes-no -> Yes (ideal candidate), UNBACKED so it stays
+    # review-flagged; forces the affirmative even if the weak LLM picked No/null.
+    for i, q in enumerate(questions):
+        cap = _capability_pick(q.get("question_text", ""), q.get("options", []))
+        if cap is not None:
+            results[i] = {"index": cap, "backed": False}
     return results

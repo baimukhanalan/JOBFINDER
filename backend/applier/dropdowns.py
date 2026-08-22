@@ -267,6 +267,86 @@ async def fill_react_selects_known(page, known: dict) -> dict:
     return {"filled": len(filled), "handled": filled}
 
 
+_COMBO_SEL = "input[role='combobox'], .ashby-application-form-input-autocomplete"
+
+
+async def _combo_label(box) -> str:
+    """Question label for an Ashby-style combobox input (aria-labelledby, else the
+    field-entry's stable question-title / .application-label / legend)."""
+    try:
+        return await box.evaluate(r"""el=>{
+          const clean=s=>(s||'').replace(/\s+/g,' ').trim();
+          const a=el.getAttribute('aria-labelledby');
+          if(a){const l=document.getElementById(a.split(' ')[0]); if(l) return clean(l.innerText);}
+          const c=el.closest('.ashby-application-form-field-entry,[class*="_fieldEntry_"],.application-question,fieldset,li');
+          if(c){const t=c.querySelector('.ashby-application-form-question-title,.application-label,legend');
+            if(t){const cl=t.cloneNode(true);cl.querySelectorAll('input,select,textarea,svg,button').forEach(n=>n.remove());return clean(cl.innerText);}}
+          return '';
+        }""")
+    except Exception:
+        return ""
+
+
+async def fill_comboboxes_known(page, known: dict) -> dict:
+    """Fill Ashby-style input[role=combobox] dropdowns/typeaheads (What brought you…,
+    Current Location) from explicit known answers: type the value, click the matching
+    [role=option] (exact/prefix), else the first result (geo typeahead). These widgets
+    are NOT native <select>, NOT Greenhouse .select__container, and NOT button groups —
+    nothing else in the prefill path fills them. Demographics stay blank by policy."""
+    filled: list[str] = []
+    if not known:
+        return {"filled": 0, "handled": []}
+    norm = {_clean_text(k).strip(" *").lower(): v
+            for k, v in known.items() if v and str(v).strip()}
+    try:
+        boxes = await page.query_selector_all(_COMBO_SEL)
+    except Exception:
+        return {"filled": 0, "handled": []}
+    for box in boxes:
+        try:
+            v0 = await box.evaluate("el=>el.value")
+            if v0 and v0.strip():
+                continue  # already answered
+            label = await _combo_label(box)
+            key = _clean_text(label).strip(" *").lower()
+            want = norm.get(key)
+            if not want or _DEMOGRAPHIC.search(key):
+                continue
+            await box.click()
+            await page.wait_for_timeout(250)
+            await page.keyboard.type(str(want)[:60], delay=15)
+            await page.wait_for_timeout(650)
+            wl = str(want).strip().lower()
+            opts = await page.query_selector_all("[role='option']")
+            opt = None
+            for o in opts:
+                t = ((await o.inner_text()) or "").strip().lower()
+                if t == wl:
+                    opt = o
+                    break
+                if opt is None and wl and t.startswith(wl[:30]):
+                    opt = o
+            if opt is None and opts:
+                opt = opts[0]  # geo/typeahead: best first result
+            if opt is None:
+                await page.keyboard.press("Escape")
+                continue
+            await opt.click()
+            await page.wait_for_timeout(250)
+            v = await box.evaluate("el=>el.value")
+            if v and v.strip():
+                filled.append(label[:50])
+        except Exception as e:
+            logger.debug("combobox known-fill failed: %s", e)
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+    if filled:
+        logger.info("combobox known-filled %d: %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
 async def list_unanswered_react_selects(page) -> list[str]:
     """Cleaned labels of react-selects still showing the placeholder. The analyzer
     skips their inner typeahead inputs, so without this scan the report and the

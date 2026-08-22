@@ -17,6 +17,7 @@ from backend.applier.analyzer import analyze_page, detect_page_type
 from backend.applier.dropdowns import (
     apply_button_choice,
     apply_react_select_choice,
+    fill_comboboxes_known,
     fill_react_selects,
     fill_react_selects_known,
     harvest_button_groups,
@@ -237,6 +238,14 @@ class ApplyStrategy(ABC):
         except Exception as exc:
             logger.debug("fill_react_selects_known raised unexpectedly: %s", exc)
 
+        # Ashby input[role=combobox] dropdowns/typeaheads (What brought you, Location)
+        # from known answers — the only path that fills these custom widgets.
+        try:
+            dcb = await fill_comboboxes_known(page, known_clean)
+            success += dcb["filled"]
+        except Exception as exc:
+            logger.debug("fill_comboboxes_known raised unexpectedly: %s", exc)
+
         unknown = analysis.get("unknown_questions", [])
         # `success` here = rule-based fills that actually took + react-select eligibility
         sources = {"rule": success, "fact": 0,
@@ -258,6 +267,33 @@ class ApplyStrategy(ABC):
         for item in review_from_known(known_answers):
             review_items.append(item)
             sources["draft_review"] += 1
+
+        # --- Replay-first: exact known answers for native closed questions ------
+        # Any known answer (the reviewed ideal packet) for a native select / radio /
+        # checkbox group is applied EXACTLY here, before the LLM gets a say — so the
+        # reviewed packet is what lands, and short-label selects the analyzer's fuzzy
+        # match misses ("Country", "Seniority") still fill. answered_idx marks them so
+        # the deterministic/draft loops below skip them (no double-fill, no clobber).
+        for i, q in enumerate(unknown):
+            if i in answered_idx:
+                continue
+            if q.get("type") not in ("select", "select-one", "radio_group", "checkbox_group"):
+                continue
+            opts = q.get("options") or []
+            known = known_clean.get(q.get("question_text", ""))
+            if not known or not opts:
+                continue
+            idx = opts.index(known) if known in opts else next(
+                (k for k, o in enumerate(opts)
+                 if (o or "").strip().lower() == str(known).strip().lower()), None)
+            if idx is None or not await self._fill_choice(page, q, idx):
+                continue
+            answered_idx.add(i)
+            success += 1
+            qt = q["question_text"]
+            choice_picks[qt] = {"option": opts[idx], "backed": True}
+            drafted[qt] = opts[idx]
+            sources["choice"] += 1
 
         # --- Deterministic answering (LLM-FREE) --------------------------------
         # Fill the standard screener + identity fields (Telegram, hear-about,

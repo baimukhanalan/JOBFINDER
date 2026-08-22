@@ -224,6 +224,11 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     `jobfinder_crm` Postgres holds only CRM data) + password in `mailbox_passwords.json` + a Maildir. Idempotent
     (`INSERT IGNORE`), and a provisioning failure never breaks the fill. Real onboarding via `/setup` still does
     NOT auto-provision — run `python -m backend.tools.provision_mailboxes --only <id>` for a real candidate.
+    The synthetic persona is NOT in the profile store, so `ensure_and_wire` also writes
+    `uploads/prefill/<demo_id>/<jobid>/persona.json` (`{profile, facts}`) and the **co-pilot `/load` loads it
+    from there** when `get_profile(demo_*)` raises KeyError (else the headful fill crashed with "profile not
+    found" and left the stale page up). `Profile` gained `street_address` + `is_synthetic` so `from_dict`
+    accepts a synth persona. `_SCRAPE_V` was bumped to 3 so pre-persona.json cached drafts regenerate.
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

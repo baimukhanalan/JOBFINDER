@@ -776,7 +776,8 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
 
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
-_SCRAPE_V = 2
+# v3: synthetic per-job persona + persona.json for the co-pilot /load.
+_SCRAPE_V = 3
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
@@ -823,6 +824,14 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
     d["_scrape_v"] = _SCRAPE_V
     catalog_db.set_draft(job_id, d)
     pid, jid = materialize_prefill(job_id)
+    # the synthetic persona isn't in the profile store — persist it beside the prefill so the
+    # co-pilot /load can build a Profile for it (else get_profile raises "profile not found").
+    try:
+        (PREFILL_ROOT / pid / jid / "persona.json").write_text(
+            json.dumps({"profile": cand["profile"], "facts": cand.get("facts") or {}},
+                       ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"[demo-fill] persona.json write skipped: {type(e).__name__}: {e}", flush=True)
     return pid, jid, True
 
 

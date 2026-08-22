@@ -235,7 +235,20 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
     async with _S["lock"]:
         _cancel_watch()  # the previous job's page is going away with this goto
         page = await _ensure_browser()
-        prof = get_profile(profile)
+        try:
+            prof = get_profile(profile)
+            facts = load_facts(profile)
+        except KeyError:
+            # a synthetic demo persona (synth_persona) isn't in the roster store — load it
+            # from the prefill dir instead of crashing with "profile not found".
+            pj = d / "persona.json"
+            if not pj.exists():
+                return JSONResponse(
+                    {"error": "demo persona not saved — re-generate the fill"}, status_code=404)
+            persona = json.loads(pj.read_text(encoding="utf-8"))
+            from backend.profiles.store import Profile
+            prof = Profile.from_dict(persona.get("profile") or {})
+            facts = persona.get("facts") or {}
         niche, variant = variant_for({"title": title, "description": ""}, prof)
         form = prof.to_form_dict()
         if variant and variant.get("years_experience"):
@@ -257,7 +270,7 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
                                          draft=True,
                                          resume_summary=render_text(tailored),
                                          known_answers=known,
-                                         facts=load_facts(profile),
+                                         facts=facts,
                                          profile_id=profile, niche=niche or "")
             _S["current"] = jobid
             _S["owner"] = profile

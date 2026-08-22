@@ -30,6 +30,7 @@ class Profile:
     city: str = ""
     state: str = ""
     zip_code: str = ""
+    street_address: str = ""       # street line — real onboarded people + synth demo personas
     country: str = "United States"
     linkedin_url: str = ""
     work_authorization: str = "US Citizen"
@@ -41,6 +42,7 @@ class Profile:
     resume: dict = field(default_factory=dict)  # structured base résumé (real facts)
     mailbox: str = ""              # application-mail address indexed by inbox_index.py
     is_sample: bool = False
+    is_synthetic: bool = False     # a demo persona invented by synth_persona (never a real roster person)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
@@ -61,6 +63,7 @@ class Profile:
             "city": self.city,
             "state": self.state,
             "zip_code": self.zip_code,
+            "street_address": self.street_address,
             "country": self.country,
             "linkedin_url": self.linkedin_url,
             "years_experience": self.years_experience,

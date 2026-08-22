@@ -71,7 +71,9 @@ _ID_TEXT = [
     (re.compile(r"(?i)e-?mail"), "email"),
     (re.compile(r"(?i)phone|mobile|telephone|cell"), "phone"),
     (re.compile(r"(?i)linkedin"), "linkedin_url"),
-    (re.compile(r"(?i)city|current location|where.*located|location"), "location"),
+    # a "City" field wants just the city; "current location"/"location" wants the full string.
+    (re.compile(r"(?i)\bcity\b|\btown\b"), "city"),
+    (re.compile(r"(?i)current location|where.*located|location"), "location"),
     # \b-anchored: bare "state|province" also matched the "State" inside "United States"
     # and leaked the candidate's state code ("OR") into work-authorization text fields.
     (re.compile(r"(?i)\bstate\b|\bprovince\b"), "state"),

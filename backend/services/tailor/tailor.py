@@ -68,6 +68,11 @@ _NOT_SKILL = {
     "access", "money", "scaling", "regulated", "deep", "local", "combines", "alongside",
     "millions", "filipinos", "recommend", "recommends", "skip", "various", "across",
     "based", "team", "teams", "role", "roles", "day", "days", "understand", "help",
+    # generic business/JD nouns that leaked into injected "Role-specific skills"
+    "global", "employment", "future", "interview", "interviews", "around", "encourage",
+    "encourages", "goals", "goal", "time", "values", "value", "bring", "brings",
+    "opportunity", "opportunities", "growth", "benefits", "culture", "passionate",
+    "motivated", "environment", "flexible", "diverse", "inclusive", "talented",
 }
 
 

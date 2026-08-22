@@ -1,0 +1,589 @@
+"""A→Z application-draft generator for the job catalog.
+
+For each catalog job it builds the COMPLETE fill-packet a semi-auto applier needs:
+a résumé tailored to the JD (from the candidate's REAL profile — no fabrication) plus
+an answer for EVERY scraped question, routed by kind:
+
+  * identity/contact  -> deterministic from the profile (name/email/phone/links)
+  * work-eligibility  -> deterministic from the profile (region-matched candidate ->
+                         "authorized: yes", "sponsorship: no", country select)
+  * closed selects    -> validated option index (deterministic rules + LLM choose_options)
+  * open text         -> grounded LLM draft, behavioural answers flagged [review]
+  * file uploads      -> the generated résumé PDF (+ cover letter)
+  * video / Loom      -> flagged human-only (cannot be auto-filled)
+
+The candidate is picked by REGION (US job -> US-authorized person, CA -> Canadian) —
+the agency's "for America, an American" rule. Runs OFFLINE against the questions
+already in Postgres (no browser), so a full batch is fast + cheap. The packet is
+stored in job_catalog.draft and reviewed on the /drafts dashboard page; the live
+in-browser pre-fill is a separate downstream step.
+
+    python -m backend.tools.catalog_drafts --limit 150        # representative batch
+    python -m backend.tools.catalog_drafts --all              # every eligible job
+    python -m backend.tools.catalog_drafts --job 12345        # one job (smoke test)
+    python -m backend.tools.catalog_drafts --limit 150 --no-ai # deterministic only
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from backend.services.tailor.answers import cover_letter, draft_answers
+from backend.services.tailor.choices import (_extract_array, choose_options,
+                                             deterministic_choices)
+from backend.services.tailor.render import render_text
+from backend.services.tailor.tailor import _llm_complete, tailor_resume
+from backend.tools import catalog_db
+
+DATA = Path(__file__).resolve().parents[1] / "data"
+
+# ---- question routing -------------------------------------------------------
+_FILE_TYPES = {"file", "input_file"}
+_SELECT_TYPES = {"select", "multi_value_single_select", "multi_value_multi_select", "choice"}
+_MULTI_TYPES = {"multi_value_multi_select"}
+_VIDEO_RE = re.compile(r"(?i)\b(video|loom|vidyard|screen[- ]?record|record (?:a|yourself|your)|"
+                       r"voice (?:note|recording)|audio recording)\b")
+_COVER_RE = re.compile(r"(?i)cover letter|motivation letter|why do you want")
+
+# identity / contact free-text fields filled straight from the profile
+_ID_TEXT = [
+    (re.compile(r"(?i)^(?:first|given|preferred) name|first[_ ]?name"), "first_name"),
+    (re.compile(r"(?i)^(?:last|family|sur)\s*name|last[_ ]?name|surname"), "last_name"),
+    (re.compile(r"(?i)^full name$|^name$|legal name|your name"), "full_name"),
+    (re.compile(r"(?i)e-?mail"), "email"),
+    (re.compile(r"(?i)phone|mobile|telephone|cell"), "phone"),
+    (re.compile(r"(?i)linkedin"), "linkedin_url"),
+    (re.compile(r"(?i)city|current location|where.*located|location"), "location"),
+    (re.compile(r"(?i)state|province"), "state"),
+    (re.compile(r"(?i)zip|postal code"), "zip_code"),
+    (re.compile(r"(?i)country"), "country"),
+    (re.compile(r"(?i)years? of (?:relevant )?experience|how many years"), "years_experience"),
+]
+
+# education free-text fields filled deterministically from the résumé's education
+_EDU = [
+    (re.compile(r"(?i)field of study|\bmajor\b|concentration|discipline|area of study|"
+                r"course of study|specializ"), "field"),
+    (re.compile(r"(?i)^degree|highest degree|degree (?:earned|obtained|level|type|name)|"
+                r"level of (?:education|study)|education level"), "degree"),
+    (re.compile(r"(?i)school|university|college|institution|alma mater|"
+                r"where did you (?:study|graduate)"), "school"),
+    (re.compile(r"(?i)graduat\w* (?:year|date)|year of graduation|completion year"), "grad_year"),
+]
+# NOTE the \b after every token: without it "in"/"of" would match the "In" of
+# "Information" and strip into the next word ("BSc Information" -> "formation").
+_DEGREE_PREFIX = re.compile(
+    r"(?i)^(?:b\.?s\.?c?|b\.?a|m\.?s\.?c?|m\.?a|m\.?b\.?a|ph\.?d|bachelor'?s?|master'?s?|"
+    r"associate'?s?|doctor\w*|diploma)\b\s*(?:(?:of|in)\b\s+)?")
+
+
+def _education_value(key: str, resume: dict) -> str:
+    edu = resume.get("education") or []
+    if not edu:
+        return ""
+    e = edu[0]
+    if key == "degree":
+        return e.get("degree", "")
+    if key == "school":
+        return e.get("school", "")
+    if key == "grad_year":
+        return str(e.get("year", "") or "")
+    if key == "field":  # "BSc Information Systems" -> "Information Systems"
+        deg = e.get("degree", "")
+        stripped = _DEGREE_PREFIX.sub("", deg).strip()
+        return stripped or deg
+    return ""
+
+
+# closed eligibility selects answered deterministically from the profile
+_AUTH_RE = re.compile(r"(?i)authoriz|legally (?:allowed|eligible|authorized)|"
+                      r"eligible to work|right to work|work permit|permitted to work")
+_SPONSOR_RE = re.compile(r"(?i)sponsor|visa support|require.*visa|now or in the future require")
+_COUNTRY_RE = re.compile(r"(?i)country (?:of )?(?:residence|residency|location|based)|"
+                         r"which country|country (?:in which|where)|in which country|"
+                         r"your country|country are you")
+
+
+def _split_name(full: str) -> tuple[str, str]:
+    parts = (full or "").split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+
+def _profile_value(key: str, profile: dict) -> str:
+    if key in ("first_name", "last_name"):
+        first, last = _split_name(profile.get("full_name", ""))
+        return first if key == "first_name" else last
+    v = profile.get(key)
+    return str(v) if v not in (None, "") else ""
+
+
+def _yes_option(options: list[str]) -> int | None:
+    for i, o in enumerate(options):
+        ol = (o or "").strip().lower()
+        if ol == "yes" or ol.startswith("yes"):
+            return i
+    return None
+
+
+def _no_option(options: list[str]) -> int | None:
+    for i, o in enumerate(options):
+        ol = (o or "").strip().lower()
+        if ol == "no" or ol.startswith("no"):
+            return i
+    return None
+
+
+def _identity_choice(label: str, options: list[str], profile: dict) -> int | None:
+    """Deterministic option pick for the eligibility selects that gate the whole
+    application. The candidate is REGION-MATCHED to the job, so: authorized -> Yes,
+    sponsorship -> No, country -> the profile's country. This is exactly the
+    'answer the blocking questions the way the employer wants' step."""
+    lab = label or ""
+    # needs_sponsorship is a STRING ("No"/"Yes"), so `not profile[...]` is always False —
+    # parse it. All our candidates are region-authorized citizens/PRs (needs = "No").
+    ns = str(profile.get("needs_sponsorship", "")).strip().lower()
+    authorized = ns not in ("yes", "true", "1")
+    if _SPONSOR_RE.search(lab):
+        return (_no_option(options) if authorized else _yes_option(options))
+    if _AUTH_RE.search(lab):
+        return (_yes_option(options) if authorized else _no_option(options))
+    if _COUNTRY_RE.search(lab):
+        country = (profile.get("country") or "").lower()
+        for i, o in enumerate(options):
+            ol = (o or "").lower()
+            if country and (country in ol or ol in country):
+                return i
+            if "united states" in country and ol in ("usa", "us", "u.s.", "u.s.a."):
+                return i
+    return None
+
+
+def _clean_review(answer: str) -> tuple[str, bool]:
+    """Split the '[review] ' wire flag off an answer -> (clean text, needs_review)."""
+    if answer.startswith("[review]"):
+        return answer[len("[review]"):].strip(), True
+    return answer, False
+
+
+# ---- ideal (test) fill ------------------------------------------------------
+# TEST mode: answer EVERY remaining question at 100% as the perfect JD-fit candidate.
+# Deliberately relaxes the production "leave capability/behavioural questions for the
+# human" gate — used only to preview full auto-fill quality; nothing is ever submitted.
+_PLACEHOLDER = re.compile(r"(?i)^(select|choose|--|please|pick|\s*$|n/?a$)")
+
+
+def _fallback_option(options: list[str], multi: bool = False):
+    """Guarantee a valid option even if the model returns nothing: prefer an
+    affirmative 'Yes', else the first non-placeholder option."""
+    idx = _yes_option(options)
+    if idx is None:
+        idx = next((i for i, o in enumerate(options)
+                    if not _PLACEHOLDER.match((o or "").strip())), 0)
+    return [idx] if multi else idx
+
+
+def _cand_brief(profile: dict, facts: dict, resume: dict) -> str:
+    pi = resume.get("personal_info", {})
+    skills = []
+    for items in (resume.get("skills_grouped") or {}).values():
+        skills.extend(items)
+    return json.dumps({
+        "name": profile.get("full_name"), "location": profile.get("location"),
+        "years_experience": profile.get("years_experience"),
+        "work_authorization": profile.get("work_authorization"),
+        "summary": resume.get("summary", "")[:400],
+        "top_skills": skills[:25],
+        "recent_roles": [f"{e.get('title')} @ {e.get('company')}"
+                         for e in (resume.get("experience") or [])[:3]],
+    }, default=str)
+
+
+def _ideal_chunk(items: list[dict], brief: str, job: dict) -> dict:
+    """items: [{"n": local_index, "label", "type", "options"}]. Returns
+    {local_index: {"value" or "option_index"/"option_indices"}}."""
+    blocks = []
+    for it in items:
+        opts = it["options"]
+        if opts:
+            ol = "\n".join(f"      {j}) {o}" for j, o in enumerate(opts))
+            multi = "SELECT ALL that apply" if it["multi"] else "choose ONE"
+            blocks.append(f'Q{it["n"]} [{multi}] {it["label"]}\n{ol}')
+        else:
+            blocks.append(f'Q{it["n"]} [free text] {it["label"]}')
+    jd = re.sub(r"\s+", " ", (job.get("description") or "")).strip()[:1500]
+    prompt = (
+        "You are completing a job application AS THE IDEAL CANDIDATE for this role — a "
+        "perfect fit who meets every requirement in the description. This is a TEST "
+        "fill: answer EVERY question confidently and positively as this ideal candidate "
+        "would. NEVER leave anything blank, never write 'to be confirmed', never add "
+        "'[review]'.\n"
+        "Rules:\n"
+        '- Question with options + "choose ONE": return {"n":N,"option_index":<0-based '
+        "index of the best option for an ideal candidate>}.\n"
+        '- Question with options + "SELECT ALL": return {"n":N,"option_indices":[indices]}.\n'
+        '- Free-text question: return {"n":N,"value":"<concise confident first-person '
+        "answer tailored to THIS job; for 'describe a time' give a plausible concrete "
+        'example; 1-3 sentences>"}.\n'
+        "- For experience/skill questions answer affirmatively with relevant specifics.\n\n"
+        f"JOB: {job.get('title', '')} at {job.get('company', '')}\n"
+        f"DESCRIPTION: {jd}\n"
+        f"CANDIDATE: {brief}\n\n"
+        "QUESTIONS:\n" + "\n\n".join(blocks) + "\n\n"
+        "Return ONLY a JSON array with exactly one entry per question, e.g. "
+        '[{"n":0,"option_index":2},{"n":1,"value":"..."}].')
+    out: dict = {}
+    for _ in range(3):
+        try:
+            arr = _extract_array(_llm_complete(prompt) or "")
+        except Exception:
+            arr = None
+        if not arr:
+            continue
+        for item in arr:
+            if isinstance(item, dict) and isinstance(item.get("n"), int):
+                out[item["n"]] = item
+        if out:
+            break
+    return out
+
+
+def ideal_fill(questions: list, indices: list, profile: dict, facts: dict,
+               resume: dict, resume_text: str, job: dict) -> dict:
+    """Fill every question in `indices` at 100%. Returns {orig_index: answer_obj}."""
+    brief = _cand_brief(profile, facts, resume)
+    items = []
+    for local, i in enumerate(indices):
+        q = questions[i]
+        items.append({"n": local, "orig": i, "label": (q.get("label") or "").strip(),
+                      "type": (q.get("type") or ""), "options": q.get("options") or [],
+                      "multi": (q.get("type") or "").lower() in _MULTI_TYPES})
+    got: dict = {}
+    CHUNK = 8
+    for s in range(0, len(items), CHUNK):
+        got.update(_ideal_chunk(items[s:s + CHUNK], brief, job))
+
+    answers: dict = {}
+    for it in items:
+        i, opts, multi = it["orig"], it["options"], it["multi"]
+        base = {"label": it["label"], "type": it["type"],
+                "required": bool(questions[i].get("required"))}
+        res = got.get(it["n"], {})
+        if opts:  # closed select -> validated option index (with affirmative fallback)
+            if multi:
+                raw = res.get("option_indices")
+                idxs = [k for k in (raw or []) if isinstance(k, int) and 0 <= k < len(opts)]
+                if not idxs:
+                    idxs = _fallback_option(opts, multi=True)
+                value = [opts[k] for k in idxs]
+            else:
+                k = res.get("option_index")
+                if not (isinstance(k, int) and 0 <= k < len(opts)):
+                    k = _fallback_option(opts)
+                value = opts[k]
+            answers[i] = {**base, "value": value, "source": "ideal",
+                          "needs_review": False, "status": "filled"}
+        else:  # free text
+            val = str(res.get("value") or "").strip()
+            if not val:
+                val = "Yes." if it["label"].lower().startswith(("do ", "have ", "are ", "can ", "will ")) \
+                    else "Through an online job search."
+            answers[i] = {**base, "value": val, "source": "ideal",
+                          "needs_review": False, "status": "filled"}
+    return answers
+
+
+# ---- candidate roster -------------------------------------------------------
+def load_candidates() -> dict:
+    """{profile_id: {"profile": <profile>, "facts": <fact sheet or {}>}} for every
+    non-sample candidate, plus region pools."""
+    profs = json.loads((DATA / "profiles.json").read_text())
+    facts_dir = DATA / "facts"
+    roster = {}
+    for p in profs:
+        if p.get("is_sample") or not p.get("resume"):
+            continue
+        pid = p.get("id")
+        fp = facts_dir / f"{pid}.json"
+        facts = {}
+        if fp.exists():
+            try:
+                facts = json.loads(fp.read_text())
+            except Exception:
+                facts = {}
+        roster[pid] = {"profile": p, "facts": facts}
+    return roster
+
+
+def _region_pools(roster: dict) -> dict:
+    us, ca, other = [], [], []
+    for pid, c in roster.items():
+        country = (c["profile"].get("country") or "").lower()
+        if country == "united states":
+            us.append(pid)
+        elif country == "canada":
+            ca.append(pid)
+        else:
+            other.append(pid)
+    return {"US": sorted(us), "CA": sorted(ca), "OTHER": sorted(other)}
+
+
+def pick_candidate(regions: list, roster: dict, pools: dict) -> dict | None:
+    """Region-matched candidate: US job -> US-authorized person, CA -> Canadian.
+    One representative per region (first in the pool) so the review sample is stable."""
+    regions = regions or []
+    for code in ("US", "CA"):
+        if code in regions and pools.get(code):
+            return roster[pools[code][0]]
+    # UK / OTHER / untagged -> a US candidate as a sensible default for the pilot
+    if pools.get("US"):
+        return roster[pools["US"][0]]
+    any_pool = pools.get("CA") or pools.get("OTHER")
+    return roster[any_pool[0]] if any_pool else None
+
+
+# ---- per-job generation -----------------------------------------------------
+def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
+                   ideal: bool = False) -> dict:
+    profile = candidate["profile"]
+    facts = candidate["facts"]
+    resume = profile["resume"]
+    job = {"title": job_row.get("title", ""), "company": job_row.get("company", ""),
+           "description": job_row.get("description", "")}
+    questions = job_row.get("questions") or []
+
+    # 1) résumé tailored to the JD (real experience, JD-relevant bullets first)
+    tailored = tailor_resume(resume, job["title"], job["company"], job["description"],
+                             use_ai=use_ai)
+    resume_text = render_text(tailored)
+
+    resume_file = f"{profile['id']}_resume.pdf"
+    profile_form = {k: v for k, v in profile.items() if k != "resume"}
+    profile_form.setdefault("desired_salary", facts.get("salary_annual"))
+    facts_aug = {**facts, "work_authorization": profile.get("work_authorization"),
+                 "country": profile.get("country"),
+                 "needs_sponsorship": profile.get("needs_sponsorship"),
+                 "linkedin_url": profile.get("linkedin_url"),
+                 "years_experience": profile.get("years_experience")}
+
+    # 2) route every question
+    answers = [None] * len(questions)
+    choice_idx, choice_qs = [], []   # (orig index) + {question_text, options}
+    text_idx, text_labels = [], []
+    ideal_idx = []                   # TEST mode: everything not deterministically known
+
+    for i, q in enumerate(questions):
+        label = (q.get("label") or "").strip()
+        qtype = (q.get("type") or "").lower()
+        opts = q.get("options") or []
+        required = bool(q.get("required"))
+        base = {"label": label, "type": q.get("type", ""), "required": required}
+
+        if not label:
+            answers[i] = {**base, "value": "", "source": "none", "needs_review": False,
+                          "status": "empty"}
+            continue
+        if _VIDEO_RE.search(label):
+            if ideal:
+                ideal_idx.append(i)  # test fill: write an intro script rather than blank
+            else:
+                answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
+                              "status": "human", "note": "video/recording — human only"}
+            continue
+        if qtype in _FILE_TYPES:
+            is_cover = _COVER_RE.search(label)
+            answers[i] = {**base, "value": ("cover_letter.pdf" if is_cover else resume_file),
+                          "source": "file", "needs_review": False, "status": "filled"}
+            continue
+        # eligibility selects gated deterministically from the region-matched profile
+        if opts and (_AUTH_RE.search(label) or _SPONSOR_RE.search(label) or _COUNTRY_RE.search(label)):
+            pick = _identity_choice(label, opts, profile)
+            if pick is not None:
+                answers[i] = {**base, "value": opts[pick], "source": "identity",
+                              "needs_review": False, "status": "filled"}
+                continue
+        # closed select / radio
+        if qtype in _SELECT_TYPES or (opts and len(opts) >= 2):
+            if ideal:
+                ideal_idx.append(i)          # LLM picks a valid option (fallback guaranteed)
+                continue
+            if len(opts) < 2:
+                answers[i] = {**base, "value": "", "source": "none", "needs_review": True,
+                              "status": "human", "note": "select without options"}
+                continue
+            choice_idx.append(i)
+            choice_qs.append({"question_text": label, "options": opts})
+            continue
+        # identity / contact free text
+        idkey = next((k for rx, k in _ID_TEXT if rx.search(label)), None)
+        if idkey:
+            val = _profile_value(idkey, profile)
+            if val:
+                answers[i] = {**base, "value": val, "source": "identity",
+                              "needs_review": False, "status": "filled"}
+                continue
+        # education free text (degree / field of study / school / grad year)
+        edukey = next((k for rx, k in _EDU if rx.search(label)), None)
+        if edukey:
+            val = _education_value(edukey, resume)
+            if val:
+                answers[i] = {**base, "value": val, "source": "identity",
+                              "needs_review": False, "status": "filled"}
+                continue
+        # everything else -> open-text (test: ideal fill; prod: grounded draft)
+        if ideal:
+            ideal_idx.append(i)
+        else:
+            text_idx.append(i)
+            text_labels.append(label)
+
+    # TEST mode: fill every remaining question at 100% as the ideal JD-fit candidate
+    if ideal and ideal_idx:
+        for i, a in ideal_fill(questions, ideal_idx, profile, facts, resume,
+                               resume_text, job).items():
+            answers[i] = a
+
+    # 3) closed selects: deterministic rules first, LLM for the residue
+    if choice_qs:
+        picks = deterministic_choices(choice_qs, facts_aug)
+        need = [j for j, p in enumerate(picks)
+                if p["index"] is None and 2 <= len(choice_qs[j]["options"]) <= 40]
+        if need and use_ai:
+            sub = [choice_qs[j] for j in need]
+            llm = choose_options(sub, facts_aug, job)
+            for local, j in enumerate(need):
+                picks[j] = llm[local]
+        for j, p in enumerate(picks):
+            i = choice_idx[j]
+            base = {"label": choice_qs[j]["question_text"],
+                    "type": questions[i].get("type", ""), "required": bool(questions[i].get("required"))}
+            opts = choice_qs[j]["options"]
+            multi = (questions[i].get("type") or "").lower() in _MULTI_TYPES
+            if p["index"] is None:
+                answers[i] = {**base, "value": "", "source": "none", "needs_review": True,
+                              "status": "human"}
+            else:
+                val = opts[p["index"]]
+                note = "multi-select: 1 option chosen" if multi else None
+                answers[i] = {**base, "value": ([val] if multi else val), "source": "choice",
+                              "backed": bool(p.get("backed")),
+                              "needs_review": (not p.get("backed")) or multi, "status": "filled",
+                              **({"note": note} if note else {})}
+
+    # 4) open text: deterministic factual pre-pass + grounded LLM drafts
+    if text_labels:
+        drafted = draft_answers(text_labels, profile_form, job, resume_summary=resume_text,
+                                facts=facts_aug) if use_ai else {}
+        for k, i in enumerate(text_idx):
+            label = text_labels[k]
+            base = {"label": label, "type": questions[i].get("type", ""),
+                    "required": bool(questions[i].get("required"))}
+            raw = drafted.get(label)
+            if raw:
+                clean, needs = _clean_review(raw)
+                answers[i] = {**base, "value": clean, "source": "llm",
+                              "needs_review": needs, "status": "filled"}
+            else:
+                answers[i] = {**base, "value": "", "source": "none", "needs_review": True,
+                              "status": "human"}
+
+    # 5) cover-letter body (for any cover-letter textarea / to attach as a file)
+    cover = ""
+    if any(_COVER_RE.search(a["label"]) for a in answers if a):
+        try:
+            cover = cover_letter(job, resume_text, profile_form, use_llm=use_ai)
+        except Exception:
+            cover = ""
+
+    filled = sum(1 for a in answers if a and a["status"] == "filled")
+    human = sum(1 for a in answers if a and a["status"] == "human")
+    need_rev = sum(1 for a in answers if a and a.get("needs_review"))
+    by_source: dict[str, int] = {}
+    for a in answers:
+        if a:
+            by_source[a["source"]] = by_source.get(a["source"], 0) + 1
+
+    return {
+        "candidate": {"id": profile["id"], "name": profile.get("full_name", ""),
+                      "country": profile.get("country", ""),
+                      "work_authorization": profile.get("work_authorization", ""),
+                      "email": profile.get("email", "")},
+        "resume": tailored,
+        "resume_text": resume_text,
+        "resume_file": resume_file,
+        "cover_letter": cover,
+        "answers": answers,
+        "stats": {"total": len(questions), "filled": filled, "human": human,
+                  "needs_review": need_rev, "by_source": by_source,
+                  "match_score": tailored.get("match_score"),
+                  "ats_score": tailored.get("ats_score")},
+        "used_ai": bool(use_ai),
+    }
+
+
+# ---- batch runner -----------------------------------------------------------
+def run(limit: int = 150, all_jobs: bool = False, use_ai: bool = True,
+        workers: int = 5, job_id: int | None = None, ideal: bool = False) -> dict:
+    catalog_db.ensure_schema()
+    roster = load_candidates()
+    pools = _region_pools(roster)
+    print(f"candidates: US={len(pools['US'])} CA={len(pools['CA'])} "
+          f"OTHER={len(pools['OTHER'])}", flush=True)
+
+    if job_id is not None:
+        j = catalog_db.get_job(job_id)
+        jobs = [j] if j else []
+    else:
+        jobs = catalog_db.jobs_for_drafting(limit=10 ** 7 if all_jobs else limit)
+    print(f"generating drafts for {len(jobs)} jobs (ai={use_ai}, workers={workers})", flush=True)
+
+    def work(job_row):
+        cand = pick_candidate(job_row.get("regions") or [], roster, pools)
+        if not cand:
+            return (job_row["id"], None, "no candidate for region")
+        try:
+            draft = generate_draft(job_row, cand, use_ai=use_ai, ideal=ideal)
+            catalog_db.set_draft(job_row["id"], draft)
+            return (job_row["id"], draft["stats"], None)
+        except Exception as e:
+            return (job_row["id"], None, f"{type(e).__name__}: {e}")
+
+    ok = fail = 0
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for f in as_completed([ex.submit(work, j) for j in jobs]):
+            done += 1
+            jid, stats, err = f.result()
+            if err:
+                fail += 1
+                print(f"  [{done}/{len(jobs)}] job {jid} FAILED: {err}", flush=True)
+            else:
+                ok += 1
+                if done % 10 == 0 or done == len(jobs):
+                    print(f"  [{done}/{len(jobs)}] job {jid} ok "
+                          f"(filled {stats['filled']}/{stats['total']}, "
+                          f"review {stats['needs_review']}, human {stats['human']})", flush=True)
+    print(f"DONE. drafts ok={ok} fail={fail}; total in DB={catalog_db.drafts_count()}",
+          flush=True)
+    return {"ok": ok, "fail": fail}
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Generate A→Z application drafts into job_catalog.draft.")
+    ap.add_argument("--limit", type=int, default=150, help="jobs in the batch (mixed across ATS)")
+    ap.add_argument("--all", action="store_true", help="every eligible job, not just --limit")
+    ap.add_argument("--job", type=int, default=None, help="one job id (smoke test)")
+    ap.add_argument("--no-ai", action="store_true", help="deterministic only (no LLM drafts/choices)")
+    ap.add_argument("--ideal", action="store_true",
+                    help="TEST mode: answer EVERY question at 100%% as the ideal JD-fit "
+                         "candidate (relaxes the leave-for-human gate; nothing is submitted)")
+    ap.add_argument("--workers", type=int, default=5)
+    args = ap.parse_args()
+    print(run(limit=args.limit, all_jobs=args.all, use_ai=not args.no_ai,
+              workers=args.workers, job_id=args.job, ideal=args.ideal), flush=True)

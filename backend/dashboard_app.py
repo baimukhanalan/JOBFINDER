@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, Form, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse, StreamingResponse)
+                               RedirectResponse, Response, StreamingResponse)
 
 from backend.applier.profile_validator import validate_profile
 from backend.profiles import facts as facts_lib
@@ -568,6 +568,50 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
         return HTMLResponse(catalog_ui.render_more(company=company, q=q, offset=offset, region=region))
     except Exception:
         return HTMLResponse("", status_code=200)
+
+
+# ---- Application drafts review (job_catalog.draft) --------------------------
+@app.get("/drafts", response_class=HTMLResponse)
+def drafts_index(q: str = ""):
+    """Every job that has a pre-generated application draft, with a fill bar."""
+    from backend.tools import drafts_ui
+    try:
+        return HTMLResponse(drafts_ui.render_index(q=q))
+    except Exception as exc:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Черновики недоступны: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+@app.get("/drafts/{job_id}/resume.pdf")
+def drafts_resume_pdf(job_id: int):
+    """The tailored résumé for this draft, rendered to PDF on the fly."""
+    from backend.tools import drafts_ui
+    try:
+        pdf = drafts_ui.resume_pdf(job_id)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    if pdf is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="resume_{job_id}.pdf"'})
+
+
+@app.get("/drafts/{job_id}", response_class=HTMLResponse)
+def drafts_detail(job_id: int):
+    """Full fill-packet for one job: every question, its value, and how it was filled."""
+    from backend.tools import drafts_ui
+    try:
+        html_out = drafts_ui.render_detail(job_id)
+    except Exception as exc:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Ошибка: {escape(str(exc))}</p>",
+                            status_code=502)
+    if html_out is None:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            "<p style='font-family:sans-serif;padding:16px'>Черновик не найден.</p>",
+                            status_code=404)
+    return HTMLResponse(html_out)
 
 
 # ---- Candidate mailboxes (Mailgun inbound, or the local Mailpit sink) ------

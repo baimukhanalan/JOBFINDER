@@ -101,6 +101,10 @@ def ensure_schema() -> None:
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS regions TEXT[]")
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS region_source TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS jc_regions ON job_catalog USING GIN (regions)")
+        # draft: the full pre-generated application fill-packet (tailored résumé dict +
+        # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft JSONB")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft_at TIMESTAMPTZ")
 
 
 _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
@@ -213,6 +217,68 @@ def rows_missing_regions(limit: int = 0) -> list:
     with _cur() as cur:
         cur.execute(sql)
         return [dict(r) for r in cur.fetchall()]
+
+
+_JOB_COLS = ("id", "ats", "company_key", "company", "external_id", "title", "location",
+             "department", "workplace", "is_remote", "url", "description",
+             "questions", "q_count", "regions", "draft", "draft_at")
+
+
+def get_job(job_id: int) -> dict | None:
+    """One full catalog row by id (for the draft generator + review page)."""
+    with _cur() as cur:
+        cur.execute("SELECT " + ",".join(_JOB_COLS) + " FROM job_catalog WHERE id=%s",
+                    (job_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def jobs_for_drafting(limit: int = 150, regions=("US", "CA"),
+                      min_q: int = 1) -> list:
+    """A representative work-list for a draft batch: jobs with real questions whose
+    regions overlap the given set, spread ACROSS the four ATS (so the review sample
+    covers greenhouse/ashby/lever/workable + a range of question counts), not just
+    the first board alphabetically."""
+    per = max(1, limit // 4)
+    picked: list[dict] = []
+    with _cur() as cur:
+        for ats in ("greenhouse", "ashby", "lever", "workable"):
+            cur.execute(
+                "SELECT " + ",".join(_JOB_COLS) + " FROM job_catalog "
+                "WHERE ats=%s AND q_count >= %s AND is_remote=TRUE AND regions && %s "
+                "ORDER BY id LIMIT %s",
+                (ats, min_q, list(regions), per))
+            picked.extend(dict(r) for r in cur.fetchall())
+    return picked[:limit]
+
+
+def set_draft(job_id: int, draft: dict) -> int:
+    with _cur(False) as cur:
+        cur.execute("UPDATE job_catalog SET draft=%s, draft_at=now() WHERE id=%s",
+                    (Json(draft), job_id))
+        return cur.rowcount
+
+
+def list_drafts(q: str | None = None, limit: int = 60, offset: int = 0) -> list:
+    where, args = ["draft IS NOT NULL"], []
+    if q:
+        where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')) "
+                     "@@ plainto_tsquery('simple', %s)")
+        args.append(q)
+    w = " AND ".join(where)
+    with _cur() as cur:
+        cur.execute("SELECT id, ats, company, title, url, q_count, regions, "
+                    "draft->'stats' AS stats, draft->'candidate' AS candidate "
+                    "FROM job_catalog WHERE " + w +
+                    " ORDER BY draft_at DESC LIMIT %s OFFSET %s",
+                    tuple(args) + (limit, offset))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def drafts_count() -> int:
+    with _cur(False) as cur:
+        cur.execute("SELECT COUNT(*) FROM job_catalog WHERE draft IS NOT NULL")
+        return cur.fetchone()[0]
 
 
 def counts() -> dict:

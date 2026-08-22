@@ -474,19 +474,33 @@ def _region_pools(roster: dict) -> dict:
     return {"US": sorted(us), "CA": sorted(ca), "OTHER": sorted(other)}
 
 
-def pick_candidate(regions: list, roster: dict, pools: dict) -> dict | None:
+def pick_candidate(regions: list, roster: dict, pools: dict,
+                   etalon: bool = False) -> dict | None:
     """Region-matched candidate: a US-eligible job -> a US person, a CA-eligible job -> a
     Canadian. One representative per region (first in the pool) so the review sample is
-    stable. A job that is NOT US/CA-eligible (OTHER/UK-only) or is untagged returns None —
-    we NEVER send a US candidate to a foreign posting ('for America, an American'). Without
-    this guard, the region tags are moot: a 'Remote - Japan' role tagged OTHER would still
-    fall through to a US default and claim a Japanese visa. US wins when a job is open to
-    both US and CA."""
+    stable. US wins when a job is open to both US and CA.
+
+    REAL apply (etalon=False, the default) is a strict GATE: a job that is NOT US/CA-eligible
+    (OTHER / UK-only / untagged) returns None — we NEVER send a US candidate to a foreign
+    posting ('for America, an American'). Without this guard a 'Remote - Japan' role tagged
+    OTHER would fall through to a US default and claim a Japanese visa.
+
+    ETALON demo (etalon=True) is a DEMONSTRATION that fills EVERY job maximally, so it never
+    returns None while any pool exists: an OTHER / UK-only / untagged posting gets a
+    rest-of-world persona (the agency's own pool is Kazakhstani) so e.g. Salmon (Tbilisi) is
+    filled by a KZ candidate with a working @takhet.com mailbox. This deliberately relaxes the
+    region gate — it is only ever used for the demo fill (ideal=True), never a real submit."""
     regions = regions or []
     if "US" in regions and pools.get("US"):
         return roster[pools["US"][0]]
     if "CA" in regions and pools.get("CA"):
         return roster[pools["CA"][0]]
+    if not etalon:
+        return None
+    # etalon: fill the rest with a rest-of-world (KZ) persona; keep the demo non-empty.
+    for key in ("OTHER", "US", "CA"):
+        if pools.get(key):
+            return roster[pools[key][0]]
     return None
 
 
@@ -781,9 +795,11 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
             catalog_db.set_questions(job["ats"], job["company_key"], job["external_id"], qs)
             job = catalog_db.get_job(job_id)
     roster, pools = roster_cached()
-    cand = pick_candidate(job.get("regions") or [], roster, pools)
+    # the one-click fill is always the etalon demo (ideal=True) -> fill every region,
+    # incl. OTHER/untagged, with a region-appropriate persona (never "no candidate").
+    cand = pick_candidate(job.get("regions") or [], roster, pools, etalon=True)
     if not cand:
-        raise ValueError("no candidate for this region")
+        raise ValueError("no candidate available (empty roster)")
     d = generate_draft(job, cand, use_ai=True, ideal=True)
     d["_scrape_v"] = _SCRAPE_V
     catalog_db.set_draft(job_id, d)
@@ -808,7 +824,8 @@ def run(limit: int = 150, all_jobs: bool = False, use_ai: bool = True,
     print(f"generating drafts for {len(jobs)} jobs (ai={use_ai}, workers={workers})", flush=True)
 
     def work(job_row):
-        cand = pick_candidate(job_row.get("regions") or [], roster, pools)
+        # etalon batch fills every region (demo); a real (ideal=False) batch keeps the gate.
+        cand = pick_candidate(job_row.get("regions") or [], roster, pools, etalon=ideal)
         if not cand:
             return (job_row["id"], None, "no candidate for region")
         try:

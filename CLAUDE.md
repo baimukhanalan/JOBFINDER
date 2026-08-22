@@ -226,6 +226,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     `jobfinder_crm` Postgres holds only CRM data) + password in `mailbox_passwords.json` + a Maildir. Idempotent
     (`INSERT IGNORE`), and a provisioning failure never breaks the fill. Real onboarding via `/setup` still does
     NOT auto-provision — run `python -m backend.tools.provision_mailboxes --only <id>` for a real candidate.
+    It also **registers the persona in `backend/data/demo_personas.json`** (gitignored) via
+    `mailcrm.register_demo_persona`, and `mailcrm.candidates()` merges those in (flagged `is_demo`) so the
+    persona's inbox actually SHOWS in the CRM `/mail` — the mail delivers to the Maildir regardless, but
+    `mailcrm.build_index_row` returns None (skips) for any address that isn't a candidate, so without the
+    registration a recruiter reply to the résumé email lands in the box but never surfaces in the UI. New
+    demo personas need the **mail-indexer** to see them: `mail_indexer.build_index_row` re-checks
+    `candidates()` per file and `run_once()` reconciles on startup, so a `pm2 restart jobfinder-mail-indexer`
+    re-indexes freshly-registered personas (the inotify watcher already `add_tree`s new mailbox dirs).
     The synthetic persona is NOT in the profile store, so `ensure_and_wire` also writes
     `uploads/prefill/<demo_id>/<jobid>/persona.json` (`{profile, facts}`) and the **co-pilot `/load` loads it
     from there** when `get_profile(demo_*)` raises KeyError (else the headful fill crashed with "profile not

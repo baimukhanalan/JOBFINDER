@@ -70,10 +70,46 @@ def _maildir(local: str, domain: str) -> str:
     return f"{MAILDIR_ROOT}/{domain}/{local}"
 
 
-def candidates() -> list[dict]:
-    """[{id,email,name,local,domain,maildir}] for every provisioned candidate."""
-    profs = {p["id"]: p for p in _load(PROFILES, [])}
+DEMO_FILE = ROOT / "backend" / "data" / "demo_personas.json"  # synthetic demo personas (email -> {id,name})
+
+
+def register_demo_persona(email: str, name: str, pid: str = "") -> None:
+    """Add a synthetic demo persona (synth_persona) to the candidate registry so its mailbox
+    is scanned + shown in the CRM inbox — demo personas aren't in profiles.json. Idempotent."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return
+    reg = _load(DEMO_FILE, {})
+    if not isinstance(reg, dict):
+        reg = {}
+    if reg.get(email) == {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}:
+        return
+    reg[email] = {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}
+    try:
+        DEMO_FILE.write_text(json.dumps(reg, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+
+
+def _demo_candidates() -> list[dict]:
     out = []
+    reg = _load(DEMO_FILE, {})
+    for email, info in (reg if isinstance(reg, dict) else {}).items():
+        local, _, domain = str(email).lower().partition("@")
+        if not domain:
+            continue
+        out.append({"id": (info or {}).get("id") or local, "email": email.lower(),
+                    "name": (info or {}).get("name") or local, "local": local,
+                    "domain": domain, "maildir": _maildir(local, domain), "is_demo": True})
+    return out
+
+
+def candidates() -> list[dict]:
+    """[{id,email,name,local,domain,maildir}] for every provisioned candidate — the real
+    roster (profiles.json + mail_addresses.json) plus synthetic demo personas so their
+    mailboxes surface in the CRM inbox too."""
+    profs = {p["id"]: p for p in _load(PROFILES, [])}
+    out, seen = [], set()
     for pid, email in _load(ADDR_FILE, {}).items():
         p = profs.get(pid)
         if not p or p.get("is_sample"):
@@ -83,6 +119,11 @@ def candidates() -> list[dict]:
             continue
         out.append({"id": pid, "email": email.lower(), "name": p.get("full_name") or pid,
                     "local": local, "domain": domain, "maildir": _maildir(local, domain)})
+        seen.add(email.lower())
+    for c in _demo_candidates():          # demo personas (real roster wins on any collision)
+        if c["email"] not in seen:
+            out.append(c)
+            seen.add(c["email"])
     return out
 
 

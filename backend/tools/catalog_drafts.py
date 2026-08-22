@@ -823,8 +823,11 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
     # NEVER break the fill. Idempotent, so a re-click of a cached persona is a no-op.
     try:
         from backend.tools.provision_mailboxes import provision_email
+        from backend.tools import mailcrm
         prof = cand["profile"]
         res = provision_email(prof.get("email", ""), prof.get("full_name", ""))
+        # register as a candidate so the persona's inbox shows in the CRM /mail
+        mailcrm.register_demo_persona(prof.get("email", ""), prof.get("full_name", ""), prof.get("id", ""))
         print(f"[demo-fill] mailbox {res.get('email')}: "
               f"{'created' if res.get('created') else ('exists' if res.get('ok') else 'FAILED: ' + str(res.get('error')))}",
               flush=True)

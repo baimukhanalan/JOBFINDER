@@ -133,6 +133,21 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   per-request egress. `tools/roles_dashboard.py` **stays but is unrouted** — it still holds the
   `_is_remote` / `_workplace` helpers that `apply_bot` + `online_roles` import. `online_roles.py` is NOT
   wired into any dashboard route (apply-side only).
+- **Custom-ATS form scrape: WAIT for the React form to render, then RETRY on empty/partial**
+  (`tools/catalog_forms.py`). Ashby/Lever/Workable apply pages are React SPAs — `networkidle` fires
+  before the fields hydrate, so the old fixed 2.2s sleep-then-extract silently stored partial/empty
+  results as complete (e.g. Cohere `q_count=0` while the form has 5 Yes/No screeners; Workable stored
+  4 identity fields while the form has 3 language screeners). Fix: `_scrape` calls `_wait_for_fields`
+  → `_poll_stable`, polling the field count (via the SAME `_JS` extractor) every 0.5s until it's
+  nonzero AND stable across two reads (cap 12s) before reading; then `_scrape_with_retry` → `_retry_loads`
+  reloads up to 3× with exponential-ish backoff, keeping the fullest result. **An empty scrape is
+  "not scraped" (never persisted as 0 questions) and gets full retries; an identity-only result
+  (name/email/phone/resume/linkedin, no `choice/select/textarea/multi_select`) is suspicious and gets
+  ONE extra load.** Keep re-scrapes gentle (sequential single browser, or ≤3 parallel — the whole bug
+  was hammering under batch concurrency). Do NOT re-add a fixed sleep or a tight retry loop, and do NOT
+  touch the extractor's field-recognition (`_JS`) — it works; only the wait/retry/persistence is the fix.
+  Pure helpers (`_looks_partial`/`_poll_stable`/`_retry_loads`) are unit-tested in
+  `tests/test_catalog_forms_wait.py` (no network).
 - **No auto-submit — by design** (commit `a8ab56e`). Real submits from a datacenter IP get
   spam-flagged/banned. Do NOT re-add. **Submit DETECTION is not submission**: the extension's
   `installSubmitWatch` and `copilot.py`'s confirmation poller only *record* a human's submit into

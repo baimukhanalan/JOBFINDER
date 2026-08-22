@@ -21,9 +21,84 @@ deliberately want a full unbounded scrape.
 """
 from __future__ import annotations
 
+import time
+
 from playwright.sync_api import sync_playwright
 
 from backend.tools import catalog_db
+
+# ---- robustness knobs (React SPA forms hydrate progressively) -----------------
+# Ashby/Lever/Workable apply pages are React SPAs: networkidle fires before the
+# fields are on the page, so a fixed sleep-then-extract silently persisted partial
+# (or empty) results as if complete. We instead POLL the field count until it is
+# nonzero and stable across two consecutive reads, then extract; and we RETRY the
+# whole load a few times when the result is empty or only identity fields.
+_WAIT_CAP_S = 12.0        # hard cap on the render poll (per load attempt)
+_WAIT_INTERVAL_S = 0.5    # re-read the field count this often while polling
+_MAX_LOADS = 3            # max full load attempts before giving up on a row
+_RETRY_BACKOFF_BASE = 1.5  # backoff seconds between load attempts = base ** attempt
+
+# Field types that mean the form carried a real QUESTION (screener/free-text/pick),
+# not just the identity block every form has (name/email/phone/resume/linkedin). A
+# result with none of these is "identity-only": suspicious for a form that may not
+# have finished hydrating, so we give it one extra load before trusting it.
+_SCREENER_TYPES = frozenset(
+    {"choice", "multi_select", "select", "textarea", "radio_group", "checkbox_group"})
+
+
+def _looks_partial(fields) -> bool:
+    """True if a non-empty scrape carried ONLY identity-type fields (no screener,
+    select, textarea, or radio/checkbox group). Such a result is suspicious for a
+    React form that hasn't finished hydrating — worth one more load. An empty result
+    is handled separately (it's "not scraped", not "partial")."""
+    if not fields:
+        return False
+    return not any((f.get("type") in _SCREENER_TYPES) for f in fields)
+
+
+def _poll_stable(read, *, cap_s: float = _WAIT_CAP_S, interval_s: float = _WAIT_INTERVAL_S,
+                 sleep, clock=time.monotonic) -> int:
+    """Poll `read()` (an int field count) until it returns a nonzero value that is
+    stable across two consecutive reads, or until `cap_s` elapses; return the last
+    count. `sleep(seconds)` and `clock()` are injectable so the loop is unit-testable
+    without a browser. A genuinely-empty form keeps reading 0 and returns 0 at the cap."""
+    start = clock()
+    prev = read()
+    while clock() - start < cap_s:
+        sleep(interval_s)
+        cur = read()
+        if cur and cur == prev:   # two equal nonzero reads => rendered/stable
+            return cur
+        prev = cur
+    return prev
+
+
+def _retry_loads(load, *, max_loads: int = _MAX_LOADS, sleep,
+                 backoff_base: float = _RETRY_BACKOFF_BASE) -> list:
+    """Call `load()` (returns a field list) up to `max_loads` times, keeping the
+    FULLEST result seen. Accept immediately once a load yields a screener field. An
+    empty result is retried up to `max_loads` times; an identity-only result gets at
+    most ONE extra load (many Workable forms are legitimately identity-only — don't
+    hammer them). `sleep(seconds)` is injectable for tests; real callers back off
+    between attempts. Never returns a partial in place of a fuller earlier result."""
+    best: list = []
+    partial_retried = False
+    for i in range(max_loads):
+        try:
+            fields = load() or []
+        except Exception:
+            fields = []
+        if len(fields) > len(best):
+            best = fields
+        if fields and not _looks_partial(fields):
+            return best                    # has a real question: trust it
+        if fields and _looks_partial(fields):
+            if partial_retried:
+                return best                # already gave identity-only one extra shot
+            partial_retried = True
+        if i < max_loads - 1:
+            sleep(backoff_base ** i)       # exponential-ish backoff; never a tight loop
+    return best
 
 # Entry/container-based extractor covering the three DOM styles we scrape:
 #  - Lever: native <select>/<input> + .application-label sibling label.
@@ -207,6 +282,24 @@ def _open_comboboxes(page, fields: list) -> None:
             f["options"] = by_label[(f.get("label") or "").strip()]
 
 
+def _field_count(page) -> int:
+    """How many extractable question fields are on the page right now (same extractor
+    used for the real read, so the poll count matches what we'll persist)."""
+    try:
+        return len(page.evaluate(_JS) or [])
+    except Exception:
+        return 0
+
+
+def _wait_for_fields(page, cap_s: float = _WAIT_CAP_S,
+                     interval_s: float = _WAIT_INTERVAL_S) -> int:
+    """Wait for the React form to actually render: poll the field count until it's
+    nonzero and stable, capped at cap_s. Replaces the old fixed 2.2s sleep, which
+    fired before slow forms had hydrated (the root cause of partial/empty scrapes)."""
+    return _poll_stable(lambda: _field_count(page), cap_s=cap_s, interval_s=interval_s,
+                        sleep=lambda s: page.wait_for_timeout(int(s * 1000)))
+
+
 def _scrape(page, url: str) -> list:
     try:
         page.goto(url, wait_until="networkidle", timeout=45000)
@@ -215,7 +308,9 @@ def _scrape(page, url: str) -> list:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
         except Exception:
             return []
-    page.wait_for_timeout(2200)
+    # Poll until the fields are on the page and stable (not a fixed sleep), THEN read
+    # — combobox option harvesting runs after, on a settled DOM.
+    _wait_for_fields(page)
     try:
         fields = page.evaluate(_JS)
     except Exception:
@@ -228,6 +323,14 @@ def _scrape(page, url: str) -> list:
     return fields
 
 
+def _scrape_with_retry(page, url: str, max_loads: int = _MAX_LOADS) -> list:
+    """`_scrape` with empty/partial retry: reuse ONE page, reload up to max_loads times
+    with backoff, keep the fullest result. Gentle by construction — sequential loads on
+    a single browser, exponential backoff, no tight retry loop."""
+    return _retry_loads(lambda: _scrape(page, url), max_loads=max_loads,
+                        sleep=lambda s: page.wait_for_timeout(int(s * 1000)))
+
+
 def scrape_one(ats: str, url: str) -> list:
     """Scrape ONE apply page's questions (single Playwright load) -> job_catalog rows.
     Used for on-demand re-scrape so a clicked job's questions are complete/current
@@ -236,7 +339,7 @@ def scrape_one(ats: str, url: str) -> list:
         with sync_playwright() as p:
             b = p.chromium.launch()
             page = b.new_context().new_page()
-            fields = _scrape(page, _apply_url(ats, url))
+            fields = _scrape_with_retry(page, _apply_url(ats, url))
             b.close()
     except Exception:
         return []
@@ -262,7 +365,7 @@ def run(ats_list=("ashby", "lever", "workable"), limit: int = 0,
             print(f"{ats}: {len(rows)} rows to scrape", flush=True)
             got = 0
             for i, r in enumerate(rows, 1):
-                fields = _scrape(page, _apply_url(ats, r["url"]))
+                fields = _scrape_with_retry(page, _apply_url(ats, r["url"]))
                 if fields:
                     qs = [{"label": f["label"][:300], "required": bool(f.get("required")),
                            "type": f.get("type", ""),

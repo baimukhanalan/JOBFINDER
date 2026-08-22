@@ -220,6 +220,11 @@ async def release(profile: str = Form("michael")):
 async def load(jobid: str = Form(...), profile: str = Form("michael")):
     profile = _safe_id(profile) or "michael"
     jobid = _safe_id(jobid)
+    # A demo persona (synth_persona, id demo_*) is ephemeral — never a human mid-review.
+    # Every demo click is a NEW persona, so the per-owner busy gate would leave the previous
+    # demo's page stuck ("shows my old requests"). Preempt a demo owner so the new load wins.
+    if str(_S.get("owner") or "").startswith("demo_"):
+        _S["owner"] = None
     if not can_load(_S["owner"], _S["loaded_at"], profile, time.time()):
         return JSONResponse(
             {"error": f"co-pilot busy: {_S['owner']} is reviewing — try later or POST /release"},

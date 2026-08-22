@@ -47,6 +47,11 @@ _MULTI_TYPES = {"multi_value_multi_select"}
 _VIDEO_RE = re.compile(r"(?i)\b(video|loom|vidyard|screen[- ]?record|record (?:a|yourself|your)|"
                        r"voice (?:note|recording)|audio recording)\b")
 _COVER_RE = re.compile(r"(?i)cover letter|motivation letter|why do you want")
+# A headshot/photo upload has no auto-fill source (we hold a résumé, never a portrait) —
+# dumping the résumé PDF into a "Photo" field is wrong-file garbage, so flag it human-only.
+_PHOTO_RE = re.compile(r"(?i)\b(photo|photograph|head\s?shot|selfie|"
+                       r"profile (?:picture|photo|image)|your (?:picture|photo|image)|"
+                       r"upload (?:a |your )?(?:picture|image|headshot))\b")
 
 # identity / contact free-text fields filled straight from the profile
 _ID_TEXT = [
@@ -57,7 +62,9 @@ _ID_TEXT = [
     (re.compile(r"(?i)phone|mobile|telephone|cell"), "phone"),
     (re.compile(r"(?i)linkedin"), "linkedin_url"),
     (re.compile(r"(?i)city|current location|where.*located|location"), "location"),
-    (re.compile(r"(?i)state|province"), "state"),
+    # \b-anchored: bare "state|province" also matched the "State" inside "United States"
+    # and leaked the candidate's state code ("OR") into work-authorization text fields.
+    (re.compile(r"(?i)\bstate\b|\bprovince\b"), "state"),
     (re.compile(r"(?i)zip|postal code"), "zip_code"),
     (re.compile(r"(?i)country"), "country"),
     (re.compile(r"(?i)years? of (?:relevant )?experience|how many years"), "years_experience"),
@@ -72,6 +79,11 @@ _EDU = [
     (re.compile(r"(?i)school|university|college|institution|alma mater|"
                 r"where did you (?:study|graduate)"), "school"),
     (re.compile(r"(?i)graduat\w* (?:year|date)|year of graduation|completion year"), "grad_year"),
+    # a free-text "Education History / background" -> the whole education block, rendered
+    # from the résumé (never LLM-drafted, which once invented a contradicting degree).
+    (re.compile(r"(?i)education (?:history|background|details|summary|record)|"
+                r"educational background|academic (?:background|history|record)|"
+                r"tell us about your education"), "history"),
 ]
 # NOTE the \b after every token: without it "in"/"of" would match the "In" of
 # "Information" and strip into the next word ("BSc Information" -> "formation").
@@ -95,19 +107,45 @@ def _education_value(key: str, resume: dict) -> str:
         deg = e.get("degree", "")
         stripped = _DEGREE_PREFIX.sub("", deg).strip()
         return stripped or deg
+    if key == "history":  # every entry: "Degree — School (year)", newest first
+        parts = []
+        for ent in edu:
+            deg = (ent.get("degree") or "").strip()
+            sch = (ent.get("school") or "").strip()
+            yr = str(ent.get("year", "") or "").strip()
+            seg = deg
+            if sch:
+                seg = f"{seg} — {sch}" if seg else sch
+            if yr:
+                seg = f"{seg} ({yr})" if seg else yr
+            if seg:
+                parts.append(seg)
+        return "; ".join(parts)
     return ""
 
 
 # closed eligibility selects answered deterministically from the profile
 _AUTH_RE = re.compile(r"(?i)authoriz|legally (?:allowed|eligible|authorized)|"
                       r"eligible to work|right to work|work permit|permitted to work")
-# PRECISE: only a real "do/will you require|need sponsorship/visa" question — NOT any
-# mention of "sponsor/visa" (an authorization question often explains "we don't offer
-# sponsorship", which must still be answered YES via _AUTH_RE, not No).
+# PRECISE — the NO-direction trigger fires ONLY on a real "do/will you REQUIRE|NEED
+# sponsorship" construct. Bare "visa sponsorship" is deliberately NOT here: a positively
+# framed auth question ("authorized to work WITHOUT visa sponsorship", "can you present
+# proof you are authorized ... without sponsorship") merely mentions it and must answer
+# YES (via _AUTH_RE / _WITHOUT_SPON_RE below), not No.
 _SPONSOR_RE = re.compile(
-    r"(?i)(?:will|do|would|are)\s+you\b.{0,45}\b(?:require|need|sponsor)\w*\b.{0,30}(?:sponsor|visa|work permit)"
-    r"|require[sd]? (?:visa |work )?sponsorship|need (?:visa )?sponsorship|visa sponsorship"
-    r"|sponsorship (?:now or in the future|is required|to work)")
+    r"(?i)(?:will|do|would|are|is|does)\s+(?:you|your|the candidate|this role|anyone)\b"
+    r".{0,45}\b(?:requir\w*|need\w*)\b.{0,30}(?:sponsor\w*|visa|work permit|work authoriz)"
+    r"|require[sd]?\s+(?:visa\s+|work\s+)?sponsorship"
+    r"|need(?:ing|s|ed)?\s+(?:visa\s+)?sponsorship"
+    r"|sponsorship\s+(?:now or in the future|is required|will be required|to work|required)"
+    r"|require\s+(?:visa|work permit)")
+# Positive frame: "authorized/able to work WITHOUT sponsorship" — beats _SPONSOR_RE, answered
+# YES for our region-matched (needs_sponsorship = "No") candidates.
+_WITHOUT_SPON_RE = re.compile(
+    r"(?i)without\s+(?:needing\s+|requiring\s+|the need for\s+)?(?:company\s+|employer\s+)?"
+    r"(?:visa\s+|work\s+)?sponsorship"
+    r"|(?:do not|don'?t|will not|won'?t)\s+(?:require|need)\s+(?:visa\s+)?sponsorship"
+    r"|no\s+sponsorship\s+(?:required|needed)")
 _COUNTRY_RE = re.compile(r"(?i)country (?:of )?(?:residence|residency|location|based)|"
                          r"which country|country (?:in which|where)|in which country|"
                          r"your country|country are you")
@@ -128,6 +166,19 @@ def _profile_value(key: str, profile: dict) -> str:
         return first if key == "first_name" else last
     v = profile.get(key)
     return str(v) if v not in (None, "") else ""
+
+
+def _auth_text(profile: dict) -> str:
+    """Affirmative answer for a FREE-TEXT work-authorization question (the region-matched
+    candidate is authorized and needs no sponsorship)."""
+    country = (profile.get("country") or "").strip()
+    wa = (profile.get("work_authorization") or "").strip()
+    art = "the " if re.match(r"(?i)united |u\.?s\.?a?\b|netherlands|philippines|uk\b",
+                             country) else ""
+    where = f" in {art}{country}" if country else ""
+    who = f" ({wa})" if wa else ""
+    return (f"Yes — I am authorized to work{where} for any employer "
+            f"and do not require visa sponsorship{who}.")
 
 
 def _yes_option(options: list[str]) -> int | None:
@@ -156,6 +207,12 @@ def _identity_choice(label: str, options: list[str], profile: dict) -> int | Non
     # parse it. All our candidates are region-authorized citizens/PRs (needs = "No").
     ns = str(profile.get("needs_sponsorship", "")).strip().lower()
     authorized = ns not in ("yes", "true", "1")
+    # A positively-framed authorization question that merely MENTIONS sponsorship
+    # ("...authorized to work WITHOUT visa sponsorship", "can you present proof you are
+    # authorized...") is a YES for an authorized candidate — it must beat _SPONSOR_RE,
+    # which now fires only on a real "do you REQUIRE/NEED sponsorship" construct.
+    if (_AUTH_RE.search(lab) or _WITHOUT_SPON_RE.search(lab)) and not _SPONSOR_RE.search(lab):
+        return (_yes_option(options) if authorized else _no_option(options))
     if _SPONSOR_RE.search(lab):
         return (_no_option(options) if authorized else _yes_option(options))
     if _AUTH_RE.search(lab):
@@ -454,12 +511,37 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
                               "status": "human", "note": "video/recording — human only"}
             continue
         if qtype in _FILE_TYPES:
+            if _PHOTO_RE.search(label):     # no portrait on file — never the résumé PDF
+                answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
+                              "status": "human", "note": "photo/headshot — no auto-fill"}
+                continue
             is_cover = _COVER_RE.search(label)
             answers[i] = {**base, "value": ("cover_letter.pdf" if is_cover else resume_file),
                           "source": "file", "needs_review": False, "status": "filled"}
             continue
+        # No-option fields (free text, or a mislabeled type="select" typeahead) that are
+        # eligibility or education get a deterministic answer BEFORE the generic
+        # select/LLM path, so they never fall through to an invented value.
+        if len(opts) < 2:
+            # work-eligibility free text -> affirmative authorization. Require a work/employ
+            # context so a behavioural "authorized to make a decision" free-text isn't caught.
+            work_ctx = re.search(r"(?i)\b(work|employ|job|role|position)\b", label)
+            if not _COUNTRY_RE.search(label) and (
+                    _WITHOUT_SPON_RE.search(label)
+                    or (_AUTH_RE.search(label) and work_ctx)):
+                answers[i] = {**base, "value": _auth_text(profile), "source": "identity",
+                              "needs_review": False, "status": "filled"}
+                continue
+            edukey0 = next((k for rx, k in _EDU if rx.search(label)), None)
+            if edukey0:
+                val0 = _education_value(edukey0, resume)
+                if val0:
+                    answers[i] = {**base, "value": val0, "source": "identity",
+                                  "needs_review": False, "status": "filled"}
+                    continue
         # eligibility selects gated deterministically from the region-matched profile
-        if opts and (_AUTH_RE.search(label) or _SPONSOR_RE.search(label) or _COUNTRY_RE.search(label)):
+        if opts and (_AUTH_RE.search(label) or _SPONSOR_RE.search(label)
+                     or _WITHOUT_SPON_RE.search(label) or _COUNTRY_RE.search(label)):
             pick = _identity_choice(label, opts, profile)
             if pick is not None:
                 answers[i] = {**base, "value": opts[pick], "source": "identity",

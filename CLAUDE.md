@@ -156,3 +156,15 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 - **`frontend/` (Vite/React) is not the deployed UI** — the live app is `dashboard_app.py`'s
   server-rendered HTML. The React app is an old job-browser talking to `backend.main` `/api` with no
   inbox/roles; not deployed.
+- **Draft-generator eligibility polarity (`catalog_drafts._identity_choice`).** Work-auth questions come
+  in two polarities and MUST be told apart: `_SPONSOR_RE` (do you *require/need* sponsorship → **No**)
+  vs `_AUTH_RE`/`_WITHOUT_SPON_RE` (are you *authorized … without* sponsorship / can you present proof →
+  **Yes**). A positive frame that merely mentions "visa sponsorship" is answered YES and beats
+  `_SPONSOR_RE` — do NOT put bare `visa sponsorship` back into `_SPONSOR_RE` (it re-inverts "authorized
+  to work without visa sponsorship" to a disqualifying No). Free-text auth / "Education History" /
+  no-option `type="select"` typeaheads are answered deterministically from the profile/résumé BEFORE the
+  LLM/ideal path (else the model invents a contradicting degree or leaks the state code "OR" into an
+  auth textarea via a `\b`-less `state` regex matching "United **State**s"). A "Photo" upload is
+  `human`-only — never the résumé PDF (`_PHOTO_RE`). Tests: `backend/tests/test_catalog_drafts.py`.
+  NOTE still open: `_identity_choice` answers "authorized in <country>?" YES country-blind — correct
+  country gating belongs with the region-matching fix (a US candidate shouldn't reach a Japan/UK job).

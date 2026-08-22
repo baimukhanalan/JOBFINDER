@@ -150,8 +150,8 @@ async def harvest_react_selects(page) -> list[dict]:
         return out
     for idx, c in enumerate(containers):
         try:
-            if await c.query_selector(".select__single-value"):
-                continue  # already answered
+            if await c.query_selector(".select__single-value") or await c.query_selector(".select__multi-value"):
+                continue  # already answered (single OR a multi already given chips)
             label_el = await c.query_selector("label, .select__label")
             label = (await label_el.inner_text()).strip() if label_el else ""
             # pre-filter on the label so we don't open menus we'll discard anyway
@@ -271,7 +271,9 @@ async def apply_react_select_multi(page, container_index: int, joined_value: str
         control = await c.query_selector(".select__control")
         if not control:
             return False
-        # resolve which options the value asks for
+        # Open ONCE and read all options (empty filter) to resolve which the value asks for.
+        # react-select multi keeps the menu open after a pick and auto-clears the filter, so we
+        # must NOT re-open the control (a 2nd click TOGGLES the menu shut) nor clear by hand.
         await control.click()
         opts = []
         for _ in range(8):
@@ -284,15 +286,11 @@ async def apply_react_select_multi(page, container_index: int, joined_value: str
             t = (await o.inner_text()).strip()
             if t and t.lower() in want and t not in wanted:
                 wanted.append(t)
-        await page.keyboard.press("Escape")
         if not wanted:
+            await page.keyboard.press("Escape")
             return False
-        # pick each — re-open + clear the filter before every one
         for text in wanted:
-            await control.click()
-            await page.keyboard.press("Control+A")
-            await page.keyboard.press("Backspace")
-            await page.keyboard.type(text[:60], delay=12)
+            await page.keyboard.type(text[:60], delay=12)   # filter (input is empty after each pick)
             menu = []
             for _ in range(8):
                 await page.wait_for_timeout(200)
@@ -300,11 +298,16 @@ async def apply_react_select_multi(page, container_index: int, joined_value: str
                 if menu:
                     break
             tl = text.strip().lower()
+            clicked = False
             for o in menu:
                 if ((await o.inner_text()) or "").strip().lower() == tl:
                     await o.click()
-                    await page.wait_for_timeout(200)
+                    clicked = True
                     break
+            if not clicked and menu:
+                await page.keyboard.press("Enter")   # fallback: pick the highlighted top hit
+            await page.wait_for_timeout(250)
+        await page.keyboard.press("Escape")
         return bool(await c.query_selector(".select__multi-value"))
     except Exception as e:
         logger.debug("react-select multi apply failed at #%d: %s", container_index, e)
@@ -450,8 +453,8 @@ async def list_unanswered_react_selects(page) -> list[str]:
         return out
     for c in containers:
         try:
-            if await c.query_selector(".select__single-value"):
-                continue
+            if await c.query_selector(".select__single-value") or await c.query_selector(".select__multi-value"):
+                continue  # single OR a filled multi (>=1 chip) is answered — not "unanswered"
             label_el = await c.query_selector("label, .select__label")
             label = (await label_el.inner_text()).strip() if label_el else ""
             q = _clean_text(label).strip(" *")[:200]

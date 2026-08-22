@@ -18,6 +18,7 @@ from backend.applier.dropdowns import (
     apply_button_choice,
     apply_react_select_choice,
     fill_react_selects,
+    fill_react_selects_known,
     harvest_button_groups,
     harvest_react_selects,
     list_unanswered_react_selects,
@@ -227,6 +228,14 @@ class ApplyStrategy(ABC):
             logger.debug("fill_react_selects raised unexpectedly: %s", exc)
             ds = {"filled": 0, "handled": []}
         success += ds["filled"]
+
+        # Typeahead react-selects (e.g. School) we hold an explicit answer for: type +
+        # pick. These list no options until typed, so the harvest above skips them.
+        try:
+            dk = await fill_react_selects_known(page, known_clean)
+            success += dk["filled"]
+        except Exception as exc:
+            logger.debug("fill_react_selects_known raised unexpectedly: %s", exc)
 
         unknown = analysis.get("unknown_questions", [])
         # `success` here = rule-based fills that actually took + react-select eligibility

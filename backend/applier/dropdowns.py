@@ -228,6 +228,45 @@ async def apply_react_select_choice(page, container_index: int,
         return False
 
 
+async def fill_react_selects_known(page, known: dict) -> dict:
+    """Fill react-select TYPEAHEADS from explicit known answers (e.g. School ->
+    the candidate's university). These remote-search widgets list no options until
+    something is typed, so `harvest_react_selects` (which needs >=2 options) skips
+    them — but when we already hold the answer we can type it and pick. Additive and
+    safe: only acts on a container whose label matches a known answer; demographics
+    stay blank by policy."""
+    filled: list[str] = []
+    if not known:
+        return {"filled": 0, "handled": []}
+    norm = {_clean_text(k).strip(" *").lower(): v
+            for k, v in known.items() if v and str(v).strip()}
+    try:
+        containers = await page.query_selector_all(".select__container")
+    except Exception:
+        return {"filled": 0, "handled": []}
+    for idx, c in enumerate(containers):
+        try:
+            if await c.query_selector(".select__single-value"):
+                continue  # already answered
+            label_el = await c.query_selector("label, .select__label")
+            label = (await label_el.inner_text()).strip() if label_el else ""
+            key = _clean_text(label).strip(" *").lower()
+            val = norm.get(key)
+            if not val or _DEMOGRAPHIC.search(key):
+                continue
+            if await apply_react_select_choice(page, idx, str(val)):
+                filled.append(label[:50])
+        except Exception as e:
+            logger.debug("react-select known-fill failed at #%d: %s", idx, e)
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+    if filled:
+        logger.info("react-select known-filled %d: %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
 async def list_unanswered_react_selects(page) -> list[str]:
     """Cleaned labels of react-selects still showing the placeholder. The analyzer
     skips their inner typeahead inputs, so without this scan the report and the

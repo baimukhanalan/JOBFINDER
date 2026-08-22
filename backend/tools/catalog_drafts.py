@@ -574,6 +574,17 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
         if lbl and v:
             drafted[lbl] = v
 
+    # Standard education fields (School esp.) are often a live typeahead dropdown that
+    # isn't in the scraped questions — supply them from the résumé so the co-pilot can
+    # type + pick them (fill_react_selects_known).
+    edu = ((d.get("resume") or {}).get("education") or [])
+    if edu:
+        e0 = edu[0]
+        if e0.get("school"):
+            drafted.setdefault("School", e0["school"])
+        if e0.get("degree"):
+            drafted.setdefault("Degree", e0["degree"])
+
     report = {"apply_url": job.get("url", ""), "job_title": job.get("title", ""),
               "company": job.get("company", ""), "profile": profile_id,
               "resume_niche": None, "drafted_answers": drafted, "submitted": False}

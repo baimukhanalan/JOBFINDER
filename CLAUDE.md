@@ -186,11 +186,18 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   vs `_AUTH_RE`/`_WITHOUT_SPON_RE` (are you *authorized … without* sponsorship / can you present proof →
   **Yes**). A positive frame that merely mentions "visa sponsorship" is answered YES and beats
   `_SPONSOR_RE` — do NOT put bare `visa sponsorship` back into `_SPONSOR_RE` (it re-inverts "authorized
-  to work without visa sponsorship" to a disqualifying No). Free-text auth / "Education History" /
-  no-option `type="select"` typeaheads are answered deterministically from the profile/résumé BEFORE the
-  LLM/ideal path (else the model invents a contradicting degree or leaks the state code "OR" into an
-  auth textarea via a `\b`-less `state` regex matching "United **State**s"). A "Photo" upload is
-  `human`-only — never the résumé PDF (`_PHOTO_RE`). Tests: `backend/tests/test_catalog_drafts.py`.
+  to work without visa sponsorship" to a disqualifying No). **`_WITHOUT_SPON_RE` is checked FIRST in
+  `_identity_choice`** and wins even when `_SPONSOR_RE` also fires: "authorized to work in the US **without
+  requiring sponsorship now or in the future**?" contains the `sponsorship now or in the future` clause
+  `_SPONSOR_RE` matches, so without the positive-frame-first ordering an authorized citizen was inverted to
+  a self-disqualifying **No**. Keep the `_WITHOUT_SPON_RE` branch ahead of the `_SPONSOR_RE` branch. Free-text
+  auth / "Education History" / no-option `type="select"` typeaheads are answered deterministically from the
+  profile/résumé BEFORE the LLM/ideal path (else the model invents a contradicting degree or leaks the state
+  code "OR" into an auth textarea via a `\b`-less `state` regex matching "United **State**s"). A "Photo"
+  upload is `human`-only — never the résumé PDF (`_PHOTO_RE`); so are **specialized document uploads**
+  (`_HUMAN_FILE_RE`: medical report / laudo·CID / passport / national ID / diploma / transcript / reference
+  letter) — a résumé attached to a "please attach your medical report" field is a misrepresentation.
+  Tests: `backend/tests/test_catalog_drafts.py`.
   `_identity_choice` answers "authorized in <country>?" YES country-blind, but that is now gated
   upstream by `pick_candidate` (below) — a US candidate never reaches a Japan/UK posting, so the
   question isn't asked. (A per-country auth check would still be belt-and-suspenders.)
@@ -202,11 +209,15 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     US default.
   - **`backend.tools.synth_persona.synth_persona(job)` — the ETALON demo fill.** The one-click `/catalog`
     button (`ensure_and_wire`, always `ideal=True`) and `run(ideal=True)` invent a FRESH FICTIONAL
-    applicant per job — **never a real roster person** ("не трогай моих людей"). Region → country: US→American,
-    CA→Canadian, else (OTHER/UK/untagged, e.g. Salmon in Tbilisi)→Kazakhstani. LLM-authored (region-appropriate
-    random name + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
-    never fails; email is derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone is a
-    reserved-fiction number. Do NOT wire the demo path back onto the real roster.
+    applicant per job — **never a real roster person** ("не трогай моих людей"). The persona's NATIONALITY
+    matches the JOB'S COUNTRY (`_country_of`: parse `location` first, else the region tag US→United States /
+    CA→Canada / UK→United Kingdom, else Kazakhstan) so work-auth answers are TRUTHFUL and CONSISTENT — a
+    Netherlands role gets a Dutch person ("authorized in NL: yes"), a Tbilisi role a Georgian, never a
+    Kazakhstani in Almaty claiming US authorization. LLM-authored (country-appropriate random name + street
+    address + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
+    never fails; email derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone a reserved-
+    fiction 555-01xx number. Do NOT wire the demo path back onto the real roster, and do NOT revert persona
+    selection to the region TAG only (an untagged "Remote U.S." job must resolve to a US persona via location).
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

@@ -98,6 +98,20 @@ def test_pick_candidate_region_gating():
     assert cd.pick_candidate([], roster, pools) is None          # untagged -> skip
 
 
+# ---- unit: work-auth polarity — "authorized WITHOUT sponsorship" must be Yes ----
+def test_auth_without_sponsorship_is_yes():
+    prof = {"needs_sponsorship": "No"}
+    opts = ["Yes", "No"]
+    # the exact job-3573 phrasing: "sponsorship now or in the future" made _SPONSOR_RE fire
+    # and invert an authorized citizen to No — the positive "without ... sponsorship" frame wins.
+    lab = ("Are you legally authorized to work in the United States without requiring "
+           "sponsorship now or in the future?")
+    assert opts[cd._identity_choice(lab, opts, prof)] == "Yes"
+    # a genuine "do you REQUIRE sponsorship?" still answers No for the same candidate
+    assert opts[cd._identity_choice("Will you now or in the future require visa sponsorship?",
+                                    opts, prof)] == "No"
+
+
 # ---- unit: email derivation (first.last@takhet.com from a name) -----------------
 def test_derive_email():
     assert cd.derive_email("Steve Jobs") == "steve.jobs@takhet.com"

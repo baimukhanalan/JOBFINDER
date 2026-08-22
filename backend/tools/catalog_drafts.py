@@ -53,6 +53,15 @@ _COVER_RE = re.compile(r"(?i)cover letter|motivation letter|why do you want")
 _PHOTO_RE = re.compile(r"(?i)\b(photo|photograph|head\s?shot|selfie|"
                        r"profile (?:picture|photo|image)|your (?:picture|photo|image)|"
                        r"upload (?:a |your )?(?:picture|image|headshot))\b")
+# Specialized document uploads that are NEVER the résumé PDF — attaching a CV to a medical
+# report / ID / diploma field is a misrepresentation. Human-only (incl. multilingual forms).
+_HUMAN_FILE_RE = re.compile(
+    r"(?i)\b(medical (?:report|certificate|record)|health certificate|laudo|atestado|"
+    r"disability (?:report|certificate|code)|\bcid\b|"
+    r"passport|national id|identity (?:document|card|proof)|driver'?s licen[cs]e|"
+    r"diploma|transcript|degree certificate|"
+    r"reference letter|recommendation letter|"
+    r"bank statement|proof of address)\b")
 
 # identity / contact free-text fields filled straight from the profile
 _ID_TEXT = [
@@ -67,6 +76,9 @@ _ID_TEXT = [
     # and leaked the candidate's state code ("OR") into work-authorization text fields.
     (re.compile(r"(?i)\bstate\b|\bprovince\b"), "state"),
     (re.compile(r"(?i)zip|postal code"), "zip_code"),
+    # street address ("Address Line 1", "Street address") — NOT "email address" (email is
+    # matched earlier) and NOT "Address Line 2" (kept blank).
+    (re.compile(r"(?i)^address(?:\s*line\s*1)?\b|street address|\bstreet\b"), "street_address"),
     (re.compile(r"(?i)country"), "country"),
     (re.compile(r"(?i)years? of (?:relevant )?experience|how many years"), "years_experience"),
 ]
@@ -237,7 +249,13 @@ def _identity_choice(label: str, options: list[str], profile: dict) -> int | Non
     # ("...authorized to work WITHOUT visa sponsorship", "can you present proof you are
     # authorized...") is a YES for an authorized candidate — it must beat _SPONSOR_RE,
     # which now fires only on a real "do you REQUIRE/NEED sponsorship" construct.
-    if (_AUTH_RE.search(lab) or _WITHOUT_SPON_RE.search(lab)) and not _SPONSOR_RE.search(lab):
+    # An explicit "authorized to work WITHOUT sponsorship" positive frame is a YES for an
+    # authorized candidate even when the SAME sentence also contains a "sponsorship now or in
+    # the future" clause that _SPONSOR_RE would read as the NO-direction trigger (e.g.
+    # "authorized to work in the US without requiring sponsorship now or in the future?").
+    if _WITHOUT_SPON_RE.search(lab):
+        return (_yes_option(options) if authorized else _no_option(options))
+    if _AUTH_RE.search(lab) and not _SPONSOR_RE.search(lab):
         return (_yes_option(options) if authorized else _no_option(options))
     if _SPONSOR_RE.search(lab):
         return (_no_option(options) if authorized else _yes_option(options))
@@ -541,6 +559,10 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
             if _PHOTO_RE.search(label):     # no portrait on file — never the résumé PDF
                 answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
                               "status": "human", "note": "photo/headshot — no auto-fill"}
+                continue
+            if _HUMAN_FILE_RE.search(label):   # medical report / ID / diploma — not the résumé
+                answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
+                              "status": "human", "note": "specialized document — human only"}
                 continue
             is_cover = _COVER_RE.search(label)
             answers[i] = {**base, "value": ("cover_letter.pdf" if is_cover else resume_file),

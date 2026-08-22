@@ -628,7 +628,13 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
         if e0.get("degree"):
             drafted.setdefault("Degree", e0["degree"])
 
-    report = {"apply_url": job.get("url", ""), "job_title": job.get("title", ""),
+    # Give the co-pilot the real APPLY-form URL, not the raw posting: Workable's raw
+    # /j/<code> is the job LISTING (page_type=job_listing, nothing to fill) — the form
+    # is at +/apply; Ashby needs /application. _apply_url handles each ATS.
+    from backend.tools.catalog_forms import _apply_url
+    apply_url = _apply_url(job.get("ats", ""), job.get("url", "")) or job.get("url", "")
+
+    report = {"apply_url": apply_url, "job_title": job.get("title", ""),
               "company": job.get("company", ""), "profile": profile_id,
               "resume_niche": None, "drafted_answers": drafted, "submitted": False}
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

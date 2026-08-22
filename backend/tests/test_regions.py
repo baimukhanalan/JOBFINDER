@@ -90,6 +90,14 @@ def test_global_fluff_alone_is_not_worldwide():
         _j(location="Remote", description="You can work from anywhere in the world.")) == ["US", "CA", "UK", "OTHER"]
 
 
+def test_anywhere_in_country_is_that_country_not_worldwide():
+    # "Anywhere in the United States" must be US-only, not all-four (a named country beats
+    # the bare "anywhere" worldwide token).
+    assert regions.classify_regions(_j(location="Anywhere in the United States")) == ["US"]
+    assert regions.classify_regions(_j(location="Anywhere in Canada")) == ["CA"]
+    assert regions.classify_regions(_j(location="Remote - Worldwide")) == ["US", "CA", "UK", "OTHER"]
+
+
 def test_source_rule_when_deterministic(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(regions, "_llm_regions", lambda job: called.__setitem__("n", called["n"] + 1) or [])

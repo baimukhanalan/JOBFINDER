@@ -107,8 +107,8 @@ def _regions_from_location(job: dict) -> list[str]:
     loc = re.sub(r"_+", " ", (job.get("location") or "").strip().lower())
     if not loc:
         return []
-    if _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
-        return list(REGION_CODES)
+    # Country-FIRST: a named country wins over a "worldwide" word, so "Anywhere in the
+    # United States" is US-only (not all-four just because it contains "anywhere").
     found: set[str] = set()
     if _NA_RE.search(loc):
         found.update(("US", "CA"))
@@ -121,7 +121,12 @@ def _regions_from_location(job: dict) -> list[str]:
         found.add("UK")
     if _OTHER_RE.search(loc):
         found.add("OTHER")
-    return [c for c in REGION_CODES if c in found]
+    if found:
+        return [c for c in REGION_CODES if c in found]
+    # no specific place named -> a genuine "worldwide/anywhere" location opens all regions
+    if _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
+        return list(REGION_CODES)
+    return []
 
 
 def classify_regions(job: dict) -> list[str]:

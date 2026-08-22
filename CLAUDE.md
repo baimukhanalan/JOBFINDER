@@ -241,12 +241,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     accepts a synth persona. `_SCRAPE_V` was bumped to 3 so pre-persona.json cached drafts regenerate.
     A demo `demo_*` owner is **preemptible** in `copilot /load` (every demo click is a new persona, so the
     per-owner busy gate would otherwise leave the previous demo's page stuck = the "shows my old requests" bug).
-  - **Greenhouse apply URL = the EMBED form, not the board.** `materialize_prefill` sends greenhouse jobs to
-    `https://boards.greenhouse.io/embed/job_app?for=<company_key>&token=<external_id>` — the raw hosted
-    application form. The board URL (`job-boards.greenhouse.io/<slug>/jobs/<id>`) 302-redirects to the
-    company's own careers wrapper for companies that embed the form on their domain (e.g. samsara →
-    samsara.com, behind a cookie wall) → the co-pilot lands on a form-less page (0 filled). The embed endpoint
-    never redirects and works for every greenhouse company (verified: samsara 0→22 fields, axon still 16).
+  - **Greenhouse apply URL = the EMBED form, keyed by the gh_jid FROM THE URL.** `materialize_prefill` sends
+    greenhouse jobs to `https://boards.greenhouse.io/embed/job_app?for=<company_key>&token=<gh_jid>` — the raw
+    hosted form, which (unlike the board URL `job-boards.greenhouse.io/<slug>/jobs/<id>`) never 302-redirects
+    to a company careers wrapper (samsara → samsara.com behind a cookie wall = 0 filled). **The `<gh_jid>` is
+    extracted from the stored URL (`?gh_jid=<n>` or `/jobs/<n>`), NOT from `external_id`** — `external_id` can
+    be a collector sha1 fallback (nebius stored `63f8…` while the real gh_jid `4930024101` is only in the URL),
+    and a hash token makes the embed 404 → 0 filled. Verified: nebius 0→23, samsara 0→22, axon still 16.
+    **Residual (not all greenhouse fills):** a few companies (e.g. oscar / hioscar.com) embed the form on their
+    own domain with no working greenhouse endpoint at all — embed 404s and the board/stored URLs show only a
+    listing → 0 filled. Those are genuinely un-auto-fillable; the human applies manually.
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

@@ -174,9 +174,12 @@ def _build_candidate(raw: dict, region: str, job: dict) -> dict:
     email = derive_email(name)
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "candidate"
     pid = f"demo_{region.lower()}_{slug}"
+    # the LLM sometimes already puts the country in the city ("Ottawa, Canada") — don't
+    # append it twice.
+    loc = city if cfg["country"].lower() in city.lower() else f"{city}, {cfg['country']}"
+    phone = _fictional_phone(region)
     resume = {
-        "personal_info": {"name": name, "email": email, "phone": _fictional_phone(region),
-                          "location": f"{city}, {cfg['country']}"},
+        "personal_info": {"name": name, "email": email, "phone": phone, "location": loc},
         "preferred_titles": [job_title],
         "headline": str(raw.get("headline") or job_title),
         "summary": str(raw.get("summary") or ""),
@@ -186,9 +189,8 @@ def _build_candidate(raw: dict, region: str, job: dict) -> dict:
         "education": edu,
     }
     profile = {
-        "id": pid, "full_name": name, "email": email,
-        "phone": resume["personal_info"]["phone"],
-        "location": f"{city}, {cfg['country']}", "city": city,
+        "id": pid, "full_name": name, "email": email, "phone": phone,
+        "location": loc, "city": city.split(",")[0].strip(),
         "country": cfg["country"], "linkedin_url": f"https://www.linkedin.com/in/{slug}",
         "work_authorization": cfg["auth"], "needs_sponsorship": "No",
         "years_experience": yoe, "is_synthetic": True, "is_sample": True,

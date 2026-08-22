@@ -761,6 +761,15 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
         if e0.get("degree"):
             drafted.setdefault("Degree", e0["degree"])
 
+    # Location/City is usually a live geo-typeahead NOT in the scraped questions, so no
+    # drafted answer exists for it (the co-pilot then leaves it blank). Supply the persona's
+    # city under the common label variants so fill_react_selects_known can type + pick it.
+    ploc = (((d.get("resume") or {}).get("personal_info") or {}).get("location") or "").strip()
+    city = ploc.split(",")[0].strip()
+    if city:
+        for lbl in ("Location (City)", "Location", "City", "Current location", "City/Town"):
+            drafted.setdefault(lbl, city)
+
     # Give the co-pilot the real APPLY-form URL, not the raw posting: Workable's raw
     # /j/<code> is the job LISTING (page_type=job_listing, nothing to fill) — the form
     # is at +/apply; Ashby needs /application. _apply_url handles each ATS.

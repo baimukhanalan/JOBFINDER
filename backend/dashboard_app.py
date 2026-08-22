@@ -577,6 +577,11 @@ def catalog_fill(job_id: int):
     import httpx
 
     from backend.tools import catalog_drafts
+    # Autoconnecting noVNC client URL. The bare /vnc/ doesn't autoconnect and noVNC's
+    # default ws path (`websockify`) resolves to /websockify -> the dashboard, not the
+    # VNC proxy. vnc_lite.html + path=vnc/websockify routes the ws through the /vnc/
+    # nginx location to websockify (:6090) correctly.
+    novnc = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
     try:
         pid, jid, generated = catalog_drafts.ensure_and_wire(job_id)
     except Exception as exc:
@@ -591,9 +596,9 @@ def catalog_fill(job_id: int):
                             status_code=502)
     if r.status_code != 200:
         return JSONResponse({"error": res.get("error", "co-pilot load failed"),
-                             "novnc": "/vnc/", "generated": generated},
+                             "novnc": novnc, "generated": generated},
                             status_code=r.status_code)
-    return JSONResponse({"ok": True, "generated": generated, "novnc": "/vnc/",
+    return JSONResponse({"ok": True, "generated": generated, "novnc": novnc,
                          "profile": pid, "filled": res.get("filled"),
                          "unfilled": res.get("unfilled"),
                          "company": res.get("company"), "title": res.get("title")})

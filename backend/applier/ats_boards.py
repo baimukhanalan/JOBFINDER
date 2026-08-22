@@ -60,6 +60,7 @@ def _fetch_ashby(slug: str) -> list[dict]:
     for j in jobs:
         wt, rem = _wp_norm(j.get("workplaceType", ""), bool(j.get("isRemote")))
         out.append({
+            "id": j.get("id") or "",   # stable UUID — the apply URL ends in "/application"
             "title": j.get("title", ""),
             "applyUrl": j.get("applyUrl") or j.get("jobUrl") or "",
             "jobUrl": j.get("jobUrl") or j.get("applyUrl") or "",
@@ -89,6 +90,7 @@ def _fetch_greenhouse(slug: str) -> list[dict]:
         desc_html = html.unescape(raw)
         dept = ", ".join(d.get("name", "") for d in (j.get("departments") or []) if d.get("name"))
         out.append({
+            "id": str(j.get("id") or ""),   # numeric greenhouse job id
             "title": j.get("title", ""),
             "applyUrl": j.get("absolute_url", ""),
             "jobUrl": j.get("absolute_url", ""),
@@ -118,6 +120,7 @@ def _fetch_lever(slug: str) -> list[dict]:
         plain = (p.get("descriptionPlain") or p.get("descriptionBodyPlain") or "")
         dept = cats.get("department") or cats.get("team") or ""
         out.append({
+            "id": p.get("id") or "",   # stable UUID — the apply URL ends in "/apply"
             "title": p.get("text", ""),
             "applyUrl": p.get("applyUrl") or p.get("hostedUrl") or "",
             "jobUrl": p.get("hostedUrl") or p.get("applyUrl") or "",
@@ -141,6 +144,7 @@ def _fetch_workable(slug: str) -> list[dict]:
         loc_str = loc.get("location_str") or loc.get("city") or ""
         remote = bool(j.get("telecommuting"))
         out.append({
+            "id": j.get("shortcode") or j.get("id") or "",   # workable shortcode (unique)
             "title": j.get("title", ""),
             "applyUrl": j.get("url", ""),
             "jobUrl": j.get("url", ""),

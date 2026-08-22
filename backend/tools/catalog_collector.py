@@ -76,7 +76,10 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
         if remote_only and not j.get("isRemote"):
             continue
         url = j.get("applyUrl") or j.get("jobUrl") or ""
-        ext = _ext_id(ats, url)
+        # Prefer the ATS's own stable job id. The apply URL's LAST segment is a constant
+        # ("/application" for ashby, "/apply" for lever), so _ext_id collapsed every job on
+        # a board to one row (ashby/lever were ~1 job per company). id fixes that.
+        ext = str(j.get("id") or "").strip() or _ext_id(ats, url)
         row = {
             "ats": ats, "company_key": slug, "company": company, "external_id": ext,
             "title": j.get("title", ""), "location": j.get("location", ""),

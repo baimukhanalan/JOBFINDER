@@ -153,6 +153,13 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 - **Local LLM default.** `ANTHROPIC_API_KEY` is empty; résumé polish (`--ai`) and answer drafting
   (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without the
   key, tailoring falls back to the deterministic keyword path.
+- **Collector keys postings by the ATS job `id`, NOT the URL tail.** `catalog_collector.collect_board`
+  uses `job["id"]` (ashby/lever UUID, greenhouse numeric, workable shortcode — passed through by
+  `ats_boards`) as `external_id`, falling back to `_ext_id(url)` only when absent. The upsert key is
+  `(ats, company_key, external_id)`, and ashby apply URLs ALL end in `/application`, lever's in `/apply`
+  — so the old last-segment `_ext_id` gave every posting on a board the SAME external_id and they
+  overwrote each other (ashby collapsed to ~52 total, lever to ~13, e.g. Salmon 1 of 30). Never revert
+  to URL-tail ids for ashby/lever. Test: `backend/tests/test_collector_extid.py`.
 - **`frontend/` (Vite/React) is not the deployed UI** — the live app is `dashboard_app.py`'s
   server-rendered HTML. The React app is an old job-browser talking to `backend.main` `/api` with no
   inbox/roles; not deployed.

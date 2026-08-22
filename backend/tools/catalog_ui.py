@@ -115,13 +115,19 @@ def _card(j: dict) -> str:
     open_link = (f'<a class="cat-open" href="{esc(url)}" target="_blank" rel="noopener">Открыть ↗</a>'
                  if url else "")
 
+    jid = j.get("id")
+    fill_row = (
+        f'<div class="cat-fill-row"><button class="cat-fill" data-id="{jid}" '
+        f'onclick="fillJob(this)">▶ Заполнить вживую</button>'
+        f'<span class="cat-fill-res"></span></div>') if jid else ""
+
     return (
         '<article class="cat-card">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
         f'<span class="cat-wp {wt_cls}">{esc(wt)}</span></div>'
         f'<div class="cat-title">{title}</div>{meta}'
         f'<div class="cat-row">{qbadge}{open_link}</div>'
-        f'{desc_det}{qblock}'
+        f'{fill_row}{desc_det}{qblock}'
         "</article>")
 
 
@@ -253,6 +259,12 @@ _CAT_CSS = """<style>
 .cat-req{color:#d93025;font-weight:700;margin-left:3px}
 .cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
+.cat-fill-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:9px}
+.cat-fill{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
+.cat-fill:hover{filter:brightness(1.06)}
+.cat-fill:disabled{opacity:.8;cursor:default;box-shadow:none}
+.cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
+.cat-fill-res a:hover{text-decoration:underline}
 /* Hide the inline catalog search on mobile — the Gmail top pill already searches
    the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
    the later .cat-search{display:flex} in this same stylesheet). */
@@ -260,6 +272,27 @@ _CAT_CSS = """<style>
 </style>"""
 
 _CAT_JS = """<script>
+// One-click: generate (if needed) + fill the LIVE ATS form via the co-pilot, then
+// point at noVNC. Global (used by cards added via infinite scroll too).
+window.fillJob = async function(btn){
+  var id=btn.dataset.id, res=btn.parentNode.querySelector('.cat-fill-res');
+  if(btn.disabled) return;
+  btn.disabled=true; btn.textContent='⏳ Готовлю и заполняю… (до ~1.5 мин)';
+  if(res) res.textContent='';
+  try{
+    var r=await fetch('/catalog/'+id+'/fill',{method:'POST'});
+    var j=await r.json();
+    if(j.ok){
+      btn.textContent='✅ Заполнено '+(j.filled||0)+' полей'+
+        (j.unfilled?(' · '+j.unfilled+' вручную'):'');
+      if(res) res.innerHTML=' <a href="'+j.novnc+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
+      try{ window.open(j.novnc,'_blank'); }catch(e){}
+    } else {
+      btn.textContent='⚠ '+((j.error||'ошибка').slice(0,60)); btn.disabled=false;
+      if(res && j.novnc) res.innerHTML=' <a href="'+j.novnc+'" target="_blank">noVNC ↗</a>';
+    }
+  }catch(e){ btn.textContent='⚠ ошибка сети — повторить'; btn.disabled=false; }
+};
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');
   if(!list||!more)return;

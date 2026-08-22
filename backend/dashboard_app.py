@@ -570,6 +570,35 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
         return HTMLResponse("", status_code=200)
 
 
+@app.post("/catalog/{job_id}/fill")
+def catalog_fill(job_id: int):
+    """One-click: generate the ideal draft (if missing), wire it into the co-pilot, and
+    fill the LIVE ATS form in the headful browser (watch in noVNC). Never submits."""
+    import httpx
+
+    from backend.tools import catalog_drafts
+    try:
+        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    try:
+        httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
+        r = httpx.post("http://127.0.0.1:8102/load",
+                       data={"jobid": jid, "profile": pid}, timeout=200)
+        res = r.json()
+    except Exception as exc:
+        return JSONResponse({"error": f"co-pilot: {exc}", "generated": generated},
+                            status_code=502)
+    if r.status_code != 200:
+        return JSONResponse({"error": res.get("error", "co-pilot load failed"),
+                             "novnc": "/vnc/", "generated": generated},
+                            status_code=r.status_code)
+    return JSONResponse({"ok": True, "generated": generated, "novnc": "/vnc/",
+                         "profile": pid, "filled": res.get("filled"),
+                         "unfilled": res.get("unfilled"),
+                         "company": res.get("company"), "title": res.get("title")})
+
+
 # ---- Application drafts review (job_catalog.draft) --------------------------
 @app.get("/drafts", response_class=HTMLResponse)
 def drafts_index(q: str = ""):

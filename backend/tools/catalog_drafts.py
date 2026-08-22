@@ -321,6 +321,20 @@ def load_candidates() -> dict:
     return roster
 
 
+_ROSTER_CACHE: dict | None = None
+_POOLS_CACHE: dict | None = None
+
+
+def roster_cached() -> tuple[dict, dict]:
+    """Load the candidate roster once per process (profiles.json is ~1.4MB) — used by
+    the one-click /catalog fill endpoint so a click doesn't re-read it every time."""
+    global _ROSTER_CACHE, _POOLS_CACHE
+    if _ROSTER_CACHE is None:
+        _ROSTER_CACHE = load_candidates()
+        _POOLS_CACHE = _region_pools(_ROSTER_CACHE)
+    return _ROSTER_CACHE, _POOLS_CACHE
+
+
 def _region_pools(roster: dict) -> dict:
     us, ca, other = [], [], []
     for pid, c in roster.items():
@@ -565,6 +579,31 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
               "resume_niche": None, "drafted_answers": drafted, "submitted": False}
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return profile_id, jobid
+
+
+def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
+    """One-click backend for the /catalog "Заполнить" button: generate the ideal draft
+    if this job has none (region-matched candidate, 100% fill), then materialize it for
+    the co-pilot. Returns (profile_id, jobid, was_generated). The dashboard route then
+    POSTs the co-pilot /load to fill the live form."""
+    job = catalog_db.get_job(job_id)
+    if not job:
+        raise ValueError("job not found")
+    generated = False
+    if not job.get("draft"):
+        # on-demand generation must use the FAST tier, not the .env default (which is a
+        # slow model) — otherwise a click blocks ~2 min instead of ~40s.
+        from backend.config import settings
+        if settings.llm_model != "gpt-5.6-luna":
+            settings.llm_model = "gpt-5.6-luna"
+        roster, pools = roster_cached()
+        cand = pick_candidate(job.get("regions") or [], roster, pools)
+        if not cand:
+            raise ValueError("no candidate for this region")
+        catalog_db.set_draft(job_id, generate_draft(job, cand, use_ai=True, ideal=True))
+        generated = True
+    pid, jid = materialize_prefill(job_id)
+    return pid, jid, generated
 
 
 # ---- batch runner -----------------------------------------------------------

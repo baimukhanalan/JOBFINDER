@@ -76,16 +76,39 @@ def can_load(owner: str | None, loaded_at: float, requester: str, now: float) ->
     return (now - (loaded_at or 0.0)) >= BUSY_TTL
 
 
+# Image-upload controls (photo/avatar/headshot) must NEVER get the résumé PDF — mirrors
+# base.attach_resume's résumé-field heuristic (but keeps "autofill", a résumé parser).
+_PHOTO_FILE_RE = re.compile(r"photo|avatar|picture|headshot|selfie|logo")
+
+
+def _is_photo_input(info: dict) -> bool:
+    """True if a file input is an image/photo/avatar control (the résumé must not go here).
+    `info` = {"acc": <accept attr>, "blob": <id+name+surrounding text>}, lower-cased."""
+    return ("image/" in (info.get("acc") or "")) or bool(_PHOTO_FILE_RE.search(info.get("blob") or ""))
+
+
 def _on_filechooser(fc):
     """Playwright intercepts the file chooser so no native OS dialog pops up on the
-    shared headful page. Attach the current résumé (résumé-upload buttons); if none is
-    set, feed an empty list so the chooser still closes."""
+    shared headful page. Attach the current résumé (résumé-upload buttons) — but NOT to a
+    photo/avatar/image field; if none applies, feed an empty list so the chooser still closes."""
     import asyncio as _a
     path = _S.get("resume_pdf")
 
     async def _handle():
         try:
-            await fc.set_files(path if path else [])
+            attach = bool(path)
+            if attach:
+                try:
+                    info = await fc.element.evaluate(
+                        '(el)=>{const c=el.closest("div,section,fieldset,form");'
+                        'return {acc:(el.accept||"").toLowerCase(),'
+                        ' blob:((el.id||"")+" "+(el.name||"")+" "+(c?c.innerText:""))'
+                        '.toLowerCase()};}')
+                    if _is_photo_input(info):
+                        attach = False  # a headshot/avatar upload — leave it for the human
+                except Exception:
+                    pass
+            await fc.set_files(path if attach else [])
         except Exception:
             pass
     _a.ensure_future(_handle())

@@ -184,10 +184,16 @@ async def harvest_react_selects(page) -> list[dict]:
 
 
 async def apply_react_select_choice(page, container_index: int,
-                                    option_text: str) -> bool:
+                                    option_text: str, allow_first: bool = False) -> bool:
     """Pick `option_text` in the react-select at `container_index` (harvest order):
     open the menu, type to filter, click the exact/prefix matching option, and
-    confirm `.select__single-value` appeared."""
+    confirm `.select__single-value` appeared.
+
+    `allow_first` (only the KNOWN-typeahead callers set it — never the screener engine):
+    when no option exact/prefix-matches, accept the FIRST result. A remote-search typeahead
+    (e.g. Greenhouse School) returns canonical names ('The University of Texas at Austin')
+    that don't prefix-match the résumé's exact wording, so the strict match leaves a required
+    field blank; the top hit is the right pick, mirroring fill_comboboxes_known's geo fallback."""
     try:
         containers = await page.query_selector_all(".select__container")
         if not 0 <= container_index < len(containers):
@@ -202,16 +208,24 @@ async def apply_react_select_choice(page, container_index: int,
         await page.wait_for_timeout(300)
         # type to filter; 60 chars is enough to disambiguate and keeps typing fast
         await page.keyboard.type(option_text[:60], delay=15)
-        await page.wait_for_timeout(500)
+        # poll for options to render (remote search is slow; a fixed wait dropped hits)
+        opts = []
+        for _ in range(8):
+            await page.wait_for_timeout(250)
+            opts = await page.query_selector_all(".select__option")
+            if opts:
+                break
         want = option_text.strip().lower()
         opt = None
-        for o in await page.query_selector_all(".select__option"):
+        for o in opts:
             t = (await o.inner_text()).strip().lower()
             if t == want:
                 opt = o
                 break
             if opt is None and t.startswith(want[:40]):
                 opt = o
+        if opt is None and allow_first and opts:
+            opt = opts[0]           # remote-search typeahead: the top hit is the answer
         if opt is None:
             await page.keyboard.press("Escape")
             return False
@@ -221,6 +235,80 @@ async def apply_react_select_choice(page, container_index: int,
     except Exception as e:
         logger.debug("react-select apply failed at #%d (%r): %s",
                      container_index, option_text[:40], e)
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return False
+
+
+async def _resolve_multi_options(page, container_index: int, joined_value: str) -> list[str]:
+    """For a 'select all that apply' react-select: open it, read the real option texts, and
+    return those that appear (as a substring) in the known joined value. Substring — never a
+    naive comma-split — because legit options contain commas ('Yes, as a full-time employee')."""
+    want = (joined_value or "").lower()
+    picks: list[str] = []
+    try:
+        containers = await page.query_selector_all(".select__container")
+        if not 0 <= container_index < len(containers):
+            return []
+        control = await containers[container_index].query_selector(".select__control")
+        if not control:
+            return []
+        await control.click()
+        for _ in range(8):
+            await page.wait_for_timeout(250)
+            opts = await page.query_selector_all(".select__option")
+            if opts:
+                break
+        for o in opts:
+            t = (await o.inner_text()).strip()
+            if t and t.lower() in want and t not in picks:
+                picks.append(t)
+        await page.keyboard.press("Escape")
+    except Exception as e:
+        logger.debug("multi-option resolve failed at #%d: %s", container_index, e)
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+    return picks
+
+
+async def apply_react_select_multi(page, container_index: int, option_texts: list[str]) -> bool:
+    """Pick MULTIPLE options in a react-select ('select all that apply'). React-select multi
+    keeps the menu open and re-filters after each pick; confirm via >=1 .select__multi-value
+    chip (a multi container never shows .select__single-value)."""
+    try:
+        containers = await page.query_selector_all(".select__container")
+        if not 0 <= container_index < len(containers):
+            return False
+        c = containers[container_index]
+        control = await c.query_selector(".select__control")
+        if not control:
+            return False
+        await control.click()
+        for want in option_texts:
+            await page.wait_for_timeout(150)
+            await page.keyboard.type(want[:60], delay=12)
+            picked = None
+            for _ in range(8):
+                await page.wait_for_timeout(200)
+                opts = await page.query_selector_all(".select__option")
+                if opts:
+                    break
+            wl = want.strip().lower()
+            for o in opts:
+                if ((await o.inner_text()) or "").strip().lower() == wl:
+                    picked = o
+                    break
+            if picked:
+                await picked.click()
+                await page.wait_for_timeout(150)
+        await page.keyboard.press("Escape")
+        return bool(await c.query_selector(".select__multi-value"))
+    except Exception as e:
+        logger.debug("react-select multi apply failed at #%d: %s", container_index, e)
         try:
             await page.keyboard.press("Escape")
         except Exception:
@@ -246,15 +334,23 @@ async def fill_react_selects_known(page, known: dict) -> dict:
         return {"filled": 0, "handled": []}
     for idx, c in enumerate(containers):
         try:
-            if await c.query_selector(".select__single-value"):
-                continue  # already answered
+            if await c.query_selector(".select__single-value") or await c.query_selector(".select__multi-value"):
+                continue  # already answered (single or multi)
             label_el = await c.query_selector("label, .select__label")
             label = (await label_el.inner_text()).strip() if label_el else ""
             key = _clean_text(label).strip(" *").lower()
             val = norm.get(key)
             if not val or _DEMOGRAPHIC.search(key):
                 continue
-            if await apply_react_select_choice(page, idx, str(val)):
+            is_multi = bool(await c.query_selector(".select__value-container--is-multi"))
+            if is_multi:
+                # "select all that apply": the known value is a comma-joined string, but each
+                # real option is individual — resolve wanted options by SUBSTRING (never a raw
+                # split, since legit options contain commas) and pick each chip.
+                wants = await _resolve_multi_options(page, idx, str(val))
+                if wants and await apply_react_select_multi(page, idx, wants):
+                    filled.append(label[:50])
+            elif await apply_react_select_choice(page, idx, str(val), allow_first=True):
                 filled.append(label[:50])
         except Exception as e:
             logger.debug("react-select known-fill failed at #%d: %s", idx, e)
@@ -425,7 +521,10 @@ _HARVEST_BTN_JS = """
         else cand = sib.querySelector('label, legend, [class*="question"], [class*="label"]');
         if (cand) {
           const t = (cand.textContent || '').trim();
-          if (t.length > 10) q = t;
+          // skip Ashby's 'ashby-application-form-question-description' sub-line (its class
+          // contains 'question' so it would win over the real title) — keep scanning to the
+          // actual question-title, else drafted_answers (keyed by title) never replays.
+          if (t.length > 10 && !/description/i.test(cand.className || '')) q = t;
         }
         sib = sib.previousElementSibling;
       }

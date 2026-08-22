@@ -195,7 +195,8 @@ def _match_field(text: str) -> tuple[str, str] | None:
 
 
 def _field_selector(el_id: str, el_name: str, aria_label: str,
-                    el_type: str = "", el_value: str = "", nth: int = 0) -> str:
+                    el_type: str = "", el_value: str = "", nth: int = 0,
+                    data_qa: str = "") -> str:
     """Build a Playwright selector for a form element. Attribute selector for id
     (not "#id"): Ashby/Workday custom-question ids are bare UUIDs that start with
     a digit, which is an invalid CSS id selector and made those fields unfillable.
@@ -220,6 +221,10 @@ def _field_selector(el_id: str, el_name: str, aria_label: str,
         return f'[name="{el_name}"]'
     if aria_label:
         return f'[aria-label="{aria_label}"]'
+    if data_qa and '"' not in data_qa:
+        # Lever's candidate-location <select data-qa="candidate-location-select"> has no
+        # id/name/aria-label — without this it was dropped and the location never filled.
+        return f'[data-qa="{data_qa}"]'
     return ""
 
 
@@ -515,6 +520,7 @@ async def extract_form_fields(page: Page) -> list[dict]:
                 el_id = await el.get_attribute("id") or ""
                 el_name = await el.get_attribute("name") or ""
                 aria_label = await el.get_attribute("aria-label") or ""
+                data_qa = await el.get_attribute("data-qa") or ""
                 placeholder = await el.get_attribute("placeholder") or ""
                 title = await el.get_attribute("title") or ""
                 required = await el.get_attribute("required") is not None or await el.get_attribute("aria-required") == "true"
@@ -567,7 +573,7 @@ async def extract_form_fields(page: Page) -> list[dict]:
                     el_value = await el.get_attribute("value") or ""
 
                 nth = valueless_seen.get((el_type, el_name), 0)
-                selector = _field_selector(el_id, el_name, aria_label, el_type, el_value, nth)
+                selector = _field_selector(el_id, el_name, aria_label, el_type, el_value, nth, data_qa)
                 if not selector:
                     continue
                 if el_type in ("radio", "checkbox") and el_name and not el_value:

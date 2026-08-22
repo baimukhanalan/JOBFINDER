@@ -218,6 +218,12 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     never fails; email derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone a reserved-
     fiction 555-01xx number. Do NOT wire the demo path back onto the real roster, and do NOT revert persona
     selection to the region TAG only (an untagged "Remote U.S." job must resolve to a US persona via location).
+    On the demo fill `ensure_and_wire` also **provisions the persona's mailbox** (best-effort,
+    `provision_mailboxes.provision_email`) so its `@takhet.com` address is a LIVE deliverable box — a row in
+    the SHARED **MySQL `amasmail.virtual_users`** (NOT Postgres — that is the Dovecot/Postfix account backend;
+    `jobfinder_crm` Postgres holds only CRM data) + password in `mailbox_passwords.json` + a Maildir. Idempotent
+    (`INSERT IGNORE`), and a provisioning failure never breaks the fill. Real onboarding via `/setup` still does
+    NOT auto-provision — run `python -m backend.tools.provision_mailboxes --only <id>` for a real candidate.
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

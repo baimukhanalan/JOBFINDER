@@ -807,6 +807,18 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
     # persona for this job (never a real roster person) — see synth_persona.
     from backend.tools.synth_persona import synth_persona
     cand = synth_persona(job)
+    # provision the persona's mailbox so its @takhet.com email is a LIVE, deliverable box
+    # (row in amasmail.virtual_users + Maildir). Best-effort: a provisioning failure must
+    # NEVER break the fill. Idempotent, so a re-click of a cached persona is a no-op.
+    try:
+        from backend.tools.provision_mailboxes import provision_email
+        prof = cand["profile"]
+        res = provision_email(prof.get("email", ""), prof.get("full_name", ""))
+        print(f"[demo-fill] mailbox {res.get('email')}: "
+              f"{'created' if res.get('created') else ('exists' if res.get('ok') else 'FAILED: ' + str(res.get('error')))}",
+              flush=True)
+    except Exception as e:
+        print(f"[demo-fill] mailbox provision skipped: {type(e).__name__}: {e}", flush=True)
     d = generate_draft(job, cand, use_ai=True, ideal=True)
     d["_scrape_v"] = _SCRAPE_V
     catalog_db.set_draft(job_id, d)

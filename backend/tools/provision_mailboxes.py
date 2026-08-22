@@ -79,6 +79,50 @@ def _rows() -> list[dict]:
     return out
 
 
+def provision_email(email: str, full_name: str = "") -> dict:
+    """Provision ONE mailbox into `amasmail.virtual_users` (+ password + group-readable
+    Maildir). Idempotent (INSERT IGNORE — a re-click of the same demo persona is a no-op).
+    Used by the /catalog demo fill so a synthetic persona's address is a LIVE, deliverable
+    mailbox. Returns {email, ok, created, error}. Best-effort by design: the caller must not
+    let a provisioning failure break the fill."""
+    email = (email or "").strip().lower()
+    local, _, domain = email.partition("@")
+    if not (local and domain):
+        return {"email": email, "ok": False, "created": False, "error": "bad address"}
+    passwords = {}
+    if PW_FILE.exists():
+        try:
+            passwords = json.loads(PW_FILE.read_text())
+        except Exception:
+            passwords = {}
+    pw = passwords.get(email) or _gen_password()
+    maildir = _maildir(local, domain)
+    sql = ("INSERT IGNORE INTO virtual_users "
+           "(email,domain,full_name,password_hash,password_plain,maildir) VALUES "
+           "('{e}','{d}','{n}','{h}','{p}','{m}'); SELECT ROW_COUNT();".format(
+               e=_sql_escape(email), d=_sql_escape(domain),
+               n=_sql_escape(full_name or local), h=_sql_escape(_hash(pw)),
+               p=_sql_escape(pw), m=_sql_escape(maildir)))
+    try:
+        dbpass = Path(DBPASS_FILE).read_text().strip()
+        proc = subprocess.run(["mysql", "-N", "-uamasmail", f"-p{dbpass}", "amasmail"],
+                              input=sql, text=True, capture_output=True)
+    except Exception as e:
+        return {"email": email, "ok": False, "created": False, "error": f"{type(e).__name__}: {e}"}
+    if proc.returncode != 0:
+        return {"email": email, "ok": False, "created": False, "error": proc.stderr.strip()[:200]}
+    created = (proc.stdout.strip().splitlines() or ["0"])[-1].strip() == "1"
+    if created:                       # only write on a real insert (keeps the file stable)
+        passwords[email] = pw
+        try:
+            PW_FILE.write_text(json.dumps(passwords, ensure_ascii=False, indent=2))
+            os.chmod(PW_FILE, 0o600)
+        except Exception:
+            pass
+        _ensure_maildir(maildir)
+    return {"email": email, "ok": True, "created": created, "maildir": maildir}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="provision just this profile id")

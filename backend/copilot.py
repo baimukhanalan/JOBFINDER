@@ -76,6 +76,21 @@ def can_load(owner: str | None, loaded_at: float, requester: str, now: float) ->
     return (now - (loaded_at or 0.0)) >= BUSY_TTL
 
 
+def _on_filechooser(fc):
+    """Playwright intercepts the file chooser so no native OS dialog pops up on the
+    shared headful page. Attach the current résumé (résumé-upload buttons); if none is
+    set, feed an empty list so the chooser still closes."""
+    import asyncio as _a
+    path = _S.get("resume_pdf")
+
+    async def _handle():
+        try:
+            await fc.set_files(path if path else [])
+        except Exception:
+            pass
+    _a.ensure_future(_handle())
+
+
 async def _ensure_browser():
     """Launch (or relaunch) the persistent headful browser on the virtual display."""
     if _S["page"] is not None and not _S["page"].is_closed():
@@ -90,6 +105,10 @@ async def _ensure_browser():
             env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
         ctx = await _S["browser"].new_context(no_viewport=True)
         _S["page"] = await ctx.new_page()
+        # Intercept any button-triggered file picker so the NATIVE OS "Open File" dialog
+        # never appears (it would block the shared page + cover the form in noVNC).
+        # Attaching the current résumé here is the right action for résumé-upload buttons.
+        _S["page"].on("filechooser", _on_filechooser)
         await _S["page"].goto("about:blank")
         return _S["page"]
     except Exception:
@@ -201,6 +220,7 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
         base = variant or prof.resume
         tailored = tailor_resume(base, title, company, "", use_ai=False)
         resume_pdf = str(d / "resume.pdf")
+        _S["resume_pdf"] = resume_pdf  # used by the filechooser interceptor
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             await page.wait_for_timeout(2000)

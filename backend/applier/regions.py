@@ -35,9 +35,11 @@ _US_STRONG_RE = re.compile(
     r"|\bremote\s*[-,(]\s*us\b")
 # US state NAMES — a location given as US cities/states ("New York City, Santa Barbara")
 # carries no "US" token but is unmistakably US. Scanned over the location scope only.
+# NOTE "georgia" is intentionally OMITTED — it is both a US state and a country. It is
+# disambiguated in _regions_from_location: a bare "Georgia" (no US context) is the COUNTRY.
 _US_STATE_RE = re.compile(
     r"\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|"
-    r"georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|"
+    r"hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|"
     r"massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|"
     r"new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|"
     r"oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|"
@@ -120,6 +122,10 @@ def _regions_from_location(job: dict) -> list[str]:
     if _UK_STRONG_RE.search(loc) or _UK_LOC_RE.search(loc):
         found.add("UK")
     if _OTHER_RE.search(loc):
+        found.add("OTHER")
+    # "Georgia": a US state ONLY with US context (which set US above); a bare "Georgia"
+    # with no other signal is the COUNTRY (e.g. a Tbilisi-based employer) -> OTHER.
+    if not found and re.search(r"\bgeorgia\b", loc):
         found.add("OTHER")
     if found:
         return [c for c in REGION_CODES if c in found]

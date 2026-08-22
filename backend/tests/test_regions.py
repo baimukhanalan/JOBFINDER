@@ -98,6 +98,15 @@ def test_anywhere_in_country_is_that_country_not_worldwide():
     assert regions.classify_regions(_j(location="Remote - Worldwide")) == ["US", "CA", "UK", "OTHER"]
 
 
+def test_georgia_country_vs_us_state():
+    # bare "Georgia" (no US context) is the COUNTRY -> OTHER (e.g. a Tbilisi employer)
+    assert regions.classify_regions(_j(location="Georgia")) == ["OTHER"]
+    # but a US-context "Georgia" stays US
+    assert regions.classify_regions(_j(location="Atlanta, Georgia, USA")) == ["US"]
+    assert regions.classify_regions(_j(location="Georgia, United States")) == ["US"]
+    assert regions.classify_regions(_j(location="Georgia, USA, Remote")) == ["US"]
+
+
 def test_source_rule_when_deterministic(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(regions, "_llm_regions", lambda job: called.__setitem__("n", called["n"] + 1) or [])

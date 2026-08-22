@@ -1,0 +1,2062 @@
+[
+ {
+  "profile": {
+   "id": "etalon_japan_kenji_tanaka",
+   "full_name": "Kenji Tanaka",
+   "email": "kenji.tanaka@takhet.com",
+   "phone": "+1 (555) 0100",
+   "location": "Tokyo, Japan",
+   "city": "Tokyo",
+   "state": "",
+   "zip_code": "",
+   "country": "Japan",
+   "linkedin_url": "https://www.linkedin.com/in/kenji-tanaka-7c4",
+   "work_authorization": "Japan Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Kenji Tanaka",
+     "email": "kenji.tanaka@takhet.com",
+     "phone": "+1 (555) 0100",
+     "location": "Tokyo, Japan",
+     "linkedin": "https://www.linkedin.com/in/kenji-tanaka-7c4"
+    },
+    "preferred_titles": [
+     "Product Operations & Business Analyst"
+    ],
+    "headline": "Product Operations & Business Analyst",
+    "summary": "Mid-level product operations professional with 7 years of experience across e-commerce and SaaS in Tokyo. Comfortable bridging business, data, and engineering teams to ship features and streamline workflows. Detail-oriented and used to cross-functional coordination in fast-moving organizations.",
+    "experience": [
+     {
+      "company": "Rakuten Group",
+      "title": "Product Operations Specialist",
+      "dates": "2020 - Present",
+      "bullets": [
+       "Coordinated release planning across product, engineering, and support for a marketplace vertical serving millions of monthly users.",
+       "Built recurring performance dashboards that cut manual reporting time by roughly 40% for the operations team."
+      ]
+     },
+     {
+      "company": "Recruit Co., Ltd.",
+      "title": "Business Analyst",
+      "dates": "2017 - 2020",
+      "bullets": [
+       "Analyzed funnel and retention metrics to prioritize roadmap items for a lifestyle-services platform.",
+       "Ran A/B tests and translated findings into concrete product requirements for stakeholders."
+      ]
+     },
+     {
+      "company": "Fujitsu Limited",
+      "title": "Junior Operations Associate",
+      "dates": "2016 - 2017",
+      "bullets": [
+       "Supported process documentation and vendor coordination for enterprise client projects.",
+       "Assisted in quarterly planning and tracked KPIs across multiple delivery teams."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Operations",
+      "Data Analysis",
+      "SQL",
+      "Stakeholder Management",
+      "A/B Testing",
+      "Roadmap Planning",
+      "Excel / Google Sheets",
+      "Cross-functional Coordination",
+      "KPI Reporting",
+      "Agile / Scrum",
+      "Process Improvement",
+      "Tableau"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "B.A. in Economics",
+      "school": "Keio University",
+      "year": "2016"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Operations & Business Analyst"
+   ],
+   "languages": [
+    "Japanese",
+    "English"
+   ],
+   "english_level": "Professional",
+   "timezone": "Asia/Tokyo",
+   "education_level": "B.A. in Economics",
+   "tools": [
+    "Product Operations",
+    "Data Analysis",
+    "SQL",
+    "Stakeholder Management",
+    "A/B Testing",
+    "Roadmap Planning",
+    "Excel / Google Sheets",
+    "Cross-functional Coordination",
+    "KPI Reporting",
+    "Agile / Scrum",
+    "Process Improvement",
+    "Tableau"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Tokyo",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_germany_lukas_weber",
+   "full_name": "Lukas Weber",
+   "email": "lukas.weber@takhet.com",
+   "phone": "+1 (555) 0101",
+   "location": "Berlin, Germany",
+   "city": "Berlin",
+   "state": "",
+   "zip_code": "",
+   "country": "Germany",
+   "linkedin_url": "https://www.linkedin.com/in/lukas-weber-9a2",
+   "work_authorization": "Germany Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 8,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Lukas Weber",
+     "email": "lukas.weber@takhet.com",
+     "phone": "+1 (555) 0101",
+     "location": "Berlin, Germany",
+     "linkedin": "https://www.linkedin.com/in/lukas-weber-9a2"
+    },
+    "preferred_titles": [
+     "Product Manager | B2B SaaS"
+    ],
+    "headline": "Product Manager | B2B SaaS",
+    "summary": "Product manager with 8 years of experience in B2B software and e-commerce across Berlin and Munich. Strong track record of owning discovery-to-delivery, aligning engineering and commercial teams, and shipping customer-facing features. Data-driven, pragmatic, and comfortable in international, English-speaking teams.",
+    "experience": [
+     {
+      "company": "Zalando SE",
+      "title": "Product Manager",
+      "dates": "2019 - Present",
+      "bullets": [
+       "Owned a merchant-facing tooling area, defining the roadmap and shipping features that improved partner onboarding time.",
+       "Partnered with data and engineering to run experiments that lifted key conversion metrics quarter over quarter."
+      ]
+     },
+     {
+      "company": "SAP SE",
+      "title": "Associate Product Manager",
+      "dates": "2016 - 2019",
+      "bullets": [
+       "Managed backlog and requirements for an enterprise analytics module used by large B2B customers.",
+       "Gathered user feedback across regions and translated it into prioritized, well-scoped user stories."
+      ]
+     },
+     {
+      "company": "Bosch",
+      "title": "Working Student, Product Analytics",
+      "dates": "2014 - 2016",
+      "bullets": [
+       "Supported product analytics reporting for a connected-devices business unit.",
+       "Prepared market and competitor research to inform early product decisions."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Roadmap Prioritization",
+      "User Research",
+      "Agile / Scrum",
+      "Stakeholder Management",
+      "SQL",
+      "Data-Driven Decision Making",
+      "A/B Testing",
+      "Requirements Gathering",
+      "Jira & Confluence",
+      "Go-to-Market Coordination",
+      "B2B SaaS",
+      "Product Analytics"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "M.Sc. in Management & Technology",
+      "school": "Technical University of Munich (TUM)",
+      "year": "2016"
+     },
+     {
+      "degree": "B.Sc. in Business Administration",
+      "school": "University of Mannheim",
+      "year": "2014"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Manager | B2B SaaS"
+   ],
+   "languages": [
+    "German",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Berlin",
+   "education_level": "M.Sc. in Management & Technology",
+   "tools": [
+    "Product Management",
+    "Roadmap Prioritization",
+    "User Research",
+    "Agile / Scrum",
+    "Stakeholder Management",
+    "SQL",
+    "Data-Driven Decision Making",
+    "A/B Testing",
+    "Requirements Gathering",
+    "Jira & Confluence",
+    "Go-to-Market Coordination",
+    "B2B SaaS"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Berlin",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_netherlands_daan_de_vries",
+   "full_name": "Daan de Vries",
+   "email": "daan.de.vries@takhet.com",
+   "phone": "+1 (555) 0102",
+   "location": "Amsterdam, Netherlands",
+   "city": "Amsterdam",
+   "state": "",
+   "zip_code": "",
+   "country": "Netherlands",
+   "linkedin_url": "https://www.linkedin.com/in/daan-de-vries-5b8",
+   "work_authorization": "Netherlands Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 6,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Daan de Vries",
+     "email": "daan.de.vries@takhet.com",
+     "phone": "+1 (555) 0102",
+     "location": "Amsterdam, Netherlands",
+     "linkedin": "https://www.linkedin.com/in/daan-de-vries-5b8"
+    },
+    "preferred_titles": [
+     "Operations & Commercial Analyst"
+    ],
+    "headline": "Operations & Commercial Analyst",
+    "summary": "Operations and commercial analyst with 6 years of experience at tech and fintech companies in Amsterdam and Rotterdam. Skilled at turning data into process improvements and supporting revenue and account teams. Collaborative, structured, and fully comfortable working in English-first international environments.",
+    "experience": [
+     {
+      "company": "Booking.com",
+      "title": "Operations Analyst",
+      "dates": "2020 - Present",
+      "bullets": [
+       "Analyzed partner and supply operations data to identify bottlenecks and recommend process changes.",
+       "Built reporting and forecasting models that supported weekly decision-making for regional teams."
+      ]
+     },
+     {
+      "company": "Adyen",
+      "title": "Commercial Operations Associate",
+      "dates": "2018 - 2020",
+      "bullets": [
+       "Supported the sales and account management teams with pipeline reporting and CRM hygiene.",
+       "Coordinated cross-functional onboarding processes for new merchant accounts."
+      ]
+     },
+     {
+      "company": "ING Group",
+      "title": "Junior Business Analyst",
+      "dates": "2016 - 2018",
+      "bullets": [
+       "Assisted in mapping and documenting internal operational processes for a retail banking unit.",
+       "Prepared dashboards and ad-hoc analyses for team leads and project stakeholders."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Business Operations",
+      "Data Analysis",
+      "SQL",
+      "Excel / Google Sheets",
+      "CRM (Salesforce)",
+      "Reporting & Dashboards",
+      "Process Improvement",
+      "Forecasting",
+      "Stakeholder Management",
+      "Cross-functional Collaboration",
+      "Commercial Analytics",
+      "Project Coordination",
+      "Power BI"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "M.Sc. in Business Analytics",
+      "school": "Erasmus University Rotterdam",
+      "year": "2018"
+     },
+     {
+      "degree": "B.Sc. in International Business",
+      "school": "University of Amsterdam",
+      "year": "2016"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Operations & Commercial Analyst"
+   ],
+   "languages": [
+    "Dutch",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Amsterdam",
+   "education_level": "M.Sc. in Business Analytics",
+   "tools": [
+    "Business Operations",
+    "Data Analysis",
+    "SQL",
+    "Excel / Google Sheets",
+    "CRM (Salesforce)",
+    "Reporting & Dashboards",
+    "Process Improvement",
+    "Forecasting",
+    "Stakeholder Management",
+    "Cross-functional Collaboration",
+    "Commercial Analytics",
+    "Project Coordination"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Amsterdam",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_france_julien_moreau",
+   "full_name": "Julien Moreau",
+   "email": "julien.moreau@takhet.com",
+   "phone": "+1 (555) 0103",
+   "location": "Lyon, France",
+   "city": "Lyon",
+   "state": "",
+   "zip_code": "",
+   "country": "France",
+   "linkedin_url": "https://www.linkedin.com/in/julien-moreau-7c4",
+   "work_authorization": "France Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Julien Moreau",
+     "email": "julien.moreau@takhet.com",
+     "phone": "+1 (555) 0103",
+     "location": "Lyon, France",
+     "linkedin": "https://www.linkedin.com/in/julien-moreau-7c4"
+    },
+    "preferred_titles": [
+     "Product & Operations Manager | SaaS & Marketplace"
+    ],
+    "headline": "Product & Operations Manager | SaaS & Marketplace",
+    "summary": "Mid-level product and operations professional with 7 years across marketplace and B2B SaaS environments. Comfortable owning cross-functional roadmaps, translating customer needs into requirements, and driving process improvements with data. Fully authorized to work in France as a French citizen and open to remote collaboration.",
+    "experience": [
+     {
+      "company": "BlaBlaCar",
+      "title": "Product Operations Manager",
+      "dates": "2021 - Present",
+      "bullets": [
+       "Coordinated cross-functional launches across product, support, and marketing, cutting time-to-launch by 25%.",
+       "Built recurring KPI dashboards that gave leadership weekly visibility into funnel conversion and retention."
+      ]
+     },
+     {
+      "company": "ManoMano",
+      "title": "Operations Analyst",
+      "dates": "2018 - 2021",
+      "bullets": [
+       "Analyzed seller and order data to identify bottlenecks, improving on-time fulfillment by 12 points.",
+       "Standardized reporting processes across three regional teams to align on shared operational metrics."
+      ]
+     },
+     {
+      "company": "Decathlon",
+      "title": "Junior Project Coordinator",
+      "dates": "2016 - 2018",
+      "bullets": [
+       "Supported rollout of an internal inventory tool across pilot stores, gathering feedback for iteration.",
+       "Documented workflows and trained store staff, reducing onboarding time for new processes."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Project Management",
+      "Data Analysis",
+      "Stakeholder Management",
+      "Process Improvement",
+      "Roadmap Planning",
+      "SQL",
+      "Agile / Scrum",
+      "KPI Reporting",
+      "Cross-functional Collaboration",
+      "Excel",
+      "A/B Testing"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc in Management (Grande Ecole Programme)",
+      "school": "EM Lyon Business School",
+      "year": "2016"
+     },
+     {
+      "degree": "Bachelor in Economics",
+      "school": "Universite Lumiere Lyon 2",
+      "year": "2014"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product & Operations Manager | SaaS & Marketplace"
+   ],
+   "languages": [
+    "French",
+    "English"
+   ],
+   "english_level": "Professional",
+   "timezone": "Europe/Paris",
+   "education_level": "MSc in Management (Grande Ecole Programme)",
+   "tools": [
+    "Product Management",
+    "Project Management",
+    "Data Analysis",
+    "Stakeholder Management",
+    "Process Improvement",
+    "Roadmap Planning",
+    "SQL",
+    "Agile / Scrum",
+    "KPI Reporting",
+    "Cross-functional Collaboration",
+    "Excel",
+    "A/B Testing"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Lyon",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_spain_lucia_martin_sanchez",
+   "full_name": "Lucia Martin Sanchez",
+   "email": "lucia.martin.sanchez@takhet.com",
+   "phone": "+1 (555) 0104",
+   "location": "Madrid, Spain",
+   "city": "Madrid",
+   "state": "",
+   "zip_code": "",
+   "country": "Spain",
+   "linkedin_url": "https://www.linkedin.com/in/lucia-martin-sanchez-3a9",
+   "work_authorization": "Spain Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 6,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Lucia Martin Sanchez",
+     "email": "lucia.martin.sanchez@takhet.com",
+     "phone": "+1 (555) 0104",
+     "location": "Madrid, Spain",
+     "linkedin": "https://www.linkedin.com/in/lucia-martin-sanchez-3a9"
+    },
+    "preferred_titles": [
+     "Business Operations & Analytics | Marketplace & Fintech"
+    ],
+    "headline": "Business Operations & Analytics | Marketplace & Fintech",
+    "summary": "Operations and analytics professional with 6 years of experience in fast-growing tech companies. Skilled at turning messy data into decisions, streamlining internal processes, and partnering with commercial teams to hit growth targets. Spanish citizen with full right to work in Spain and available for remote roles.",
+    "experience": [
+     {
+      "company": "Cabify",
+      "title": "Business Operations Analyst",
+      "dates": "2021 - Present",
+      "bullets": [
+       "Owned weekly performance reporting for the Spanish market, surfacing trends that informed pricing decisions.",
+       "Automated a manual reconciliation process in SQL and spreadsheets, saving roughly 10 hours per week."
+      ]
+     },
+     {
+      "company": "Glovo",
+      "title": "Operations Coordinator",
+      "dates": "2019 - 2021",
+      "bullets": [
+       "Managed courier supply and demand balancing for key city zones during peak hours.",
+       "Collaborated with support and product teams to reduce order incident rates through clearer SOPs."
+      ]
+     },
+     {
+      "company": "Telefonica",
+      "title": "Junior Data Analyst",
+      "dates": "2017 - 2019",
+      "bullets": [
+       "Prepared recurring commercial dashboards for regional sales managers using internal BI tools.",
+       "Cleaned and consolidated customer datasets to improve accuracy of monthly reporting."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Business Operations",
+      "Data Analysis",
+      "SQL",
+      "Excel",
+      "Power BI",
+      "Process Optimization",
+      "Reporting & Dashboards",
+      "Stakeholder Management",
+      "Project Coordination",
+      "Problem Solving",
+      "Commercial Analytics",
+      "CRM"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "Master in Business Analytics",
+      "school": "IE Business School",
+      "year": "2018"
+     },
+     {
+      "degree": "Grado en Administracion y Direccion de Empresas (ADE)",
+      "school": "Universidad Complutense de Madrid",
+      "year": "2017"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Business Operations & Analytics | Marketplace & Fintech"
+   ],
+   "languages": [
+    "Spanish",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Madrid",
+   "education_level": "Master in Business Analytics",
+   "tools": [
+    "Business Operations",
+    "Data Analysis",
+    "SQL",
+    "Excel",
+    "Power BI",
+    "Process Optimization",
+    "Reporting & Dashboards",
+    "Stakeholder Management",
+    "Project Coordination",
+    "Problem Solving",
+    "Commercial Analytics",
+    "CRM"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Madrid",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_portugal_tiago_ferreira",
+   "full_name": "Tiago Ferreira",
+   "email": "tiago.ferreira@takhet.com",
+   "phone": "+1 (555) 0105",
+   "location": "Lisbon, Portugal",
+   "city": "Lisbon",
+   "state": "",
+   "zip_code": "",
+   "country": "Portugal",
+   "linkedin_url": "https://www.linkedin.com/in/tiago-ferreira-5d2",
+   "work_authorization": "Portugal Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 8,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Tiago Ferreira",
+     "email": "tiago.ferreira@takhet.com",
+     "phone": "+1 (555) 0105",
+     "location": "Lisbon, Portugal",
+     "linkedin": "https://www.linkedin.com/in/tiago-ferreira-5d2"
+    },
+    "preferred_titles": [
+     "Product Manager | B2B SaaS & E-commerce"
+    ],
+    "headline": "Product Manager | B2B SaaS & E-commerce",
+    "summary": "Product manager with 8 years of experience spanning e-commerce and enterprise software. Adept at discovery, prioritization, and shipping features with distributed engineering teams. Portuguese citizen authorized to work in Portugal and the EU, experienced working remotely with international teams.",
+    "experience": [
+     {
+      "company": "Farfetch",
+      "title": "Product Manager",
+      "dates": "2020 - Present",
+      "bullets": [
+       "Led discovery and delivery for checkout improvements that lifted conversion on key markets.",
+       "Partnered with engineering and design in a remote-first setup to ship quarterly roadmap commitments."
+      ]
+     },
+     {
+      "company": "OutSystems",
+      "title": "Associate Product Manager",
+      "dates": "2017 - 2020",
+      "bullets": [
+       "Gathered and prioritized customer requirements to shape the platform feature backlog.",
+       "Ran beta programs and synthesized feedback into actionable specs for engineering teams."
+      ]
+     },
+     {
+      "company": "Talkdesk",
+      "title": "Product Analyst",
+      "dates": "2015 - 2017",
+      "bullets": [
+       "Built usage reports that helped product teams understand feature adoption.",
+       "Supported release planning by tracking bugs, metrics, and rollout readiness."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Product Discovery",
+      "Roadmap Prioritization",
+      "Agile / Scrum",
+      "User Research",
+      "Data Analysis",
+      "SQL",
+      "Stakeholder Management",
+      "A/B Testing",
+      "Wireframing",
+      "Cross-functional Leadership",
+      "Backlog Management",
+      "Jira",
+      "Go-to-Market"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc in Information Systems and Computer Engineering",
+      "school": "Instituto Superior Tecnico, Universidade de Lisboa",
+      "year": "2015"
+     },
+     {
+      "degree": "BSc in Management",
+      "school": "Universidade Nova de Lisboa (Nova SBE)",
+      "year": "2013"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Manager | B2B SaaS & E-commerce"
+   ],
+   "languages": [
+    "Portuguese",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Lisbon",
+   "education_level": "MSc in Information Systems and Computer Engineering",
+   "tools": [
+    "Product Management",
+    "Product Discovery",
+    "Roadmap Prioritization",
+    "Agile / Scrum",
+    "User Research",
+    "Data Analysis",
+    "SQL",
+    "Stakeholder Management",
+    "A/B Testing",
+    "Wireframing",
+    "Cross-functional Leadership",
+    "Backlog Management"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Lisbon",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_united_kingdom_oliver_bennett",
+   "full_name": "Oliver Bennett",
+   "email": "oliver.bennett@takhet.com",
+   "phone": "+1 (555) 0106",
+   "location": "Manchester, United Kingdom",
+   "city": "Manchester",
+   "state": "",
+   "zip_code": "",
+   "country": "United Kingdom",
+   "linkedin_url": "https://www.linkedin.com/in/oliver-bennett-7a3",
+   "work_authorization": "United Kingdom Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Oliver Bennett",
+     "email": "oliver.bennett@takhet.com",
+     "phone": "+1 (555) 0106",
+     "location": "Manchester, United Kingdom",
+     "linkedin": "https://www.linkedin.com/in/oliver-bennett-7a3"
+    },
+    "preferred_titles": [
+     "Product Operations Manager | SaaS & E-commerce"
+    ],
+    "headline": "Product Operations Manager | SaaS & E-commerce",
+    "summary": "Product operations professional with seven years across e-commerce and B2B SaaS, focused on turning customer insight into roadmap priorities and smoother cross-team delivery. Comfortable owning KPIs, running discovery, and coordinating engineering, design, and commercial stakeholders. Looking for a remote mid-level role where I can drive process and product impact.",
+    "experience": [
+     {
+      "company": "Ocado Group",
+      "title": "Product Operations Manager",
+      "dates": "2021 – Present",
+      "bullets": [
+       "Own the operational backlog for two product squads, cutting cycle time by ~20% through better prioritisation and sprint hygiene.",
+       "Built a weekly KPI dashboard adopted across the division to align commercial and engineering roadmaps."
+      ]
+     },
+     {
+      "company": "ASOS",
+      "title": "Associate Product Manager",
+      "dates": "2018 – 2021",
+      "bullets": [
+       "Ran discovery and A/B tests on checkout flows, lifting conversion on the mobile funnel.",
+       "Coordinated releases across three squads and wrote clear specs that reduced rework."
+      ]
+     },
+     {
+      "company": "Sky UK",
+      "title": "Business Analyst",
+      "dates": "2015 – 2018",
+      "bullets": [
+       "Mapped billing and CRM processes to surface automation opportunities.",
+       "Delivered stakeholder reporting used by senior product leads."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Stakeholder Management",
+      "Agile / Scrum",
+      "Roadmapping",
+      "Data Analysis",
+      "SQL",
+      "A/B Testing",
+      "Jira",
+      "Confluence",
+      "Process Improvement",
+      "KPI Reporting",
+      "Cross-functional Leadership"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "BSc (Hons) Business Management",
+      "school": "University of Manchester",
+      "year": "2015"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Operations Manager | SaaS & E-commerce"
+   ],
+   "languages": [
+    "English",
+    "English"
+   ],
+   "english_level": "Native",
+   "timezone": "Europe/London",
+   "education_level": "BSc (Hons) Business Management",
+   "tools": [
+    "Product Management",
+    "Stakeholder Management",
+    "Agile / Scrum",
+    "Roadmapping",
+    "Data Analysis",
+    "SQL",
+    "A/B Testing",
+    "Jira",
+    "Confluence",
+    "Process Improvement",
+    "KPI Reporting",
+    "Cross-functional Leadership"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Manchester",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_ireland_conor_murphy",
+   "full_name": "Conor Murphy",
+   "email": "conor.murphy@takhet.com",
+   "phone": "+1 (555) 0107",
+   "location": "Dublin, Ireland",
+   "city": "Dublin",
+   "state": "",
+   "zip_code": "",
+   "country": "Ireland",
+   "linkedin_url": "https://www.linkedin.com/in/conor-murphy-4d9",
+   "work_authorization": "Ireland Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 6,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Conor Murphy",
+     "email": "conor.murphy@takhet.com",
+     "phone": "+1 (555) 0107",
+     "location": "Dublin, Ireland",
+     "linkedin": "https://www.linkedin.com/in/conor-murphy-4d9"
+    },
+    "preferred_titles": [
+     "Operations Analyst | FinTech & Payments"
+    ],
+    "headline": "Operations Analyst | FinTech & Payments",
+    "summary": "Operations and business analyst with six years in payments and financial services, blending data analysis with day-to-day process ownership. I enjoy untangling messy workflows, building reporting that people actually use, and partnering with commercial and support teams. Seeking a remote mid-level operations or analyst position.",
+    "experience": [
+     {
+      "company": "Stripe",
+      "title": "Operations Analyst",
+      "dates": "2021 – Present",
+      "bullets": [
+       "Owned onboarding and risk-review workflows for EMEA merchants, reducing turnaround time by a third.",
+       "Built SQL-based dashboards to track SLAs and flag exceptions for the operations team."
+      ]
+     },
+     {
+      "company": "Allied Irish Banks (AIB)",
+      "title": "Business Analyst",
+      "dates": "2018 – 2021",
+      "bullets": [
+       "Documented and streamlined account-servicing processes across retail branches.",
+       "Partnered with IT to define requirements for a customer-onboarding platform."
+      ]
+     },
+     {
+      "company": "Accenture Ireland",
+      "title": "Junior Consultant",
+      "dates": "2016 – 2018",
+      "bullets": [
+       "Supported process-mapping and reporting workstreams for financial-services clients.",
+       "Produced stakeholder decks and tracked delivery milestones."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Business Analysis",
+      "Process Optimisation",
+      "SQL",
+      "Excel",
+      "Data Visualisation",
+      "Stakeholder Management",
+      "Requirements Gathering",
+      "Reporting",
+      "Payments Operations",
+      "Risk & Compliance Basics",
+      "Jira",
+      "Problem Solving"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "BComm Business & Economics",
+      "school": "University College Dublin",
+      "year": "2016"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Operations Analyst | FinTech & Payments"
+   ],
+   "languages": [
+    "English",
+    "English"
+   ],
+   "english_level": "Native",
+   "timezone": "Europe/Dublin",
+   "education_level": "BComm Business & Economics",
+   "tools": [
+    "Business Analysis",
+    "Process Optimisation",
+    "SQL",
+    "Excel",
+    "Data Visualisation",
+    "Stakeholder Management",
+    "Requirements Gathering",
+    "Reporting",
+    "Payments Operations",
+    "Risk & Compliance Basics",
+    "Jira",
+    "Problem Solving"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Dublin",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_poland_micha_kowalczyk",
+   "full_name": "Michał Kowalczyk",
+   "email": "micha.kowalczyk@takhet.com",
+   "phone": "+1 (555) 0108",
+   "location": "Kraków, Poland",
+   "city": "Kraków",
+   "state": "",
+   "zip_code": "",
+   "country": "Poland",
+   "linkedin_url": "https://www.linkedin.com/in/michal-kowalczyk-2c8",
+   "work_authorization": "Poland Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 8,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Michał Kowalczyk",
+     "email": "micha.kowalczyk@takhet.com",
+     "phone": "+1 (555) 0108",
+     "location": "Kraków, Poland",
+     "linkedin": "https://www.linkedin.com/in/michal-kowalczyk-2c8"
+    },
+    "preferred_titles": [
+     "Business / Data Analyst | E-commerce & Banking"
+    ],
+    "headline": "Business / Data Analyst | E-commerce & Banking",
+    "summary": "Analyst with eight years spanning e-commerce and banking, translating business questions into clear analysis and reliable reporting. Strong in SQL and dashboarding, and used to working with product, marketing, and finance stakeholders in international teams. Open to remote mid-level analyst or operations roles.",
+    "experience": [
+     {
+      "company": "Allegro",
+      "title": "Senior Business Analyst",
+      "dates": "2020 – Present",
+      "bullets": [
+       "Delivered pricing and category-performance analyses that informed quarterly commercial planning.",
+       "Built self-service Looker dashboards adopted by three marketplace teams."
+      ]
+     },
+     {
+      "company": "mBank",
+      "title": "Data Analyst",
+      "dates": "2017 – 2020",
+      "bullets": [
+       "Developed SQL reporting on retail-lending portfolios for risk and finance stakeholders.",
+       "Automated recurring management reports, saving several analyst-days per month."
+      ]
+     },
+     {
+      "company": "Comarch",
+      "title": "Junior Analyst",
+      "dates": "2015 – 2017",
+      "bullets": [
+       "Supported requirements analysis and testing for ERP implementation projects.",
+       "Prepared client-facing documentation and data-quality checks."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Data Analysis",
+      "SQL",
+      "Excel",
+      "Power BI",
+      "Looker",
+      "Business Analysis",
+      "Reporting Automation",
+      "Stakeholder Communication",
+      "Requirements Analysis",
+      "Python (basics)",
+      "KPI Design",
+      "Financial Analysis"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc Quantitative Methods in Economics",
+      "school": "AGH University of Science and Technology, Kraków",
+      "year": "2015"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "finance",
+   "target_titles": [
+    "Business / Data Analyst | E-commerce & Banking"
+   ],
+   "languages": [
+    "Polish",
+    "English"
+   ],
+   "english_level": "Professional",
+   "timezone": "Europe/Warsaw",
+   "education_level": "MSc Quantitative Methods in Economics",
+   "tools": [
+    "Data Analysis",
+    "SQL",
+    "Excel",
+    "Power BI",
+    "Looker",
+    "Business Analysis",
+    "Reporting Automation",
+    "Stakeholder Communication",
+    "Requirements Analysis",
+    "Python (basics)",
+    "KPI Design",
+    "Financial Analysis"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Kraków",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_hungary_g_bor_kov_cs",
+   "full_name": "Gábor Kovács",
+   "email": "g.bor.kov.cs@takhet.com",
+   "phone": "+1 (555) 0109",
+   "location": "Budapest, Hungary",
+   "city": "Budapest",
+   "state": "",
+   "zip_code": "",
+   "country": "Hungary",
+   "linkedin_url": "https://www.linkedin.com/in/gabor-kovacs-7c4",
+   "work_authorization": "Hungary Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Gábor Kovács",
+     "email": "g.bor.kov.cs@takhet.com",
+     "phone": "+1 (555) 0109",
+     "location": "Budapest, Hungary",
+     "linkedin": "https://www.linkedin.com/in/gabor-kovacs-7c4"
+    },
+    "preferred_titles": [
+     "Product Operations Analyst | Process Improvement & Cross-functional Delivery"
+    ],
+    "headline": "Product Operations Analyst | Process Improvement & Cross-functional Delivery",
+    "summary": "Product operations professional with 7 years of experience bridging business, product and engineering teams in fast-scaling tech and services companies. Comfortable turning ambiguous requirements into clear roadmaps, dashboards and repeatable processes. Data-driven, pragmatic, and used to working across time zones with distributed teams.",
+    "experience": [
+     {
+      "company": "EPAM Systems Hungary",
+      "title": "Product Operations Analyst",
+      "dates": "2021 — Present",
+      "bullets": [
+       "Coordinated delivery across product, design and engineering for a B2B SaaS platform, cutting release cycle time by ~20%.",
+       "Built recurring KPI dashboards in Power BI that became the standard reporting view for two product lines."
+      ]
+     },
+     {
+      "company": "Morgan Stanley (Budapest)",
+      "title": "Business Analyst",
+      "dates": "2018 — 2021",
+      "bullets": [
+       "Gathered and documented requirements for internal reporting tools serving 300+ users across EMEA.",
+       "Ran UAT cycles and stakeholder demos, reducing post-release defects through structured test coverage."
+      ]
+     },
+     {
+      "company": "Magyar Telekom",
+      "title": "Junior Operations Analyst",
+      "dates": "2016 — 2018",
+      "bullets": [
+       "Analysed customer churn and support data to inform retention campaigns.",
+       "Automated a set of monthly Excel reports, saving several hours of manual work each cycle."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Operations",
+      "Business Analysis",
+      "Requirements Gathering",
+      "Stakeholder Management",
+      "SQL",
+      "Power BI",
+      "Excel",
+      "Process Improvement",
+      "Agile / Scrum",
+      "Jira",
+      "Confluence",
+      "Data Analysis",
+      "Cross-functional Collaboration",
+      "Project Coordination"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc in Business Informatics",
+      "school": "Corvinus University of Budapest",
+      "year": "2016"
+     },
+     {
+      "degree": "BSc in Business Administration and Management",
+      "school": "Corvinus University of Budapest",
+      "year": "2014"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Operations Analyst | Process Improvement & Cross-functional Delivery"
+   ],
+   "languages": [
+    "Hungarian",
+    "English"
+   ],
+   "english_level": "Professional",
+   "timezone": "Europe/Budapest",
+   "education_level": "MSc in Business Informatics",
+   "tools": [
+    "Product Operations",
+    "Business Analysis",
+    "Requirements Gathering",
+    "Stakeholder Management",
+    "SQL",
+    "Power BI",
+    "Excel",
+    "Process Improvement",
+    "Agile / Scrum",
+    "Jira",
+    "Confluence",
+    "Data Analysis"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Budapest",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_romania_andreea_ionescu",
+   "full_name": "Andreea Ionescu",
+   "email": "andreea.ionescu@takhet.com",
+   "phone": "+1 (555) 0110",
+   "location": "Cluj-Napoca, Romania",
+   "city": "Cluj-Napoca",
+   "state": "",
+   "zip_code": "",
+   "country": "Romania",
+   "linkedin_url": "https://www.linkedin.com/in/andreea-ionescu-3b9",
+   "work_authorization": "Romania Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 6,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Andreea Ionescu",
+     "email": "andreea.ionescu@takhet.com",
+     "phone": "+1 (555) 0110",
+     "location": "Cluj-Napoca, Romania",
+     "linkedin": "https://www.linkedin.com/in/andreea-ionescu-3b9"
+    },
+    "preferred_titles": [
+     "Operations & Project Manager | Delivery, Vendor & Process Management"
+    ],
+    "headline": "Operations & Project Manager | Delivery, Vendor & Process Management",
+    "summary": "Operations and project management professional with 6 years of experience keeping cross-functional delivery on track in software and services organizations. Skilled at coordinating stakeholders, streamlining workflows and reporting on the metrics that matter. Fluent in English and used to working with international clients and remote teams.",
+    "experience": [
+     {
+      "company": "Endava",
+      "title": "Delivery / Project Manager",
+      "dates": "2021 — Present",
+      "bullets": [
+       "Managed delivery for two client engagements totalling 25+ people across scope, budget and timeline.",
+       "Introduced a lightweight weekly reporting cadence that improved client transparency and forecast accuracy."
+      ]
+     },
+     {
+      "company": "UiPath",
+      "title": "Operations Coordinator",
+      "dates": "2019 — 2021",
+      "bullets": [
+       "Coordinated onboarding and tooling for a rapidly growing regional team.",
+       "Owned process documentation and vendor tracking, standardizing procurement requests across departments."
+      ]
+     },
+     {
+      "company": "Banca Transilvania",
+      "title": "Junior Process Analyst",
+      "dates": "2018 — 2019",
+      "bullets": [
+       "Mapped and documented back-office processes to support an internal digitalization program.",
+       "Prepared operational reports and supported audit-readiness activities."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Project Management",
+      "Operations Management",
+      "Stakeholder Management",
+      "Process Improvement",
+      "Agile / Scrum",
+      "Jira",
+      "Confluence",
+      "Vendor Management",
+      "Reporting & KPIs",
+      "Excel",
+      "Risk Management",
+      "Budget Tracking",
+      "Cross-functional Coordination",
+      "English (Fluent)"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc in Project Management",
+      "school": "Babeș-Bolyai University",
+      "year": "2018"
+     },
+     {
+      "degree": "BSc in Economics and Business Administration",
+      "school": "Babeș-Bolyai University",
+      "year": "2016"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Operations & Project Manager | Delivery, Vendor & Process Management"
+   ],
+   "languages": [
+    "Romanian",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Bucharest",
+   "education_level": "MSc in Project Management",
+   "tools": [
+    "Project Management",
+    "Operations Management",
+    "Stakeholder Management",
+    "Process Improvement",
+    "Agile / Scrum",
+    "Jira",
+    "Confluence",
+    "Vendor Management",
+    "Reporting & KPIs",
+    "Excel",
+    "Risk Management",
+    "Budget Tracking"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Cluj-Napoca",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_bulgaria_georgi_dimitrov",
+   "full_name": "Georgi Dimitrov",
+   "email": "georgi.dimitrov@takhet.com",
+   "phone": "+1 (555) 0111",
+   "location": "Sofia, Bulgaria",
+   "city": "Sofia",
+   "state": "",
+   "zip_code": "",
+   "country": "Bulgaria",
+   "linkedin_url": "https://www.linkedin.com/in/georgi-dimitrov-5a2",
+   "work_authorization": "Bulgaria Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 8,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Georgi Dimitrov",
+     "email": "georgi.dimitrov@takhet.com",
+     "phone": "+1 (555) 0111",
+     "location": "Sofia, Bulgaria",
+     "linkedin": "https://www.linkedin.com/in/georgi-dimitrov-5a2"
+    },
+    "preferred_titles": [
+     "Business Analyst | Sales Operations & Revenue Insights"
+    ],
+    "headline": "Business Analyst | Sales Operations & Revenue Insights",
+    "summary": "Business and sales operations analyst with 8 years of experience helping commercial teams make data-driven decisions in tech and consumer-goods companies. Strong at CRM analytics, pipeline reporting and translating numbers into clear recommendations for stakeholders. Fluent in English, comfortable partnering with international sales and finance teams.",
+    "experience": [
+     {
+      "company": "Progress Software (Sofia)",
+      "title": "Sales Operations Analyst",
+      "dates": "2020 — Present",
+      "bullets": [
+       "Owned pipeline and forecast reporting in Salesforce for an EMEA sales team, improving forecast reliability.",
+       "Partnered with sales leadership on territory and quota planning using historical performance data."
+      ]
+     },
+     {
+      "company": "Coca-Cola HBC",
+      "title": "Commercial / Business Analyst",
+      "dates": "2017 — 2020",
+      "bullets": [
+       "Built revenue and volume dashboards that informed monthly commercial reviews.",
+       "Analysed promotion performance and pricing to support planning for the regional sales team."
+      ]
+     },
+     {
+      "company": "A1 Bulgaria",
+      "title": "Junior Business Analyst",
+      "dates": "2015 — 2017",
+      "bullets": [
+       "Prepared weekly and monthly sales and churn reports for management.",
+       "Supported CRM data quality initiatives and ad-hoc analysis requests."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Business Analysis",
+      "Sales Operations",
+      "Salesforce CRM",
+      "Data Analysis",
+      "SQL",
+      "Excel",
+      "Power BI",
+      "Forecasting",
+      "Pipeline Reporting",
+      "KPI Dashboards",
+      "Stakeholder Management",
+      "Commercial Analytics",
+      "Presentation Skills",
+      "English (Fluent)"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc in Finance and Accounting",
+      "school": "University of National and World Economy (UNWE)",
+      "year": "2015"
+     },
+     {
+      "degree": "BSc in Economics",
+      "school": "Sofia University St. Kliment Ohridski",
+      "year": "2013"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "sales",
+   "target_titles": [
+    "Business Analyst | Sales Operations & Revenue Insights"
+   ],
+   "languages": [
+    "Bulgarian",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Sofia",
+   "education_level": "MSc in Finance and Accounting",
+   "tools": [
+    "Business Analysis",
+    "Sales Operations",
+    "Salesforce CRM",
+    "Data Analysis",
+    "SQL",
+    "Excel",
+    "Power BI",
+    "Forecasting",
+    "Pipeline Reporting",
+    "KPI Dashboards",
+    "Stakeholder Management",
+    "Commercial Analytics"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Sofia",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_austria_lukas_gruber",
+   "full_name": "Lukas Gruber",
+   "email": "lukas.gruber@takhet.com",
+   "phone": "+1 (555) 0112",
+   "location": "Vienna, Austria",
+   "city": "Vienna",
+   "state": "",
+   "zip_code": "",
+   "country": "Austria",
+   "linkedin_url": "https://www.linkedin.com/in/lukas-gruber-7c4",
+   "work_authorization": "Austria Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Lukas Gruber",
+     "email": "lukas.gruber@takhet.com",
+     "phone": "+1 (555) 0112",
+     "location": "Vienna, Austria",
+     "linkedin": "https://www.linkedin.com/in/lukas-gruber-7c4"
+    },
+    "preferred_titles": [
+     "Product Manager | Digital & SaaS Products"
+    ],
+    "headline": "Product Manager | Digital & SaaS Products",
+    "summary": "Product manager with seven years of experience building and scaling digital products across fintech and telecom. Comfortable owning roadmaps end to end, from discovery and stakeholder alignment to launch and iteration. Strong analytical background and a track record of shipping features that move core business metrics.",
+    "experience": [
+     {
+      "company": "Bitpanda",
+      "title": "Product Manager",
+      "dates": "2021 - Present",
+      "bullets": [
+       "Own the roadmap for a core onboarding flow used by 500k+ users, raising verified-signup conversion by 18% through iterative A/B testing.",
+       "Coordinate a cross-functional squad of engineers, designers and compliance to ship regulated features on schedule."
+      ]
+     },
+     {
+      "company": "A1 Telekom Austria",
+      "title": "Associate Product Manager",
+      "dates": "2018 - 2021",
+      "bullets": [
+       "Managed the self-service mobile app backlog, prioritising features from customer research and support-ticket analysis.",
+       "Ran quarterly discovery sprints that fed a 12-month roadmap adopted by three engineering teams."
+      ]
+     },
+     {
+      "company": "Runtastic (adidas)",
+      "title": "Business Analyst",
+      "dates": "2016 - 2018",
+      "bullets": [
+       "Built KPI dashboards in SQL and Tableau that became the weekly reporting standard for the product org.",
+       "Translated user-behaviour data into feature recommendations, two of which were shipped into the flagship app."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Roadmapping",
+      "Agile / Scrum",
+      "Stakeholder Management",
+      "A/B Testing",
+      "SQL",
+      "Data Analysis",
+      "Jira",
+      "User Research",
+      "Go-to-Market Strategy",
+      "Cross-functional Leadership",
+      "Wireframing"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MSc Management (Strategy & Innovation)",
+      "school": "Vienna University of Economics and Business (WU Wien)",
+      "year": "2016"
+     },
+     {
+      "degree": "BSc Business Administration",
+      "school": "University of Vienna",
+      "year": "2014"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Manager | Digital & SaaS Products"
+   ],
+   "languages": [
+    "German",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Europe/Vienna",
+   "education_level": "MSc Management (Strategy & Innovation)",
+   "tools": [
+    "Product Management",
+    "Roadmapping",
+    "Agile / Scrum",
+    "Stakeholder Management",
+    "A/B Testing",
+    "SQL",
+    "Data Analysis",
+    "Jira",
+    "User Research",
+    "Go-to-Market Strategy",
+    "Cross-functional Leadership",
+    "Wireframing"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Vienna",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_brazil_mateus_oliveira",
+   "full_name": "Mateus Oliveira",
+   "email": "mateus.oliveira@takhet.com",
+   "phone": "+1 (555) 0113",
+   "location": "São Paulo, Brazil",
+   "city": "São Paulo",
+   "state": "",
+   "zip_code": "",
+   "country": "Brazil",
+   "linkedin_url": "https://www.linkedin.com/in/mateus-oliveira-3b9",
+   "work_authorization": "Brazil Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 8,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Mateus Oliveira",
+     "email": "mateus.oliveira@takhet.com",
+     "phone": "+1 (555) 0113",
+     "location": "São Paulo, Brazil",
+     "linkedin": "https://www.linkedin.com/in/mateus-oliveira-3b9"
+    },
+    "preferred_titles": [
+     "Operations Analyst | Process & Project Management"
+    ],
+    "headline": "Operations Analyst | Process & Project Management",
+    "summary": "Operations and project professional with eight years of experience across e-commerce, fintech and retail in Brazil. Specialises in process optimisation, cross-team coordination and data-driven decision making. Known for turning messy workflows into scalable, measurable operations.",
+    "experience": [
+     {
+      "company": "iFood",
+      "title": "Senior Operations Analyst",
+      "dates": "2021 - Present",
+      "bullets": [
+       "Redesigned the restaurant onboarding process, cutting average activation time from 9 to 4 days across the São Paulo region.",
+       "Built operational dashboards in Looker that drive weekly performance reviews for a 30-person operations team."
+      ]
+     },
+     {
+      "company": "Nubank",
+      "title": "Operations Analyst",
+      "dates": "2018 - 2021",
+      "bullets": [
+       "Owned SLA tracking for customer-operations queues, reducing backlog resolution time by 22% through workflow automation.",
+       "Partnered with product and engineering to specify internal tooling that eliminated manual reconciliation tasks."
+      ]
+     },
+     {
+      "company": "Magazine Luiza",
+      "title": "Logistics Coordinator",
+      "dates": "2015 - 2018",
+      "bullets": [
+       "Coordinated last-mile delivery routing across three distribution centres, improving on-time delivery to 94%.",
+       "Led a cost-reduction project that lowered per-order fulfilment cost by 11% over two quarters."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Operations Management",
+      "Process Improvement",
+      "Project Management",
+      "Data Analysis",
+      "Excel",
+      "SQL",
+      "Power BI",
+      "Stakeholder Management",
+      "Lean / Six Sigma",
+      "KPI Reporting",
+      "Vendor Management",
+      "Cross-functional Coordination",
+      "Problem Solving"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MBA in Project Management",
+      "school": "Fundação Getúlio Vargas (FGV)",
+      "year": "2019"
+     },
+     {
+      "degree": "Bachelor in Business Administration",
+      "school": "Universidade de São Paulo (USP)",
+      "year": "2015"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Operations Analyst | Process & Project Management"
+   ],
+   "languages": [
+    "Portuguese",
+    "English"
+   ],
+   "english_level": "Professional",
+   "timezone": "America/Sao_Paulo",
+   "education_level": "MBA in Project Management",
+   "tools": [
+    "Operations Management",
+    "Process Improvement",
+    "Project Management",
+    "Data Analysis",
+    "Excel",
+    "SQL",
+    "Power BI",
+    "Stakeholder Management",
+    "Lean / Six Sigma",
+    "KPI Reporting",
+    "Vendor Management",
+    "Cross-functional Coordination"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "São Paulo",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_india_rohan_sharma",
+   "full_name": "Rohan Sharma",
+   "email": "rohan.sharma@takhet.com",
+   "phone": "+1 (555) 0114",
+   "location": "Bengaluru, India",
+   "city": "Bengaluru",
+   "state": "",
+   "zip_code": "",
+   "country": "India",
+   "linkedin_url": "https://www.linkedin.com/in/rohan-sharma-9d2",
+   "work_authorization": "India Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 6,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Rohan Sharma",
+     "email": "rohan.sharma@takhet.com",
+     "phone": "+1 (555) 0114",
+     "location": "Bengaluru, India",
+     "linkedin": "https://www.linkedin.com/in/rohan-sharma-9d2"
+    },
+    "preferred_titles": [
+     "Business Analyst | Product & Growth"
+    ],
+    "headline": "Business Analyst | Product & Growth",
+    "summary": "Business analyst with six years of experience bridging product, data and business teams in the Indian tech industry. Skilled at turning ambiguous problems into clear requirements, dashboards and shipped features. Comfortable working with distributed, cross-functional teams and fast-moving roadmaps.",
+    "experience": [
+     {
+      "company": "Flipkart",
+      "title": "Business Analyst",
+      "dates": "2021 - Present",
+      "bullets": [
+       "Analyse customer-funnel data to identify drop-off points, informing experiments that lifted category conversion by 9%.",
+       "Define requirements and acceptance criteria for growth features, working alongside product managers and engineers."
+      ]
+     },
+     {
+      "company": "Razorpay",
+      "title": "Product Analyst",
+      "dates": "2019 - 2021",
+      "bullets": [
+       "Built self-serve SQL dashboards that let business teams track merchant activation without analyst intervention.",
+       "Ran cohort and retention analyses that shaped the pricing roadmap for the SME segment."
+      ]
+     },
+     {
+      "company": "Infosys",
+      "title": "Systems Engineer",
+      "dates": "2016 - 2019",
+      "bullets": [
+       "Delivered reporting modules for an enterprise banking client, gathering requirements directly from stakeholders.",
+       "Automated recurring data-validation checks, reducing manual QA effort by roughly 15 hours per week."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Business Analysis",
+      "SQL",
+      "Data Analysis",
+      "Product Analytics",
+      "Requirements Gathering",
+      "Excel",
+      "Tableau",
+      "Dashboarding",
+      "A/B Testing",
+      "Stakeholder Management",
+      "Agile",
+      "Jira",
+      "Problem Solving",
+      "Cross-functional Collaboration"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "MBA (Marketing & Analytics)",
+      "school": "Symbiosis Institute of Business Management, Pune",
+      "year": "2018"
+     },
+     {
+      "degree": "B.Tech in Information Technology",
+      "school": "National Institute of Technology Karnataka (NITK), Surathkal",
+      "year": "2016"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "analyst",
+   "target_titles": [
+    "Business Analyst | Product & Growth"
+   ],
+   "languages": [
+    "Hindi",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Asia/Kolkata",
+   "education_level": "MBA (Marketing & Analytics)",
+   "tools": [
+    "Business Analysis",
+    "SQL",
+    "Data Analysis",
+    "Product Analytics",
+    "Requirements Gathering",
+    "Excel",
+    "Tableau",
+    "Dashboarding",
+    "A/B Testing",
+    "Stakeholder Management",
+    "Agile",
+    "Jira"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Bengaluru",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_malaysia_ahmad_firdaus_bin_ismail",
+   "full_name": "Ahmad Firdaus bin Ismail",
+   "email": "ahmad.firdaus.bin.ismail@takhet.com",
+   "phone": "+1 (555) 0115",
+   "location": "Kuala Lumpur, Malaysia",
+   "city": "Kuala Lumpur",
+   "state": "",
+   "zip_code": "",
+   "country": "Malaysia",
+   "linkedin_url": "https://www.linkedin.com/in/ahmad-firdaus-ismail-7c3",
+   "work_authorization": "Malaysia Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Ahmad Firdaus bin Ismail",
+     "email": "ahmad.firdaus.bin.ismail@takhet.com",
+     "phone": "+1 (555) 0115",
+     "location": "Kuala Lumpur, Malaysia",
+     "linkedin": "https://www.linkedin.com/in/ahmad-firdaus-ismail-7c3"
+    },
+    "preferred_titles": [
+     "Operations & Product Analyst | Ex-AirAsia, Grab"
+    ],
+    "headline": "Operations & Product Analyst | Ex-AirAsia, Grab",
+    "summary": "Operations and product professional with seven years across banking, aviation and ride-hailing in Malaysia. Comfortable turning messy operational data into clear decisions, running cross-team process improvements, and shipping small product changes end to end. Bilingual in Malay and English and used to working with regional stakeholders.",
+    "experience": [
+     {
+      "company": "Grab Malaysia",
+      "title": "Senior Operations Analyst",
+      "dates": "2023-Present",
+      "bullets": [
+       "Own weekly supply-and-demand dashboards for the Klang Valley fleet, cutting driver idle time by 12% through targeted incentive tweaks.",
+       "Coordinate between city ops, product and support to launch and monitor pilot features, writing the SOPs the frontline teams follow."
+      ]
+     },
+     {
+      "company": "AirAsia",
+      "title": "Product Operations Executive",
+      "dates": "2020-2023",
+      "bullets": [
+       "Managed backlog triage and release checks for the mobile booking flow, reducing post-release support tickets by roughly a quarter.",
+       "Ran A/B tests on ancillary upsell placements and reported results to product managers with clear recommendations."
+      ]
+     },
+     {
+      "company": "Maybank",
+      "title": "Management Associate",
+      "dates": "2018-2020",
+      "bullets": [
+       "Rotated through retail operations and digital banking, mapping process bottlenecks in account onboarding.",
+       "Built recurring Excel and SQL reports for branch performance reviewed by regional managers."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Operations Analysis",
+      "Process Improvement",
+      "SQL",
+      "Excel",
+      "Data Visualization",
+      "Stakeholder Management",
+      "Product Operations",
+      "A/B Testing",
+      "SOP Documentation",
+      "Project Coordination",
+      "Cross-functional Collaboration",
+      "Reporting & Dashboards",
+      "Problem Solving"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "Bachelor of Business Administration (Marketing)",
+      "school": "Universiti Malaya",
+      "year": "2014-2018"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "operations",
+   "target_titles": [
+    "Operations & Product Analyst | Ex-AirAsia, Grab"
+   ],
+   "languages": [
+    "Malay",
+    "English"
+   ],
+   "english_level": "Fluent",
+   "timezone": "Asia/Kuala_Lumpur",
+   "education_level": "Bachelor of Business Administration (Marketing)",
+   "tools": [
+    "Operations Analysis",
+    "Process Improvement",
+    "SQL",
+    "Excel",
+    "Data Visualization",
+    "Stakeholder Management",
+    "Product Operations",
+    "A/B Testing",
+    "SOP Documentation",
+    "Project Coordination",
+    "Cross-functional Collaboration",
+    "Reporting & Dashboards"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Kuala Lumpur",
+   "work_location": "remote",
+   "industries": []
+  }
+ },
+ {
+  "profile": {
+   "id": "etalon_singapore_marcus_lim_jun_wei",
+   "full_name": "Marcus Lim Jun Wei",
+   "email": "marcus.lim.jun.wei@takhet.com",
+   "phone": "+1 (555) 0116",
+   "location": "Singapore, Singapore",
+   "city": "Singapore",
+   "state": "",
+   "zip_code": "",
+   "country": "Singapore",
+   "linkedin_url": "https://www.linkedin.com/in/marcus-lim-jun-wei-4a9",
+   "work_authorization": "Singapore Citizen",
+   "needs_sponsorship": "No",
+   "years_experience": 7,
+   "etalon_persona": true,
+   "resume": {
+    "personal_info": {
+     "full_name": "Marcus Lim Jun Wei",
+     "email": "marcus.lim.jun.wei@takhet.com",
+     "phone": "+1 (555) 0116",
+     "location": "Singapore, Singapore",
+     "linkedin": "https://www.linkedin.com/in/marcus-lim-jun-wei-4a9"
+    },
+    "preferred_titles": [
+     "Product Manager | Fintech & E-commerce | Ex-Shopee, DBS"
+    ],
+    "headline": "Product Manager | Fintech & E-commerce | Ex-Shopee, DBS",
+    "summary": "Product manager with seven years spanning telco, digital banking and e-commerce in Singapore. I work closely with engineering and design to ship customer-facing features, and I lean on data to prioritise a crowded roadmap. Comfortable operating across regional SEA markets and translating business goals into shippable scope.",
+    "experience": [
+     {
+      "company": "Sea Group (Shopee)",
+      "title": "Product Manager",
+      "dates": "2023-Present",
+      "bullets": [
+       "Lead the checkout and payments experience for two SEA markets, improving conversion by 8% through a redesigned voucher flow.",
+       "Run discovery interviews and prioritise a quarterly roadmap with engineering, design and regional operations."
+      ]
+     },
+     {
+      "company": "DBS Bank",
+      "title": "Associate Product Manager",
+      "dates": "2020-2023",
+      "bullets": [
+       "Shipped self-service features in the digibank app, cutting call-centre volume for common account queries.",
+       "Partnered with compliance and engineering to launch changes safely within a regulated banking environment."
+      ]
+     },
+     {
+      "company": "Singtel",
+      "title": "Business Analyst",
+      "dates": "2018-2020",
+      "bullets": [
+       "Gathered requirements and wrote user stories for internal CRM tooling used by retail staff.",
+       "Built reporting dashboards that gave product owners visibility into feature adoption."
+      ]
+     }
+    ],
+    "skills_grouped": {
+     "Core": [
+      "Product Management",
+      "Roadmap Planning",
+      "User Research",
+      "Agile / Scrum",
+      "SQL",
+      "Data Analysis",
+      "A/B Testing",
+      "Wireframing",
+      "Stakeholder Management",
+      "Requirements Gathering",
+      "Go-to-Market",
+      "Cross-functional Leadership",
+      "Analytics (Amplitude/GA)",
+      "Prioritisation"
+     ]
+    },
+    "certifications": [],
+    "education": [
+     {
+      "degree": "Bachelor of Computing (Information Systems)",
+      "school": "National University of Singapore",
+      "year": "2014-2018"
+     }
+    ]
+   }
+  },
+  "facts": {
+   "role_family": "product",
+   "target_titles": [
+    "Product Manager | Fintech & E-commerce | Ex-Shopee, DBS"
+   ],
+   "languages": [
+    "English",
+    "English"
+   ],
+   "english_level": "Native",
+   "timezone": "Asia/Singapore",
+   "education_level": "Bachelor of Computing (Information Systems)",
+   "tools": [
+    "Product Management",
+    "Roadmap Planning",
+    "User Research",
+    "Agile / Scrum",
+    "SQL",
+    "Data Analysis",
+    "A/B Testing",
+    "Wireframing",
+    "Stakeholder Management",
+    "Requirements Gathering",
+    "Go-to-Market",
+    "Cross-functional Leadership"
+   ],
+   "salary_annual": null,
+   "notice_period": "1 month",
+   "state": "Singapore",
+   "work_location": "remote",
+   "industries": []
+  }
+ }
+]

@@ -214,9 +214,18 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
         if isinstance(e, dict):
             edu.append({"degree": e.get("degree", ""), "school": e.get("school", ""),
                         "field": e.get("field", ""), "year": str(e.get("year", "") or "")})
-    email = derive_email(name)
+    # every DEMO persona gets a numeric suffix -> a UNIQUE mailbox even when the LLM invents
+    # the same common name for two jobs (first.last573@takhet.com). Real onboarding via /setup
+    # keeps the clean first.last@ (derive_email is unchanged) — the number is demo-only.
+    num = random.randint(100, 9999)
+    base = derive_email(name)
+    if base:
+        local, _, dom = base.partition("@")
+        email = f"{local}{num}@{dom}"
+    else:
+        email = ""
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "candidate"
-    pid = f"demo_{slug}"
+    pid = f"demo_{slug}{num}"
     loc = f"{city}, {country}"
     phone = str(raw.get("phone") or "").strip() or _fictional_phone()
     resume = {

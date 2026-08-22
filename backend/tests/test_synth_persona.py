@@ -1,6 +1,8 @@
 """Unit tests for the synthetic demo-candidate generator (no network — the LLM path is
 forced to fall back). Verifies country-from-location, a valid profile/résumé shape, a
 derived @takhet.com email, a street address, and that the persona is flagged synthetic."""
+import re
+
 from backend.tools import synth_persona as sp
 
 
@@ -48,7 +50,9 @@ def test_fallback_persona_builds_valid_candidate():
         assert p["country"] == country
         assert p["work_authorization"] == cit
         assert p["email"].endswith("@takhet.com")
-        assert p["email"] == sp.derive_email(p["full_name"])
+        # demo email = first.last<NUM>@takhet.com (numeric suffix for a unique mailbox)
+        base = sp.derive_email(p["full_name"])[: -len("@takhet.com")]
+        assert re.match(rf"^{re.escape(base)}\d+@takhet\.com$", p["email"])
         assert p["is_synthetic"] is True
         assert p["street_address"]                               # required-address gap fixed
         assert p["resume"]["experience"]
@@ -74,6 +78,7 @@ def test_synth_persona_honours_llm_when_present(monkeypatch):
         "skills": ["python", "sql"]})
     cand = sp.synth_persona(_job("London, United Kingdom"))
     assert cand["profile"]["full_name"] == "Steve Jobs"
-    assert cand["profile"]["email"] == "steve.jobs@takhet.com"
+    assert re.match(r"^steve\.jobs\d+@takhet\.com$", cand["profile"]["email"])  # numeric suffix
+    assert cand["profile"]["id"].startswith("demo_steve_jobs")
     assert cand["profile"]["country"] == "United Kingdom"
     assert cand["profile"]["work_authorization"] == "British Citizen"

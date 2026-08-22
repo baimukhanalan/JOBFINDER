@@ -217,7 +217,7 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     Kyrgyzstan"): if **Kazakhstan** is one of the listed countries it wins (the agency's own market); else the
     **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule. LLM-authored (country-appropriate random name + street
     address + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
-    never fails; email derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone a reserved-
+    never fails; email `first.last<NUM>@takhet.com` (numeric suffix = a UNIQUE mailbox even when the LLM repeats a common name; real /setup onboarding keeps clean `first.last@`), persona flagged `is_synthetic`, phone a reserved-
     fiction 555-01xx number. Do NOT wire the demo path back onto the real roster, and do NOT revert persona
     selection to the region TAG only (an untagged "Remote U.S." job must resolve to a US persona via location).
     On the demo fill `ensure_and_wire` also **provisions the persona's mailbox** (best-effort,

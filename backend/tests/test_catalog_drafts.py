@@ -80,6 +80,24 @@ def test_education_history_from_resume():
     assert "Business Administration" not in val
 
 
+# ---- unit: pick_candidate never sends a US person to a foreign posting ----------
+def test_pick_candidate_region_gating():
+    roster = {"us1": {"profile": {}}, "ca1": {"profile": {}}, "kz1": {"profile": {}}}
+    pools = {"US": ["us1"], "CA": ["ca1"], "OTHER": ["kz1"]}
+
+    def who(regions):
+        c = cd.pick_candidate(regions, roster, pools)
+        return next((k for k, v in roster.items() if v is c), None)
+
+    assert who(["US"]) == "us1"
+    assert who(["CA"]) == "ca1"
+    assert who(["US", "CA"]) == "us1"           # US wins
+    assert who(["OTHER", "US"]) == "us1"
+    assert cd.pick_candidate(["OTHER"], roster, pools) is None   # foreign -> no US default
+    assert cd.pick_candidate(["UK"], roster, pools) is None      # no UK pool -> skip
+    assert cd.pick_candidate([], roster, pools) is None          # untagged -> skip
+
+
 # ---- integration: full generate_draft routing ----------------------------------
 def _draft():
     job_row = {

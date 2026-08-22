@@ -166,8 +166,15 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   LLM/ideal path (else the model invents a contradicting degree or leaks the state code "OR" into an
   auth textarea via a `\b`-less `state` regex matching "United **State**s"). A "Photo" upload is
   `human`-only — never the résumé PDF (`_PHOTO_RE`). Tests: `backend/tests/test_catalog_drafts.py`.
-  NOTE still open: `_identity_choice` answers "authorized in <country>?" YES country-blind — correct
-  country gating belongs with the region-matching fix (a US candidate shouldn't reach a Japan/UK job).
+  `_identity_choice` answers "authorized in <country>?" YES country-blind, but that is now gated
+  upstream by `pick_candidate` (below) — a US candidate never reaches a Japan/UK posting, so the
+  question isn't asked. (A per-country auth check would still be belt-and-suspenders.)
+- **`pick_candidate` is the region GATE — region tags are moot without it.** `catalog_drafts.pick_candidate`
+  returns a US person only when `US ∈ regions`, a Canadian only when `CA ∈ regions`, and **None**
+  otherwise (OTHER/UK-only or untagged). It used to fall through to a US default for ANY job, so even a
+  correctly-tagged "Remote - Japan" (OTHER) still got a US candidate claiming a Japanese visa. Both
+  callers skip on None (`run()` drops the job; `ensure_and_wire` raises "no candidate for this region",
+  which is the correct answer for the one-click button on a foreign posting). Do NOT re-add a US default.
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

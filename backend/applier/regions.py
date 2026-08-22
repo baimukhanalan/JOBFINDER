@@ -28,7 +28,8 @@ _WORLDWIDE_RE = re.compile(
 # "worldwide/anywhere/global" there does mean all-four.
 _LOC_WORLDWIDE_RE = re.compile(r"\b(worldwide|anywhere|global(?:ly)?|everywhere)\b")
 _NA_RE = re.compile(
-    r"\bnorth america\b|\bus\s*&\s*canada\b|\bus\s*/\s*canada\b|\bus and canada\b|\busa\s*/\s*canada\b")
+    r"\bnorth america\b|\bus\s*&\s*canada\b|\bus\s*/\s*canada\b|\bus and canada\b|\busa\s*/\s*canada\b"
+    r"|\bnoram\b|\bnamer\b|\bamericas\b|\bamer\b")
 _US_STRONG_RE = re.compile(
     r"\bunited states\b|\bu\.?s\.?a\b|\bu\.s\.\b|\bus[- ]based\b|\bus[- ]only\b"
     r"|\bremote\s*[-,(]\s*us\b")
@@ -42,6 +43,16 @@ _US_STATE_RE = re.compile(
     r"oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|"
     r"texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|"
     r"district of columbia|washington,? d\.?c\.?)\b")
+# Major US job-hub CITIES (dominantly-US, low int'l collision) — recover common location
+# strings like "San Francisco, CA" that carry no state name and an ambiguous ", CA" code.
+_US_CITY_RE = re.compile(
+    r"\b(san francisco|sf bay area|bay area|san jose|los angeles|san diego|new york city|nyc\b|seattle|austin|"
+    r"boston|chicago|denver|atlanta|dallas|houston|miami|philadelphia|phoenix|minneapolis|"
+    r"nashville|charlotte|san antonio|brooklyn|palo alto|mountain view|sunnyvale|"
+    r"santa clara|santa monica|santa barbara|san carlos|menlo park|cupertino|redwood city|"
+    r"oakland|sacramento|pittsburgh|tampa|orlando|raleigh|durham|cincinnati|cleveland|"
+    r"kansas city|saint louis|st\.? louis|indianapolis|milwaukee|las vegas|san mateo|"
+    r"irvine|bellevue|fremont|plano|chattanooga|salt lake city|boulder)\b")
 _CA_RE = re.compile(
     r"\bcanada\b|\bcanadian\b|\bontario\b|\bquebec\b|\bbritish columbia\b|\balberta\b"
     r"|\btoronto\b|\bvancouver\b|\bmontreal\b")
@@ -53,7 +64,7 @@ _US_LOC_RE = re.compile(r"\bus\b(?!\s*[/&]?\s*canada)")
 _UK_LOC_RE = re.compile(r"\buk\b|\bu\.k\.\b")
 _OTHER_RE = re.compile(
     # macro-regions
-    r"\bemea\b|\bapac\b|\banz\b|\bmena\b|\bcis\b|\bnordics?\b|\bbenelux\b|\bbalkans?\b"
+    r"\bemea\b|\bapac\b|\banz\b|\bmena\b|\bcis\b|\bnordics?\b|\bbenelux\b|\bbalkans?\b|\bdach\b|\biberia\b"
     r"|\beurope(?:an)?\b|\basia(?:n|-pacific| pacific)?\b|\blatam\b|\blatin america\b"
     r"|\bsouth america\b|\bcentral america\b|\bmiddle east\b|\bafrica\b|\boceania\b"
     # Europe
@@ -93,7 +104,7 @@ def _loc_blob(job: dict) -> str:
 def _regions_from_location(job: dict) -> list[str]:
     """Regions implied by the `location` field ALONE. [] if location is empty or names no
     place. This is authoritative: a "Remote - Japan" posting is Japan-eligibility, full stop."""
-    loc = (job.get("location") or "").strip().lower()
+    loc = re.sub(r"_+", " ", (job.get("location") or "").strip().lower())
     if not loc:
         return []
     if _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
@@ -101,7 +112,8 @@ def _regions_from_location(job: dict) -> list[str]:
     found: set[str] = set()
     if _NA_RE.search(loc):
         found.update(("US", "CA"))
-    if _US_STRONG_RE.search(loc) or _US_LOC_RE.search(loc) or _US_STATE_RE.search(loc):
+    if (_US_STRONG_RE.search(loc) or _US_LOC_RE.search(loc)
+            or _US_STATE_RE.search(loc) or _US_CITY_RE.search(loc)):
         found.add("US")
     if _CA_RE.search(loc):
         found.add("CA")

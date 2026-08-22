@@ -449,17 +449,19 @@ def _region_pools(roster: dict) -> dict:
 
 
 def pick_candidate(regions: list, roster: dict, pools: dict) -> dict | None:
-    """Region-matched candidate: US job -> US-authorized person, CA -> Canadian.
-    One representative per region (first in the pool) so the review sample is stable."""
+    """Region-matched candidate: a US-eligible job -> a US person, a CA-eligible job -> a
+    Canadian. One representative per region (first in the pool) so the review sample is
+    stable. A job that is NOT US/CA-eligible (OTHER/UK-only) or is untagged returns None —
+    we NEVER send a US candidate to a foreign posting ('for America, an American'). Without
+    this guard, the region tags are moot: a 'Remote - Japan' role tagged OTHER would still
+    fall through to a US default and claim a Japanese visa. US wins when a job is open to
+    both US and CA."""
     regions = regions or []
-    for code in ("US", "CA"):
-        if code in regions and pools.get(code):
-            return roster[pools[code][0]]
-    # UK / OTHER / untagged -> a US candidate as a sensible default for the pilot
-    if pools.get("US"):
+    if "US" in regions and pools.get("US"):
         return roster[pools["US"][0]]
-    any_pool = pools.get("CA") or pools.get("OTHER")
-    return roster[any_pool[0]] if any_pool else None
+    if "CA" in regions and pools.get("CA"):
+        return roster[pools["CA"][0]]
+    return None
 
 
 # ---- per-job generation -----------------------------------------------------

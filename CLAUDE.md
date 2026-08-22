@@ -213,7 +213,9 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     matches the JOB'S COUNTRY (`_country_of`: parse `location` first, else the region tag US→United States /
     CA→Canada / UK→United Kingdom, else Kazakhstan) so work-auth answers are TRUTHFUL and CONSISTENT — a
     Netherlands role gets a Dutch person ("authorized in NL: yes"), a Tbilisi role a Georgian, never a
-    Kazakhstani in Almaty claiming US authorization. LLM-authored (country-appropriate random name + street
+    Kazakhstani in Almaty claiming US authorization. **Multi-country location** (e.g. Salmon's "Kazakhstan;
+    Kyrgyzstan"): if **Kazakhstan** is one of the listed countries it wins (the agency's own market); else the
+    **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule. LLM-authored (country-appropriate random name + street
     address + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
     never fails; email derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone a reserved-
     fiction 555-01xx number. Do NOT wire the demo path back onto the real roster, and do NOT revert persona
@@ -229,6 +231,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     from there** when `get_profile(demo_*)` raises KeyError (else the headful fill crashed with "profile not
     found" and left the stale page up). `Profile` gained `street_address` + `is_synthetic` so `from_dict`
     accepts a synth persona. `_SCRAPE_V` was bumped to 3 so pre-persona.json cached drafts regenerate.
+    A demo `demo_*` owner is **preemptible** in `copilot /load` (every demo click is a new persona, so the
+    per-owner busy gate would otherwise leave the previous demo's page stuck = the "shows my old requests" bug).
+  - **Greenhouse apply URL = the EMBED form, not the board.** `materialize_prefill` sends greenhouse jobs to
+    `https://boards.greenhouse.io/embed/job_app?for=<company_key>&token=<external_id>` — the raw hosted
+    application form. The board URL (`job-boards.greenhouse.io/<slug>/jobs/<id>`) 302-redirects to the
+    company's own careers wrapper for companies that embed the form on their domain (e.g. samsara →
+    samsara.com, behind a cookie wall) → the co-pilot lands on a form-less page (0 filled). The embed endpoint
+    never redirects and works for every greenhouse company (verified: samsara 0→22 fields, axon still 16).
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

@@ -42,6 +42,13 @@ _LOC_COUNTRY = [
     (re.compile(r"(?i)\b(australia|sydney|melbourne)\b"), "Australia"),
     (re.compile(r"(?i)\b(singapore)\b"), "Singapore"),
     (re.compile(r"(?i)\b(ukraine|kyiv|kiev|lviv)\b"), "Ukraine"),
+    (re.compile(r"(?i)\b(serbia|belgrade)\b"), "Serbia"),
+    (re.compile(r"(?i)\b(turkey|t[uü]rkiye|istanbul)\b"), "Turkey"),
+    (re.compile(r"(?i)\b(armenia|yerevan)\b"), "Armenia"),
+    (re.compile(r"(?i)\b(azerbaijan|baku)\b"), "Azerbaijan"),
+    (re.compile(r"(?i)\b(kyrgyzstan|bishkek)\b"), "Kyrgyzstan"),
+    (re.compile(r"(?i)\b(uzbekistan|tashkent)\b"), "Uzbekistan"),
+    (re.compile(r"(?i)\b(tajikistan|dushanbe)\b"), "Tajikistan"),
     (re.compile(r"(?i)\b(tbilisi)\b|\bgeorgia\b(?!,?\s*(?:us|usa|united states|atlanta))"), "Georgia"),
     (re.compile(r"(?i)\b(kazakhstan|almaty|astana|nur[- ]?sultan)\b"), "Kazakhstan"),
 ]
@@ -73,10 +80,21 @@ _CITIES = {
 
 
 def _country_of(job: dict) -> str:
+    """The country to synthesize a persona for. When the location names SEVERAL countries
+    (e.g. Salmon's 'Kazakhstan; Kyrgyzstan'), the rule is: if Kazakhstan is one of them use
+    Kazakhstan (the agency's own market); otherwise use the FIRST country as it appears in
+    the location text. Falls back to the region tag, then Kazakhstan."""
     loc = job.get("location") or ""
+    found = []  # (position_in_text, country)
     for rx, country in _LOC_COUNTRY:
-        if rx.search(loc):
-            return country
+        m = rx.search(loc)
+        if m:
+            found.append((m.start(), country))
+    if found:
+        if any(c == "Kazakhstan" for _, c in found):
+            return "Kazakhstan"
+        found.sort(key=lambda t: t[0])   # else the first country named in the location string
+        return found[0][1]
     regions = job.get("regions") or []
     for tag in ("US", "CA", "UK"):
         if tag in regions:

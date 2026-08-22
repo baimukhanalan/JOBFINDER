@@ -13,6 +13,16 @@ def test_country_of_from_location():
     assert sp._country_of({"location": "Toronto, ON, Canada"}) == "Canada"
 
 
+def test_country_of_multi_country():
+    # rule: several countries -> Kazakhstan if it's one of them, else the FIRST in the text
+    assert sp._country_of({"location": "Kazakhstan; Kyrgyzstan"}) == "Kazakhstan"
+    assert sp._country_of({"location": "Georgia; Kazakhstan; Poland"}) == "Kazakhstan"
+    assert sp._country_of({"location": "Serbia; Kazakhstan"}) == "Kazakhstan"
+    assert sp._country_of({"location": "Kyrgyzstan; Uzbekistan"}) == "Kyrgyzstan"   # first, no KZ
+    assert sp._country_of({"location": "Georgia; Poland"}) == "Georgia"
+    assert sp._country_of({"location": "United States; Canada"}) == "United States"
+
+
 def test_country_of_falls_back_to_region_then_kz():
     assert sp._country_of({"location": "Remote", "regions": ["US"]}) == "United States"
     assert sp._country_of({"location": "", "regions": ["CA"]}) == "Canada"

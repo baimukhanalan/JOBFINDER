@@ -765,7 +765,17 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
     # /j/<code> is the job LISTING (page_type=job_listing, nothing to fill) — the form
     # is at +/apply; Ashby needs /application. _apply_url handles each ATS.
     from backend.tools.catalog_forms import _apply_url
-    apply_url = _apply_url(job.get("ats", ""), job.get("url", "")) or job.get("url", "")
+    if job.get("ats") == "greenhouse" and job.get("company_key") and str(job.get("external_id") or "").isdigit():
+        # The stored greenhouse url is often the company's own careers WRAPPER
+        # (…/careers/job?gh_jid=<id>), and even the greenhouse BOARD
+        # (job-boards.greenhouse.io/<slug>/jobs/<id>) 302-redirects to that wrapper for
+        # companies that embed the form on their own domain (e.g. samsara) — the co-pilot
+        # then lands on a form-less careers page (0 filled). The greenhouse EMBED endpoint
+        # serves the raw hosted application form for ANY company and never redirects.
+        apply_url = (f"https://boards.greenhouse.io/embed/job_app"
+                     f"?for={job['company_key']}&token={job['external_id']}")
+    else:
+        apply_url = _apply_url(job.get("ats", ""), job.get("url", "")) or job.get("url", "")
 
     report = {"apply_url": apply_url, "job_title": job.get("title", ""),
               "company": job.get("company", ""), "profile": profile_id,

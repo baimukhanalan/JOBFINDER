@@ -66,6 +66,30 @@ def test_empty_when_no_signal():
     assert regions.classify_regions(_j(location="Remote")) == []
 
 
+def test_location_country_beats_global_fluff():
+    # THE BUG: a foreign-located remote role whose JD says "global/worldwide" used to be
+    # tagged US+CA+UK+OTHER (so a US candidate applied to it). Location now restricts.
+    assert regions.classify_regions(
+        _j(location="Remote - Japan", description="millions of users worldwide")) == ["OTHER"]
+    assert regions.classify_regions(
+        _j(location="Brazil - Remote", description="as we expand our reach globally")) == ["OTHER"]
+    assert regions.classify_regions(
+        _j(location="United Kingdom - Remote", description="used in 250 locations globally")) == ["UK"]
+    assert regions.classify_regions(
+        _j(location="Remote-Hungary", description="navigating global employment compliantly")) == ["OTHER"]
+    # Canada-only posting must not also carry US.
+    assert regions.classify_regions(_j(location="Canada Wide - Excluding Quebec")) == ["CA"]
+
+
+def test_global_fluff_alone_is_not_worldwide():
+    # bare "global"/"globally"/"worldwide" in the description is NOT an eligibility signal.
+    assert regions.classify_regions(_j(location="Remote", description="we serve customers globally")) == []
+    assert regions.classify_regions(_j(description="a global leader with users worldwide")) == []
+    # but a genuine "work from anywhere" still opens all regions.
+    assert regions.classify_regions(
+        _j(location="Remote", description="You can work from anywhere in the world.")) == ["US", "CA", "UK", "OTHER"]
+
+
 def test_source_rule_when_deterministic(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(regions, "_llm_regions", lambda job: called.__setitem__("n", called["n"] + 1) or [])

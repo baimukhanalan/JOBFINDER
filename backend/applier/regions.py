@@ -11,13 +11,37 @@ import re
 
 REGION_CODES = ("US", "CA", "UK", "OTHER")
 
+# STRICT worldwide-eligibility — only phrases that actually mean "we hire anywhere".
+# Bare "global"/"globally"/"worldwide" is company-marketing fluff ("users worldwide",
+# "expand globally", "250 locations globally") that appeared in ~55% of JDs and used to
+# short-circuit every job to all-four regions, overriding the real country in `location`.
 _WORLDWIDE_RE = re.compile(
-    r"\b(worldwide|work from anywhere|remote anywhere|anywhere in the world|global(?:ly)?)\b")
+    r"work (?:from |remotely from )?anywhere"
+    r"|(?:hire|employ|recruit)\w*\s+(?:from\s+)?anywhere"
+    r"|anywhere in the world|from any country|in any country"
+    r"|open to (?:candidates|applicants)\s+(?:from\s+)?(?:anywhere|worldwide|any country|"
+    r"any location|around the world|globally)"
+    r"|(?:candidates|applicants)\s+(?:from\s+)?(?:anywhere|around the world)\s+"
+    r"(?:are welcome|may apply|can apply)"
+    r"|location[- ]independent|remote,?\s+worldwide|worldwide,?\s+remote")
+# A short curated `location` field IS a real signal (unlike the description), so bare
+# "worldwide/anywhere/global" there does mean all-four.
+_LOC_WORLDWIDE_RE = re.compile(r"\b(worldwide|anywhere|global(?:ly)?|everywhere)\b")
 _NA_RE = re.compile(
     r"\bnorth america\b|\bus\s*&\s*canada\b|\bus\s*/\s*canada\b|\bus and canada\b|\busa\s*/\s*canada\b")
 _US_STRONG_RE = re.compile(
     r"\bunited states\b|\bu\.?s\.?a\b|\bu\.s\.\b|\bus[- ]based\b|\bus[- ]only\b"
     r"|\bremote\s*[-,(]\s*us\b")
+# US state NAMES — a location given as US cities/states ("New York City, Santa Barbara")
+# carries no "US" token but is unmistakably US. Scanned over the location scope only.
+_US_STATE_RE = re.compile(
+    r"\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|"
+    r"georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|"
+    r"massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|"
+    r"new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|"
+    r"oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|"
+    r"texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming|"
+    r"district of columbia|washington,? d\.?c\.?)\b")
 _CA_RE = re.compile(
     r"\bcanada\b|\bcanadian\b|\bontario\b|\bquebec\b|\bbritish columbia\b|\balberta\b"
     r"|\btoronto\b|\bvancouver\b|\bmontreal\b")
@@ -28,10 +52,28 @@ _UK_STRONG_RE = re.compile(
 _US_LOC_RE = re.compile(r"\bus\b(?!\s*[/&]?\s*canada)")
 _UK_LOC_RE = re.compile(r"\buk\b|\bu\.k\.\b")
 _OTHER_RE = re.compile(
-    r"\bemea\b|\bapac\b|\banz\b|\beurope(?:an)?\b|\blatam\b|\blatin america\b|\bsouth america\b"
-    r"|\bindia\b|\bphilippines\b|\bpakistan\b|\bgermany\b|\bfrance\b|\bspain\b|\bnetherlands\b"
-    r"|\bpoland\b|\bportugal\b|\bromania\b|\bireland\b|\baustralia\b|\bnew zealand\b"
-    r"|\bsingapore\b|\bbrazil\b|\bmexico\b|\bargentina\b|\bcolombia\b|\bafrica\b|\bjapan\b")
+    # macro-regions
+    r"\bemea\b|\bapac\b|\banz\b|\bmena\b|\bcis\b|\bnordics?\b|\bbenelux\b|\bbalkans?\b"
+    r"|\beurope(?:an)?\b|\basia(?:n|-pacific| pacific)?\b|\blatam\b|\blatin america\b"
+    r"|\bsouth america\b|\bcentral america\b|\bmiddle east\b|\bafrica\b|\boceania\b"
+    # Europe
+    r"|\bgermany\b|\bfrance\b|\bspain\b|\bnetherlands\b|\bpoland\b|\bportugal\b|\bromania\b"
+    r"|\bireland\b|\bitaly\b|\bhungary\b|\bczechia?\b|\bczech republic\b|\bslovakia\b"
+    r"|\bslovenia\b|\bcroatia\b|\bserbia\b|\bbulgaria\b|\bgreece\b|\baustria\b|\bswitzerland\b"
+    r"|\bbelgium\b|\bsweden\b|\bnorway\b|\bdenmark\b|\bfinland\b|\bestonia\b|\blatvia\b"
+    r"|\blithuania\b|\bukraine\b|\bcyprus\b|\bmalta\b|\bluxembourg\b|\biceland\b|\bturkey\b"
+    r"|\barmenia\b|\bmoldova\b|\bbosnia\b|\bmontenegro\b|\balbania\b|\bmacedonia\b"
+    # APAC / South Asia
+    r"|\bindia\b|\bphilippines\b|\bpakistan\b|\baustralia\b|\bnew zealand\b|\bsingapore\b"
+    r"|\bjapan\b|\bchina\b|\bhong kong\b|\btaiwan\b|\bkorea\b|\bindonesia\b|\bvietnam\b"
+    r"|\bthailand\b|\bmalaysia\b|\bbangladesh\b|\bsri lanka\b|\bnepal\b"
+    # LATAM
+    r"|\bbrazil\b|\bmexico\b|\bargentina\b|\bcolombia\b|\bchile\b|\bperu\b|\buruguay\b"
+    r"|\becuador\b|\bguatemala\b|\bcosta rica\b|\bbolivia\b|\bvenezuela\b|\bparaguay\b"
+    r"|\bdominican\b|\bpanama\b|\bhonduras\b|\bnicaragua\b|\bel salvador\b"
+    # MEA
+    r"|\bnigeria\b|\bkenya\b|\bsouth africa\b|\bghana\b|\bmorocco\b|\begypt\b|\bisrael\b"
+    r"|\buae\b|\bdubai\b|\bsaudi\b|\bqatar\b|\bkazakhstan\b|\bazerbaijan\b")
 
 
 def _blob(job: dict) -> str:
@@ -48,8 +90,38 @@ def _loc_blob(job: dict) -> str:
     return " ".join([job.get("title", "") or "", job.get("location", "") or ""]).lower()
 
 
+def _regions_from_location(job: dict) -> list[str]:
+    """Regions implied by the `location` field ALONE. [] if location is empty or names no
+    place. This is authoritative: a "Remote - Japan" posting is Japan-eligibility, full stop."""
+    loc = (job.get("location") or "").strip().lower()
+    if not loc:
+        return []
+    if _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
+        return list(REGION_CODES)
+    found: set[str] = set()
+    if _NA_RE.search(loc):
+        found.update(("US", "CA"))
+    if _US_STRONG_RE.search(loc) or _US_LOC_RE.search(loc) or _US_STATE_RE.search(loc):
+        found.add("US")
+    if _CA_RE.search(loc):
+        found.add("CA")
+    if _UK_STRONG_RE.search(loc) or _UK_LOC_RE.search(loc):
+        found.add("UK")
+    if _OTHER_RE.search(loc):
+        found.add("OTHER")
+    return [c for c in REGION_CODES if c in found]
+
+
 def classify_regions(job: dict) -> list[str]:
-    """Deterministic region set; [] if no rule fires (caller may LLM-fallback)."""
+    """Deterministic region set; [] if no rule fires (caller may LLM-fallback).
+
+    LOCATION-FIRST: if `location` names a place, it RESTRICTS eligibility (the JD saying
+    "global" no longer promotes a "Remote - Japan" role to US/CA/UK). Only when location is
+    uninformative do we fall back to full-text signals.
+    """
+    loc_regions = _regions_from_location(job)
+    if loc_regions:
+        return loc_regions
     blob = _blob(job)
     if _WORLDWIDE_RE.search(blob):
         return list(REGION_CODES)

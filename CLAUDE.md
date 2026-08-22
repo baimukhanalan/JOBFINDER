@@ -168,3 +168,11 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `human`-only — never the résumé PDF (`_PHOTO_RE`). Tests: `backend/tests/test_catalog_drafts.py`.
   NOTE still open: `_identity_choice` answers "authorized in <country>?" YES country-blind — correct
   country gating belongs with the region-matching fix (a US candidate shouldn't reach a Japan/UK job).
+- **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
+  `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
+  only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare
+  "global"/"globally"/"worldwide" promote a job to all-four regions — that marketing fluff (in ~55% of
+  JDs) was tagging "Remote - Japan"/"Brazil - Remote" as US-eligible; `_WORLDWIDE_RE` is now strict
+  ("work from anywhere", "hire anywhere", …). Full US **state names** count as US in a location; 2-letter
+  state codes are deliberately NOT used (", CA"/", DE" collide with Canada/Germany ISO) — those fall to
+  the LLM. Tests: `backend/tests/test_regions.py`.

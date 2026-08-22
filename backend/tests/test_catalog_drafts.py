@@ -98,6 +98,25 @@ def test_pick_candidate_region_gating():
     assert cd.pick_candidate([], roster, pools) is None          # untagged -> skip
 
 
+# ---- unit: email derivation (first.last@takhet.com from a name) -----------------
+def test_derive_email():
+    assert cd.derive_email("Steve Jobs") == "steve.jobs@takhet.com"
+    assert cd.derive_email("José García") == "jose.garcia@takhet.com"   # accents stripped
+    assert cd.derive_email("Zoe O'Brien") == "zoe.obrien@takhet.com"    # apostrophe dropped
+    assert cd.derive_email("Jean-Luc Picard") == "jeanluc.picard@takhet.com"
+    assert cd.derive_email("Wei") == "wei@takhet.com"                   # single token
+    assert cd.derive_email("") == ""                                   # nothing to derive
+
+
+def test_email_filled_when_profile_email_blank():
+    # a candidate whose profile.email isn't set still gets a working address in the form
+    assert cd._profile_value("email", {"full_name": "Steve Jobs"}) == "steve.jobs@takhet.com"
+    assert cd._profile_value("email", {"full_name": "Steve Jobs", "email": ""}) == "steve.jobs@takhet.com"
+    # a real stored email always wins over the derived one
+    assert cd._profile_value("email", {"full_name": "Steve Jobs",
+                                       "email": "real@takhet.com"}) == "real@takhet.com"
+
+
 # ---- integration: full generate_draft routing ----------------------------------
 def _draft():
     job_row = {

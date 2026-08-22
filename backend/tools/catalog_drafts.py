@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -160,10 +161,35 @@ def _split_name(full: str) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
+EMAIL_DOMAIN = "takhet.com"
+
+
+def _email_slug(s: str) -> str:
+    """Lowercase ASCII local-part token: strip accents (José -> jose) + non-alphanumerics."""
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+
+def derive_email(full_name: str, domain: str = EMAIL_DOMAIN) -> str:
+    """first.last@takhet.com from a name — 'Steve Jobs' -> 'steve.jobs@takhet.com'.
+    Deterministic so a recruiter reply always lands in the same candidate mailbox.
+    Used to fill/onboard a candidate whose email isn't set yet. Single-token name ->
+    just that token; empty/uncomputable -> ''."""
+    first, last = _split_name(full_name)
+    local = ".".join(t for t in (_email_slug(first), _email_slug(last)) if t)
+    return f"{local}@{domain}" if local else ""
+
+
 def _profile_value(key: str, profile: dict) -> str:
     if key in ("first_name", "last_name"):
         first, last = _split_name(profile.get("full_name", ""))
         return first if key == "first_name" else last
+    if key == "email":
+        # never leave an email blank: derive first.last@takhet.com from the name so the
+        # filled form always carries a working candidate address, even for a person whose
+        # profile.email isn't set yet.
+        v = profile.get("email")
+        return str(v) if v else derive_email(profile.get("full_name", ""))
     v = profile.get(key)
     return str(v) if v not in (None, "") else ""
 
@@ -654,7 +680,7 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
         "candidate": {"id": profile["id"], "name": profile.get("full_name", ""),
                       "country": profile.get("country", ""),
                       "work_authorization": profile.get("work_authorization", ""),
-                      "email": profile.get("email", "")},
+                      "email": profile.get("email") or derive_email(profile.get("full_name", ""))},
         "resume": tailored,
         "resume_text": resume_text,
         "resume_file": resume_file,

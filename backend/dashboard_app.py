@@ -1327,6 +1327,13 @@ def setup_save(profile: str = Form(""), kind: str = Form(""), body: str = Form("
     if kind == "facts":
         _atomic_write_json(facts_lib.FACTS_DIR / f"{pid}.json", data)
     else:
+        # onboarding convenience: derive first.last@takhet.com from the name when the
+        # email is left blank, so a new person always gets a working candidate mailbox.
+        if not str(data.get("email") or "").strip() and str(data.get("full_name") or "").strip():
+            from backend.tools.catalog_drafts import derive_email
+            em = derive_email(data["full_name"])
+            if em:
+                data["email"] = em
         try:
             profile_store.Profile.from_dict(data)  # catches unknown/missing keys
         except (TypeError, ValueError) as e:

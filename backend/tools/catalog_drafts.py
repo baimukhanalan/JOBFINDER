@@ -527,6 +527,46 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
     }
 
 
+# ---- wire a stored draft into the co-pilot (live headful fill / noVNC) -------
+PREFILL_ROOT = Path(__file__).resolve().parents[2] / "uploads" / "prefill"
+
+
+def materialize_prefill(job_id: int) -> tuple[str, str]:
+    """Write a stored ideal draft into the co-pilot's prefill dir so POST /load can
+    replay it into the LIVE form (headful, watch in noVNC). The co-pilot reads
+    report.json's `drafted_answers` and fills them as known_answers (no re-drafting);
+    labels that also match the live DOM get OUR exact reviewed answer, the rest are
+    recomputed by the same engine (co-pilot runs draft=True). Returns (profile_id, jobid)."""
+    from backend.tools import drafts_ui
+    job = catalog_db.get_job(job_id)
+    if not job or not job.get("draft"):
+        raise ValueError(f"no draft for job {job_id}")
+    d = job["draft"]
+    profile_id = (d.get("candidate") or {}).get("id") or "michael"
+    jobid = str(job_id)
+    out = PREFILL_ROOT / profile_id / jobid
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "resume.pdf").write_bytes(drafts_ui.resume_pdf(job_id) or b"")
+
+    drafted: dict[str, str] = {}
+    for a in d.get("answers") or []:
+        if not a or a.get("source") in ("file", "none"):
+            continue
+        v = a.get("value")
+        if isinstance(v, list):
+            v = ", ".join(str(x) for x in v)
+        v = str(v or "").strip()
+        lbl = drafts_ui._clean_label(a.get("label"))
+        if lbl and v:
+            drafted[lbl] = v
+
+    report = {"apply_url": job.get("url", ""), "job_title": job.get("title", ""),
+              "company": job.get("company", ""), "profile": profile_id,
+              "resume_niche": None, "drafted_answers": drafted, "submitted": False}
+    (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return profile_id, jobid
+
+
 # ---- batch runner -----------------------------------------------------------
 def run(limit: int = 150, all_jobs: bool = False, use_ai: bool = True,
         workers: int = 5, job_id: int | None = None, ideal: bool = False) -> dict:
@@ -584,6 +624,14 @@ if __name__ == "__main__":
                     help="TEST mode: answer EVERY question at 100%% as the ideal JD-fit "
                          "candidate (relaxes the leave-for-human gate; nothing is submitted)")
     ap.add_argument("--workers", type=int, default=5)
+    ap.add_argument("--wire", type=int, default=None,
+                    help="materialize a stored draft into the co-pilot prefill dir so "
+                         "POST /load can fill it live (headful / noVNC)")
     args = ap.parse_args()
-    print(run(limit=args.limit, all_jobs=args.all, use_ai=not args.no_ai,
-              workers=args.workers, job_id=args.job, ideal=args.ideal), flush=True)
+    if args.wire is not None:
+        pid, jid = materialize_prefill(args.wire)
+        print(f"wired job {args.wire} -> uploads/prefill/{pid}/{jid}/ "
+              f"(load: POST http://127.0.0.1:8102/load jobid={jid}&profile={pid})", flush=True)
+    else:
+        print(run(limit=args.limit, all_jobs=args.all, use_ai=not args.no_ai,
+                  workers=args.workers, job_id=args.job, ideal=args.ideal), flush=True)

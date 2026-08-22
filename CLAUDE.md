@@ -76,6 +76,9 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   carries per-job `regions text[]` ∈ `{US,CA,UK,OTHER}` (multi-eligibility) + `region_source`
   (`rule`/`llm`/`unknown`), classified by `applier/regions.py` (deterministic-first, LLM residue);
   `questions JSONB` per job (GH via API, Ashby/Lever/Workable via `tools/catalog_forms.py` Playwright).
+  A `dead BOOLEAN` + `dead_reason` blacklist marks postings confirmed gone at the source (e.g. a GH
+  job id that now 404s); `catalog_db.mark_dead()` sets it (reversible) and `list_jobs`/`companies`/
+  `jobs_for_drafting` all exclude `dead` so a human never opens an apply page that 404s.
 - **Per-candidate Maildirs** `/var/mail/vhosts/takhet.com/<local>` (Dovecot/Postfix, `vmail:mail 2770`).
   Sending a reply goes out via Postfix SASL **as that candidate** (`mailcrm.send`, DKIM-signed).
 - `uploads/prefill/<profile>/*/report.json` (+ a `status.json` overlay) — the apply review queue

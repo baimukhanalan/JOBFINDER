@@ -105,6 +105,11 @@ def ensure_schema() -> None:
         # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft JSONB")
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft_at TIMESTAMPTZ")
+        # dead: a posting confirmed gone at the source (e.g. greenhouse job id 404s).
+        # Kept as a reversible blacklist marker (not deleted) — hidden from the catalog
+        # browse + the draft work-list so a human never opens an apply page that 404s.
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS dead BOOLEAN DEFAULT FALSE")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS dead_reason TEXT")
 
 
 _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
@@ -147,7 +152,7 @@ _LIST_COLS = ("id", "ats", "company_key", "company", "title", "location", "depar
 
 def list_jobs(company: str | None = None, q: str | None = None, remote_only: bool = True,
               limit: int = 30, offset: int = 0, region: str | None = None) -> list:
-    where, args = ["TRUE"], []
+    where, args = ["NOT COALESCE(dead, FALSE)"], []
     if remote_only:
         where.append("is_remote=TRUE")
     if company:
@@ -169,7 +174,10 @@ def list_jobs(company: str | None = None, q: str | None = None, remote_only: boo
 
 
 def companies(remote_only: bool = True) -> list:
-    w = " WHERE is_remote=TRUE" if remote_only else ""
+    conds = ["NOT COALESCE(dead, FALSE)"]
+    if remote_only:
+        conds.append("is_remote=TRUE")
+    w = " WHERE " + " AND ".join(conds)
     with _cur() as cur:
         cur.execute("SELECT company_key, company, COUNT(*) AS n FROM job_catalog" + w +
                     " GROUP BY company_key, company ORDER BY n DESC")
@@ -182,6 +190,20 @@ def set_questions(ats: str, company_key: str, external_id: str, questions: list)
         cur.execute("UPDATE job_catalog SET questions=%s, q_count=%s "
                     "WHERE ats=%s AND company_key=%s AND external_id=%s",
                     (Json(questions), len(questions or []), ats, company_key, external_id))
+        return cur.rowcount
+
+
+def mark_dead(keys: list[tuple], reason: str) -> int:
+    """Blacklist postings confirmed gone at the source. `keys` is a list of
+    (ats, company_key, external_id). Sets dead=TRUE + dead_reason; reversible
+    (UPDATE dead=FALSE). Dead rows are hidden from list_jobs + jobs_for_drafting."""
+    if not keys:
+        return 0
+    with _cur(False) as cur:
+        cur.executemany(
+            "UPDATE job_catalog SET dead=TRUE, dead_reason=%s "
+            "WHERE ats=%s AND company_key=%s AND external_id=%s",
+            [(reason, a, c, e) for (a, c, e) in keys])
         return cur.rowcount
 
 
@@ -246,6 +268,7 @@ def jobs_for_drafting(limit: int = 150, regions=("US", "CA"),
             cur.execute(
                 "SELECT " + ",".join(_JOB_COLS) + " FROM job_catalog "
                 "WHERE ats=%s AND q_count >= %s AND is_remote=TRUE AND regions && %s "
+                "AND NOT COALESCE(dead, FALSE) "
                 "ORDER BY id LIMIT %s",
                 (ats, min_q, list(regions), per))
             picked.extend(dict(r) for r in cur.fetchall())

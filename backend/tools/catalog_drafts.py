@@ -178,6 +178,31 @@ def _clean_review(answer: str) -> tuple[str, bool]:
 # human" gate — used only to preview full auto-fill quality; nothing is ever submitted.
 _PLACEHOLDER = re.compile(r"(?i)^(select|choose|--|please|pick|\s*$|n/?a$)")
 
+# Ideal candidate: yes/no capability / experience / willingness questions must be YES
+# ("Do you have SaaS experience?" -> Yes). Grave error to answer No to these.
+_AFFIRM_YES_RE = re.compile(
+    r"(?i)do you have|have you (?:ever )?(?:used|worked|managed|led|built|developed)|"
+    r"experience (?:in|with|using|of|working)|are you (?:experienced|proficient|comfortable|"
+    r"familiar|willing|able|open|available|ready)|proficien|familiar with|worked with|"
+    r"hands[- ]on|knowledge of|background in|skilled|can you|comfortable with|willing to|"
+    r"do you possess|are you interested|would you be (?:able|willing|comfortable)")
+# ...but a yes/no question about sponsorship / criminal history / restrictions / conflicts
+# must be NO (answering Yes there is the wrong direction for an ideal candidate).
+_AFFIRM_NO_RE = re.compile(
+    r"(?i)sponsor|\bvisa\b|criminal|felony|convict|non-?compete|garden leave|"
+    r"restrict|debarr|conflict of interest|do you require|are you subject to|"
+    r"employment agreement|post-?employment")
+
+
+def _affirm_override(label: str, options: list[str]) -> int | None:
+    """Deterministic yes/no direction for an ideal candidate: capability/experience/
+    willingness -> Yes; sponsorship/criminal/restriction -> No. None = defer to LLM."""
+    if _AFFIRM_NO_RE.search(label or ""):
+        return _no_option(options)
+    if _AFFIRM_YES_RE.search(label or ""):
+        return _yes_option(options)
+    return None
+
 
 def _fallback_option(options: list[str], multi: bool = False):
     """Guarantee a valid option even if the model returns nothing: prefer an
@@ -231,6 +256,10 @@ def _ideal_chunk(items: list[dict], brief: str, job: dict) -> dict:
         '- Free-text question: return {"n":N,"value":"<concise confident first-person '
         "answer tailored to THIS job; for 'describe a time' give a plausible concrete "
         'example; 1-3 sentences>"}.\n'
+        "- CRITICAL: for any yes/no question about EXPERIENCE, SKILLS, or WILLINGNESS "
+        "(e.g. 'Do you have SaaS experience?', 'start-up experience?', 'willing to...') "
+        "ALWAYS choose YES. The only yes/no questions you answer NO to are visa "
+        "sponsorship, criminal history, non-competes, and conflicts of interest.\n"
         "- For experience/skill questions answer affirmatively with relevant specifics.\n\n"
         f"JOB: {job.get('title', '')} at {job.get('company', '')}\n"
         f"DESCRIPTION: {jd}\n"
@@ -283,9 +312,13 @@ def ideal_fill(questions: list, indices: list, profile: dict, facts: dict,
                     idxs = _fallback_option(opts, multi=True)
                 value = [opts[k] for k in idxs]
             else:
-                k = res.get("option_index")
-                if not (isinstance(k, int) and 0 <= k < len(opts)):
-                    k = _fallback_option(opts)
+                ov = _affirm_override(it["label"], opts)  # capability -> Yes (grave if No)
+                if ov is not None:
+                    k = ov
+                else:
+                    k = res.get("option_index")
+                    if not (isinstance(k, int) and 0 <= k < len(opts)):
+                        k = _fallback_option(opts)
                 value = opts[k]
             answers[i] = {**base, "value": value, "source": "ideal",
                           "needs_review": False, "status": "filled"}

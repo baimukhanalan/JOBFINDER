@@ -206,15 +206,29 @@ async def apply_react_select_choice(page, container_index: int,
             return False
         await control.click()
         await page.wait_for_timeout(300)
-        # type to filter; 60 chars is enough to disambiguate and keeps typing fast
-        await page.keyboard.type(option_text[:60], delay=15)
-        # poll for options to render (remote search is slow; a fixed wait dropped hits)
-        opts = []
-        for _ in range(8):
-            await page.wait_for_timeout(250)
-            opts = await page.query_selector_all(".select__option")
-            if opts:
-                break
+
+        async def _type_and_poll(q: str):
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(q[:60], delay=15)
+            for _ in range(8):
+                await page.wait_for_timeout(250)
+                found = await page.query_selector_all(".select__option")
+                if found:
+                    return found
+            return []
+
+        opts = await _type_and_poll(option_text)
+        # A remote-search typeahead returns NOTHING for an over-specific query (e.g.
+        # 'University of Texas School of Law' -> 0 hits, but 'University of Texas' -> the list).
+        # When we're allowed the first hit, retry with progressively fewer words until options
+        # appear, then pick the best/first below.
+        if not opts and allow_first:
+            words = option_text.split()
+            for n in range(len(words) - 1, 1, -1):
+                opts = await _type_and_poll(" ".join(words[:n]))
+                if opts:
+                    break
         want = option_text.strip().lower()
         opt = None
         for o in opts:
@@ -242,43 +256,13 @@ async def apply_react_select_choice(page, container_index: int,
         return False
 
 
-async def _resolve_multi_options(page, container_index: int, joined_value: str) -> list[str]:
-    """For a 'select all that apply' react-select: open it, read the real option texts, and
-    return those that appear (as a substring) in the known joined value. Substring — never a
-    naive comma-split — because legit options contain commas ('Yes, as a full-time employee')."""
+async def apply_react_select_multi(page, container_index: int, joined_value: str) -> bool:
+    """Pick MULTIPLE options in a 'select all that apply' react-select from a comma-joined known
+    value. Reads the real options once (resolve which appear — as a SUBSTRING — in the value;
+    never a comma split, legit options contain commas), then picks each by RE-OPENING the control
+    before every pick (react-select multi may close the menu on select) and CLEARING the filter
+    each time (else the 2nd query types onto the 1st and matches nothing). Confirm via a chip."""
     want = (joined_value or "").lower()
-    picks: list[str] = []
-    try:
-        containers = await page.query_selector_all(".select__container")
-        if not 0 <= container_index < len(containers):
-            return []
-        control = await containers[container_index].query_selector(".select__control")
-        if not control:
-            return []
-        await control.click()
-        for _ in range(8):
-            await page.wait_for_timeout(250)
-            opts = await page.query_selector_all(".select__option")
-            if opts:
-                break
-        for o in opts:
-            t = (await o.inner_text()).strip()
-            if t and t.lower() in want and t not in picks:
-                picks.append(t)
-        await page.keyboard.press("Escape")
-    except Exception as e:
-        logger.debug("multi-option resolve failed at #%d: %s", container_index, e)
-        try:
-            await page.keyboard.press("Escape")
-        except Exception:
-            pass
-    return picks
-
-
-async def apply_react_select_multi(page, container_index: int, option_texts: list[str]) -> bool:
-    """Pick MULTIPLE options in a react-select ('select all that apply'). React-select multi
-    keeps the menu open and re-filters after each pick; confirm via >=1 .select__multi-value
-    chip (a multi container never shows .select__single-value)."""
     try:
         containers = await page.query_selector_all(".select__container")
         if not 0 <= container_index < len(containers):
@@ -287,25 +271,40 @@ async def apply_react_select_multi(page, container_index: int, option_texts: lis
         control = await c.query_selector(".select__control")
         if not control:
             return False
+        # resolve which options the value asks for
         await control.click()
-        for want in option_texts:
-            await page.wait_for_timeout(150)
-            await page.keyboard.type(want[:60], delay=12)
-            picked = None
+        opts = []
+        for _ in range(8):
+            await page.wait_for_timeout(250)
+            opts = await page.query_selector_all(".select__option")
+            if opts:
+                break
+        wanted = []
+        for o in opts:
+            t = (await o.inner_text()).strip()
+            if t and t.lower() in want and t not in wanted:
+                wanted.append(t)
+        await page.keyboard.press("Escape")
+        if not wanted:
+            return False
+        # pick each — re-open + clear the filter before every one
+        for text in wanted:
+            await control.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(text[:60], delay=12)
+            menu = []
             for _ in range(8):
                 await page.wait_for_timeout(200)
-                opts = await page.query_selector_all(".select__option")
-                if opts:
+                menu = await page.query_selector_all(".select__option")
+                if menu:
                     break
-            wl = want.strip().lower()
-            for o in opts:
-                if ((await o.inner_text()) or "").strip().lower() == wl:
-                    picked = o
+            tl = text.strip().lower()
+            for o in menu:
+                if ((await o.inner_text()) or "").strip().lower() == tl:
+                    await o.click()
+                    await page.wait_for_timeout(200)
                     break
-            if picked:
-                await picked.click()
-                await page.wait_for_timeout(150)
-        await page.keyboard.press("Escape")
         return bool(await c.query_selector(".select__multi-value"))
     except Exception as e:
         logger.debug("react-select multi apply failed at #%d: %s", container_index, e)
@@ -344,11 +343,7 @@ async def fill_react_selects_known(page, known: dict) -> dict:
                 continue
             is_multi = bool(await c.query_selector(".select__value-container--is-multi"))
             if is_multi:
-                # "select all that apply": the known value is a comma-joined string, but each
-                # real option is individual — resolve wanted options by SUBSTRING (never a raw
-                # split, since legit options contain commas) and pick each chip.
-                wants = await _resolve_multi_options(page, idx, str(val))
-                if wants and await apply_react_select_multi(page, idx, wants):
+                if await apply_react_select_multi(page, idx, str(val)):
                     filled.append(label[:50])
             elif await apply_react_select_choice(page, idx, str(val), allow_first=True):
                 filled.append(label[:50])

@@ -97,18 +97,6 @@ def test_pick_candidate_region_gating():
     assert cd.pick_candidate(["UK"], roster, pools) is None      # no UK pool -> skip
     assert cd.pick_candidate([], roster, pools) is None          # untagged -> skip
 
-    # etalon DEMO fills every region — OTHER/UK-only/untagged fall to the OTHER pool
-    # (a rest-of-world persona), never None, while US/CA still win when eligible.
-    def who_etalon(regions):
-        c = cd.pick_candidate(regions, roster, pools, etalon=True)
-        return next((k for k, v in roster.items() if v is c), None)
-
-    assert who_etalon(["OTHER"]) == "kz1"        # Salmon-style foreign job -> KZ persona
-    assert who_etalon(["UK"]) == "kz1"
-    assert who_etalon([]) == "kz1"
-    assert who_etalon(["US"]) == "us1"           # eligible region still wins over the fallback
-    assert who_etalon(["CA"]) == "ca1"
-
 
 # ---- unit: email derivation (first.last@takhet.com from a name) -----------------
 def test_derive_email():

@@ -194,17 +194,19 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `_identity_choice` answers "authorized in <country>?" YES country-blind, but that is now gated
   upstream by `pick_candidate` (below) — a US candidate never reaches a Japan/UK posting, so the
   question isn't asked. (A per-country auth check would still be belt-and-suspenders.)
-- **`pick_candidate` is the region GATE — two modes.** `catalog_drafts.pick_candidate(regions, roster,
-  pools, etalon=False)`. **Real apply (`etalon=False`, default) is the strict GATE:** a US person only when
-  `US ∈ regions`, a Canadian only when `CA ∈ regions`, else **None** (OTHER/UK-only/untagged) — we never
-  send a US candidate to a foreign posting (a correctly-tagged "Remote - Japan" must NOT get a US person
-  claiming a Japanese visa). Do NOT re-add a US default to the strict path. **Etalon demo (`etalon=True`)
-  is a DEMONSTRATION that fills EVERY job:** US/CA still win when eligible, but OTHER/UK-only/untagged fall
-  to the OTHER pool (the agency's own pool is Kazakhstani), so e.g. Salmon (Tbilisi, OTHER) is filled by a
-  KZ persona with a working `@takhet.com` mailbox — never None while a roster exists. This deliberately
-  relaxes the gate and is ONLY used for the demo fill: **the one-click `/catalog` button (`ensure_and_wire`,
-  always `ideal=True`) passes `etalon=True`; `run()` passes `etalon=ideal`** (strict for a real `ideal=False`
-  batch). A US candidate never reaches a foreign posting on the real path.
+- **Real apply uses the roster GATE; the ETALON demo invents a fictional persona.** Two distinct paths:
+  - **`catalog_drafts.pick_candidate(regions, roster, pools)` — REAL apply only** (`run(ideal=False)`).
+    Strict GATE over the real roster: a US person only when `US ∈ regions`, a Canadian only when
+    `CA ∈ regions`, else **None** (OTHER/UK-only/untagged) — we never send a US candidate to a foreign
+    posting (a "Remote - Japan" role must NOT get a US person claiming a Japanese visa). Do NOT re-add a
+    US default.
+  - **`backend.tools.synth_persona.synth_persona(job)` — the ETALON demo fill.** The one-click `/catalog`
+    button (`ensure_and_wire`, always `ideal=True`) and `run(ideal=True)` invent a FRESH FICTIONAL
+    applicant per job — **never a real roster person** ("не трогай моих людей"). Region → country: US→American,
+    CA→Canadian, else (OTHER/UK/untagged, e.g. Salmon in Tbilisi)→Kazakhstani. LLM-authored (region-appropriate
+    random name + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
+    never fails; email is derived `first.last@takhet.com`, persona flagged `is_synthetic`, phone is a
+    reserved-fiction number. Do NOT wire the demo path back onto the real roster.
 - **Region classifier is LOCATION-FIRST (`applier/regions.py`).** `classify_regions` now parses the
   `location` field FIRST (`_regions_from_location`) and, if it names a place, that RESTRICTS eligibility;
   only an uninformative location falls back to full-text signals, then LLM residue. Do NOT let bare

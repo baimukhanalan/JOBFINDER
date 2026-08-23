@@ -118,8 +118,9 @@ MAX_RS_OPTIONS = 50  # cap options read per dropdown (huge country lists etc.)
 # EEOC/demographic survey questions are intentionally left blank (same policy as
 # the analyzer's `_skip` rule) — never auto-answered, never reported as unfilled.
 _DEMOGRAPHIC = re.compile(
-    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
-    r"pronoun|sexual orientation|transgender|lgbtq)")
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|"
+    r"hispanic|latin[ox]?\b|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|"
+    r"your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
 
 
 def shape_react_select(label: str, options: list[str],

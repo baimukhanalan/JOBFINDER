@@ -154,28 +154,34 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 - **Auto-submit end-to-end status by ATS (verified live 2026-08-23, ground truth = the ATS
   "Thank you for applying" email in the persona's `@takhet.com` box).** GREENHOUSE ✅ (cresta, axon,
   gofasti) and ASHBY ✅ (elevenlabs, Salmon TPM, Salmon Flutter) submit and confirm end-to-end (incl.
-  the emailed-security-code step). LEVER ⛔ cannot auto-submit from this datacenter IP — the final
-  Submit is hCaptcha-gated (human-only by design; `filler.click_submit` returns False → `click_failed`),
-  and `Current location` geocode is dead here — the human finishes Lever in noVNC. WORKABLE 🔧 partially:
-  infra fixed (1×1 aria-hidden dummy inputs skipped; apply page keyed by `/j/<shortcode>/` so the
-  company-slug redirect isn't a false page_drift), but 3 fill-widget gaps still block a full submit on
-  forms that have them — **(1)** a YES/NO screener ("Experience Remote working") rendered as Workable
-  toggle buttons that `harvest_button_groups` doesn't harvest (returns []); **(2)** a react/combobox
-  "Availability to start" whose drafted answer is a PROSE sentence ("I am available to start
-  immediately") that matches no option — needs intent→option mapping (pick the soonest/"Immediately");
-  **(3)** a demographic combobox ("Preferred pronouns") that `fill_demographics_decline` misses because
-  it scans `.select__container`/native-select/radio but NOT Workable's `input[role=combobox]` — add a
-  Workable-combobox decline branch (reuse `fill_comboboxes_known`'s open+match). Workable renders every
-  field label in a `<span id="<randomid>_label">` via `aria-labelledby` (the input carries only that id,
-  no visible label/nearbyText), and selects as readonly `input[role=combobox]` — `extract_form_fields`
-  sees only the plain text/file inputs, so ALL Workable selects/screeners are filled by `dropdowns.py`,
-  not the analyzer. Each fix is in the delicate SHARED choice-engine (`dropdowns.py`) — verify via
-  `dry_run` screenshot (no submit) + run `test_dropdowns.py`/`test_choices.py` before any real confirm,
-  so the working GH/Ashby fills don't regress. NOTE these three are the same recurring class as axon
-  (required demographic) / gofasti (mis-gated screener): the analyzer's `unfilled` has blind spots, so a
-  required field the fill layer misses is a false "complete" → auto-submit clicks → the ATS rejects with
-  "This field is required" (caught now as `submit_result.blocked`, so it's diagnosable, never a false
-  "submitted").
+  the emailed-security-code step — those two use an EMAIL CODE, not a live captcha, which is why they
+  complete). **The dividing line is the final anti-bot step: GH/Ashby = email code (passable) vs
+  Lever/Workable = a LIVE human captcha (not passable from a datacenter IP).** LEVER ⛔ hCaptcha-gated
+  (`filler.click_submit` returns False → `click_failed`; `Current location` geocode also dead here).
+  WORKABLE ⛔ **also live-captcha-gated** — verified on zyte 7383: after a complete fill the submit shows
+  Cloudflare **Turnstile "Verify you are human"** and hangs on "Submitting…", no confirmation email.
+  Turnstile fires on datacenter-IP risk score, so it will appear on most Workable submits from here.
+  So Lever + Workable both need the human to solve the captcha in noVNC — same physical limit.
+  **Workable FILL is fixed though** (the co-pilot fills the whole form so the human only solves the
+  captcha): 1×1 aria-hidden dummy inputs skipped; apply page keyed by `/j/<shortcode>/` (company-slug
+  redirect isn't a false page_drift); YES/NO `[role=radio]` screeners via `fill_role_radio_known`;
+  `Availability to start` combobox picks the soonest/"Immediate" option (prose answer matches none);
+  demographic combobox (pronouns/gender) declined via a Workable `input[role=combobox]` pass in
+  `fill_demographics_decline` (closes the listbox + removes Workable's `data-ui=backdrop` between boxes,
+  which else intercepts the next combobox click). Workable renders each label in a
+  `<span id="<randomid>_label">` (aria-labelledby; the input has no visible label) and selects as
+  readonly `input[role=combobox]`, so `extract_form_fields` sees only text/file inputs — ALL Workable
+  selects/screeners are filled by `dropdowns.py`, not the analyzer. A REQUIRED demographic with NO
+  decline option (zyte 'Preferred pronouns' = She/He/They only) stays blank by policy (never claim a
+  protected characteristic) → that form can't be fully auto-filled, by design. Choice-engine edits are
+  in the delicate SHARED `dropdowns.py`: verify via `dry_run` screenshot (no submit) + run
+  `test_dropdowns.py`/`test_choices.py` so the working GH/Ashby fills don't regress. NOTE the analyzer's
+  `unfilled` has blind spots (hidden required fields, demographics), so a required field the fill layer
+  misses is a false "complete" → auto-submit clicks → the ATS rejects "This field is required" (caught
+  as `submit_result.blocked`, diagnosable, never a false "submitted"). Also: `_identity_choice` answers
+  eligibility ("EU nationality / authorized in <country>?") YES **country-blind**, so a persona whose
+  nationality ≠ the job's country (e.g. a Kazakhstan default persona on a Lisbon job whose catalog
+  `location` is empty → region OTHER → KZ) makes a FALSE "YES" — pre-existing, unrelated to fill.
 - **Auto-submit: the co-pilot clicks Submit — but ONLY when safe (enabled 2026-08-23 by explicit
   owner request; GATED 2026-08-23 after a live 3-job smoke).** After the one-click fill, `copilot.py`'s
   `/load` calls `_click_submit_after_fill(page, result, expected_url, profile, shot_dir)` which presses

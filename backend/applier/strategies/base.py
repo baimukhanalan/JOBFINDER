@@ -588,6 +588,18 @@ class ApplyStrategy(ABC):
             pass
         sources["human"] = len(unfilled)
 
+        # Wait for the résumé upload to finish before returning. Ashby (and others) upload the
+        # attached résumé to their storage in the BACKGROUND; the fill (replaying a cached
+        # draft) completes in a few seconds while that upload takes ~10-15s. If the human
+        # clicks Submit before it lands, Ashby blocks with "We're updating your forms (e.g.
+        # uploading files), please try again when they're finished" — which reads like a
+        # not-filled error even though every field is set. Settle the network (bounded) so
+        # the fill isn't 'done' until the upload is, and a same-second Submit goes through.
+        try:
+            await page.wait_for_load_state("networkidle", timeout=12000)
+        except Exception:
+            pass
+
         return {
             "strategy": self.name,
             "page_type": page_type,

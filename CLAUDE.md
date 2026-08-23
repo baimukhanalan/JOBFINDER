@@ -240,6 +240,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   applied to the SPONSORSHIP radio = a self-disqualifying answer. Now an EXACT normalized-label match
   (`_known_answer_exact`) is preferred over any fuzzy hit and over dict order; the sponsorship field's own
   full-text key binds it to 'No'. Fuzzy remains the fallback for short Ashby title labels.
+- **Generic input placeholders are stripped from `display_text` (`analyzer._GENERIC_PLACEHOLDER`).** Lever
+  puts "Type your response" on every custom field; `display_parts` used to fold it into the human-question
+  text, and its word "your" pushed a field over the ≥2-significant-word fuzzy threshold onto "What is
+  **your** nationality?" (earlier in dict order than the field's real key) — cross-binding the COUNTRY
+  "Kazakhstan" into a Lever "earliest date you would be available to start? (DD/MM/YYYY)" text field
+  (verified live on binance; the DRAFT was the correct date `24/08/2026`, the LIVE fill mis-bound it).
+  `analyze_page` now skips a part matching `_GENERIC_PLACEHOLDER` ("Type your response", "Select…",
+  "Choose…", "Please specify", em/hyphen) when building `display_text`, so the field's real nearbyText
+  exact-matches its own date key. `match_text` still keeps the placeholder for rule signals. Do NOT widen
+  the regex to swallow real questions ("Select the option that best applies" must NOT match). Tests:
+  `test_analyzer_rules.py::test_date_field_*` / `test_generic_placeholder_matches_noise_not_questions`.
 - **Profile reality gate** (`applier/profile_validator.py`) blocks prefill/apply affordances for profiles
   with reserved-fictional phones (555-01xx) or placeholder emails — such applications are undeliverable.
   `michael` is the synthetic default persona and is gated. Do NOT bypass the gate; onboard a real person

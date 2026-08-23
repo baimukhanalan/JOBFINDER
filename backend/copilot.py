@@ -306,7 +306,7 @@ async def _submit_evidence(page, shot_dir) -> dict:
 
 
 async def _click_submit_after_fill(page, result: dict, *, expected_url: str = "",
-                                   profile: str = "", shot_dir=None) -> dict:
+                                   profile: str = "", shot_dir=None, dry_run: bool = False) -> dict:
     """Press the ATS Submit button after the fill — but ONLY when it is safe to. Enabled by
     explicit user request (reverses the human-submit-only design, commit a8ab56e), yet it
     refuses to submit when doing so would be wrong:
@@ -317,6 +317,8 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
       - RACE: the shared co-pilot page drifted to a different company/job, or another run
         took ownership -> abort (never submit the wrong form).
     On a real click it captures post-submit evidence (screenshot + block/confirm detection).
+    `dry_run=True` runs every gate and locates the Submit button but does NOT click it
+    (returns `would_click`) — for verifying coverage across many forms WITHOUT submitting.
     Returns a dict describing the outcome; never raises."""
     unfilled = (result.get("unfilled") or []) if isinstance(result, dict) else []
     review = (result.get("review_items") or []) if isinstance(result, dict) else []
@@ -343,6 +345,10 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
         if not sel:
             logger.warning("auto-submit: no submit button found on the page")
             return {"clicked": False, "reason": "no_button"}
+        if dry_run:
+            # All gates passed and the Submit button is present — but do NOT click.
+            return {"clicked": False, "would_click": True, "reason": "would_click",
+                    "selector": sel, "dry_run": True}
         # Let async validation / a just-started résumé upload settle (Ashby rejects a
         # same-instant Submit), then re-check the page hasn't drifted before the click.
         await page.wait_for_timeout(1500)
@@ -448,9 +454,10 @@ async def goto(url: str = Form(...)):
 
 
 @app.post("/load")
-async def load(jobid: str = Form(...), profile: str = Form("michael")):
+async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: str = Form("")):
     profile = _safe_id(profile) or "michael"
     jobid = _safe_id(jobid)
+    is_dry = str(dry_run).strip().lower() in ("1", "true", "yes", "on")
     # A demo persona (synth_persona, id demo_*) is ephemeral — never a human mid-review.
     # Every demo click is a NEW persona, so the per-owner busy gate would leave the previous
     # demo's page stuck ("shows my old requests"). Preempt a demo owner so the new load wins.
@@ -532,11 +539,13 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
             # nothing needs review, and the shared page is still ours. The watch below then
             # records the confirmation page into status.json.
             submit_result = await _click_submit_after_fill(
-                page, result, expected_url=url, profile=profile, shot_dir=d)
+                page, result, expected_url=url, profile=profile, shot_dir=d, dry_run=is_dry)
             # Watch (read-only) for the resulting confirmation so the queue auto-advances
-            # (also auto-fills an emailed security-code step if the ATS shows one).
-            _S["watch"] = asyncio.create_task(_watch_submit(
-                page, profile, jobid, (form.get("email") or "").strip(), time.time()))
+            # (also auto-fills an emailed security-code step if the ATS shows one). Skip it
+            # in dry_run — nothing was submitted, so there is no confirmation to wait for.
+            if not is_dry:
+                _S["watch"] = asyncio.create_task(_watch_submit(
+                    page, profile, jobid, (form.get("email") or "").strip(), time.time()))
             return JSONResponse({"loaded": jobid, "company": company, "title": title,
                                  "submitted_click": submit_result.get("clicked"),
                                  "submit_result": submit_result,

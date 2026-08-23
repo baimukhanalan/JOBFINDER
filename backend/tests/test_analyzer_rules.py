@@ -1,5 +1,39 @@
 """Rules v2: pure tests on _match_field/_resolve_value — no browser, no LLM."""
-from backend.applier.analyzer import _match_field, _resolve_value
+from backend.applier.analyzer import (_best_known_answer, _GENERIC_PLACEHOLDER,
+                                       _match_field, _resolve_value)
+
+# Regression: a Lever custom field carries the question in nearbyText but ALSO the generic
+# placeholder "Type your response". Including that placeholder in display_text added the word
+# "your", which passed the >=2-significant-word fuzzy threshold on "What is your nationality?"
+# (earlier in dict order than the real key) — cross-binding a COUNTRY into a date field.
+_LEVER_DRAFT = {
+    "Where do you currently live?": "Kazakhstan",
+    "What is your nationality?": "Kazakhstan",
+    "What is the earliest date you would be available to start? (DD/MM/YYYY)": "24/08/2026",
+}
+
+
+def test_generic_placeholder_matches_noise_not_questions():
+    for s in ("type your response", "select...", "select an option", "choose...",
+              "please specify", "start typing", "—"):
+        assert _GENERIC_PLACEHOLDER.match(s), s
+    for s in ("what is the earliest date you would be available to start? (dd/mm/yyyy)",
+              "where do you currently live?", "select the option that best applies"):
+        assert not _GENERIC_PLACEHOLDER.match(s), s
+
+
+def test_date_field_placeholder_pollution_cross_binds_country():
+    # Documents the bug: WITH the placeholder text, the date field mis-binds to nationality.
+    polluted = ("Type your response What is the earliest date you would be available "
+                "to start? (DD/MM/YYYY)")
+    assert _best_known_answer(_LEVER_DRAFT, polluted)[1] == "Kazakhstan"
+
+
+def test_date_field_binds_date_once_placeholder_stripped():
+    # The fix strips the generic placeholder from display_text, so the field's real question
+    # exact-matches its own drafted key -> the date, never the country.
+    clean = "What is the earliest date you would be available to start? (DD/MM/YYYY)"
+    assert _best_known_answer(_LEVER_DRAFT, clean)[1] == "24/08/2026"
 
 FACTS = {
     "shifts_nights": "Yes", "shifts_weekends": "Yes", "overtime": "Yes",

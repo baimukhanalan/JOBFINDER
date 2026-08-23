@@ -156,6 +156,16 @@ _FOREIGN_AUTH = re.compile(
 _LABEL_ONLY_KEYS = {"_location", "_state", "_zip", "_country", "_salary", "_how_heard", "_start_date"}
 _YESNO_START = re.compile(r"(?i)^\s*(are|do|does|did|can|could|will|would|have|has|is|if)\b")
 
+# Generic input placeholders ("Type your response", "Select…") carry NO question — they are
+# UI noise. Keeping them out of the human-question text (display_text) matters: Lever puts
+# "Type your response" on every custom field, and its word "your" created a false 2-word
+# fuzzy hit onto "What is your nationality?", cross-binding a COUNTRY into a date field
+# ("earliest date … to start"). match_text still keeps them for rule signals.
+_GENERIC_PLACEHOLDER = re.compile(
+    r"(?i)^(type (your )?(response|answer|here)|enter (a |your )?(response|answer|value|text)"
+    r"|your (response|answer)|please (type|select|choose|specify)|select(\s+an?\s+\w+| ?\.\.\.| one)?"
+    r"|choose(\s+an?\s+\w+| ?\.\.\.)?|start typing|—|-)\.?$")
+
 # A text input with a date-mask placeholder is a DATEPICKER widget: typing prose
 # into it produces garbage (live Workable turned 'Immediately' into '03/05/4583').
 _DATE_MASK = re.compile(r"(?i)\b(?:mm|dd)\s*[/.-]\s*(?:mm|dd)\s*[/.-]\s*y{2,4}\b"
@@ -803,6 +813,11 @@ async def analyze_page(
             # and leaves the field blank.
             norm = re.sub(r"\s+", " ", (part or "").strip()).lower()
             if part and norm and norm not in _seen_parts:
+                # A generic placeholder ("Type your response", "Select…") is not a question;
+                # letting it into display_text poisons known-answer matching (see
+                # _GENERIC_PLACEHOLDER). Skip it here — it stays in match_text for rules.
+                if _GENERIC_PLACEHOLDER.match(norm):
+                    continue
                 _seen_parts.add(norm)
                 display_parts.append(part.strip())
         display_text = _clean_text(" ".join(display_parts))

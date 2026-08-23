@@ -247,9 +247,16 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="cat-head"><div class="cat-h-row">'
         f'<div class="cat-h-title">{title_txt} {head_n}</div></div>'
         f"{company_pick}{search}</div>")
+    # Bulk "apply to all" — one SEQUENTIAL queue over every greenhouse+ashby job (Lever/
+    # Workable skipped server-side: live captcha). Auto-submits. Progress + stop below.
+    bulk_bar = (
+        '<div class="cat-bulk" id="catbulk">'
+        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">▶▶ Подать на все</button>'
+        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">■ Стоп</button>'
+        '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
-        _CAT_CSS + head
+        _CAT_CSS + head + bulk_bar
         + _region_bar(region, q, company, by_region, remote_total)
         + f'<div class="cat-list" id="catlist">{cards}</div>{empty}'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
@@ -325,6 +332,12 @@ _CAT_CSS = """<style>
 .cat-fill:disabled{opacity:.75;cursor:default;box-shadow:none}
 .cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
+.cat-bulk{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 2px}
+.cat-bulk-go{background:#0b8043;color:#fff;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;min-height:44px;box-shadow:0 2px 10px -3px rgba(11,128,67,.6)}
+.cat-bulk-go:hover{filter:brightness(1.06)}
+.cat-bulk-go:disabled{opacity:.55;cursor:default;box-shadow:none}
+.cat-bulk-stop{background:#c5221f;color:#fff;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;min-height:44px}
+.cat-bulk-prog{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.9}
 /* Hide the inline catalog search on mobile — the Gmail top pill already searches
    the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
    the later .cat-search{display:flex} in this same stylesheet). */
@@ -356,6 +369,50 @@ window.fillJob = async function(btn){
     if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
   }
 };
+// Bulk "apply to all": ONE sequential queue on the server over every greenhouse+ashby
+// job (Lever/Workable are skipped server-side — live captcha). Auto-submits per job.
+// We only START/STOP/POLL here — the fill+submit logic is untouched. It runs long; the
+// batch survives leaving this page (server-side thread), poll resumes on reload.
+window.bulkFillAll = async function(){
+  var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg');
+  if(go.disabled) return;
+  if(!confirm('Подать на ВСЕ вакансии (greenhouse + ashby) по очереди, с автоматической '
+      +'отправкой?\\n\\nЭто реальные заявки в реальные ATS одна за другой — займёт очень '
+      +'долго. Lever/Workable пропускаются (капча). Прервать — кнопкой «Стоп» '
+      +'(остановится после текущей).')) return;
+  go.disabled=true; if(prog) prog.textContent='Запуск…';
+  try{
+    var j=await (await fetch('/catalog/fill_all',{method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:''})).json();
+    if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }
+  }catch(e){ go.disabled=false; if(prog) prog.textContent='Ошибка запуска'; return; }
+  bulkPoll();
+};
+window.bulkStop = async function(){
+  var prog=document.getElementById('bulkProg');
+  try{ await fetch('/catalog/fill_all_stop',{method:'POST'}); }catch(e){}
+  if(prog) prog.textContent='Останавливается после текущей…';
+};
+async function bulkPoll(){
+  var go=document.getElementById('bulkGo'), stop=document.getElementById('bulkStop'),
+      prog=document.getElementById('bulkProg');
+  if(!go||!stop||!prog) return;
+  try{
+    var s=await (await fetch('/catalog/fill_all_status')).json();
+    var line=(s.done||0)+'/'+(s.total||0)+' · ✓'+(s.ok||0)+' ✗'+(s.failed||0)
+             +(s.current?(' · '+s.current):'');
+    if(s.state==='running'){
+      go.style.display='none'; go.disabled=true; stop.style.display='';
+      prog.textContent=line; setTimeout(bulkPoll, 3000);
+    }else if(s.state==='done'||s.state==='stopped'){
+      stop.style.display='none'; go.style.display=''; go.disabled=false;
+      prog.textContent=(s.state==='stopped'?'Остановлено':'Готово')+': '+line;
+    }else{
+      go.disabled=false;
+    }
+  }catch(e){ setTimeout(bulkPoll, 5000); }
+}
+bulkPoll();   // resume progress if a batch is already running when the page loads
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');
   if(!list||!more)return;

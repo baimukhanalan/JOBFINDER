@@ -175,12 +175,43 @@ def test_deterministic_choices_answers_capability_yes_unbacked():
     assert out == [{"index": 0, "backed": False}]  # index 0 == "Yes", unbacked
 
 
-def test_capability_no_direction_deferred():
-    """Prior-employer / sponsorship yes-no must NOT be forced to Yes."""
-    for qt in ("Have you ever worked with our company before?",
-               "Will you now or in the future require sponsorship?"):
-        q = {"question_text": qt, "options": ["Yes", "No"]}
-        assert choices.deterministic_choices([q], {})[0]["index"] is None
+def test_capability_no_direction_not_forced_yes():
+    """Negative-direction yes-no screeners must NEVER be forced to Yes.
+    Prior-employer is answered deterministically No (fresh applicant, unbacked ->
+    review); sponsorship is left to the analyzer's own rule and defers here."""
+    prior = {"question_text": "Have you ever worked with our company before?",
+             "options": ["Yes", "No"]}
+    out = choices.deterministic_choices([prior], {})[0]
+    assert prior["options"][out["index"]] == "No"
+    assert out["backed"] is False  # unbacked -> stays [review]-flagged
+
+    spon = {"question_text": "Will you now or in the future require sponsorship?",
+            "options": ["Yes", "No"]}
+    assert choices.deterministic_choices([spon], {})[0]["index"] is None
+
+
+def test_sanctions_screener_answers_no():
+    """OFAC / sanctioned-territory screener -> No, unbacked (review)."""
+    q = {"question_text": "Are you located in Cuba, Iran, North Korea, Syria, "
+         "the Russian Federation, Belarus, Crimea, Donetsk or Luhansk?",
+         "options": ["Yes", "No"]}
+    out = choices.deterministic_choices([q], {})[0]
+    assert q["options"][out["index"]] == "No"
+    assert out["backed"] is False
+
+
+def test_english_yesno_backed_when_fact_meets_level():
+    """'Do you master English at C1 level?' -> Yes (backed) with a Fluent fact;
+    defers when the fact is below the asked level; the 'English Level' dropdown is
+    untouched (still routed to the level picker, not this Yes/No path)."""
+    q = {"question_text": "Do you master English at C1 level?", "options": ["Yes", "No"]}
+    out = choices.deterministic_choices([q], {"english_level": "Fluent"})[0]
+    assert q["options"][out["index"]] == "Yes"
+    assert out["backed"] is True
+    # below the asked level -> never over-claim
+    assert choices.deterministic_choices([q], {"english_level": "B2"})[0]["index"] is None
+    # no fact at all -> defer
+    assert choices.deterministic_choices([q], {})[0]["index"] is None
 
 
 def test_choose_options_forces_capability_yes_over_llm_no(monkeypatch):

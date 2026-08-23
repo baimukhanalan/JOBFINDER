@@ -515,12 +515,17 @@ async def extract_form_fields(page: Page) -> list[dict]:
                     continue
 
                 # React-Select (Greenhouse) renders a typeahead <input> inside its
-                # div widget. It is NOT an open-text field: routing it to drafting
-                # types prose into the combobox that never sticks. dropdowns.py owns
-                # these widgets (deterministic rules + constrained choice).
+                # div widget; Workable renders a fixed-list select as a readonly
+                # input[role=combobox]. NEITHER is an open-text field: a text `fill`
+                # types prose the widget can't accept — a readonly combobox even
+                # type-ahead-jumps to the WRONG (first/worst) option. dropdowns.py
+                # owns these (fill_comboboxes_known: option match / candidate level).
                 if tag == "input":
                     try:
-                        if await el.evaluate("el => !!el.closest('.select__container')"):
+                        if await el.evaluate(
+                            "el => !!el.closest('.select__container')"
+                            " || el.getAttribute('role')==='combobox'"
+                            " || (el.getAttribute('aria-haspopup')||'').includes('listbox')"):
                             continue
                     except Exception:
                         pass
@@ -748,6 +753,28 @@ async def analyze_page(
                                        "matched": f"known_answer:{q_text[:30]}"})
                     else:
                         unknown.append(_unknown_entry(f, display_text))
+                elif f["type"] in ("checkbox", "radio"):
+                    # Ashby (and friends) render each option of a multi-/single-
+                    # select as its OWN <input> with a unique name (name == the
+                    # option label) and no ARIA group container, so they never
+                    # merge into a *_group and land here individually — each
+                    # matching the group question carried in `nearbyText`. `answer`
+                    # is the CHOSEN option label(s) (or an affirmative for a lone
+                    # boolean checkbox). Emitting 'fill' here calls .fill() on a
+                    # checkbox, which throws and checks NOTHING (the silent multi-
+                    # select miss). Instead CHECK this box only when it is a chosen
+                    # option; the group's other options stay blank (correct for a
+                    # multi-select), so no unknown entry either.
+                    own = (f.get("label") or f.get("optionLabel")
+                           or f.get("name") or "").strip().lower()
+                    wants = {w.strip().lower()
+                             for w in re.split(r"\s*[,;]\s*", str(answer)) if w.strip()}
+                    affirmative = str(answer).strip().lower() in (
+                        "yes", "true", "1", "on")
+                    if affirmative or (own and own in wants):
+                        fields.append({"selector": f["selector"], "action": "check",
+                                       "value": "true",
+                                       "matched": f"known_answer:{q_text[:30]}"})
                 else:
                     fields.append({
                         "selector": f["selector"],
@@ -924,12 +951,22 @@ def _known_answer_matches(q_text: str, match_text: str) -> bool:
     ("Segment", "Performance") as the field label, and those carry an exact
     drafted-answer key. The >=2-hit heuristic below can never pass for a
     one-word title (max(2, …) demands 2 hits), so without this the exact answer
-    is silently dropped and the field is left unfilled."""
+    is silently dropped and the field is left unfilled.
+
+    _n also strips a trailing '(Optional)'/'(Required)' marker: Workable renders
+    the ' (Optional)' as a decorative <span> outside the field label, so the
+    drafted key 'Summary (Optional)' never exact-matched the label 'Summary'
+    (one shared significant word, so the >=2-hit path failed too) -> the textarea
+    stayed blank. Dropping the marker (and excluding it from the sig words) fixes
+    every such optionality-suffixed key."""
     mt = match_text.lower()
-    _n = lambda s: re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip()
+    _n = lambda s: re.sub(
+        r"\s*\(?(optional|required)\)?\s*$", "",
+        re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip())
     if _n(q_text) and _n(q_text) == _n(match_text):
         return True
-    sig = {w.lower() for w in q_text.split() if len(w) > 3}
+    sig = {w.lower() for w in q_text.split()
+           if len(w) > 3 and w.lower() not in ("optional", "required")}
     hits = sum(1 for w in sig if w in mt)
     return bool(sig) and hits >= max(2, len(sig) // 2)
 

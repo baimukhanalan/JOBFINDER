@@ -198,6 +198,108 @@ def _language_pick(question_text: str, options: list[str],
     return (len(options) // 2, False) if options else (None, False)
 
 
+def _yesno_option_index(options: list[str], want: str) -> int | None:
+    """Index of the 'yes' or 'no' option in a CLEAN two-option Yes/No pair, else None.
+    Used by the negative/positive screeners below so they never fire on a multi-option
+    list they'd mis-index."""
+    norm = [(o or "").strip().lower() for o in options]
+    if len(norm) != 2:
+        return None
+    if not (any(o.startswith("yes") for o in norm) and any(o.startswith("no") for o in norm)):
+        return None
+    for i, o in enumerate(norm):
+        if o.startswith(want):
+            return i
+    return None
+
+
+# Prior relationship with THIS employer ("Have you ever worked with us before?"). A fresh
+# applicant answers No. Unbacked -> stays [review]-flagged. Kept distinct from
+# _CAPABILITY_NO_RE (which only DEFERS these out of the capability->Yes path, never answers).
+_PRIOR_EMPLOYER_RE = re.compile(
+    r"(?i)worked (?:with|at|for) (?:us|our|your|this)\b"
+    r"|ever worked (?:with|for|at) (?:us|our)"
+    r"|worked (?:here|with us).{0,20}(?:before|previously)"
+    r"|previously (?:worked|employed|applied)\b"
+    r"|former(?:ly)? (?:employ|work)"
+    r"|current or (?:previous|former) employee"
+    r"|(?:ever )?(?:been )?employed (?:by|at|with) (?:us|our|this)")
+
+
+def _prior_employer_pick(question_text: str, options: list[str]) -> int | None:
+    """Prior-employer Yes/No screener -> No (fresh applicant). Unbacked -> review."""
+    if not _PRIOR_EMPLOYER_RE.search(question_text or ""):
+        return None
+    return _yesno_option_index(options, "no")
+
+
+# OFAC / sanctioned-territory compliance screener ("Are you located in Cuba/Iran/...?").
+# A region-appropriate candidate is not in a named territory -> No. Unbacked -> review
+# (the human confirms; deterministic_choices has no country fact to back it hard).
+_SANCTIONS_RE = re.compile(
+    r"(?i)\bsanction|\bembargo|\bofac\b"
+    r"|(?:located|reside|residing|based|citizen|national|travel|visit)"
+    r".{0,80}(?:cuba|iran|north korea|syria|russian federation|\brussia\b"
+    r"|belarus|crimea|donetsk|luhansk)")
+
+
+def _sanctions_pick(question_text: str, options: list[str]) -> int | None:
+    """Sanctioned-territory Yes/No screener -> No. Unbacked -> review."""
+    if not _SANCTIONS_RE.search(question_text or ""):
+        return None
+    return _yesno_option_index(options, "no")
+
+
+# English-proficiency asked as a Yes/No ("Do you master English at C1 level?") — distinct
+# from the _ENGLISH_RE dropdown ("English Level"). Answer Yes only when a fact BACKS it,
+# so we never claim unproven proficiency. NOT routed through _language_pick: on a Yes/No
+# pair that would default to len(opts)//2 == 'No'.
+_ENGLISH_YESNO_RE = re.compile(
+    r"(?i)(?:master|speak|fluent in|proficient in|command of"
+    r"|comfortable (?:speaking|in)|do you have).{0,40}english"
+    r"|english.{0,25}(?:fluen|proficien|native|advanced|c1|c2|b1|b2)")
+_CEFR_ORDER = {"a1": 1, "a2": 2, "b1": 3, "b2": 4, "c1": 5, "c2": 6}
+
+
+def _english_level_rank(text: str) -> int:
+    """Map an english_level fact/phrase to a CEFR rank 1..6 (0 = unknown)."""
+    t = (text or "").lower()
+    m = _CEFR_RE.search(t)
+    if m:
+        return _CEFR_ORDER.get(m.group(1).lower(), 0)
+    if any(w in t for w in ("native", "bilingual", "mother tongue")):
+        return 6
+    if "fluent" in t:
+        return 5
+    if "advanced" in t or "professional working" in t or "full professional" in t:
+        return 5
+    if "upper" in t:  # upper-intermediate
+        return 4
+    if "intermediate" in t:
+        return 3
+    return 0
+
+
+def _english_yesno_pick(question_text: str, options: list[str],
+                        facts: dict) -> tuple[int | None, bool]:
+    """'Do you master English at C1 level?' Yes/No -> Yes (backed) when the candidate's
+    english_level meets/exceeds the asked level; otherwise defer. Returns (index, backed)."""
+    qt = question_text or ""
+    if not _ENGLISH_YESNO_RE.search(qt):
+        return None, False
+    yes_idx = _yesno_option_index(options, "yes")
+    if yes_idx is None:
+        return None, False  # not a clean Yes/No pair -> _language_pick / LLM handles it
+    have = _english_level_rank(str(facts.get("english_level", "")))
+    if not have:
+        return None, False  # no backing fact -> never claim unproven proficiency
+    asked_m = _CEFR_RE.search(qt)
+    asked = _CEFR_ORDER.get(asked_m.group(1).lower(), 0) if asked_m else 0
+    if have >= (asked or 4):  # named level must be met; generic 'fluent?' -> B2+ suffices
+        return yes_idx, True
+    return None, False
+
+
 def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
     """LLM-FREE option picks for the standard closed screeners, so an application form
     fills to 'only Submit remains' without any model call: eligibility/relocation
@@ -215,6 +317,12 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
             idx = _referral_pick(qt, opts, facts)
             if idx is not None:
                 backed = bool(str(facts.get("referral", "")).strip())
+        if idx is None:
+            idx = _prior_employer_pick(qt, opts)  # prior-employer -> No, UNBACKED (review)
+        if idx is None:
+            idx = _sanctions_pick(qt, opts)  # sanctioned-territory -> No, UNBACKED (review)
+        if idx is None:
+            idx, backed = _english_yesno_pick(qt, opts, facts)  # English Yes/No -> Yes if backed
         if idx is None:
             idx, backed = _language_pick(qt, opts, facts)
         if idx is None:

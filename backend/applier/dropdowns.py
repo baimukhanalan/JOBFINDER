@@ -381,12 +381,66 @@ async def _combo_label(box) -> str:
         return ""
 
 
+_CEFR_MAP = {"a1": 1, "a2": 2, "b1": 3, "b2": 4, "c1": 5, "c2": 6}
+
+
+def _lang_option_rank(text: str) -> int:
+    """Rank a language-proficiency OPTION label 1..6 (0 = not a language descriptor).
+    Handles both CEFR labels and Workable's descriptive sentences ('...speak fluently')."""
+    t = (text or "").lower()
+    if any(w in t for w in ("native", "mother tongue", "bilingual")):
+        return 6
+    m = re.search(r"\b([abc][12])\b", t)
+    if m:
+        return _CEFR_MAP[m.group(1)]
+    if "not speak" in t or "cannot speak" in t or "can't speak" in t:
+        return 2
+    if ("fluent" in t or "fluently" in t) and "not fluent" not in t:
+        return 5
+    if "not fluent" in t:          # can speak, but not fluently
+        return 3
+    if "advanced" in t:
+        return 5
+    if "speak" in t:
+        return 3
+    if "intermediate" in t:
+        return 3
+    if "beginner" in t or "basic" in t or "elementary" in t:
+        return 1
+    return 0
+
+
+def _cand_lang_rank(want: str) -> int:
+    """Candidate's proficiency rank parsed from the drafted answer text; defaults to
+    5 (fluent) when unstated — the target market is English-language remote US/CA roles,
+    and the co-pilot draft is human-reviewed before any submit (never claims Native
+    unless the answer says so)."""
+    r = _lang_option_rank(str(want))
+    return r or 5
+
+
+def _looks_language_options(texts: list[str]) -> bool:
+    """The popover options collectively read as a language-proficiency scale (so we pick
+    by candidate level, NOT the first/worst option). Requires ≥2 ranked language rows and
+    NO Yes/No pair (those are screeners, not a proficiency scale)."""
+    ranked = [t for t in texts if _lang_option_rank(t)]
+    lowered = {(t or "").strip().lower() for t in texts}
+    if {"yes", "no"} & lowered and len(texts) <= 3:
+        return False
+    return len(ranked) >= 2
+
+
 async def fill_comboboxes_known(page, known: dict) -> dict:
     """Fill Ashby-style input[role=combobox] dropdowns/typeaheads (What brought you…,
     Current Location) from explicit known answers: type the value, click the matching
     [role=option] (exact/prefix), else the first result (geo typeahead). These widgets
     are NOT native <select>, NOT Greenhouse .select__container, and NOT button groups —
-    nothing else in the prefill path fills them. Demographics stay blank by policy."""
+    nothing else in the prefill path fills them. Demographics stay blank by policy.
+
+    Language-proficiency comboboxes (Workable 'English Level', whose options are
+    descriptive sentences like '…speak fluently' / 'Native', never the drafted prose)
+    are matched by CANDIDATE LEVEL, not the first option — the first is the WORST
+    ('cannot speak'), so the geo `opts[0]` fallback would silently claim no English."""
     filled: list[str] = []
     if not known:
         return {"filled": 0, "handled": []}
@@ -407,21 +461,48 @@ async def fill_comboboxes_known(page, known: dict) -> dict:
             if not want or _DEMOGRAPHIC.search(key):
                 continue
             await box.click()
-            await page.wait_for_timeout(250)
-            await page.keyboard.type(str(want)[:60], delay=15)
-            await page.wait_for_timeout(650)
+            await page.wait_for_timeout(300)
+            try:
+                readonly = bool(await box.evaluate(
+                    "el=>el.readOnly || el.getAttribute('readonly')!=null"))
+            except Exception:
+                readonly = False
+            # A readonly combobox is a FIXED-LIST select (Workable 'English Level'): typing
+            # type-ahead-jumps to the wrong row and can filter the open listbox to empty, so
+            # the old blind opts[0] fallback then picked the WORST option. Only type into a
+            # real typeahead/geo input; for a readonly select just read the open listbox.
+            if not readonly:
+                await page.keyboard.type(str(want)[:60], delay=15)
+                await page.wait_for_timeout(650)
             wl = str(want).strip().lower()
             opts = await page.query_selector_all("[role='option']")
+            otexts = [((await o.inner_text()) or "").strip() for o in opts]
             opt = None
-            for o in opts:
-                t = ((await o.inner_text()) or "").strip().lower()
-                if t == wl:
+            for o, t in zip(opts, otexts):
+                tl = t.lower()
+                if tl == wl:
                     opt = o
                     break
-                if opt is None and wl and t.startswith(wl[:30]):
+                if opt is None and wl and tl.startswith(wl[:30]):
                     opt = o
             if opt is None and opts:
-                opt = opts[0]  # geo/typeahead: best first result
+                if _looks_language_options(otexts):
+                    # language-proficiency scale: pick the highest option that does not
+                    # exceed the candidate's level (never the first/worst 'cannot speak').
+                    cand = _cand_lang_rank(want)
+                    best_i, best_r = None, -1
+                    for i, t in enumerate(otexts):
+                        r = _lang_option_rank(t)
+                        if 0 < r <= cand and r > best_r:
+                            best_i, best_r = i, r
+                    if best_i is None:  # candidate below every option -> the lowest one
+                        best_i = min(range(len(otexts)),
+                                     key=lambda i: _lang_option_rank(otexts[i]) or 99)
+                    opt = opts[best_i]
+                elif not readonly:
+                    opt = opts[0]  # geo/typeahead: best first result
+                # readonly non-language select with no match -> leave for the human
+                # (Escape below) rather than pick an arbitrary wrong row.
             if opt is None:
                 await page.keyboard.press("Escape")
                 continue

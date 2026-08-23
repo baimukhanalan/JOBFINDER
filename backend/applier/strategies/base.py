@@ -24,7 +24,7 @@ from backend.applier.dropdowns import (
     harvest_react_selects,
     list_unanswered_react_selects,
 )
-from backend.applier.filler import check_input, fill_form
+from backend.applier.filler import check_input, dismiss_overlays, fill_form
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +193,15 @@ class ApplyStrategy(ABC):
             resume_parser_only = True
         await self.open_form(page)
         await page.wait_for_timeout(1500)
+        # Dismiss cookie/consent modals (Workable/OneTrust) whose backdrop intercepts
+        # pointer events — without this a required dropdown (e.g. Workable 'English Level')
+        # can never be clicked and silently stays blank. Mirrors runner.prefill; the helper
+        # is a no-op when no banner is present.
+        try:
+            if await dismiss_overlays(page):
+                await page.wait_for_timeout(500)
+        except Exception as exc:
+            logger.debug("dismiss_overlays raised: %s", exc)
         if resume_parser_only:
             return await self._prefill_resume_parser_only(page, resume_path)
         # Let the ATS parse the résumé and pre-populate its own fields first (Ashby's
@@ -524,8 +533,27 @@ class ApplyStrategy(ABC):
             except Exception:
                 pass
 
-        unfilled = [q.get("question_text", "") for i, q in enumerate(unknown)
-                    if i not in answered_idx]
+        # A field the analyzer logged "unknown" may still have been filled by a
+        # downstream widget handler — fill_comboboxes_known picks a Workable combobox's
+        # option, which populates a SEPARATE backing input the analyzer saw as an empty
+        # text field. Re-read live values so a genuinely-populated field is not falsely
+        # reported unfilled (false human task + false submit-gate block).
+        unfilled = []
+        for i, q in enumerate(unknown):
+            if i in answered_idx:
+                continue
+            sel = q.get("selector")
+            if sel and q.get("type") not in ("radio_group", "checkbox_group"):
+                try:
+                    if await page.locator(sel).first.evaluate(
+                        "el => { const t=(el.tagName||'').toLowerCase();"
+                        " if(t==='select') return el.selectedIndex>0 && !!el.value;"
+                        " return !!(el.value && String(el.value).trim()); }",
+                            timeout=1500):
+                        continue
+                except Exception:
+                    pass
+            unfilled.append(q.get("question_text", ""))
         unfilled += [t for t in unfilled_custom if t not in unfilled]
         # Safety net for BOTH modes: any react-select still on its placeholder is
         # invisible to the analyzer (its typeahead input is skipped) — without this

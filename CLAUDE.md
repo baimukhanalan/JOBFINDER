@@ -156,6 +156,31 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `installSubmitWatch` and `copilot.py`'s confirmation poller only *record* a human's submit into
   `status.json`; they never click. `CONFIRM_RE` lives in `extension/content.js` with a copy in
   `copilot.py` that must stay in sync.
+- **Comboboxes are dropdowns.py's, NOT the analyzer's — never text-fill them.** A Greenhouse
+  `.select__container` input AND a Workable readonly `input[role=combobox]` (aria-haspopup=listbox)
+  are select widgets, not open-text fields. `analyzer.py`'s field-extraction SKIPS both (a text `fill`
+  types prose the widget can't accept; a readonly combobox even type-ahead-jumps to the FIRST/WORST
+  option). `dropdowns.fill_comboboxes_known` owns them: on a **readonly** combobox it does NOT type
+  (typing filters the fixed list) — it opens and matches an option. Language-proficiency scales
+  (Workable 'English Level', options are sentences like '…speak fluently'/'Native', not CEFR) are
+  picked by CANDIDATE LEVEL (`_lang_option_rank`/`_cand_lang_rank`), NEVER the geo `opts[0]` fallback
+  (opts[0] is 'cannot speak'). A Workable combobox has a SEPARATE `[name=…]` backing input the analyzer
+  sees as an empty text field → `base.prefill` re-reads live values when building `unfilled` so a
+  combobox-filled field isn't falsely reported unfilled. `dismiss_overlays()` runs in `base.prefill`
+  (cookie/consent backdrop otherwise intercepts the combobox click). Tests: `test_dropdowns.py`.
+- **Deterministic Yes/No screeners in `services/tailor/choices.py::deterministic_choices`.** Three
+  families answer WITHOUT the LLM (so they don't fall through to `choose_options` and get left blank):
+  prior-employer ('worked with us before?' → **No**, unbacked/review), OFAC sanctioned-territory
+  ('located in Cuba/Iran/Russia/…?' → **No**, unbacked/review), and English-Yes/No ('master English at
+  C1?' → **Yes** only when `facts.english_level` BACKS the asked CEFR level, else defer — never
+  over-claim). `_english_yesno_pick` must run BEFORE `_language_pick` (a Yes/No pair sent to
+  `_language_pick` defaults to `len(opts)//2` = 'No'). `_prior_employer_pick`/`_sanctions_pick` only
+  fire on a clean 2-option Yes/No pair. Tests: `test_choices.py`.
+- **Lever geocode 'Current location' is dead on this datacenter IP.** `filler.py`'s `is_lever_loc`
+  branch polls `.dropdown-location` for a REAL suggestion (skipping 'Loading'/'No location found') and
+  only presses ArrowDown+Enter when one exists (a blind Enter wipes the typed text); if the geocode
+  never resolves it JS-sets BOTH the visible input and hidden `selectedLocation` directly, then returns
+  an HONEST boolean (True only if a value actually stuck) so a genuine failure reaches the submit gate.
 - **Profile reality gate** (`applier/profile_validator.py`) blocks prefill/apply affordances for profiles
   with reserved-fictional phones (555-01xx) or placeholder emails — such applications are undeliverable.
   `michael` is the synthetic default persona and is gated. Do NOT bypass the gate; onboard a real person

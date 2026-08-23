@@ -169,17 +169,96 @@ async def fill_field(page: Page, field: dict) -> bool:
             except Exception:
                 is_lever_loc = False
             if is_lever_loc:
-                try:
+                # Poll the geocode dropdown for a REAL suggestion (skip the widget's own
+                # 'Loading' / 'No location found' rows) before committing. ArrowDown+Enter
+                # on a fixed timer used to fire blindly: with no suggestion it selects
+                # nothing AND wipes the typed text, leaving the REQUIRED field blank while
+                # the caller counted it "filled" (phantom success). Only press Enter once a
+                # suggestion is actually present.
+                _STATE_JS = """() => {
+                    const box = document.querySelector(
+                        '.dropdown-location, [class*="dropdown-results"], [class*="dropdown-location"]');
+                    if (!box) return 'none';
+                    if (box.querySelector('[class*="no-results"]')) return 'noresults';
+                    if (box.querySelector('[class*="loading"]')) return 'loading';
+                    const rows = box.querySelectorAll(
+                        '[class*="result"]:not([class*="no-results"]):not([class*="loading"])');
+                    return rows.length ? 'ready' : 'empty';
+                }"""
+
+                async def _type_and_poll(text: str) -> str:
                     await element.click(timeout=3000)
                     await page.keyboard.press("Control+A")
                     await page.keyboard.press("Backspace")
-                    await page.keyboard.type(value, delay=40)
-                    await page.wait_for_timeout(1000)
-                    await page.keyboard.press("ArrowDown")
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(300)
-                    logger.info("Filled Lever location typeahead '%s'", value[:40])
-                    return True
+                    await page.keyboard.type(text, delay=40)
+                    state = "none"
+                    for _ in range(8):  # up to ~4s for the network geocode
+                        await page.wait_for_timeout(500)
+                        try:
+                            state = await page.evaluate(_STATE_JS)
+                        except Exception:
+                            state = "none"
+                        if state in ("ready", "noresults"):
+                            break
+                    return state
+
+                try:
+                    state = await _type_and_poll(value)
+                    if state != "ready" and "," in value:
+                        # a bare city segment geocodes more often than 'City, Country'
+                        state = await _type_and_poll(value.split(",")[0].strip())
+                    if state == "ready":
+                        await page.keyboard.press("ArrowDown")
+                        await page.keyboard.press("Enter")
+                        await page.wait_for_timeout(300)
+                    stuck = ""
+                    try:
+                        stuck = (await element.input_value(timeout=1500)).strip()
+                    except Exception:
+                        stuck = ""
+                    if not stuck:
+                        # Geocode never resolved (common on a datacenter IP). Write the value
+                        # straight into the visible input AND the hidden selectedLocation
+                        # (native setter + input/change events) so the form carries a
+                        # location the human can see and adjust.
+                        try:
+                            await element.evaluate(
+                                """(el, val) => {
+                                    const set = (node, v) => {
+                                        if (!node) return;
+                                        const d = Object.getOwnPropertyDescriptor(
+                                            window.HTMLInputElement.prototype, 'value').set;
+                                        d.call(node, v);
+                                        node.dispatchEvent(new Event('input', {bubbles: true}));
+                                        node.dispatchEvent(new Event('change', {bubbles: true}));
+                                    };
+                                    set(el, val);
+                                    set(el.form && el.form.querySelector(
+                                        '[name="selectedLocation"]'), val);
+                                }""", value)
+                            logger.info("Lever location geocode empty; set "
+                                        "value+selectedLocation directly '%s'", value[:40])
+                        except Exception as e2:
+                            logger.debug("lever location direct-set failed: %s", e2)
+                    else:
+                        logger.info("Filled Lever location typeahead '%s'", value[:40])
+                    # HONEST return: True only if the visible input OR the hidden
+                    # selectedLocation carries a value — a genuine failure now reaches the
+                    # submit gate instead of masquerading as filled.
+                    final = ""
+                    try:
+                        final = (await element.input_value(timeout=1500)).strip()
+                    except Exception:
+                        final = ""
+                    if not final:
+                        try:
+                            final = (await element.evaluate(
+                                "el => { const f=el.form;"
+                                " const h=f&&f.querySelector('[name=\"selectedLocation\"]');"
+                                " return (h&&h.value)||''; }") or "").strip()
+                        except Exception:
+                            final = ""
+                    return bool(final)
                 except Exception as e:
                     logger.debug("lever location typeahead failed: %s", e)
             try:

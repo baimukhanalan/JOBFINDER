@@ -240,6 +240,22 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
     async with _S["lock"]:
         _cancel_watch()  # the previous job's page is going away with this goto
         page = await _ensure_browser()
+        # The persistent headful browser can die between loads (Xvfb/CDP hiccup, EPIPE,
+        # a crashed tab) while the page reference still reports open — the old frame then
+        # stays frozen in noVNC and the next goto throws 'session closed', so a NEW job
+        # opens onto a STALE page. Ping the page; on failure tear the browser down and
+        # relaunch a clean one so a fresh load never lands on a dead/stale page.
+        try:
+            await page.evaluate("1")
+        except Exception:
+            logger.warning("co-pilot page unresponsive — relaunching browser for a clean load")
+            browser, _S["browser"], _S["page"] = _S.get("browser"), None, None
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            page = await _ensure_browser()
         try:
             prof = get_profile(profile)
             facts = load_facts(profile)

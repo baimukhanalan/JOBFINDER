@@ -299,9 +299,15 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     Netherlands role gets a Dutch person ("authorized in NL: yes"), a Tbilisi role a Georgian, never a
     Kazakhstani in Almaty claiming US authorization. **Multi-country location** (e.g. Salmon's "Kazakhstan;
     Kyrgyzstan"): if **Kazakhstan** is one of the listed countries it wins (the agency's own market); else the
-    **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule. LLM-authored (country-appropriate random name + street
-    address + a résumé tailored to the JD) with a deterministic name-bank + template fallback so a click
-    never fails; email `first.last<NUM>@takhet.com` (numeric suffix = a UNIQUE mailbox even when the LLM repeats a common name; real /setup onboarding keeps clean `first.last@`), persona flagged `is_synthetic`, phone a reserved-
+    **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule. **The NAME is OURS, not the LLM's** —
+    `_pick_name` chooses first+last from the large per-country `_NAMES` banks, AVOIDING names in a rolling
+    recent-history file (`backend/data/demo_used_names.json`, gitignored, atomic write, best-effort; `synth_persona`
+    records each pick immediately). The local LLM is stateless (no generation history) so left to itself it
+    collapsed to the same few "favourite" names per country on every fill — the name is now pinned into the LLM
+    prompt and force-set on BOTH the LLM and fallback persona (`raw["full_name"] = name`), so the LLM only authors
+    the résumé/city/experience tailored to the JD, never the identity. Do NOT revert to letting the LLM pick the
+    name. Résumé + street address are LLM-authored with a template fallback so a click
+    never fails; email `first.last<NUM>@takhet.com` (numeric suffix = a UNIQUE mailbox even when two personas share a common name; real /setup onboarding keeps clean `first.last@`), persona flagged `is_synthetic`, phone a reserved-
     fiction 555-01xx number. Do NOT wire the demo path back onto the real roster, and do NOT revert persona
     selection to the region TAG only (an untagged "Remote U.S." job must resolve to a US persona via location).
     On the demo fill `ensure_and_wire` also **provisions the persona's mailbox** (best-effort,

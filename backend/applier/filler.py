@@ -159,6 +159,29 @@ async def fill_field(page: Page, field: dict) -> bool:
                 element = inner
 
         if action == "fill":
+            # Lever geocode "Current location" typeahead: a plain fill leaves the hidden
+            # `selectedLocation` empty and Lever rejects the value — must type then PICK a
+            # dropdown suggestion (ArrowDown+Enter selects the first geocode hit).
+            try:
+                is_lever_loc = await element.evaluate(
+                    "el => (el.name==='location' || (el.className||'').includes('location'))"
+                    " && !!(el.form && el.form.querySelector('[name=\"selectedLocation\"]'))")
+            except Exception:
+                is_lever_loc = False
+            if is_lever_loc:
+                try:
+                    await element.click(timeout=3000)
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    await page.keyboard.type(value, delay=40)
+                    await page.wait_for_timeout(1000)
+                    await page.keyboard.press("ArrowDown")
+                    await page.keyboard.press("Enter")
+                    await page.wait_for_timeout(300)
+                    logger.info("Filled Lever location typeahead '%s'", value[:40])
+                    return True
+                except Exception as e:
+                    logger.debug("lever location typeahead failed: %s", e)
             try:
                 await element.clear(timeout=5000)
                 await element.fill(value, timeout=5000)

@@ -109,7 +109,7 @@ FIELD_PATTERNS = [
     # Gender/demographics (optional, skip)
     # keep in sync with dropdowns._DEMOGRAPHIC — a narrower list left 'sexual orientation'/
     # 'pronouns'/'hispanic' etc. flowing into the fill+unfilled path (wrongly "1 left for human").
-    (r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|hispanic|latin[ox]?|pronoun|sexual\s*orientation|transgender|lgbtq|neurodiverg|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)", "_skip", None),
+    (r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual\s*orientation|transgender|lgbtq|neurodiverg|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)", "_skip", None),
 ]
 
 # Optional social / profile / URL fields — skipped entirely when NOT required, so a demo

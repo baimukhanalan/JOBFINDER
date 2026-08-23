@@ -180,3 +180,19 @@ def test_generate_draft_fixes():
 
     state = find("State / Province")
     assert state["value"] == "OR"   # a real state field still fills correctly
+
+
+# Regression: "Latin American country" is a GEOGRAPHY screener, not a Latino/Latinx
+# demographic. The demographic regex's `latin[ox]?\b` matched "Latin" in "Latin American",
+# so a required "Are you based in a Latin American country?" was mis-classified as an EEO
+# self-ID and left blank -> Greenhouse "This field is required" (verified live on gofasti).
+def test_latin_american_country_is_not_demographic():
+    assert cd._is_demographic("Are you based in a Latin American country?", ["Yes", "No"]) is False
+    assert cd._is_demographic("Do you live in Latin America?", ["Yes", "No"]) is False
+
+
+def test_real_latino_demographic_still_gated():
+    assert cd._is_demographic("Are you Hispanic or Latino?", ["Yes", "No"]) is True
+    assert cd._is_demographic("Are you Latinx?", ["Yes", "No"]) is True
+    assert cd._is_demographic("Gender", ["Male", "Female", "Prefer not to say"]) is True
+    assert cd._is_demographic("Disability Status", ["Yes", "No", "I do not want to answer"]) is True

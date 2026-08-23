@@ -286,11 +286,25 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   — before the video/file/select branches. The ≥2-option threshold keeps a lone 'Prefer not to answer' on
   a real screener (hear-about) from tripping it; `age` matches only 'your/current age'/'age range'/'DOB'
   (NOT "18 years of age"). `_SCRAPE_V` bumped so cached drafts regenerate without the false claims.
-  A REQUIRED demographic (e.g. Greenhouse Pronouns) is still left blank by policy — the human sets it.
+  A REQUIRED demographic that offers an explicit non-disclosure option is answered with it by
+  `dropdowns.fill_demographics_decline` ('Prefer not to answer' / 'Decline to self-identify' / 'I do not
+  want to answer') — NOT left blank — so the form submits without ever claiming a characteristic; one with
+  no decline option stays blank (human sets it). **`_DECLINE_RE` must match "do not **want** to answer"**,
+  not only "wish to": Greenhouse's Disability Status decline is "I do not want to answer", so a want-only
+  phrasing was missed and a REQUIRED Disability field blocked the whole submit ("This field is required")
+  while Gender/Hispanic/Veteran (which say "Decline to self-identify") declined fine — verified live on axon
+  (now submits end-to-end, "Thank you for applying to Axon!").
   All three `_DEMOGRAPHIC` regexes (dropdowns / analyzer `_skip` / catalog_drafts) use `rac(e|ial)` +
   `ethnic` (bare `race`/`ethnicit` missed 'racial'/'ethnic', leaking a race question as a false "1 left
   for the human"), and the analyzer location rule is `\bcity\b` (bare `city` substring-matched inside
-  'Ethni**city**' → a demographic resolved to `_location`). In the ETALON `ideal_fill` path,
+  'Ethni**city**' → a demographic resolved to `_location`). **`latin[ox]?\b` is guarded with
+  `(?!\s*americ)` in ALL FOUR demographic regexes** (dropdowns `_DEMOGRAPHIC`, analyzer `_skip`,
+  catalog_drafts `_DEMOGRAPHIC_LABEL_RE` + `_DEMOGRAPHIC_OPTION_RE`): bare "Latin" matched the GEOGRAPHY
+  "**Latin** American country", so a required screener "Are you based in a Latin American country?" was
+  mis-gated as a Latino/Latinx EEO field and left blank → Greenhouse rejected it — verified live on gofasti
+  (now answered "No" for a non-LatAm persona and submits end-to-end, "Thank you for applying to GoFasti").
+  Latino/Latinx/Latine self-ID still gates. Tests: `test_catalog_drafts.py::test_latin_american_country_is_not_demographic`
+  / `test_real_latino_demographic_still_gated`, `test_dropdowns.py::test_decline_re_matches_do_not_want_to_answer`. In the ETALON `ideal_fill` path,
   `_AFFIRM_NO_RE` answers "contractual obligations/agreements/commitments that would **impede/interfere
   with** your ability to join" → **No** (was a self-disqualifying Yes).
 - **Long Ashby Yes/No labels: replay is prefix-tolerant (`strategies/base.prefill` custom-widget loop).**

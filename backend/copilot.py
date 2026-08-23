@@ -347,8 +347,10 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
             return {"clicked": False, "reason": "no_button"}
         if dry_run:
             # All gates passed and the Submit button is present — but do NOT click.
+            # Still snapshot the FILLED form (no click) so coverage can be eyeballed.
+            ev = await _submit_evidence(page, shot_dir)
             return {"clicked": False, "would_click": True, "reason": "would_click",
-                    "selector": sel, "dry_run": True}
+                    "selector": sel, "dry_run": True, **ev}
         # Let async validation / a just-started résumé upload settle (Ashby rejects a
         # same-instant Submit), then re-check the page hasn't drifted before the click.
         await page.wait_for_timeout(1500)

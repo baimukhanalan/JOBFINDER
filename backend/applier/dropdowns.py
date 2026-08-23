@@ -119,7 +119,7 @@ MAX_RS_OPTIONS = 50  # cap options read per dropdown (huge country lists etc.)
 # the analyzer's `_skip` rule) — never auto-answered, never reported as unfilled.
 _DEMOGRAPHIC = re.compile(
     r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|"
-    r"hispanic|latin[ox]?\b|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|"
+    r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|"
     r"your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
 
 
@@ -215,7 +215,7 @@ def _degree_level(text: str) -> str | None:
 _DECLINE_RE = re.compile(
     r"(?i)prefer not to (?:answer|say|disclose|respond|state|identify)"
     r"|decline to (?:self.?identif|answer|state|respond|disclose)"
-    r"|(?:don'?t|do not) wish to (?:answer|disclose|self.?identif|respond|provide)"
+    r"|(?:don'?t|do not) (?:wish|want) to (?:answer|disclose|self.?identif|respond|provide|say)"
     r"|choose not to (?:answer|disclose|identify)"
     r"|i (?:prefer|choose) not to\b|rather not (?:say|answer)|not to disclose")
 

@@ -81,3 +81,17 @@ def test_closed_includes_binary_and_file_types():
         assert closed_type in _CLOSED, (
             f"type {closed_type!r} missing from _CLOSED — would incorrectly route to draft"
         )
+
+
+# Regression: Greenhouse's Disability Status decline option is "I do not want to answer"
+# (want, not wish). _DECLINE_RE matched only "wish to", so Disability was left blank while
+# Gender/Hispanic/Veteran declined -> a required demographic blocked the submit (live axon).
+def test_decline_re_matches_do_not_want_to_answer():
+    from backend.applier.dropdowns import _DECLINE_RE, _DEMOGRAPHIC
+    for s in ("I do not want to answer", "I don't want to answer",
+              "I do not wish to answer", "Decline to self-identify", "Prefer not to say"):
+        assert _DECLINE_RE.search(s), s
+    assert not _DECLINE_RE.search("I want to answer honestly")
+    # and "Latin American" is not treated as a demographic by dropdowns either
+    assert not _DEMOGRAPHIC.search("are you based in a latin american country?")
+    assert _DEMOGRAPHIC.search("are you latinx?")

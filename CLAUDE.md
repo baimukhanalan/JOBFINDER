@@ -294,6 +294,25 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   co-pilot is `backend/copilot.py`, a distinct app from the dashboard. **Pick host ports with
   `nginx -T | grep -oE '127.0.0.1:PORT'`, not `grep -r sites-enabled`** (grep doesn't follow the symlinks,
   so it misses most vhosts, and a port with nothing listening can still be claimed by a live vhost).
+- **Proxy pool → rotating egress IP per application (`tools/proxy_pool.py`).** `/catalog` has a
+  🛡️ **Прокси (N)** panel: paste a list (`host:port:user:pass` / `user:pass@host:port` / `scheme://…` /
+  bare `host:port`) → `POST /proxies/upload` parses + VALIDATES each (http/https via a real IP-echo
+  fetch THROUGH the proxy recording the egress IP; socks5 only TCP-probed) and keeps only the live
+  ones. Pool + round-robin cursor persist in **`backend/data/proxies.json` (gitignored — creds)**.
+  `next_proxy()` hands them out round-robin. `dashboard._do_fill` picks one per fill and passes
+  `proxy_server/username/password` to co-pilot `/load`; `copilot._use_proxy_context` builds a FRESH
+  browser context (⇒ new IP) per proxy — so every submit (single **and** the bulk «Подать на все»
+  queue) rotates IPs. The persistent headful browser is now launched with
+  `proxy={"server":"per-context"}` (verified: `browser:true` still — contexts w/o a proxy stay DIRECT,
+  so an empty pool = today's behavior). **Limits:** socks5 with auth won't route in the browser
+  (Playwright can't authenticate socks5); the fast preview `/goto` stays on the direct IP (throwaway —
+  only the real fill+submit is proxied); a fresh context per job briefly flickers the noVNC window.
+  Parse/rotation are unit-tested (`tests/test_proxy_pool.py`, no network).
+- **Bulk auto-apply: «Подать на все» (`/catalog`).** One SEQUENTIAL server-side queue (co-pilot has
+  ONE shared browser) over every **greenhouse+ashby** job — Lever/Workable are skipped (live captcha
+  would stall it). Reuses `_do_fill` per job (so it auto-submits AND rotates proxy IPs). Endpoints:
+  `POST /catalog/fill_all` (start), `GET /catalog/fill_all_status` (poll), `POST /catalog/fill_all_stop`
+  (halts after the current job). State in `dashboard._FILL_ALL`; survives leaving the page.
 - **Local LLM default.** `ANTHROPIC_API_KEY` is empty; résumé polish (`--ai`) and answer drafting
   (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without the
   key, tailoring falls back to the deterministic keyword path.

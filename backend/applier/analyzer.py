@@ -112,6 +112,15 @@ FIELD_PATTERNS = [
     (r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|hispanic|latin[ox]?|pronoun|sexual\s*orientation|transgender|lgbtq|neurodiverg|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)", "_skip", None),
 ]
 
+# Optional social / profile / URL fields — skipped entirely when NOT required, so a demo
+# persona's invented LinkedIn/Twitter/Telegram/etc. profile isn't typed into a field nobody
+# asked for. A REQUIRED one (red *) is still filled with the persona's value.
+_OPTIONAL_SOCIAL = re.compile(
+    r"(?i)\b(linkedin|personal\s*(?:url|site|website|page)|portfolio|"
+    r"twitter|github|gitlab|telegram|whatsapp|facebook|instagram|dribbble|behance|"
+    r"stack\s*overflow|social\s*(?:media|profile|link)|"
+    r"other\s*(?:url|link|website|profile|social)|(?<!company )website)\b")
+
 # Submit button patterns
 SUBMIT_PATTERNS = [
     r"(?i)(submit.?application|apply.?now|apply.?for|submit$|apply$|send.?application|submit.?resume)",
@@ -799,6 +808,15 @@ async def analyze_page(
         display_text = _clean_text(" ".join(display_parts))
         if not display_text:  # nothing human-readable -> cleaned name/id beats nothing
             display_text = _clean_text(match_text)
+
+        # Optional social/profile/URL field (LinkedIn, Website, Twitter, Telegram, …) that is
+        # NOT required: leave it blank instead of typing the demo persona's invented profile.
+        # A required one (red *) falls through and is filled below.
+        if (not f.get("required") and f["tag"] == "input"
+                and f["type"] in ("text", "url", "search", "input", "")
+                and _OPTIONAL_SOCIAL.search(display_text)
+                and not _looks_like_question(display_text)):
+            continue
 
         # Check known answers first — EXACT label match preferred over fuzzy overlap (and
         # over dict order), so a work-auth 'Yes' doesn't cross-bind onto the sponsorship

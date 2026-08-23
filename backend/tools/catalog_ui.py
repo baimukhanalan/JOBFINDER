@@ -37,6 +37,23 @@ def _qs(company: str = "", q: str = "", **extra) -> str:
     return ("?" + urllib.parse.urlencode(d)) if d else ""
 
 
+def resolve_company_key(company_name: str) -> str:
+    """Map a typed/picked company NAME to its company_key (exact case-insensitive match,
+    then a substring hit). '' when nothing matches — the caller then treats the text as a
+    free-text search. Used by the /catalog route to redirect the picker to the canonical
+    ?company=<key> URL so pagination + bookmarks stay clean."""
+    cn = (company_name or "").strip().lower()
+    if not cn:
+        return ""
+    try:
+        comps = catalog_db.companies(remote_only=True)
+    except Exception:
+        return ""
+    hit = ([c for c in comps if (c.get("company") or "").lower() == cn]
+           or [c for c in comps if cn in (c.get("company") or "").lower()])
+    return (hit[0].get("company_key") or "") if hit else ""
+
+
 def _plural(n: int, one: str, few: str, many: str) -> str:
     n = abs(int(n))
     if n % 10 == 1 and n % 100 != 11:
@@ -148,12 +165,29 @@ def _region_bar(active: str, q: str, company: str, by_region: dict, total: int) 
     return f'<div class="cat-regions">{"".join(out)}</div>'
 
 
-def render_page(company: str = "", q: str = "", region: str = "") -> str:
+def render_page(company: str = "", q: str = "", region: str = "",
+                company_name: str = "") -> str:
     company = (company or "").strip()
     q = (q or "").strip()
+    company_name = (company_name or "").strip()
     region = (region or "").strip().upper()
     if region not in ("US", "CA", "UK", "OTHER"):
         region = ""
+    try:
+        comps = catalog_db.companies(remote_only=True)
+    except Exception:
+        comps = []
+    # Resolve a typed/picked company NAME -> its company_key (list_jobs filters on the key).
+    # Exact case-insensitive match first, then a substring hit; if nothing matches, fall
+    # back to the free-text search so the box is never a dead end (a typo still finds rows).
+    if company_name and not company:
+        cn = company_name.lower()
+        hit = ([c for c in comps if (c.get("company") or "").lower() == cn]
+               or [c for c in comps if cn in (c.get("company") or "").lower()])
+        if hit:
+            company = hit[0].get("company_key") or ""
+        elif not q:
+            q = company_name
     jobs = catalog_db.list_jobs(company=company or None, q=q or None,
                                 remote_only=True, limit=PAGE, offset=0,
                                 region=region or None)
@@ -167,19 +201,36 @@ def render_page(company: str = "", q: str = "", region: str = "") -> str:
     except Exception:
         remote_total, by_region = 0, {}
 
+    active_cname = ""
     if company:
         # use the active company's display name if we can find it
-        cname = company
-        for c in catalog_db.companies(remote_only=True):
+        active_cname = company
+        for c in comps:
             if (c.get("company_key") or "") == company:
-                cname = c.get("company") or company
+                active_cname = c.get("company") or company
                 break
-        title_txt = esc(cname)
+        title_txt = esc(active_cname)
         head_n = ""
     else:
         title_txt = "Каталог"
         n = by_region.get(region, 0) if region else remote_total
         head_n = f'<span class="cat-h-n">{n}</span>'
+
+    # Company picker: native-autocomplete over every company (name + job count). Type
+    # "salmon" -> pick -> a clean per-company view (?company=<key>). Distinct from the
+    # free-text q search below and — unlike it — kept visible on mobile too.
+    dl = "".join(
+        f'<option value="{esc(c.get("company") or "")}">'
+        f'{c.get("n")} {_plural(c.get("n") or 0, "вакансия", "вакансии", "вакансий")}</option>'
+        for c in comps if c.get("company"))
+    company_pick = (
+        '<form class="cat-company" method="get" action="/catalog" role="search">'
+        + (f'<input type="hidden" name="region" value="{esc(region)}">' if region else "")
+        + '<input list="cat-companies" name="company_name" autocomplete="off" '
+        + f'value="{esc(active_cname)}" placeholder="🏢 Найти компанию…" aria-label="Поиск компании">'
+        + '<button class="ghost" type="submit">Открыть</button>'
+        + (f'<a class="ghost" href="/catalog{_qs(region=region)}">Сброс</a>' if company else "")
+        + f'</form><datalist id="cat-companies">{dl}</datalist>')
 
     search = (
         '<form class="cat-search" method="get" action="/catalog">'
@@ -192,7 +243,7 @@ def render_page(company: str = "", q: str = "", region: str = "") -> str:
     head = (
         '<div class="cat-head"><div class="cat-h-row">'
         f'<div class="cat-h-title">{title_txt} {head_n}</div></div>'
-        f"{search}</div>")
+        f"{company_pick}{search}</div>")
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
         _CAT_CSS + head
@@ -226,6 +277,9 @@ _CAT_CSS = """<style>
 .cat-h-n{color:var(--ink-mute);font-weight:600;font-size:14px;margin-left:4px}
 .cat-search{display:flex;gap:8px;flex-wrap:wrap}
 .cat-search input[type=search]{flex:1;min-width:0}
+.cat-company{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.cat-company input[list]{flex:1;min-width:0;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:15px;background:var(--panel);color:var(--ink)}
+.cat-company input[list]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(26,115,232,.18)}
 .cat-regions{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .cat-regions::-webkit-scrollbar{display:none}
 .cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}

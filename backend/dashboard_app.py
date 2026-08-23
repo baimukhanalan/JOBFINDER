@@ -547,13 +547,25 @@ def health():
 
 
 @app.get("/catalog", response_class=HTMLResponse)
-def catalog_page(company: str = "", q: str = "", region: str = ""):
+def catalog_page(company: str = "", q: str = "", region: str = "", company_name: str = ""):
     """Persisted remote-job catalog (Postgres) with descriptions + application-form
     questions, collected across every known ATS board. `region` ∈ {US,CA,UK,OTHER}
-    filters by a job's eligibility tags."""
+    filters by a job's eligibility tags. `company_name` is the company-picker's typed
+    name, resolved to a `company` key server-side."""
     from backend.tools import catalog_ui
+    # Company picker: resolve the typed name to a key and redirect to the canonical
+    # ?company=<key> URL so the title, pagination and bookmarks stay clean; a name that
+    # matches no company falls back to the free-text search.
+    if company_name and not company:
+        from urllib.parse import urlencode
+        key = catalog_ui.resolve_company_key(company_name)
+        params = {"company": key} if key else {"q": company_name}
+        if region:
+            params["region"] = region
+        return RedirectResponse("/catalog?" + urlencode(params), status_code=303)
     try:
-        return HTMLResponse(catalog_ui.render_page(company=company, q=q, region=region))
+        return HTMLResponse(catalog_ui.render_page(company=company, q=q, region=region,
+                                                   company_name=company_name))
     except Exception as exc:
         return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
                             f"<p style='font-family:sans-serif;padding:16px'>Каталог недоступен: {escape(str(exc))}</p>",

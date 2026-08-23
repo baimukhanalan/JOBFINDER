@@ -181,13 +181,13 @@ def _cancel_watch() -> None:
 
 async def _watch_submit(page, profile: str, jid: str,
                         applicant_email: str = "", load_ts: float = 0.0) -> None:
-    """Submit DETECTION + email-code AUTO-FILL — never submission. Polls the live page:
+    """Submit DETECTION + email-code AUTO-FILL + code-step confirm. Polls the live page:
       (1) when a Greenhouse-style 'enter the emailed security code' step appears (after the
-          HUMAN clicks Submit), read that code from the candidate's OWN mailbox and fill it.
-          This confirms EMAIL CONTROL only — the reCAPTCHA/anti-bot and the FINAL Submit stay
-          with the human; this never clicks a submit and never touches the captcha.
+          auto Submit), read that code from the candidate's OWN mailbox, fill it, and click
+          the step's confirm/submit button (_click_code_confirm) to finalize. It never
+          touches a captcha — if the step is captcha-gated the submit just waits for the human.
       (2) when the confirmation text/URL appears, mark the job submitted.
-    Read-only otherwise: never navigates."""
+    Never navigates."""
     deadline = time.time() + WATCH_MAX
     code_done = False
     while time.time() < deadline:
@@ -230,6 +230,14 @@ async def _watch_submit(page, profile: str, jid: str,
                                     break
                             except Exception:
                                 continue
+                    if code_done:
+                        # Some OTP widgets auto-submit on the last digit; give that a beat,
+                        # then click the step's confirm/submit button to finalize the apply.
+                        await page.wait_for_timeout(1200)
+                        try:
+                            await _click_code_confirm(page)
+                        except Exception:
+                            logger.warning("code-step confirm click failed", exc_info=True)
         except Exception:
             continue  # transient (mid-navigation, detached body) — keep polling
 
@@ -258,6 +266,38 @@ async def _click_submit_after_fill(page, result: dict) -> bool:
     except Exception:
         logger.warning("auto-submit failed", exc_info=True)
         return False
+
+
+# Confirm/submit button on the emailed-security-code step (Greenhouse & co). Verify/Confirm
+# come first (that step's primary action); Submit/Continue are the Greenhouse-reuse fallbacks.
+_CODE_CONFIRM_SELECTORS = (
+    'button:has-text("Verify")',
+    'button:has-text("Confirm")',
+    'button:has-text("Submit Application")',
+    'button:has-text("Submit")',
+    'button:has-text("Continue")',
+    'button:has-text("Next")',
+    'button[type="submit"]',
+    'input[type="submit"]',
+)
+
+
+async def _click_code_confirm(page) -> bool:
+    """After the emailed security code is typed, click the step's confirm/submit button to
+    finalize (the second Submit on a Greenhouse-style email-verification step). Best-effort:
+    many OTP widgets auto-submit on the last digit, so if no button is visible this is a
+    no-op; a captcha on the step will just block the submit for the human to finish."""
+    for sel in _CODE_CONFIRM_SELECTORS:
+        try:
+            btn = page.locator(sel).first
+            if await btn.count() and await btn.is_visible(timeout=1000):
+                await btn.click()
+                await page.wait_for_timeout(1500)
+                logger.info("code-step confirm clicked: %s", sel)
+                return True
+        except Exception:
+            continue
+    return False
 
 
 @app.get("/health")

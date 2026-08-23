@@ -158,10 +158,13 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   (commit `a8ab56e`) — so **`/catalog` «Заполнить» and the co-pilot `Fill →` button both auto-submit**,
   including the SYNTHETIC demo persona to real ATS. Owner accepted the datacenter-IP / takhet.com
   spam-ban risk that `a8ab56e` was avoiding. It's best-effort (a missing/blocked button never breaks
-  the load). To turn it OFF again, no-op `_click_submit_after_fill`. NOTE: the **extension** path and
-  the strategy layer are UNCHANGED — the extension's `installSubmitWatch` and `copilot.py`'s
-  `_watch_submit` poller still only *record* the confirmation into `status.json` (they never click),
-  and `strategies/base`/`prefill_application` still expose no submit path (regression test
+  the load). To turn it OFF again, no-op `_click_submit_after_fill`. It also finishes a
+  **Greenhouse-style emailed-security-code step**: `_watch_submit` fills the code from the candidate's
+  own mailbox AND now clicks that step's confirm/submit button (`_click_code_confirm`) to finalize —
+  it still never touches a captcha (a captcha-gated step just waits for the human). NOTE: the
+  **extension** path and the strategy layer are UNCHANGED — the extension's `installSubmitWatch` still
+  only *records* the confirmation into `status.json` (never clicks), and
+  `strategies/base`/`prefill_application` still expose no submit path (regression test
   `test_no_auto_submit_path` still passes). `CONFIRM_RE` lives in `extension/content.js` with a copy in
   `copilot.py` that must stay in sync.
 - **Comboboxes are dropdowns.py's, NOT the analyzer's — never text-fill them.** A Greenhouse

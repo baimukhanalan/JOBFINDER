@@ -868,18 +868,23 @@ def apply_url_for_job(job: dict) -> str:
 _SCRAPE_V = 9  # bump: drop stray postal_code key from synth persona profile (crashed Profile.from_dict in co-pilot /load)
 
 
-def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
+def ensure_and_wire(job_id: int, gender: str | None = None) -> tuple[str, str, bool]:
     """One-click backend for the /catalog "Заполнить" button. Generates the ideal draft
     (100% fill, region-matched candidate) unless a CURRENT one (_scrape_v) already
     exists. For custom ATS (ashby/lever/workable) it re-scrapes THIS job's questions
     live first — their screeners are DOM-scraped (not from an API), so a fresh scrape
     guarantees every question (selects/comboboxes/capability) is captured. Then
-    materializes for the co-pilot. Returns (profile_id, jobid, was_generated)."""
+    materializes for the co-pilot. Returns (profile_id, jobid, was_generated).
+
+    `gender` ('male'/'female', from the M/Ж choice) picks a gender-appropriate synthetic
+    persona. A cached draft is reused only when the requested gender is None OR matches the
+    cached persona's gender — otherwise a fresh persona of the requested gender is generated."""
     job = catalog_db.get_job(job_id)
     if not job:
         raise ValueError("job not found")
     draft = job.get("draft")
-    if draft and draft.get("_scrape_v") == _SCRAPE_V:
+    if (draft and draft.get("_scrape_v") == _SCRAPE_V
+            and (gender is None or draft.get("gender") == gender)):
         pid, jid = materialize_prefill(job_id)
         return pid, jid, False
 
@@ -895,7 +900,7 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
     # the one-click fill is the etalon DEMO: invent a fresh, fictional, region-appropriate
     # persona for this job (never a real roster person) — see synth_persona.
     from backend.tools.synth_persona import synth_persona
-    cand = synth_persona(job)
+    cand = synth_persona(job, gender=gender)
     # provision the persona's mailbox so its @takhet.com email is a LIVE, deliverable box
     # (row in amasmail.virtual_users + Maildir). Best-effort: a provisioning failure must
     # NEVER break the fill. Idempotent, so a re-click of a cached persona is a no-op.
@@ -913,6 +918,7 @@ def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:
         print(f"[demo-fill] mailbox provision skipped: {type(e).__name__}: {e}", flush=True)
     d = generate_draft(job, cand, use_ai=True, ideal=True)
     d["_scrape_v"] = _SCRAPE_V
+    d["gender"] = cand.get("gender")            # cache key so an M/Ж re-click regenerates
     catalog_db.set_draft(job_id, d)
     pid, jid = materialize_prefill(job_id)
     # the synthetic persona isn't in the profile store — persist it beside the prefill so the

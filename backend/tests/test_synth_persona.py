@@ -83,8 +83,8 @@ def test_synth_persona_honours_llm_content_but_our_name(monkeypatch):
     p = cand["profile"]
     assert p["full_name"] != "Steve Jobs"                 # our pick overrides the LLM name
     first, last = p["full_name"].split(" ", 1)
-    uk_first, uk_last = sp._NAMES["United Kingdom"]
-    assert first in uk_first and last in uk_last          # from the UK bank
+    uk = sp._NAMES["United Kingdom"]
+    assert first in (uk["male"] + uk["female"]) and last in uk["last"]   # from the UK bank
     assert p["email"].endswith("@takhet.com") and re.search(r"\d+@", p["email"])  # numeric suffix
     assert p["id"].startswith("demo_")
     assert p["resume"]["experience"][0]["company"] == "X"  # LLM content honoured
@@ -99,3 +99,22 @@ def test_synth_persona_names_do_not_repeat(monkeypatch, tmp_path):
     names = [sp.synth_persona(_job("Austin, TX, United States"))["profile"]["full_name"]
              for _ in range(30)]
     assert len(set(names)) == 30                           # all distinct across 30 fills
+
+
+def test_synth_persona_gender_choice(monkeypatch, tmp_path):
+    # The M/Ж choice picks a gender-appropriate first name; gender is returned top-level and
+    # NEVER placed in the profile dict (Profile.from_dict rejects unknown keys).
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
+    monkeypatch.setattr(sp, "_USED_NAMES_PATH", str(tmp_path / "used.json"))
+    us = sp._NAMES["United States"]
+    for _ in range(12):
+        m = sp.synth_persona(_job("Austin, TX, United States"), gender="male")
+        assert m["gender"] == "male"
+        assert m["profile"]["full_name"].split()[0] in us["male"]
+        assert "gender" not in m["profile"]                # Profile.from_dict-safe
+        f = sp.synth_persona(_job("Austin, TX, United States"), gender="female")
+        assert f["gender"] == "female"
+        assert f["profile"]["full_name"].split()[0] in us["female"]
+    # gender=None still rolls a valid gender
+    r = sp.synth_persona(_job("Austin, TX, United States"))
+    assert r["gender"] in ("male", "female")

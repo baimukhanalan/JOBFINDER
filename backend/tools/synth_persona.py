@@ -59,14 +59,14 @@ _DEFAULT_COUNTRY = "Kazakhstan"       # rest-of-world default (the agency's own 
 _CITIZEN = {"United States": "U.S. Citizen", "United Kingdom": "British Citizen",
             "Canada": "Canadian Citizen"}
 
-# Name banks per country. These are OUR source of names now (not just the LLM fallback):
+# Name banks per country, split by gender (male/female/last) so the /catalog "Заполнить" M/Ж
+# choice picks a gender-appropriate first name. OUR source of names (not just the LLM fallback):
 # `_pick_name` chooses first+last from here, avoiding recently-used names, and pins that name
 # into the LLM prompt — the local LLM is stateless and otherwise collapses to the same handful
 # of "favourite" names on every fill. Banks are large so repeats are rare even before history.
 _NAMES = {
-    "United States": (
-        # first names — male block then female block, balanced
-        ["James", "Michael", "Daniel", "Ethan", "Noah", "Mason", "Logan", "Jackson", "Aiden",
+    "United States": {
+        "male": ["James", "Michael", "Daniel", "Ethan", "Noah", "Mason", "Logan", "Jackson", "Aiden",
          "Caleb", "Owen", "Henry", "Nathan", "Isaac", "Evan", "Julian", "Adrian", "Miles",
          "Lucas", "Benjamin", "Samuel", "Wyatt", "Dylan", "Gavin", "Hunter", "Cole", "Brandon",
          "Austin", "Elliot", "Nolan", "Spencer", "Tristan", "Bryce", "Preston", "Colton", "Grant",
@@ -76,7 +76,8 @@ _NAMES = {
          "Jordan", "Brady", "Chase", "Zachary", "Everett", "Finn", "Graham", "Harrison", "Jasper",
          "Keegan", "Levi", "Maxwell", "Oscar", "Parker", "Quentin", "Reid", "Sawyer", "Theodore",
          "Victor", "Weston", "Xander", "Zane", "Beau", "Declan", "Emmett", "Ford", "Griffin",
-         "Holden", "Jude", "Knox", "Marcus", "Rhys", "Silas", "Tobias", "Walker", "Carson",
+         "Holden", "Jude", "Knox", "Marcus", "Rhys", "Silas", "Tobias", "Walker", "Carson"],
+        "female": [
          "Emily", "Olivia", "Grace", "Ava", "Sophia", "Chloe", "Lily", "Hannah", "Zoe", "Nora",
          "Ruby", "Claire", "Violet", "Stella", "Aubrey", "Naomi", "Paige", "Vivian", "Ella",
          "Hazel", "Aurora", "Savannah", "Brooke", "Delaney", "Autumn", "Sadie", "Willow", "Piper",
@@ -87,7 +88,7 @@ _NAMES = {
          "Josephine", "Clara", "Ivy", "Adeline", "Cora", "Genevieve", "Iris", "Juliette", "Lydia",
          "Margaret", "Nina", "Ophelia", "Rosalie", "Tessa", "Valentina", "Wren", "Daisy", "Eloise",
          "Fiona", "Georgia", "June", "Kira", "Lila", "Norah", "Rose", "Selena", "Talia", "Vera"],
-        ["Carter", "Bennett", "Foster", "Hayes", "Brooks", "Parker", "Ellis", "Reed", "Coleman",
+        "last": ["Carter", "Bennett", "Foster", "Hayes", "Brooks", "Parker", "Ellis", "Reed", "Coleman",
          "Sullivan", "Fleming", "Dawson", "Harrington", "Blake", "Morrison", "Sherwood",
          "Whitaker", "Preston", "Underwood", "Hollis", "Barrett", "Cross", "Mercer", "Vaughn",
          "Ashby", "Lang", "Sutton", "Pierce", "Rowe", "Kirby", "Nash", "Chase", "Donovan",
@@ -105,22 +106,23 @@ _NAMES = {
          "Willis", "Wolfe", "Woods", "Yates", "Zimmerman", "Ackerman", "Ainsworth", "Bancroft",
          "Barlow", "Braddock", "Cardwell", "Chandler", "Cromwell", "Dalton", "Eastman", "Fenwick",
          "Garrison", "Hadley", "Harlow", "Ingram", "Kingston", "Merrick", "Norwood", "Ashford",
-         "Bexley", "Caldwell", "Denton", "Ashcroft"]),
-    "Canada": (
-        ["Liam", "Owen", "Nathan", "Aiden", "William", "Samuel", "Felix", "Thomas", "Gabriel",
+         "Bexley", "Caldwell", "Denton", "Ashcroft"]},
+    "Canada": {
+        "male": ["Liam", "Owen", "Nathan", "Aiden", "William", "Samuel", "Felix", "Thomas", "Gabriel",
          "Simon", "Adam", "Elliot", "Xavier", "Nicolas", "Antoine", "Julien", "Mathis", "Leo",
          "Cedric", "Marc", "Olivier", "Etienne", "Hugo", "Raphael", "Lucas", "Zachary", "Benjamin",
          "Alexis", "Charles", "Louis", "Philippe", "Vincent", "Maxime", "Guillaume", "Francois",
          "Jerome", "Bastien", "Emile", "Gaspard", "Loic", "Yannick", "Damien", "Fabien", "Renaud",
          "Sylvain", "Tristan", "Aurele", "Corentin", "Malik", "Jacob", "Ryan", "Nolan", "Dominic",
-         "Isaac", "Landon", "Hudson", "Rowan", "Beckett", "Theo", "Jasper", "Cole", "Miles",
+         "Isaac", "Landon", "Hudson", "Rowan", "Beckett", "Theo", "Jasper", "Cole", "Miles"],
+        "female": [
          "Charlotte", "Zoe", "Juliette", "Emma", "Chloe", "Camille", "Rose", "Alice", "Beatrice",
          "Margot", "Laurence", "Sadie", "Amelie", "Ophelie", "Clara", "Manon", "Elodie", "Noemie",
          "Sophie", "Genevieve", "Isabelle", "Florence", "Colette", "Anais", "Emilie", "Sarah",
          "Justine", "Marie", "Gabrielle", "Rosalie", "Maeva", "Coralie", "Delphine", "Sabine",
          "Adele", "Aurelie", "Celine", "Elise", "Ines", "Lea", "Maude", "Noelle", "Oceane",
          "Pauline", "Solene", "Valerie", "Jade", "Mia", "Nora", "Olivia", "Penelope", "Sienna"],
-        ["Tremblay", "Gagnon", "Roy", "Clarke", "MacKenzie", "Fortin", "Lavoie", "Bergeron",
+        "last": ["Tremblay", "Gagnon", "Roy", "Clarke", "MacKenzie", "Fortin", "Lavoie", "Bergeron",
          "Cote", "Girard", "Morin", "Belanger", "Cardinal", "Beaulieu", "Fraser", "Leclerc",
          "Boucher", "Gauthier", "Pelletier", "Caron", "Simard", "Fontaine", "Bouchard", "Nadeau",
          "Ouellet", "Poirier", "Levesque", "Cloutier", "Dubois", "Lefebvre", "Michaud",
@@ -133,15 +135,16 @@ _NAMES = {
          "Beaudoin", "Comeau", "Doucet", "Gallant", "Landry", "LeBlanc", "Melanson", "Robichaud",
          "Savoie", "Theriault", "Cameron", "Douglas", "Grant", "MacDonald", "Murray", "Nelson",
          "Ross", "Stewart", "Watson", "Bell", "Campbell", "Ferguson", "Hamilton", "Kennedy",
-         "Mitchell", "Reid", "Scott", "Young"]),
-    "United Kingdom": (
-        ["Oliver", "Harry", "George", "Jack", "Charlie", "Thomas", "Arthur", "Alfie", "Edward",
+         "Mitchell", "Reid", "Scott", "Young"]},
+    "United Kingdom": {
+        "male": ["Oliver", "Harry", "George", "Jack", "Charlie", "Thomas", "Arthur", "Alfie", "Edward",
          "Reuben", "Toby", "Louis", "Henry", "Oscar", "Freddie", "Archie", "Theo", "Leo",
          "Finlay", "Rory", "Sebastian", "Hugo", "Callum", "Dexter", "William", "James", "Noah",
          "Jacob", "Charles", "Alexander", "Benjamin", "Samuel", "Joseph", "Daniel", "Isaac", "Max",
          "Logan", "Ethan", "Mason", "Harrison", "Frederick", "Albert", "Stanley", "Wilfred",
          "Ronnie", "Rex", "Otis", "Chester", "Rupert", "Barnaby", "Percy", "Sidney", "Hamish",
-         "Angus", "Fraser", "Lachlan", "Gareth", "Nigel", "Desmond", "Cedric", "Godfrey", "Neville",
+         "Angus", "Fraser", "Lachlan", "Gareth", "Nigel", "Desmond", "Cedric", "Godfrey", "Neville"],
+        "female": [
          "Amelia", "Isla", "Freya", "Poppy", "Evie", "Florence", "Ivy", "Maisie", "Rosie", "Elsie",
          "Martha", "Bonnie", "Matilda", "Beatrice", "Willow", "Imogen", "Daisy", "Eleanor",
          "Harriet", "Phoebe", "Bethany", "Clara", "Nancy", "Edith", "Olivia", "Emily", "Sophie",
@@ -149,7 +152,7 @@ _NAMES = {
          "Gracie", "Millie", "Ada", "Penelope", "Ottilie", "Cordelia", "Winifred", "Prudence",
          "Agatha", "Beatrix", "Cecily", "Dorothy", "Estelle", "Flora", "Hermione", "Josephine",
          "Lavinia", "Nell", "Odette", "Primrose", "Rosalind", "Sybil", "Tabitha", "Verity"],
-        ["Walker", "Wright", "Hughes", "Hall", "Green", "Baker", "Clarke", "Turner", "Hutchinson",
+        "last": ["Walker", "Wright", "Hughes", "Hall", "Green", "Baker", "Clarke", "Turner", "Hutchinson",
          "Pearce", "Whitfield", "Redmond", "Ashworth", "Bramwell", "Fairfax", "Holloway",
          "Winterbourne", "Marsh", "Pembroke", "Radcliffe", "Thornton", "Ainsley", "Barlow",
          "Chadwick", "Fletcher", "Hargreaves", "Kingsley", "Lowe", "Merton", "Ormsby", "Prentice",
@@ -163,15 +166,16 @@ _NAMES = {
          "Mitchell", "Newman", "Palmer", "Payne", "Perry", "Poole", "Reeves", "Rhodes", "Riley",
          "Shaw", "Stevens", "Stokes", "Sutton", "Wade", "Webb", "Wells", "Barnes", "Blackwood",
          "Croft", "Godwin", "Hawthorne", "Middleton", "Pennington", "Ravenscroft", "Selby",
-         "Underhill", "Wycliffe"]),
-    "Kazakhstan": (
-        ["Arman", "Dias", "Aibek", "Timur", "Nurlan", "Yerlan", "Bekzat", "Ruslan", "Sanzhar",
+         "Underhill", "Wycliffe"]},
+    "Kazakhstan": {
+        "male": ["Arman", "Dias", "Aibek", "Timur", "Nurlan", "Yerlan", "Bekzat", "Ruslan", "Sanzhar",
          "Adil", "Daniyar", "Kairat", "Yernar", "Azamat", "Nurbek", "Alikhan", "Yerkebulan",
          "Talgat", "Miras", "Serik", "Askar", "Rustem", "Dauren", "Zhandos", "Baurzhan", "Yerbol",
          "Nurzhan", "Aidos", "Almas", "Bakyt", "Damir", "Erasyl", "Galym", "Ilyas", "Kanat", "Madi",
          "Nariman", "Olzhas", "Rakhat", "Temirlan", "Ulan", "Yeldos", "Zhalgas", "Abzal", "Dastan",
          "Erzhan", "Farkhat", "Kuanysh", "Meirzhan", "Nurdaulet", "Sultan", "Zhomart", "Adilet",
-         "Didar", "Iskander", "Karim", "Maksat", "Oralbek", "Yerkin", "Zhasulan",
+         "Didar", "Iskander", "Karim", "Maksat", "Oralbek", "Yerkin", "Zhasulan"],
+        "female": [
          "Dana", "Aigerim", "Alina", "Aizhan", "Madina", "Zhanar", "Gulnar", "Assel", "Aisulu",
          "Malika", "Saltanat", "Ainur", "Zarina", "Balzhan", "Gaukhar", "Dinara", "Kamila",
          "Aruzhan", "Nazerke", "Zhuldyz", "Tomiris", "Alua", "Meruert", "Sabina", "Akbota",
@@ -179,7 +183,7 @@ _NAMES = {
          "Gulzhan", "Indira", "Karlygash", "Moldir", "Nazgul", "Perizat", "Raushan", "Symbat",
          "Togzhan", "Ulzhan", "Venera", "Zhibek", "Aiym", "Bayan", "Elnara", "Gulmira", "Inkar",
          "Kymbat", "Nurgul", "Saule", "Tolganay", "Zhaniya"],
-        ["Serikuly", "Zhaksybek", "Toleubek", "Amirkhan", "Beisenov", "Yesenov", "Nurpeisov",
+        "last": ["Serikuly", "Zhaksybek", "Toleubek", "Amirkhan", "Beisenov", "Yesenov", "Nurpeisov",
          "Sagatov", "Iskakov", "Bekova", "Omarov", "Kassymova", "Zhumabek", "Tulegenov", "Abenov",
          "Dosanova", "Kaliyev", "Seitkali", "Baibek", "Nurlanuly", "Akhmetov", "Suleimenov",
          "Zhaparov", "Musin", "Aitkali", "Bolatov", "Mukhamedzhanov", "Sadykov", "Tazhibaev",
@@ -191,21 +195,22 @@ _NAMES = {
          "Kozhabekov", "Mataev", "Orynbasar", "Sarsenbek", "Tuleuov", "Adilbek", "Bazarbay",
          "Doszhan", "Gabdullin", "Kuandyk", "Muratov", "Ospan", "Rakhmet", "Sultanbek", "Toktarov",
          "Zhandaulet", "Amangeldy", "Baiseitov", "Darkhan", "Erkebulan", "Muslim", "Nurym",
-         "Sagyndyk", "Zhaksybai", "Berdibek", "Kenzhebek", "Sapargali", "Tursynbek"]),
+         "Sagyndyk", "Zhaksybai", "Berdibek", "Kenzhebek", "Sapargali", "Tursynbek"]},
 }
-_GENERIC_NAMES = (
-    ["Alex", "Daniel", "Adrian", "Lucas", "David", "Marco", "Victor", "Theo", "Leon", "Felix",
+_GENERIC_NAMES = {
+    "male": ["Alex", "Daniel", "Adrian", "Lucas", "David", "Marco", "Victor", "Theo", "Leon", "Felix",
      "Andrei", "Milan", "Ivan", "Diego", "Mateo", "Nikolai", "Pablo", "Stefan", "Tomas", "Rafael",
      "Andres", "Bruno", "Carlos", "Dmitri", "Emilio", "Fernando", "Giovanni", "Hassan", "Igor",
      "Javier", "Karl", "Luca", "Matteo", "Nils", "Omar", "Piotr", "Ravi", "Sergei", "Timo",
      "Umberto", "Vasco", "Wassim", "Youssef", "Zoltan", "Aleksandr", "Bogdan", "Cristian", "Dario",
-     "Erik", "Florian", "Gustavo", "Henrik", "Iker", "Janos", "Lorenzo",
+     "Erik", "Florian", "Gustavo", "Henrik", "Iker", "Janos", "Lorenzo"],
+    "female": [
      "Maria", "Sofia", "Elena", "Nina", "Clara", "Ines", "Lena", "Anna", "Mira", "Sara", "Petra",
      "Nadia", "Yara", "Lucia", "Amara", "Freya", "Zara", "Ana", "Elsa", "Marta", "Alba", "Bianca",
      "Camila", "Daniela", "Eva", "Fatima", "Giulia", "Hana", "Irina", "Julia", "Katya", "Mila",
      "Noor", "Olga", "Priya", "Renata", "Tara", "Ulla", "Valeria", "Wanda", "Ximena", "Yuki",
      "Aria", "Bruna", "Chiara", "Greta", "Helena", "Ingrid", "Jana"],
-    ["Novak", "Silva", "Kovac", "Costa", "Popov", "Moreau", "Duarte", "Weiss", "Ferrari",
+    "last": ["Novak", "Silva", "Kovac", "Costa", "Popov", "Moreau", "Duarte", "Weiss", "Ferrari",
      "Andersen", "Halvorsen", "Bauer", "Marin", "Vidal", "Horvat", "Lindqvist", "Rossi",
      "Fischer", "Nagy", "Sorensen", "Almeida", "Bianchi", "Dubois", "Eriksson", "Fabbri",
      "Georgiev", "Hansen", "Ibrahim", "Jansen", "Kowalski", "Larsen", "Muller", "Nilsson",
@@ -217,12 +222,14 @@ _GENERIC_NAMES = (
      "Krause", "Lehmann", "Marchetti", "Olsen", "Petersen", "Ricci", "Schneider", "Toth", "Varga",
      "Zaytsev", "Blomqvist", "Cabrera", "Dimitrov", "Fuentes", "Grigoryan", "Hernandez", "Jung",
      "Kaur", "Leroy", "Mikkelsen", "Nakamura", "Okafor", "Petit", "Rahman", "Suzuki", "Traore",
-     "Vermeulen", "Yildiz", "Zaman"])
+     "Vermeulen", "Yildiz", "Zaman"]}
 
 # Guard: the banks are large and hand-maintained — dedupe each list (order-preserving) so an
 # accidental repeat can never skew the random pick or the history-based "no repeat" guarantee.
-_NAMES = {c: (list(dict.fromkeys(fb)), list(dict.fromkeys(lb))) for c, (fb, lb) in _NAMES.items()}
-_GENERIC_NAMES = (list(dict.fromkeys(_GENERIC_NAMES[0])), list(dict.fromkeys(_GENERIC_NAMES[1])))
+def _dedup(seq):
+    return list(dict.fromkeys(seq))
+_NAMES = {c: {g: _dedup(v) for g, v in b.items()} for c, b in _NAMES.items()}
+_GENERIC_NAMES = {g: _dedup(v) for g, v in _GENERIC_NAMES.items()}
 _CITIES = {
     "United States": ["Austin, TX", "Denver, CO", "Columbus, OH", "Seattle, WA"],
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
@@ -315,11 +322,23 @@ def _remember_name(name: str) -> None:
         pass
 
 
-def _pick_name(country: str) -> str:
-    """A random 'First Last' for the country, avoiding names used in the recent history so
-    consecutive fills don't show the same person. Falls back to a plain random pick if the
-    whole (small) space is exhausted."""
-    first_bank, last_bank = _NAMES.get(country, _GENERIC_NAMES)
+def _first_bank(country: str, gender: str) -> list:
+    """The first-name list for a country + gender ('male'/'female'); any other gender value
+    means 'either' (male+female combined)."""
+    banks = _NAMES.get(country, _GENERIC_NAMES)
+    if gender == "male":
+        return banks["male"]
+    if gender == "female":
+        return banks["female"]
+    return banks["male"] + banks["female"]
+
+
+def _pick_name(country: str, gender: str = "either") -> str:
+    """A random 'First Last' for the country + gender ('male'/'female'/'either'), avoiding
+    names used in the recent history so consecutive fills don't show the same person. Falls
+    back to a plain random pick if the (bounded) history-avoidance loop is exhausted."""
+    first_bank = _first_bank(country, gender)
+    last_bank = _NAMES.get(country, _GENERIC_NAMES)["last"]
     used = set(_load_used())
     for _ in range(20):
         full = f"{random.choice(first_bank)} {random.choice(last_bank)}"
@@ -367,8 +386,11 @@ def _llm_persona(job: dict, country: str, name: str = "") -> dict | None:
     return None
 
 
-def _fallback_persona(job: dict, country: str) -> dict:
-    first_bank, last_bank = _NAMES.get(country, _GENERIC_NAMES)
+def _fallback_persona(job: dict, country: str, gender: str = "either") -> dict:
+    # Name here is a placeholder — synth_persona overwrites full_name with its own gendered,
+    # history-avoided pick — but keep it valid + gender-consistent anyway.
+    first_bank = _first_bank(country, gender)
+    last_bank = _NAMES.get(country, _GENERIC_NAMES)["last"]
     cities = _CITIES.get(country, [country])
     title = job.get("title") or "Specialist"
     return {
@@ -468,14 +490,24 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     return {"profile": profile, "facts": facts}
 
 
-def synth_persona(job: dict) -> dict:
+def synth_persona(job: dict, gender: str | None = None) -> dict:
     """A fresh, fictional demo candidate whose nationality matches the job's country
-    (never a real roster person). LLM-authored with a deterministic fallback."""
+    (never a real roster person). LLM-authored with a deterministic fallback.
+
+    `gender` ('male'/'female') comes from the /catalog "Заполнить" M/Ж choice and selects a
+    gender-appropriate first name; None (or anything else) rolls a random gender. The chosen
+    gender is returned as cand["gender"] (a cache key for ensure_and_wire) — NOT put into the
+    profile dict, which Profile.from_dict would reject as an unknown key. It is used ONLY to
+    pick the name; a demographic gender field on the form is still human/declined by policy."""
     country = _country_of(job)
-    name = _pick_name(country)                 # OUR choice, history-avoided (not the LLM's)
+    if gender not in ("male", "female"):
+        gender = random.choice(("male", "female"))
+    name = _pick_name(country, gender)         # OUR choice, gendered + history-avoided
     raw = _llm_persona(job, country, name)
     if not (raw and str(raw.get("full_name") or "").strip()):
-        raw = _fallback_persona(job, country)
+        raw = _fallback_persona(job, country, gender)
     raw["full_name"] = name                     # force the diverse name in BOTH paths
     _remember_name(name)
-    return _build_candidate(raw, country, job)
+    cand = _build_candidate(raw, country, job)
+    cand["gender"] = gender                      # top-level only (not in cand["profile"])
+    return cand

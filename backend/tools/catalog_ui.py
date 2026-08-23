@@ -134,8 +134,11 @@ def _card(j: dict) -> str:
 
     jid = j.get("id")
     fill_row = (
-        f'<div class="cat-fill-row"><button class="cat-fill" data-id="{jid}" '
-        f'onclick="fillJob(this)">▶ Заполнить вживую</button>'
+        f'<div class="cat-fill-row"><span class="cat-fill-lbl">▶ Заполнить вживую:</span>'
+        f'<button class="cat-fill cat-fill-m" data-id="{jid}" data-gender="male" '
+        f'onclick="fillJob(this)">♂ Муж</button>'
+        f'<button class="cat-fill cat-fill-f" data-id="{jid}" data-gender="female" '
+        f'onclick="fillJob(this)">♀ Жен</button>'
         f'<span class="cat-fill-res"></span></div>') if jid else ""
 
     return (
@@ -313,10 +316,13 @@ _CAT_CSS = """<style>
 .cat-req{color:#d93025;font-weight:700;margin-left:3px}
 .cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-.cat-fill-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:9px}
-.cat-fill{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
+.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px}
+.cat-fill-lbl{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.85}
+.cat-fill{color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
+.cat-fill-m{background:#1a73e8;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
+.cat-fill-f{background:#c2559b;box-shadow:0 2px 8px -2px rgba(194,85,155,.5)}
 .cat-fill:hover{filter:brightness(1.06)}
-.cat-fill:disabled{opacity:.8;cursor:default;box-shadow:none}
+.cat-fill:disabled{opacity:.75;cursor:default;box-shadow:none}
 .cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
 /* Hide the inline catalog search on mobile — the Gmail top pill already searches
@@ -332,15 +338,21 @@ _CAT_JS = """<script>
 // "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
 // noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
 window.fillJob = async function(btn){
-  var id=btn.dataset.id, res=btn.parentNode.querySelector('.cat-fill-res');
+  var id=btn.dataset.id, gender=btn.dataset.gender||'',
+      row=btn.closest('.cat-fill-row'),
+      res=row?row.querySelector('.cat-fill-res'):null,
+      btns=row?row.querySelectorAll('.cat-fill'):[btn],
+      label=btn.textContent;
   if(btn.disabled) return;
   var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
-  btn.disabled=true; btn.textContent='⏳ Открываю…'; if(res) res.textContent='';
+  btns.forEach(function(b){b.disabled=true;}); btn.textContent='⏳…'; if(res) res.textContent='';
   try{
-    var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST'})).json();
+    var body='gender='+encodeURIComponent(gender);
+    var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
   }catch(e){
-    btn.textContent='⚠ не удалось запустить — повторить'; btn.disabled=false;
+    btns.forEach(function(b){b.disabled=false;}); btn.textContent=label;
     if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
   }
 };

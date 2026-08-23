@@ -593,12 +593,12 @@ _NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
 _FILL_JOBS: dict[int, dict] = {}
 
 
-def _do_fill(job_id: int) -> None:
+def _do_fill(job_id: int, gender: str | None = None) -> None:
     import httpx
 
     from backend.tools import catalog_drafts
     try:
-        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id)
+        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id, gender=gender)
     except Exception as exc:
         _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
         return
@@ -624,12 +624,13 @@ def _do_fill(job_id: int) -> None:
 
 
 @app.post("/catalog/{job_id}/fill")
-def catalog_fill(job_id: int):
+def catalog_fill(job_id: int, gender: str = Form("")):
     """Start the one-click fill in the background and return immediately (poll
     /catalog/{id}/fill_status). Generates the ideal draft if missing, wires it into the
     co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC).
-    Never submits."""
+    Never submits. `gender` ('male'/'female' from the M/Ж buttons) picks the persona's sex."""
     import threading
+    g = gender if gender in ("male", "female") else None
     st = _FILL_JOBS.get(job_id)
     if not (st and st.get("state") == "running"):
         _FILL_JOBS[job_id] = {"state": "running", "phase": "generating"}
@@ -646,7 +647,7 @@ def catalog_fill(job_id: int):
                 httpx.post("http://127.0.0.1:8102/goto", data={"url": aurl}, timeout=30)
         except Exception:
             pass
-        threading.Thread(target=_do_fill, args=(job_id,), daemon=True).start()
+        threading.Thread(target=_do_fill, args=(job_id, g), daemon=True).start()
     return JSONResponse({"started": True, "novnc": _NOVNC_URL})
 
 

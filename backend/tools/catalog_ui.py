@@ -134,7 +134,7 @@ def _card(j: dict) -> str:
 
     jid = j.get("id")
     fill_row = (
-        f'<div class="cat-fill-row"><span class="cat-fill-lbl">▶ Заполнить вживую:</span>'
+        f'<div class="cat-fill-row"><span class="cat-fill-lbl">Заполнить вживую:</span>'
         f'<button class="cat-fill cat-fill-m" data-id="{jid}" data-gender="male" '
         f'onclick="fillJob(this)">♂ Муж</button>'
         f'<button class="cat-fill cat-fill-f" data-id="{jid}" data-gender="female" '
@@ -329,21 +329,24 @@ _CAT_CSS = """<style>
 .cat-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;min-height:22px}
 .cat-qbadge{font-size:12px;font-weight:700;color:#b06000;background:#fef3e0;border:1px solid #fadfb0;padding:2px 9px;border-radius:999px;white-space:nowrap}
 .cat-open{font-size:13.5px;font-weight:600;color:#1a73e8;text-decoration:none;white-space:nowrap;padding:6px 0;min-height:36px;display:inline-flex;align-items:center;margin-left:auto}
-.cat-det{margin-top:9px}
-.cat-det>summary{cursor:pointer;color:var(--ink-mute);font-size:13px;user-select:none;padding:5px 0}
-.cat-det[open]>summary{color:#1a73e8;margin-bottom:6px}
-.cat-desc{font-size:13.5px;line-height:1.55;color:var(--ink);max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:11px 12px;background:var(--bg-app)}
+.cat-det{margin-top:4px}
+.cat-det>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink-soft);font-size:13px;font-weight:600;user-select:none;padding:7px 0}
+.cat-det>summary::-webkit-details-marker{display:none}
+.cat-det>summary::before{content:"";width:6px;height:6px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .18s;flex:0 0 auto}
+.cat-det[open]>summary::before{transform:rotate(45deg)}
+.cat-det[open]>summary{color:var(--accent);margin-bottom:8px}
+.cat-desc{font-size:13.5px;line-height:1.55;color:var(--ink);max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 13px;background:var(--bg-app)}
 .cat-desc img{max-width:100%;height:auto}
 .cat-desc table{max-width:100%;display:block;overflow-x:auto}
-.cat-desc a{color:#1a73e8}
-.cat-qlist{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--bg-app);overflow:hidden}
-.cat-q{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13.5px}
+.cat-desc a{color:var(--accent)}
+.cat-qlist{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-app);overflow:auto;max-height:360px}
+.cat-q{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;line-height:1.4}
 .cat-q:last-child{border-bottom:0}
-.cat-qlbl{color:var(--ink);line-height:1.4;min-width:0}
-.cat-req{color:#d93025;font-weight:700;margin-left:3px}
-.cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
+.cat-qlbl{color:var(--ink);min-width:0}
+.cat-req{color:var(--danger);font-weight:700;margin-left:3px}
+.cat-qtype{flex:0 0 auto;margin-top:1px;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px}
+.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 .cat-fill-lbl{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
 .cat-fill{display:inline-flex;align-items:center;gap:5px;color:#fff;border:none;border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
 .cat-fill-m{background:var(--accent)}

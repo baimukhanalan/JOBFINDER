@@ -247,19 +247,23 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="cat-head"><div class="cat-h-row">'
         f'<div class="cat-h-title">{title_txt} {head_n}</div></div>'
         f"{company_pick}{search}</div>")
-    # Bulk "apply to all" — one SEQUENTIAL queue over every greenhouse+ashby job (Lever/
-    # Workable skipped server-side: live captcha). Auto-submits. Progress + stop below.
+    # Action row: the primary mass-action (bulk apply) + a compact Proxy chip, grouped on
+    # ONE line so mobile doesn't stack two full-width slabs. Bulk = one SEQUENTIAL queue
+    # over every greenhouse+ashby job (Lever/Workable skipped: live captcha); auto-submits.
     bulk_bar = (
         '<div class="cat-bulk" id="catbulk">'
-        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">▶▶ Подать на все</button>'
-        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">■ Стоп</button>'
+        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">'
+        '<span class="cat-ico">⚡</span>Подать на все</button>'
+        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">'
+        '■ Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
-    # Proxy pool: upload a list, dead proxies dropped on validation, applications rotate
-    # through the survivors (a different egress IP per submit). N = current pool size.
-    proxy_panel = (
-        '<div class="cat-proxy" id="catproxy">'
+    proxy_toggle = (
         '<button class="cat-proxy-toggle" id="pxToggle" onclick="pxPanel()">'
-        '🛡️ Прокси (<span id="pxCount">…</span>)</button>'
+        '<span class="cat-ico">🛡</span>Прокси<b id="pxCount">0</b></button>')
+    actions = f'<div class="cat-actions">{bulk_bar}{proxy_toggle}</div>'
+    # Proxy pool panel (collapsed): upload a list, dead proxies dropped on validation,
+    # applications rotate through the survivors (a different egress IP per submit).
+    proxy_body = (
         '<div class="cat-proxy-body" id="pxBody" style="display:none">'
         '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
         'user:pass@host:port&#10;socks5://host:port&#10;(по одному в строке)"></textarea>'
@@ -267,12 +271,12 @@ def render_page(company: str = "", q: str = "", region: str = "",
         'socks5 — только проверка доступности, и в браузере socks5 работает лишь без логина/пароля.</div>'
         '<div class="cat-proxy-row">'
         '<button class="cat-proxy-go" onclick="pxUpload()">Загрузить и проверить</button>'
-        '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
+        '<button class="cat-proxy-clr" onclick="pxClear()">Очистить</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
-        '<div class="cat-proxy-list" id="pxList"></div></div></div>')
+        '<div class="cat-proxy-list" id="pxList"></div></div>')
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
-        _CAT_CSS + head + bulk_bar + proxy_panel
+        _CAT_CSS + head + actions + proxy_body
         + _region_bar(region, q, company, by_region, remote_total)
         + f'<div class="cat-list" id="catlist">{cards}</div>{empty}'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
@@ -339,37 +343,55 @@ _CAT_CSS = """<style>
 .cat-req{color:#d93025;font-weight:700;margin-left:3px}
 .cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px}
-.cat-fill-lbl{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.85}
-.cat-fill{color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
-.cat-fill-m{background:#1a73e8;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
-.cat-fill-f{background:#c2559b;box-shadow:0 2px 8px -2px rgba(194,85,155,.5)}
-.cat-fill:hover{filter:brightness(1.06)}
-.cat-fill:disabled{opacity:.75;cursor:default;box-shadow:none}
+.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px}
+.cat-fill-lbl{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.cat-fill{display:inline-flex;align-items:center;gap:5px;color:#fff;border:none;border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-fill-m{background:var(--accent)}
+.cat-fill-m:hover{background:var(--accent-deep)}
+.cat-fill-f{background:#b8478a}
+.cat-fill-f:hover{background:#a23c79}
+.cat-fill:disabled{opacity:.6;cursor:default}
 .cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
-.cat-bulk{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 2px}
-.cat-bulk-go{background:#0b8043;color:#fff;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;min-height:44px;box-shadow:0 2px 10px -3px rgba(11,128,67,.6)}
-.cat-bulk-go:hover{filter:brightness(1.06)}
-.cat-bulk-go:disabled{opacity:.55;cursor:default;box-shadow:none}
-.cat-bulk-stop{background:#c5221f;color:#fff;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;min-height:44px}
-.cat-bulk-prog{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.9}
-.cat-proxy{margin:8px 0 2px}
-.cat-proxy-toggle{background:var(--panel,#f1f3f4);color:var(--fg,#202124);border:1px solid var(--line,#dadce0);border-radius:9px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
-.cat-proxy-toggle:hover{filter:brightness(.98)}
-.cat-proxy-body{margin-top:10px;padding:12px;border:1px solid var(--line,#dadce0);border-radius:10px;background:var(--panel,#f8f9fa);max-width:640px}
-.cat-proxy-body textarea{width:100%;min-height:120px;box-sizing:border-box;font-family:var(--ff-mono,monospace);font-size:12.5px;border:1px solid var(--line,#dadce0);border-radius:8px;padding:9px;resize:vertical;background:var(--bg,#fff);color:var(--fg,#202124)}
-.cat-proxy-hint{font-size:11.5px;color:var(--ink-mute,#5f6368);margin:4px 0 8px}
-.cat-proxy-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.cat-proxy-go{background:#1a73e8;color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
-.cat-proxy-clr{background:var(--panel,#f1f3f4);color:#c5221f;border:1px solid var(--line,#dadce0);border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
-.cat-proxy-msg{font-size:12.5px;font-weight:700;color:var(--fg,#202124);opacity:.9}
-.cat-proxy-list{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
-.px-ip{font-family:var(--ff-mono,monospace);font-size:11.5px;color:#0b8043;background:rgba(11,128,67,.1);border-radius:6px;padding:2px 8px}
-/* Hide the inline catalog search on mobile — the Gmail top pill already searches
-   the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
-   the later .cat-search{display:flex} in this same stylesheet). */
-@media(max-width:760px){.cat-h-title{font-size:17px}.cat-title{font-size:15px}.cat-search{display:none}}
+.cat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 6px}
+.cat-ico{font-size:15px;line-height:1}
+.cat-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}
+.cat-bulk-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);padding:10px 18px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px;box-shadow:0 1px 2px rgba(11,128,67,.3)}
+.cat-bulk-go:hover{background:#0a7038}
+.cat-bulk-go:active{transform:translateY(1px)}
+.cat-bulk-go:disabled{opacity:.5;cursor:default;box-shadow:none}
+.cat-bulk-stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--danger);color:#fff;border:none;border-radius:var(--r-full);padding:10px 16px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
+.cat-bulk-prog{flex:1 1 100%;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:0}
+.cat-proxy-toggle{display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:10px 15px;font-size:13px;font-weight:600;cursor:pointer;min-height:42px}
+.cat-proxy-toggle:hover{border-color:var(--accent);color:var(--ink)}
+.cat-proxy-toggle b{font-family:var(--ff-mono);font-weight:500;font-size:12px;color:var(--ink-mute)}
+.cat-proxy-body{margin:2px 0 8px;padding:13px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);max-width:640px}
+.cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
+.cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
+.cat-proxy-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cat-proxy-go{background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:40px}
+.cat-proxy-go:hover{background:var(--accent-deep)}
+.cat-proxy-clr{background:var(--panel);color:var(--danger);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:40px}
+.cat-proxy-clr:hover{border-color:var(--danger)}
+.cat-proxy-msg{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.cat-proxy-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
+.px-ip{font-family:var(--ff-mono);font-size:11.5px;color:#0b8043;background:rgba(11,128,67,.1);border-radius:var(--r-sm);padding:3px 9px}
+/* Mobile: hide the inline free-text search (the Gmail top pill already searches the
+   catalog), let the green action fill the row beside a compact Proxy chip, and tighten
+   the whole top area so job cards surface sooner. */
+@media(max-width:760px){
+  .cat-search{display:none}
+  .cat-head{gap:8px;margin-bottom:2px}
+  .cat-h-title{font-size:16px}
+  .cat-title{font-size:15px}
+  .cat-company input[list]{padding:11px 14px}
+  .cat-actions{margin:10px 0 4px}
+  .cat-bulk{flex:1 1 auto}
+  .cat-bulk-go{flex:1 1 auto}
+  .cat-proxy-body{max-width:none}
+  .cat-regions{padding:2px 0 8px}
+  .cat-reg{padding:8px 14px;min-height:40px;font-size:13.5px}
+}
 </style>"""
 
 _CAT_JS = """<script>

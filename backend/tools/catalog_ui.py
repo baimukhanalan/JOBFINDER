@@ -108,10 +108,10 @@ def _card(j: dict) -> str:
     dept = esc(j.get("department") or "")
     meta_bits = []
     if loc:
-        meta_bits.append(f'<span class="cat-loc">📍 {loc}</span>')
+        meta_bits.append(f'<span class="cat-loc">{loc}</span>')
     if dept:
         meta_bits.append(f'<span class="cat-dept">{dept}</span>')
-    meta = f'<div class="cat-meta">{"".join(meta_bits)}</div>' if meta_bits else ""
+    meta = f'<div class="cat-meta">{" · ".join(meta_bits)}</div>' if meta_bits else ""
 
     desc_html = j.get("description_html")
     if desc_html:
@@ -125,30 +125,33 @@ def _card(j: dict) -> str:
     questions = j.get("questions") or []
     qblock = _questions_block(questions)
 
-    open_link = (f'<a class="cat-open" href="{esc(url)}" target="_blank" rel="noopener">Открыть ↗</a>'
-                 if url else "")
+    # The title itself is the link to the source posting — no separate "Открыть" button.
+    if url:
+        title_html = (f'<a class="cat-title" href="{esc(url)}" target="_blank" '
+                      f'rel="noopener">{title}</a>')
+    else:
+        title_html = f'<div class="cat-title">{title}</div>'
 
     jid = j.get("id")
-    # ONE primary action per card ("Заполнить") + a compact ♂/♀ segmented toggle (a
-    # modifier, not two separate buttons). Открыть is a quiet link pushed to the right.
+    # ONE primary action per card ("Заполнить") + a compact М/Ж sex toggle (no emoji).
     if jid:
         fill_row = (
             '<div class="cat-fill-row">'
             '<div class="cat-sex" role="group" aria-label="Пол персоны">'
             '<button type="button" class="cat-sex-b on" data-gender="male" '
-            'onclick="pickSex(this)" aria-pressed="true" aria-label="Мужчина">♂</button>'
+            'onclick="pickSex(this)" aria-pressed="true">М</button>'
             '<button type="button" class="cat-sex-b" data-gender="female" '
-            'onclick="pickSex(this)" aria-pressed="false" aria-label="Женщина">♀</button></div>'
-            f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">⚡ Заполнить</button>'
-            f'<span class="cat-fill-res"></span>{open_link}</div>')
+            'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
+            f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
+            '<span class="cat-fill-res"></span></div>')
     else:
-        fill_row = f'<div class="cat-fill-row">{open_link}</div>' if open_link else ""
+        fill_row = ""
 
     return (
         '<article class="cat-card">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
         f'<span class="cat-wp {wt_cls}">{esc(wt)}</span></div>'
-        f'<div class="cat-title">{title}</div>{meta}'
+        f'{title_html}{meta}'
         f'{fill_row}{desc_det}{qblock}'
         "</article>")
 
@@ -156,7 +159,7 @@ def _card(j: dict) -> str:
 # Region axis for the catalog — a job's regions[] ∈ {US,CA,UK,OTHER} (multi). This is
 # the primary filter for the agency flow: pick a country, apply with a candidate who is
 # actually authorized there.
-_REGIONS = [("US", "🇺🇸 США"), ("CA", "🇨🇦 Канада"), ("UK", "🇬🇧 UK"), ("OTHER", "🌍 Другие")]
+_REGIONS = [("US", "США"), ("CA", "Канада"), ("UK", "UK"), ("OTHER", "Другие")]
 
 
 def _region_bar(active: str, q: str, company: str, by_region: dict, total: int) -> str:
@@ -221,52 +224,34 @@ def render_page(company: str = "", q: str = "", region: str = "",
         n = by_region.get(region, 0) if region else remote_total
         head_n = f'<span class="cat-h-n">{n}</span>'
 
-    # Company picker: native-autocomplete over every company (name + job count). Type
-    # "salmon" -> pick -> a clean per-company view (?company=<key>). Distinct from the
-    # free-text q search below and — unlike it — kept visible on mobile too.
-    dl = "".join(
-        f'<option value="{esc(c.get("company") or "")}">'
-        f'{c.get("n")} {_plural(c.get("n") or 0, "вакансия", "вакансии", "вакансий")}</option>'
-        for c in comps if c.get("company"))
-    company_pick = (
-        '<form class="cat-company" method="get" action="/catalog" role="search">'
-        + (f'<input type="hidden" name="region" value="{esc(region)}">' if region else "")
-        + '<input list="cat-companies" name="company_name" autocomplete="off" '
-        + f'value="{esc(active_cname)}" placeholder="🏢 Найти компанию…" aria-label="Поиск компании">'
-        + '<button class="ghost" type="submit">Открыть</button>'
-        + (f'<a class="ghost" href="/catalog{_qs(region=region)}">Сброс</a>' if company else "")
-        + f'</form><datalist id="cat-companies">{dl}</datalist>')
-
+    # Header: title + a single "Фильтры" button (opens the settings sheet). The active
+    # region shows as a tag on the button so it reads even while the sheet is closed.
+    _REG_NAMES = {"": "Все", "US": "США", "CA": "Канада", "UK": "UK", "OTHER": "Другие"}
+    reg_tag = _REG_NAMES.get(region, "Все") if not company else esc(active_cname)
+    # ONE wide search input. Filters the list in place as you type OR on Enter (see
+    # _CAT_JS). No company logo, no separate button. On mobile the top pill is the search,
+    # so this input is desktop-only.
     search = (
-        '<form class="cat-search" method="get" action="/catalog">'
-        + (f'<input type="hidden" name="company" value="{esc(company)}">' if company else "")
-        + (f'<input type="hidden" name="region" value="{esc(region)}">' if region else "")
-        + f'<input type="search" name="q" value="{esc(q)}" placeholder="Поиск: должность, компания, описание…">'
-        + '<button class="ghost" type="submit">Найти</button>'
-        + (f'<a class="ghost" href="/catalog{_qs(company=company, region=region)}">Сброс</a>' if q else "")
-        + "</form>")
+        f'<input id="catq" class="cat-q" type="search" value="{esc(q)}" '
+        'placeholder="Поиск: должность или компания…" autocomplete="off" '
+        'aria-label="Поиск вакансий">')
     head = (
-        '<div class="cat-head"><div class="cat-h-row">'
-        f'<div class="cat-h-title">{title_txt} {head_n}</div></div>'
-        f"{company_pick}{search}</div>")
-    # Action row: the primary mass-action (bulk apply) + a compact Proxy chip, grouped on
-    # ONE line so mobile doesn't stack two full-width slabs. Bulk = one SEQUENTIAL queue
-    # over every greenhouse+ashby job (Lever/Workable skipped: live captcha); auto-submits.
+        '<div class="cat-head">'
+        f'<div class="cat-h-row"><div class="cat-h-title">{title_txt} {head_n}</div>'
+        '<button class="cat-filters-btn" id="fltBtn" onclick="toggleFilters()" '
+        f'aria-expanded="false">Фильтры<span class="cat-filters-tag">{reg_tag}</span></button>'
+        f'</div>{search}</div>')
+
+    # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
+    # settings sheet, so the main view is just search + jobs.
+    region_chips = _region_bar(region, q, company, by_region, remote_total)
     bulk_bar = (
         '<div class="cat-bulk" id="catbulk">'
-        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">'
-        '<span class="cat-ico">⚡</span>Подать на все</button>'
-        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">'
-        '■ Стоп</button>'
+        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать на все</button>'
+        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
+        'onclick="bulkStop()">Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
-    proxy_toggle = (
-        '<button class="cat-proxy-toggle" id="pxToggle" onclick="pxPanel()">'
-        '<span class="cat-ico">🛡</span>Прокси<b id="pxCount">0</b></button>')
-    actions = f'<div class="cat-actions">{bulk_bar}{proxy_toggle}</div>'
-    # Proxy pool panel (collapsed): upload a list, dead proxies dropped on validation,
-    # applications rotate through the survivors (a different egress IP per submit).
-    proxy_body = (
-        '<div class="cat-proxy-body" id="pxBody" style="display:none">'
+    proxy_block = (
         '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
         'user:pass@host:port&#10;socks5://host:port&#10;(по одному в строке)"></textarea>'
         '<div class="cat-proxy-hint">http/https проверяются реальным запросом (виден egress-IP); '
@@ -275,12 +260,19 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="cat-proxy-go" onclick="pxUpload()">Загрузить и проверить</button>'
         '<button class="cat-proxy-clr" onclick="pxClear()">Очистить</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
-        '<div class="cat-proxy-list" id="pxList"></div></div>')
-    empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
+        '<div class="cat-proxy-list" id="pxList"></div>')
+    settings = (
+        '<div class="cat-settings" id="catSettings" hidden>'
+        f'<div class="cs-sec"><div class="cs-label">Регион</div>{region_chips}</div>'
+        f'<div class="cs-sec"><div class="cs-label">Массовая подача</div>{bulk_bar}</div>'
+        '<div class="cs-sec"><div class="cs-label">Прокси <b id="pxCount">0</b></div>'
+        f'<div class="cat-proxy-body">{proxy_block}</div></div>'
+        '</div>')
+
+    list_html = cards or '<div class="empty">Вакансий не найдено</div>'
     body = (
-        _CAT_CSS + head + actions + proxy_body
-        + _region_bar(region, q, company, by_region, remote_total)
-        + f'<div class="cat-list" id="catlist">{cards}</div>{empty}'
+        _CAT_CSS + head + settings
+        + f'<div class="cat-list" id="catlist">{list_html}</div>'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _CAT_JS)
     return mailcrm_ui._page("catalog", body)
@@ -304,15 +296,28 @@ def render_more(company: str = "", q: str = "", offset: int = 0, region: str = "
 
 _CAT_CSS = """<style>
 .cat-head{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
-.cat-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cat-head{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
+.cat-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .cat-h-title{font-size:19px;font-weight:700;color:var(--ink)}
 .cat-h-n{color:var(--ink-mute);font-weight:600;font-size:14px;margin-left:4px}
-.cat-search{display:flex;gap:8px;flex-wrap:wrap}
-.cat-search input[type=search]{flex:1;min-width:0}
-.cat-company{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.cat-company input[list]{flex:1;min-width:0;padding:9px 12px;border:1px solid var(--line-strong);border-radius:8px;font-size:15px;background:var(--panel);color:var(--ink)}
-.cat-company input[list]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(26,115,232,.18)}
-.cat-regions{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+/* One wide search field (pill). Live-filters as you type / on Enter. */
+.cat-q{width:100%;box-sizing:border-box;padding:12px 16px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:15px;background:var(--panel);color:var(--ink)}
+.cat-q::placeholder{color:var(--ink-mute)}
+.cat-q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
+/* Filters button — opens the settings sheet; shows the active region as a tag. */
+.cat-filters-btn{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-filters-btn:hover{border-color:var(--accent);color:var(--ink)}
+.cat-filters-btn[aria-expanded=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}
+.cat-filters-btn[aria-expanded=true] .cat-filters-tag{background:var(--panel)}
+/* Settings sheet — regions + mass-apply + proxy, collapsed by default. */
+.cat-settings{margin:2px 0 10px;padding:2px 14px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
+.cat-settings[hidden]{display:none}
+.cs-sec{padding:13px 0;border-top:1px solid var(--line)}
+.cs-sec:first-child{border-top:0}
+.cs-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-mute);margin-bottom:10px}
+.cs-label b{font-family:var(--ff-mono);font-weight:500;color:var(--accent);margin-left:2px}
+.cat-regions{display:flex;flex-wrap:wrap;gap:8px}
 .cat-regions::-webkit-scrollbar{display:none}
 .cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}
 .cat-reg b{font-family:var(--ff-mono,monospace);font-weight:500;font-size:12px;color:var(--ink-mute)}
@@ -325,11 +330,10 @@ _CAT_CSS = """<style>
 .cat-co{font-size:12px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em}
 .cat-wp{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
 .cat-wp-remote{color:#188038;border-color:#bcdfc4}.cat-wp-hybrid{color:#1a73e8;border-color:#b8d3f5}.cat-wp-onsite{color:var(--ink-mute)}
-.cat-title{font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;margin-bottom:5px}
-.cat-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
-.cat-meta span{font-size:12.5px;color:var(--ink-mute)}
-.cat-open{font-size:13px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;margin-left:auto;padding:6px 0;display:inline-flex;align-items:center}
-.cat-open:hover{text-decoration:underline}
+.cat-title{display:block;font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;margin-bottom:5px;text-decoration:none}
+a.cat-title:hover{color:var(--accent);text-decoration:underline}
+.cat-meta{font-size:12.5px;color:var(--ink-mute);margin-bottom:8px}
+.cat-meta span{color:inherit}
 .cat-det{margin-top:4px}
 .cat-det>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink-soft);font-size:13px;font-weight:600;user-select:none;padding:7px 0}
 .cat-det>summary::-webkit-details-marker{display:none}
@@ -351,15 +355,13 @@ _CAT_CSS = """<style>
 /* Sex is a compact segmented toggle, not two big buttons — one modifier for the single
    primary action below. */
 .cat-sex{display:inline-flex;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:2px}
-.cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:15px;line-height:1;width:36px;height:32px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-.cat-sex-b.on{background:var(--panel);color:var(--accent);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.cat-fill{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);padding:9px 20px;font-size:13.5px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:13px;font-weight:600;line-height:1;min-width:38px;height:32px;padding:0 10px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.cat-sex-b.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.cat-fill{display:inline-flex;align-items:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);padding:9px 22px;font-size:13.5px;font-weight:600;cursor:pointer;min-height:38px}
 .cat-fill:hover{background:var(--accent-deep)}
 .cat-fill:disabled{opacity:.6;cursor:default}
 .cat-fill-res a{color:var(--accent);font-weight:600;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
-.cat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 6px}
-.cat-ico{font-size:15px;line-height:1}
 .cat-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0}
 .cat-bulk-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);padding:10px 18px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px;box-shadow:0 1px 2px rgba(11,128,67,.3)}
 .cat-bulk-go:hover{background:#0a7038}
@@ -367,10 +369,7 @@ _CAT_CSS = """<style>
 .cat-bulk-go:disabled{opacity:.5;cursor:default;box-shadow:none}
 .cat-bulk-stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--danger);color:#fff;border:none;border-radius:var(--r-full);padding:10px 16px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
 .cat-bulk-prog{flex:1 1 100%;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:0}
-.cat-proxy-toggle{display:inline-flex;align-items:center;gap:7px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:10px 15px;font-size:13px;font-weight:600;cursor:pointer;min-height:42px}
-.cat-proxy-toggle:hover{border-color:var(--accent);color:var(--ink)}
-.cat-proxy-toggle b{font-family:var(--ff-mono);font-weight:500;font-size:12px;color:var(--ink-mute)}
-.cat-proxy-body{margin:2px 0 8px;padding:13px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);max-width:640px}
+.cat-proxy-body{max-width:640px}
 .cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
 .cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
 .cat-proxy-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -381,21 +380,17 @@ _CAT_CSS = """<style>
 .cat-proxy-msg{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
 .cat-proxy-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
 .px-ip{font-family:var(--ff-mono);font-size:11.5px;color:#0b8043;background:rgba(11,128,67,.1);border-radius:var(--r-sm);padding:3px 9px}
-/* Mobile: hide the inline free-text search (the Gmail top pill already searches the
-   catalog), let the green action fill the row beside a compact Proxy chip, and tighten
-   the whole top area so job cards surface sooner. */
+/* Mobile: the Gmail top pill IS the search there, so hide this page's own wide input;
+   keep the header to just title + Фильтры. */
 @media(max-width:760px){
-  .cat-search{display:none}
-  .cat-head{gap:8px;margin-bottom:2px}
-  .cat-h-title{font-size:16px}
+  .cat-q{display:none}
+  .cat-head{gap:6px;margin-bottom:2px}
+  .cat-h-title{font-size:17px}
   .cat-title{font-size:15px}
-  .cat-company input[list]{padding:11px 14px}
-  .cat-actions{margin:10px 0 4px}
   .cat-bulk{flex:1 1 auto}
   .cat-bulk-go{flex:1 1 auto}
   .cat-proxy-body{max-width:none}
-  .cat-regions{padding:2px 0 8px}
-  .cat-reg{padding:8px 14px;min-height:40px;font-size:13.5px}
+  .cat-reg{min-height:40px}
 }
 </style>"""
 
@@ -477,13 +472,17 @@ async function bulkPoll(){
 }
 bulkPoll();   // resume progress if a batch is already running when the page loads
 
-// Proxy pool: upload a list, invalid ones are dropped on validation, applications
-// then rotate through the survivors (a different egress IP per submit).
-window.pxPanel=function(){
-  var b=document.getElementById('pxBody');
-  b.style.display=(b.style.display==='none')?'block':'none';
-  if(b.style.display==='block') pxRefresh();
+// Filters/settings sheet holds regions + mass-apply + proxy — declutters the top.
+window.toggleFilters=function(){
+  var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
+  if(!s) return;
+  var willOpen=s.hasAttribute('hidden');
+  if(willOpen){ s.removeAttribute('hidden'); pxRefresh(); bulkPoll(); }
+  else{ s.setAttribute('hidden',''); }
+  if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
+// Proxy pool: upload a list, invalid ones dropped on validation, applications then
+// rotate through the survivors (a different egress IP per submit).
 async function pxRefresh(){
   var c=document.getElementById('pxCount'), list=document.getElementById('pxList');
   try{
@@ -518,15 +517,33 @@ pxRefresh();   // show the current pool size on load
 
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');
-  if(!list||!more)return;
-  var loading=false, PAGE=30;
+  if(!list) return;
+  var qp=new URLSearchParams(location.search);
+  var region=qp.get('region')||'', curQ=(qp.get('q')||'').trim();
+  var loading=false, PAGE=30, seq=0;
+  function fragUrl(offset){
+    var sp=new URLSearchParams();
+    if(curQ) sp.set('q', curQ);
+    if(region) sp.set('region', region);
+    sp.set('offset', offset);
+    return '/catalog/more?'+sp.toString();
+  }
+  async function runSearch(){
+    var mine=++seq; loading=true;
+    try{
+      var r=await fetch(fragUrl(0)), txt=r.ok?await r.text():'';
+      if(mine!==seq) return;                 // a newer keystroke already fired
+      list.innerHTML = txt.trim() || '<div class="empty">Вакансий не найдено</div>';
+      var added=(txt.match(/class="cat-card"/g)||[]).length;
+      if(more){ more.dataset.offset=String(added); more.dataset.more=(added>=PAGE)?'1':'0'; }
+      window.scrollTo(0,0);
+    }catch(e){}finally{ loading=false; }
+  }
   async function loadMore(){
-    if(loading||more.dataset.more!=='1')return;
+    if(loading||!more||more.dataset.more!=='1')return;
     loading=true;
     try{
-      var sp=new URLSearchParams(location.search);
-      sp.set('offset', more.dataset.offset);
-      var r=await fetch('/catalog/more?'+sp.toString());
+      var r=await fetch(fragUrl(more.dataset.offset));
       if(r.ok){
         var txt=await r.text();
         var added=(txt.match(/class="cat-card"/g)||[]).length;
@@ -539,5 +556,16 @@ pxRefresh();   // show the current pool size on load
   window.addEventListener('scroll',function(){
     if(window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-500)loadMore();
   },{passive:true});
+  // Live search: type in the desktop input OR the mobile top pill — debounced, and
+  // Enter is intercepted so it filters in place instead of reloading.
+  var deb;
+  function onType(v){ curQ=(v||'').trim(); clearTimeout(deb); deb=setTimeout(runSearch,250); }
+  [document.getElementById('catq'),
+   document.querySelector('.gm-search input[type=search]')].forEach(function(inp){
+    if(!inp) return;
+    if(curQ) inp.value=curQ;
+    if(inp.form) inp.form.addEventListener('submit',function(e){ e.preventDefault(); onType(inp.value); });
+    inp.addEventListener('input',function(){ onType(inp.value); });
+  });
 })();
 </script>"""

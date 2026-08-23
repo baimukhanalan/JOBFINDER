@@ -181,8 +181,16 @@ async def fill_field(page: Page, field: dict) -> bool:
                     if (!box) return 'none';
                     if (box.querySelector('[class*="no-results"]')) return 'noresults';
                     if (box.querySelector('[class*="loading"]')) return 'loading';
-                    const rows = box.querySelectorAll(
-                        '[class*="result"]:not([class*="no-results"]):not([class*="loading"])');
+                    // A REAL suggestion is a LEAF element with actual location text — NOT the
+                    // '.dropdown-results' container itself (which matches [class*=result] and
+                    // exists even when empty, so the old selector always read 'ready' -> a
+                    // phantom pick on a dead geocode). Require a childless node with >2 chars
+                    // of text that isn't the widget's own 'Loading'/'No location found' state.
+                    const rows = [...box.querySelectorAll('*')].filter(e => {
+                        const t = (e.textContent || '').trim();
+                        return e.children.length === 0 && t.length > 2
+                            && !/no location found|loading/i.test(t);
+                    });
                     return rows.length ? 'ready' : 'empty';
                 }"""
 
@@ -208,51 +216,54 @@ async def fill_field(page: Page, field: dict) -> bool:
                         # a bare city segment geocodes more often than 'City, Country'
                         state = await _type_and_poll(value.split(",")[0].strip())
                     if state == "ready":
-                        # A genuine geocode suggestion is present — commit it. This is the
-                        # ONLY case Lever persists (a real geocode object backs the value);
-                        # verify the input actually took the value and report honestly.
+                        # A genuine geocode suggestion is present — commit it.
                         await page.keyboard.press("ArrowDown")
                         await page.keyboard.press("Enter")
                         await page.wait_for_timeout(300)
+                    else:
+                        # Geocode never resolved (common on a datacenter IP). Best-effort
+                        # JS-set both the visible input and the hidden selectedLocation as a
+                        # submit aid; Lever usually clears a non-geocoded value on reconcile.
                         try:
-                            final = (await element.input_value(timeout=1500)).strip()
-                        except Exception:
-                            final = ""
-                        if final:
-                            logger.info("Filled Lever location typeahead '%s'", final[:40])
-                            return True
-                    # Geocode never resolved (common on a datacenter IP): no real suggestion
-                    # exists, so Lever will CLEAR any directly-set value on its next reconcile
-                    # (verified: both the visible input and the hidden selectedLocation end up
-                    # empty). We still JS-set both as a best-effort submit aid, but report
-                    # HONESTLY as NOT filled — the required 'Current location' then surfaces as
-                    # unfilled and the human completes it where the geocode resolves. Reading
-                    # the transient post-set value here would falsely report "filled" (the
-                    # clear happens later than any fixed wait/blur can force).
-                    try:
-                        await element.evaluate(
-                            """(el, val) => {
-                                const set = (node, v) => {
-                                    if (!node) return;
-                                    const tr = node._valueTracker;
-                                    if (tr) tr.setValue('');
-                                    const d = Object.getOwnPropertyDescriptor(
-                                        window.HTMLInputElement.prototype, 'value').set;
-                                    d.call(node, v);
-                                    node.dispatchEvent(new Event('input', {bubbles: true}));
-                                    node.dispatchEvent(new Event('change', {bubbles: true}));
-                                };
-                                set(el, val);
-                                set(el.form && el.form.querySelector(
-                                    '[name="selectedLocation"]'), val);
-                            }""", value)
-                        logger.info("Lever location geocode dead; best-effort set "
-                                    "'%s', reporting unfilled for the human", value[:40])
-                    except Exception as e2:
-                        logger.debug("lever location direct-set failed: %s", e2)
+                            await element.evaluate(
+                                """(el, val) => {
+                                    const set = (node, v) => {
+                                        if (!node) return;
+                                        const tr = node._valueTracker;
+                                        if (tr) tr.setValue('');
+                                        const d = Object.getOwnPropertyDescriptor(
+                                            window.HTMLInputElement.prototype, 'value').set;
+                                        d.call(node, v);
+                                        node.dispatchEvent(new Event('input', {bubbles: true}));
+                                        node.dispatchEvent(new Event('change', {bubbles: true}));
+                                    };
+                                    set(el, val);
+                                    set(el.form && el.form.querySelector(
+                                        '[name="selectedLocation"]'), val);
+                                }""", value)
+                        except Exception as e2:
+                            logger.debug("lever location direct-set failed: %s", e2)
+                    # HONEST return = False. On this datacenter IP Lever's geocode never
+                    # commits a persistent selection: whatever a pick or the JS-set shows
+                    # IMMEDIATELY, React clears on a LATER async reconcile (verified: the
+                    # visible input and the hidden selectedLocation both end empty every time,
+                    # and the clear fires >1.2s later — after any settle a single fill_field
+                    # call can wait). So there is no reliable in-call signal that the value
+                    # stuck; report the field unfilled so a REQUIRED 'Current location'
+                    # surfaces for the human (who completes it where the geocode resolves) and
+                    # is never a phantom "filled" over a blank. An OPTIONAL location isn't in
+                    # failed_required, so it stays silently blank. The best-effort JS-set above
+                    # still gives the form a value in the rare case Lever does keep it.
+                    logger.info("Lever location geocode unreliable on this host; "
+                                "reporting unfilled for the human")
                     return False
                 except Exception as e:
+                    # Do NOT fall through to the plain-text fill below: on a Lever geocode
+                    # field a bare .fill() types text React discards (and here the click was
+                    # blocked by an hCaptcha overlay), which would return True over a blank
+                    # required field. Report unfilled instead so it surfaces for the human.
                     logger.debug("lever location typeahead failed: %s", e)
+                    return False
             try:
                 await element.clear(timeout=5000)
                 await element.fill(value, timeout=5000)
@@ -305,20 +316,35 @@ async def fill_field(page: Page, field: dict) -> bool:
         return False
 
 
-async def fill_form(page: Page, analysis: dict) -> tuple[int, int]:
-    """Fill all fields from analysis result. Returns (success_count, fail_count)."""
+async def fill_form(page: Page, analysis: dict) -> tuple[int, int, list[str]]:
+    """Fill all fields from analysis. Returns (success, fail, failed_required_labels).
+    failed_required carries the human labels of REQUIRED standard fields whose fill
+    returned False (e.g. a Lever 'Current location' the dead-geocode couldn't set) so the
+    caller can surface them as unfilled — otherwise a required field that fails silently
+    vanishes from BOTH the filled count and the unfilled list (phantom 'form complete')."""
     success = 0
     fail = 0
+    failed_required: list[str] = []
 
     for field in analysis.get("fields", []):
         if await fill_field(page, field):
             success += 1
         else:
             fail += 1
+            if field.get("required"):
+                label = (field.get("label") or "").strip()
+                low = label.lower()
+                if not label or "loading" in low or "no location found" in low:
+                    # the analyzer's display_text can absorb the geocode dropdown's own
+                    # 'Loading'/'No location found' state text — give the human a clean label
+                    label = ("Current location" if field.get("matched") == "_location"
+                             else (field.get("matched") or "").lstrip("_").replace("_", " "))
+                if label and label not in failed_required:
+                    failed_required.append(label)
         # Small delay between fields to appear human
         await page.wait_for_timeout(300)
 
-    return success, fail
+    return success, fail, failed_required
 
 
 async def click_submit(page: Page, analysis: dict) -> bool:

@@ -182,11 +182,25 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   option, detected by LABEL (`communicationConsent`), option SENTENCES, OR the `given`/`notGiven` VALUE
   pair — the live analyzer extracts a radio's `value` attr as its option "text", so a sentence-only match
   misses; unbacked → review. Tests: `test_choices.py`.
-- **Lever geocode 'Current location' is dead on this datacenter IP.** `filler.py`'s `is_lever_loc`
-  branch polls `.dropdown-location` for a REAL suggestion (skipping 'Loading'/'No location found') and
-  only presses ArrowDown+Enter when one exists (a blind Enter wipes the typed text); if the geocode
-  never resolves it JS-sets BOTH the visible input and hidden `selectedLocation` directly, then returns
-  an HONEST boolean (True only if a value actually stuck) so a genuine failure reaches the submit gate.
+- **Lever geocode 'Current location' is dead on this datacenter IP — `is_lever_loc` returns False.**
+  Verified: after a pick OR a direct JS-set, Lever's React clears BOTH the visible input and the hidden
+  `selectedLocation` on a LATER async reconcile (>1.2s — past any settle a single `fill_field` can wait),
+  so there is NO reliable in-call signal the value stuck. `filler.py`'s `is_lever_loc` branch still polls
+  `.dropdown-location` for a real suggestion and JS-sets both as best-effort, but **always returns False**
+  (incl. on an exception — an hCaptcha overlay often blocks the click; do NOT fall through to the plain
+  `.fill()` below, which types text React discards and would return True over a blank field). False means
+  `fill_form` reports it: `fill_form` now returns `(success, fail, failed_required)` and `base.prefill`
+  appends `failed_required` to `unfilled`, so a REQUIRED location surfaces for the human (who fills it on
+  a real IP where the geocode resolves) instead of a phantom "complete". OPTIONAL locations aren't in
+  `failed_required`, so they stay silently blank. Lever marks the location `required` in the DOM even with
+  no visible asterisk, so most Lever forms carry this one human task — that is honest, not a regression.
+- **Known-answer replay is EXACT-match-first (`analyzer._best_known_answer`).** `analyze_page`'s known-
+  answers loop used to bind the FIRST fuzzy `_known_answer_matches` hit (word-overlap ≥ max(2, sig//2)),
+  so two Yes/No screeners sharing only generic words — "authorized to work…for our company?" (Yes) and
+  "…require **sponsorship**…to work legally for our Company?" (No) — cross-bound: the authorized 'Yes' was
+  applied to the SPONSORSHIP radio = a self-disqualifying answer. Now an EXACT normalized-label match
+  (`_known_answer_exact`) is preferred over any fuzzy hit and over dict order; the sponsorship field's own
+  full-text key binds it to 'No'. Fuzzy remains the fallback for short Ashby title labels.
 - **Profile reality gate** (`applier/profile_validator.py`) blocks prefill/apply affordances for profiles
   with reserved-fictional phones (555-01xx) or placeholder emails — such applications are undeliverable.
   `michael` is the synthetic default persona and is gated. Do NOT bypass the gate; onboard a real person

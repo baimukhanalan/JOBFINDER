@@ -236,7 +236,7 @@ class ApplyStrategy(ABC):
                 "submitted": False,
                 "note": f"stopped: page_type={page_type}",
             }
-        success, fail = await fill_form(page, analysis)
+        success, fail, failed_required = await fill_form(page, analysis)
 
         # Custom React-Select dropdowns (Greenhouse) the analyzer can't fill — deterministic
         # eligibility ones only (work-auth/sponsorship/country/18+/background/equipment).
@@ -564,6 +564,10 @@ class ApplyStrategy(ABC):
                     pass
             unfilled.append(q.get("question_text", ""))
         unfilled += [t for t in unfilled_custom if t not in unfilled]
+        # A REQUIRED standard field whose fill returned False (e.g. Lever 'Current location'
+        # the dead-geocode couldn't set) is not an unknown_question, so it would otherwise
+        # never surface — a phantom 'form complete' over a blank required field.
+        unfilled += [t for t in failed_required if t not in unfilled]
         # Safety net for BOTH modes: any react-select still on its placeholder is
         # invisible to the analyzer (its typeahead input is skipped) — without this
         # scan the report/submit gate would treat the form as complete.

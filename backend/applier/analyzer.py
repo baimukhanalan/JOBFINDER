@@ -753,9 +753,12 @@ async def analyze_page(
         if not display_text:  # nothing human-readable -> cleaned name/id beats nothing
             display_text = _clean_text(match_text)
 
-        # Check known answers first
-        for q_text, answer in known_answers.items():
-            if _known_answer_matches(q_text, display_text):
+        # Check known answers first — EXACT label match preferred over fuzzy overlap (and
+        # over dict order), so a work-auth 'Yes' doesn't cross-bind onto the sponsorship
+        # radio via shared generic words (see _best_known_answer).
+        _best = _best_known_answer(known_answers, display_text)
+        for q_text, answer in ([_best] if _best else []):
+            if True:
                 if f["type"] in ("radio_group", "checkbox_group"):
                     opt = _pick_option(f["options"], answer, "")
                     if opt:
@@ -792,6 +795,7 @@ async def analyze_page(
                         "action": "select" if f["tag"] == "select" else "fill",
                         "value": answer,
                         "matched": f"known_answer:{q_text[:30]}",
+                        "required": f["required"], "label": display_text,
                     })
                 break
         else:
@@ -897,6 +901,7 @@ async def analyze_page(
                             "action": "fill",
                             "value": value,
                             "matched": key,
+                            "required": f["required"], "label": display_text,
                         })
                     continue
 
@@ -904,6 +909,7 @@ async def analyze_page(
                     "selector": f["selector"],
                     "action": action,
                     "value": value,
+                    "required": f["required"], "label": display_text,
                     "matched": key,
                 })
             else:
@@ -970,16 +976,38 @@ def _known_answer_matches(q_text: str, match_text: str) -> bool:
     (one shared significant word, so the >=2-hit path failed too) -> the textarea
     stayed blank. Dropping the marker (and excluding it from the sig words) fixes
     every such optionality-suffixed key."""
-    mt = match_text.lower()
-    _n = lambda s: re.sub(
-        r"\s*\(?(optional|required)\)?\s*$", "",
-        re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip())
-    if _n(q_text) and _n(q_text) == _n(match_text):
+    if _known_answer_exact(q_text, match_text):
         return True
+    mt = match_text.lower()
     sig = {w.lower() for w in q_text.split()
            if len(w) > 3 and w.lower() not in ("optional", "required")}
     hits = sum(1 for w in sig if w in mt)
     return bool(sig) and hits >= max(2, len(sig) // 2)
+
+
+def _known_answer_exact(q_text: str, match_text: str) -> bool:
+    """True when the cached question and the field label are the SAME text (normalized:
+    whitespace/asterisk-insensitive, trailing '(Optional)'/'(Required)' dropped). An exact
+    match is unambiguous and is preferred over any fuzzy word-overlap hit."""
+    _n = lambda s: re.sub(
+        r"\s*\(?(optional|required)\)?\s*$", "",
+        re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip())
+    return bool(_n(q_text)) and _n(q_text) == _n(match_text)
+
+
+def _best_known_answer(known_answers: dict, display_text: str):
+    """Pick the cached (question, answer) for a field: an EXACT normalized-label match wins
+    over any fuzzy word-overlap hit and over dict order. Two Yes/No screeners sharing only
+    generic words (authorized-to-work vs require-sponsorship) otherwise cross-bind on the
+    first fuzzy hit, inverting a work-auth 'Yes' onto the sponsorship radio. Returns
+    (q_text, answer) or None."""
+    for q_text, answer in known_answers.items():
+        if _known_answer_exact(q_text, display_text):
+            return (q_text, answer)
+    for q_text, answer in known_answers.items():
+        if _known_answer_matches(q_text, display_text):
+            return (q_text, answer)
+    return None
 
 
 def _unknown_entry(f: dict, display_text: str) -> dict:

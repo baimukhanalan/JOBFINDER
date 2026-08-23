@@ -610,8 +610,13 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
         if len(opts) < 2:
             # work-eligibility free text -> affirmative authorization. Require a work/employ
             # context so a behavioural "authorized to make a decision" free-text isn't caught.
+            # ONLY for a genuinely optionless field (`not opts`): a closed choice under-captured
+            # to a SINGLE option (e.g. a Lever "multiple-select" Yes/No checkbox the scraper
+            # stored as options=["Yes"]) must NOT get the prose _auth_text — the live widget is a
+            # checkbox and _pick_option can't match long prose to "Yes"/"No", leaving it unfilled.
+            # It falls through to the eligibility-select gate below, which picks the "Yes" option.
             work_ctx = re.search(r"(?i)\b(work|employ|job|role|position)\b", label)
-            if not _COUNTRY_RE.search(label) and (
+            if not opts and not _COUNTRY_RE.search(label) and (
                     _WITHOUT_SPON_RE.search(label)
                     or (_AUTH_RE.search(label) and work_ctx)):
                 answers[i] = {**base, "value": _auth_text(profile), "source": "identity",
@@ -834,7 +839,7 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 5  # bump: obligations-that-impede -> No (was self-disqualifying Yes)
+_SCRAPE_V = 6  # bump: single-option choice auth (Lever Yes/No checkbox scraped as ["Yes"]) -> pick "Yes", not prose
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:

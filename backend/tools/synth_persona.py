@@ -16,6 +16,7 @@ demo click never fails.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 
@@ -58,19 +59,48 @@ _DEFAULT_COUNTRY = "Kazakhstan"       # rest-of-world default (the agency's own 
 _CITIZEN = {"United States": "U.S. Citizen", "United Kingdom": "British Citizen",
             "Canada": "Canadian Citizen"}
 
-# deterministic fallback name banks + cities (only used if the LLM is unavailable)
+# Name banks per country. These are OUR source of names now (not just the LLM fallback):
+# `_pick_name` chooses first+last from here, avoiding recently-used names, and pins that name
+# into the LLM prompt — the local LLM is stateless and otherwise collapses to the same handful
+# of "favourite" names on every fill. Banks are large so repeats are rare even before history.
 _NAMES = {
-    "United States": (["James", "Michael", "Emily", "Olivia", "Daniel", "Grace", "Ethan", "Ava"],
-                      ["Carter", "Bennett", "Foster", "Hayes", "Brooks", "Parker", "Ellis"]),
-    "Canada": (["Liam", "Owen", "Charlotte", "Nathan", "Zoe", "Juliette", "Aiden"],
-               ["Tremblay", "Gagnon", "Roy", "Clarke", "MacKenzie", "Fortin", "Lavoie"]),
-    "United Kingdom": (["Oliver", "Harry", "Amelia", "Isla", "George", "Freya", "Jack"],
-                       ["Walker", "Wright", "Hughes", "Hall", "Green", "Baker", "Clarke"]),
-    "Kazakhstan": (["Arman", "Dias", "Aibek", "Timur", "Dana", "Aigerim", "Nurlan", "Alina"],
-                   ["Serikuly", "Zhaksybek", "Toleubek", "Amirkhan", "Beisenov", "Yesenov"]),
+    "United States": (
+        ["James", "Michael", "Emily", "Olivia", "Daniel", "Grace", "Ethan", "Ava", "Noah",
+         "Sophia", "Mason", "Chloe", "Logan", "Lily", "Jackson", "Hannah", "Aiden", "Zoe",
+         "Caleb", "Nora", "Owen", "Ruby", "Henry", "Claire", "Nathan", "Violet", "Isaac",
+         "Stella", "Evan", "Aubrey", "Julian", "Naomi", "Adrian", "Paige", "Miles", "Vivian"],
+        ["Carter", "Bennett", "Foster", "Hayes", "Brooks", "Parker", "Ellis", "Reed", "Coleman",
+         "Sullivan", "Fleming", "Dawson", "Harrington", "Blake", "Morrison", "Sherwood",
+         "Whitaker", "Preston", "Underwood", "Hollis", "Barrett", "Cross", "Mercer", "Vaughn",
+         "Ashby", "Lang", "Sutton", "Pierce", "Rowe", "Kirby", "Nash", "Chase", "Donovan"]),
+    "Canada": (
+        ["Liam", "Owen", "Charlotte", "Nathan", "Zoe", "Juliette", "Aiden", "Emma", "William",
+         "Chloe", "Samuel", "Camille", "Felix", "Rose", "Thomas", "Alice", "Gabriel", "Beatrice",
+         "Simon", "Margot", "Adam", "Laurence", "Elliot", "Sadie"],
+        ["Tremblay", "Gagnon", "Roy", "Clarke", "MacKenzie", "Fortin", "Lavoie", "Bergeron",
+         "Cote", "Girard", "Morin", "Belanger", "Cardinal", "Beaulieu", "Fraser", "Leclerc",
+         "Boucher", "Gauthier", "Pelletier", "Caron", "Simard", "Fontaine"]),
+    "United Kingdom": (
+        ["Oliver", "Harry", "Amelia", "Isla", "George", "Freya", "Jack", "Poppy", "Charlie",
+         "Evie", "Thomas", "Florence", "Arthur", "Ivy", "Alfie", "Maisie", "Edward", "Rosie",
+         "Reuben", "Elsie", "Toby", "Martha", "Louis", "Bonnie"],
+        ["Walker", "Wright", "Hughes", "Hall", "Green", "Baker", "Clarke", "Turner", "Hutchinson",
+         "Pearce", "Whitfield", "Redmond", "Ashworth", "Bramwell", "Fairfax", "Holloway",
+         "Winterbourne", "Marsh", "Pembroke", "Radcliffe", "Thornton", "Ainsley"]),
+    "Kazakhstan": (
+        ["Arman", "Dias", "Aibek", "Timur", "Dana", "Aigerim", "Nurlan", "Alina", "Yerlan",
+         "Aizhan", "Bekzat", "Madina", "Ruslan", "Zhanar", "Sanzhar", "Gulnar", "Adil", "Assel",
+         "Daniyar", "Aisulu", "Kairat", "Malika", "Yernar", "Saltanat"],
+        ["Serikuly", "Zhaksybek", "Toleubek", "Amirkhan", "Beisenov", "Yesenov", "Nurpeisov",
+         "Sagatov", "Iskakov", "Bekova", "Omarov", "Kassymova", "Zhumabek", "Tulegenov",
+         "Abenov", "Dosanova", "Kaliyev", "Seitkali", "Baibek", "Nurlanuly"]),
 }
-_GENERIC_NAMES = (["Alex", "Maria", "Daniel", "Sofia", "Adrian", "Elena", "Lucas", "Nina"],
-                  ["Novak", "Silva", "Kovac", "Costa", "Popov", "Moreau", "Duarte"])
+_GENERIC_NAMES = (
+    ["Alex", "Maria", "Daniel", "Sofia", "Adrian", "Elena", "Lucas", "Nina", "David", "Clara",
+     "Marco", "Ines", "Victor", "Lena", "Theo", "Anna", "Leon", "Mira", "Felix", "Sara"],
+    ["Novak", "Silva", "Kovac", "Costa", "Popov", "Moreau", "Duarte", "Weiss", "Ferrari",
+     "Andersen", "Halvorsen", "Bauer", "Marin", "Vidal", "Horvat", "Lindqvist", "Rossi",
+     "Fischer", "Nagy", "Sorensen"])
 _CITIES = {
     "United States": ["Austin, TX", "Denver, CO", "Columbus, OH", "Seattle, WA"],
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
@@ -132,17 +162,66 @@ def _fictional_phone() -> str:
     return f"+1 ({random.randint(200, 989)}) 555-0{random.randint(100, 199)}"
 
 
-def _llm_persona(job: dict, country: str) -> dict | None:
+# --- name history (the local LLM is stateless; we keep the memory it lacks) ------------------
+# A tiny rolling log of recently-invented demo names so a fresh fill doesn't keep showing the
+# same person. Best-effort + gitignored (demo data); any failure never blocks a fill.
+_USED_NAMES_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "demo_used_names.json")
+_USED_MAX = 400  # remember this many recent names before rolling off the oldest
+
+
+def _load_used() -> list:
+    try:
+        with open(_USED_NAMES_PATH) as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _remember_name(name: str) -> None:
+    if not name:
+        return
+    try:
+        used = _load_used()
+        used.append(name.lower())
+        used = used[-_USED_MAX:]
+        tmp = _USED_NAMES_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(used, f)
+        os.replace(tmp, _USED_NAMES_PATH)  # atomic — no torn file under concurrent clicks
+    except Exception:
+        pass
+
+
+def _pick_name(country: str) -> str:
+    """A random 'First Last' for the country, avoiding names used in the recent history so
+    consecutive fills don't show the same person. Falls back to a plain random pick if the
+    whole (small) space is exhausted."""
+    first_bank, last_bank = _NAMES.get(country, _GENERIC_NAMES)
+    used = set(_load_used())
+    for _ in range(20):
+        full = f"{random.choice(first_bank)} {random.choice(last_bank)}"
+        if full.lower() not in used:
+            return full
+    return f"{random.choice(first_bank)} {random.choice(last_bank)}"
+
+
+def _llm_persona(job: dict, country: str, name: str = "") -> dict | None:
     title = job.get("title", "")
     company = job.get("company", "")
     desc = re.sub(r"\s+", " ", (job.get("description") or "")).strip()[:1200]
+    # Pin the name we already chose (see `_pick_name`) so the résumé is authored around it and
+    # the model can't drift back to its handful of favourite names.
+    name_line = (f"The applicant's name is EXACTLY '{name}'. Use it verbatim as full_name; do "
+                 f"NOT invent a different name.\n" if name else "")
+    full_name_slot = ('"<given + family name for ' + country + '>"') if not name else f'"{name}"'
     prompt = (
         f"Invent a REALISTIC but entirely FICTIONAL job applicant who is a citizen of and "
         f"resides in {country}, for the role below. This is synthetic demo data — do NOT use "
         f"any real, famous, or celebrity name; make up an ordinary {country} person with a "
-        f"name and a city typical of {country}. Tailor the experience to the role.\n"
+        f"city typical of {country}. Tailor the experience to the role.\n" + name_line +
         f"Return ONLY a JSON object, no prose:\n"
-        '{"full_name":"<common given + family name for ' + country + '>",'
+        '{"full_name":' + full_name_slot + ','
         '"city":"<a city in ' + country + '>",'
         '"street_address":"<a plausible street address, number + street>",'
         '"phone":"<a ' + country + '-format phone number>",'
@@ -271,7 +350,10 @@ def synth_persona(job: dict) -> dict:
     """A fresh, fictional demo candidate whose nationality matches the job's country
     (never a real roster person). LLM-authored with a deterministic fallback."""
     country = _country_of(job)
-    raw = _llm_persona(job, country)
+    name = _pick_name(country)                 # OUR choice, history-avoided (not the LLM's)
+    raw = _llm_persona(job, country, name)
     if not (raw and str(raw.get("full_name") or "").strip()):
         raw = _fallback_persona(job, country)
+    raw["full_name"] = name                     # force the diverse name in BOTH paths
+    _remember_name(name)
     return _build_candidate(raw, country, job)

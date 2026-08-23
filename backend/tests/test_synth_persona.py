@@ -60,7 +60,7 @@ def test_fallback_persona_builds_valid_candidate():
 
 
 def test_synth_persona_uses_fallback_without_llm(monkeypatch):
-    monkeypatch.setattr(sp, "_llm_persona", lambda job, country: None)
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
     cand = sp.synth_persona(_job("Brazil (Remote)"))
     p = cand["profile"]
     assert p["country"] == "Brazil"
@@ -69,16 +69,33 @@ def test_synth_persona_uses_fallback_without_llm(monkeypatch):
     assert p["street_address"]
 
 
-def test_synth_persona_honours_llm_when_present(monkeypatch):
-    monkeypatch.setattr(sp, "_llm_persona", lambda job, country: {
+def test_synth_persona_honours_llm_content_but_our_name(monkeypatch):
+    # The résumé CONTENT comes from the LLM, but the NAME is OUR history-avoided pick — the
+    # stateless local model otherwise collapses to the same handful of names on every fill,
+    # and must never be trusted to avoid a famous name either ("Steve Jobs" below).
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": {
         "full_name": "Steve Jobs", "city": "London", "street_address": "1 King St",
         "years_experience": 8, "summary": "s",
         "experience": [{"company": "X", "title": "Y", "bullets": ["b"]}],
         "education": [{"degree": "BSc CS", "school": "U", "field": "CS", "year": "2016"}],
         "skills": ["python", "sql"]})
     cand = sp.synth_persona(_job("London, United Kingdom"))
-    assert cand["profile"]["full_name"] == "Steve Jobs"
-    assert re.match(r"^steve\.jobs\d+@takhet\.com$", cand["profile"]["email"])  # numeric suffix
-    assert cand["profile"]["id"].startswith("demo_steve_jobs")
-    assert cand["profile"]["country"] == "United Kingdom"
-    assert cand["profile"]["work_authorization"] == "British Citizen"
+    p = cand["profile"]
+    assert p["full_name"] != "Steve Jobs"                 # our pick overrides the LLM name
+    first, last = p["full_name"].split(" ", 1)
+    uk_first, uk_last = sp._NAMES["United Kingdom"]
+    assert first in uk_first and last in uk_last          # from the UK bank
+    assert p["email"].endswith("@takhet.com") and re.search(r"\d+@", p["email"])  # numeric suffix
+    assert p["id"].startswith("demo_")
+    assert p["resume"]["experience"][0]["company"] == "X"  # LLM content honoured
+    assert p["country"] == "United Kingdom"
+    assert p["work_authorization"] == "British Citizen"
+
+
+def test_synth_persona_names_do_not_repeat(monkeypatch, tmp_path):
+    # Consecutive fills for one country must not keep showing the same person.
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
+    monkeypatch.setattr(sp, "_USED_NAMES_PATH", str(tmp_path / "used.json"))
+    names = [sp.synth_persona(_job("Austin, TX, United States"))["profile"]["full_name"]
+             for _ in range(30)]
+    assert len(set(names)) == 30                           # all distinct across 30 fills

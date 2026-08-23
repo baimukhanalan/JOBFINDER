@@ -113,10 +113,6 @@ def _card(j: dict) -> str:
         meta_bits.append(f'<span class="cat-dept">{dept}</span>')
     meta = f'<div class="cat-meta">{"".join(meta_bits)}</div>' if meta_bits else ""
 
-    qc = int(j.get("q_count") or 0)
-    qbadge = (f'<span class="cat-qbadge">❓ {qc} '
-              f'{_plural(qc, "вопрос", "вопроса", "вопросов")}</span>') if qc > 0 else ""
-
     desc_html = j.get("description_html")
     if desc_html:
         desc = desc_html
@@ -133,20 +129,26 @@ def _card(j: dict) -> str:
                  if url else "")
 
     jid = j.get("id")
-    fill_row = (
-        f'<div class="cat-fill-row"><span class="cat-fill-lbl">Заполнить вживую:</span>'
-        f'<button class="cat-fill cat-fill-m" data-id="{jid}" data-gender="male" '
-        f'onclick="fillJob(this)">♂ Муж</button>'
-        f'<button class="cat-fill cat-fill-f" data-id="{jid}" data-gender="female" '
-        f'onclick="fillJob(this)">♀ Жен</button>'
-        f'<span class="cat-fill-res"></span></div>') if jid else ""
+    # ONE primary action per card ("Заполнить") + a compact ♂/♀ segmented toggle (a
+    # modifier, not two separate buttons). Открыть is a quiet link pushed to the right.
+    if jid:
+        fill_row = (
+            '<div class="cat-fill-row">'
+            '<div class="cat-sex" role="group" aria-label="Пол персоны">'
+            '<button type="button" class="cat-sex-b on" data-gender="male" '
+            'onclick="pickSex(this)" aria-pressed="true" aria-label="Мужчина">♂</button>'
+            '<button type="button" class="cat-sex-b" data-gender="female" '
+            'onclick="pickSex(this)" aria-pressed="false" aria-label="Женщина">♀</button></div>'
+            f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">⚡ Заполнить</button>'
+            f'<span class="cat-fill-res"></span>{open_link}</div>')
+    else:
+        fill_row = f'<div class="cat-fill-row">{open_link}</div>' if open_link else ""
 
     return (
         '<article class="cat-card">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
         f'<span class="cat-wp {wt_cls}">{esc(wt)}</span></div>'
         f'<div class="cat-title">{title}</div>{meta}'
-        f'<div class="cat-row">{qbadge}{open_link}</div>'
         f'{fill_row}{desc_det}{qblock}'
         "</article>")
 
@@ -326,9 +328,8 @@ _CAT_CSS = """<style>
 .cat-title{font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;margin-bottom:5px}
 .cat-meta{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
 .cat-meta span{font-size:12.5px;color:var(--ink-mute)}
-.cat-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;min-height:22px}
-.cat-qbadge{font-size:12px;font-weight:700;color:#b06000;background:#fef3e0;border:1px solid #fadfb0;padding:2px 9px;border-radius:999px;white-space:nowrap}
-.cat-open{font-size:13.5px;font-weight:600;color:#1a73e8;text-decoration:none;white-space:nowrap;padding:6px 0;min-height:36px;display:inline-flex;align-items:center;margin-left:auto}
+.cat-open{font-size:13px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;margin-left:auto;padding:6px 0;display:inline-flex;align-items:center}
+.cat-open:hover{text-decoration:underline}
 .cat-det{margin-top:4px}
 .cat-det>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink-soft);font-size:13px;font-weight:600;user-select:none;padding:7px 0}
 .cat-det>summary::-webkit-details-marker{display:none}
@@ -346,15 +347,16 @@ _CAT_CSS = """<style>
 .cat-req{color:var(--danger);font-weight:700;margin-left:3px}
 .cat-qtype{flex:0 0 auto;margin-top:1px;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-.cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
-.cat-fill-lbl{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
-.cat-fill{display:inline-flex;align-items:center;gap:5px;color:#fff;border:none;border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
-.cat-fill-m{background:var(--accent)}
-.cat-fill-m:hover{background:var(--accent-deep)}
-.cat-fill-f{background:#b8478a}
-.cat-fill-f:hover{background:#a23c79}
+.cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+/* Sex is a compact segmented toggle, not two big buttons — one modifier for the single
+   primary action below. */
+.cat-sex{display:inline-flex;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:2px}
+.cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:15px;line-height:1;width:36px;height:32px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.cat-sex-b.on{background:var(--panel);color:var(--accent);font-weight:700;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.cat-fill{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);padding:9px 20px;font-size:13.5px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-fill:hover{background:var(--accent-deep)}
 .cat-fill:disabled{opacity:.6;cursor:default}
-.cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
+.cat-fill-res a{color:var(--accent);font-weight:600;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
 .cat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 6px}
 .cat-ico{font-size:15px;line-height:1}
@@ -403,22 +405,30 @@ _CAT_JS = """<script>
 // Redirect the SAME tab — window.open('_blank') is popup-blocked on mobile (that was the
 // "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
 // noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
+// ♂/♀ segmented toggle: mark the tapped segment active (per card).
+window.pickSex = function(b){
+  var g=b.closest('.cat-sex'); if(!g) return;
+  g.querySelectorAll('.cat-sex-b').forEach(function(x){
+    var on=(x===b); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on?'true':'false');
+  });
+};
 window.fillJob = async function(btn){
-  var id=btn.dataset.id, gender=btn.dataset.gender||'',
-      row=btn.closest('.cat-fill-row'),
-      res=row?row.querySelector('.cat-fill-res'):null,
-      btns=row?row.querySelectorAll('.cat-fill'):[btn],
-      label=btn.textContent;
   if(btn.disabled) return;
+  var id=btn.dataset.id,
+      row=btn.closest('.cat-fill-row'),
+      sel=row?row.querySelector('.cat-sex-b.on'):null,
+      gender=sel?(sel.dataset.gender||''):'',
+      res=row?row.querySelector('.cat-fill-res'):null,
+      label=btn.textContent;
   var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
-  btns.forEach(function(b){b.disabled=true;}); btn.textContent='⏳…'; if(res) res.textContent='';
+  btn.disabled=true; btn.textContent='⏳…'; if(res) res.textContent='';
   try{
     var body='gender='+encodeURIComponent(gender);
     var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
   }catch(e){
-    btns.forEach(function(b){b.disabled=false;}); btn.textContent=label;
+    btn.disabled=false; btn.textContent=label;
     if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
   }
 };

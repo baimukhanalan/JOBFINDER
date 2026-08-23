@@ -42,6 +42,42 @@ class ClassifierTests(unittest.TestCase):
         body = "Unfortunately, we will not be moving forward to an interview."
         self.assertEqual(mailcrm.classify("Your application", body), "rejection")
 
+    def test_saved_keywords_replace_defaults_and_apply_immediately(self):
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(mailcrm, "KEYWORDS_FILE", Path(td) / "keywords.json"):
+            old_cache = dict(mailcrm._KEYWORDS_CACHE)
+            try:
+                mailcrm._KEYWORDS_CACHE.update({"mtime": None, "rules": None})
+                mailcrm.save_keyword_rules({
+                    "offer": ["golden ticket"], "rejection": ["red light"],
+                    "interview": ["calendar link"], "ack": ["application logged"],
+                })
+                self.assertEqual(mailcrm.classify("Your golden ticket", "Hello"), "offer")
+                self.assertEqual(mailcrm.classify("Next", "Here is your calendar link"),
+                                 "interview")
+                self.assertEqual(mailcrm.classify("Offer letter", "Old default removed"), "other")
+            finally:
+                mailcrm._KEYWORDS_CACHE.clear()
+                mailcrm._KEYWORDS_CACHE.update(old_cache)
+
+    def test_classifier_checks_beyond_the_visible_snippet(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "candidate"
+            (root / "new").mkdir(parents=True)
+            path = root / "new" / "long-message"
+            msg = EmailMessage()
+            msg["From"] = "Recruiter <recruiter@example.com>"
+            msg["To"] = "candidate@example.com"
+            msg["Subject"] = "Next step"
+            msg.set_content(("ordinary update " * 30) + " schedule an interview")
+            path.write_bytes(msg.as_bytes())
+            box = {"id": "p1", "email": "candidate@example.com", "name": "Candidate",
+                   "maildir": str(root)}
+            with patch.object(mailcrm, "candidates", return_value=[box]):
+                row = mailcrm.build_index_row(str(path), 0)
+            self.assertNotIn("schedule an interview", row["snippet"])
+            self.assertEqual(row["kind"], "interview")
+
 
 class ReplyUiTests(unittest.TestCase):
     def test_reply_data_survives_quotes_without_inline_javascript(self):
@@ -76,6 +112,25 @@ class ReplyUiTests(unittest.TestCase):
         self.assertIn(".funnel{flex-wrap:nowrap;overflow-x:auto", page)
         thread = mailcrm_ui.render_thread({"messages": []})
         self.assertIn(".msg-toolbar .reply-action,.msg-toolbar .delete-action", thread)
+
+    def test_inbox_duplicates_stage_funnel_and_preserves_context(self):
+        page = mailcrm_ui.render_inbox(
+            [], {"unread": 2, "candidates": 10}, q="openai",
+            mailbox="candidate@example.com", stage="interview",
+            stage_counts={"all": 8, "sent": 1, "ack": 3, "interview": 2,
+                          "offer": 1, "rejection": 1},
+        )
+        self.assertIn('data-filter-list="maillist"', page)
+        self.assertIn('class="fbtn active"', page)
+        self.assertIn('stage=offer&amp;q=openai&amp;mailbox=candidate%40example.com', page)
+        self.assertIn('href="/mail/keywords"', page)
+        self.assertIn("Фильтруем…", page)
+
+    def test_keyword_settings_expose_one_editable_field_per_category(self):
+        page = mailcrm_ui.render_keyword_settings(mailcrm.DEFAULT_KEYWORDS)
+        for kind in ("interview", "offer", "rejection", "ack"):
+            self.assertIn(f'name="{kind}"', page)
+        self.assertIn("Сохранить и пересчитать письма", page)
 
 
 class DeleteThreadTests(unittest.TestCase):

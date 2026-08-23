@@ -138,6 +138,8 @@ button.primary:hover{background:var(--accent-deep);}
 .funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
 .candidate-tools{display:flex;align-items:center;gap:8px;margin:0 0 14px;}
 .candidate-tools input{width:min(420px,100%);}
+.funnel.busy{opacity:.65;pointer-events:none}.fbtn.pending{border-color:var(--accent);color:var(--accent);}
+.filter-status{min-height:18px;margin:-8px 0 8px;color:var(--ink-mute);font-size:12px;}
 .fbtn{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:var(--r-full);border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;min-height:38px;}
 .fbtn b{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink);}
 .fbtn:hover{border-color:var(--accent);text-decoration:none;}
@@ -158,6 +160,13 @@ button.primary:hover{background:var(--accent-deep);}
 .modal form input,.modal form textarea,.modal form select{width:100%;}
 .modal-actions{margin-top:16px;}.modal-actions .primary{width:100%;}
 .sendmsg{margin-top:10px;font-size:13px;}
+.keyword-intro{max-width:760px;color:var(--ink-soft);margin:-4px 0 18px;}
+.keyword-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:920px;}
+.keyword-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;}
+.keyword-card h2{font-size:16px;margin:0 0 4px;}.keyword-card p{font-size:12.5px;color:var(--ink-mute);margin:0 0 10px;}
+.keyword-card textarea{min-height:220px;font-family:var(--ff-mono);font-size:12.5px;line-height:1.55;}
+.keyword-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:920px;margin-top:16px;}
+.keyword-note{background:var(--accent-soft);color:var(--accent-deep);border-radius:var(--r-sm);padding:10px 13px;margin:0 0 14px;max-width:920px;}
 @media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;}.sidebar{justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
 /* iOS auto-zooms the page when a focused input's font-size is < 16px. The generic
    `input,select,textarea{font-size:16px}` above is low-specificity, so a class rule
@@ -200,6 +209,7 @@ button.primary:hover{background:var(--accent-deep);}
   .msg-toolbar>a:nth-child(2){flex:1 1 auto;}
   .mbxrow{padding:11px 12px;gap:9px;}
   .mbxrow .em{display:none;}
+  .keyword-grid{grid-template-columns:1fr}.keyword-card textarea{min-height:180px}.keyword-actions>*{flex:1 1 auto;text-align:center;justify-content:center;min-height:44px;}
 }
 /* NB: the catalog's own .cat-search is hidden inside catalog_ui _CAT_CSS, whose
    later .cat-search{display:flex} would otherwise override a rule placed here. */
@@ -313,7 +323,8 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
 
 
 def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
-                 mailbox_name: str = "", page_size: int = 50, warning: str = "") -> str:
+                 mailbox_name: str = "", page_size: int = 50, warning: str = "",
+                 stage: str = "", stage_counts: dict | None = None) -> str:
     has_more = 1 if len(rows) == page_size else 0
     unread = counts.get("unread", 0)
     ncand = counts.get("candidates", counts.get("mailboxes", 0))  # ALL candidates, not just those with mail
@@ -323,22 +334,79 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
         f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
         '</div><div class="head-actions">'
+        '<a class="hbtn" href="/mail/keywords">Ключевые слова</a>'
         '<button class="hbtn" onclick="openCompose()">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
         'Написать</button></div></div>'
         f'<form method="get" action="/mail" class="toolbar"><input type="search" name="q" value="{escape(q)}" placeholder="Поиск по теме / отправителю">'
         + (f'<input type="hidden" name="mailbox" value="{escape(mailbox)}">' if mailbox else "")
+        + (f'<input type="hidden" name="stage" value="{escape(stage)}">' if stage else "")
         + '<button class="ghost" type="submit">Найти</button>'
         + (f'<a class="ghost" href="/mail">Сброс</a>' if (q or mailbox) else "")
         + '</form></div>')
+    sc = stage_counts or {}
+    def sf(key: str, label: str) -> str:
+        params = {}
+        if key:
+            params["stage"] = key
+        if q:
+            params["q"] = q
+        if mailbox:
+            params["mailbox"] = mailbox
+        href = "/mail" + ("?" + urlencode(params) if params else "")
+        cls = "fbtn" + (" active" if stage == key else "")
+        n = sc.get("all" if not key else key, 0)
+        return f'<a class="{cls}" href="{escape(href, quote=True)}">{label} <b>{n}</b></a>'
+    funnel = ('<div class="funnel" data-filter-list="maillist">'
+              + sf("", "Все") + sf("sent", "📤 Отправленные")
+              + sf("ack", "✅ Принято") + sf("interview", "📞 Собеседование")
+              + sf("offer", "🎉 Оффер") + sf("rejection", "✕ Отказ") + '</div>'
+              '<div class="filter-status" role="status" aria-live="polite"></div>')
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
-    empty = '<div class="empty">Писем нет</div>' if not rows else ""
+    empty = '<div class="empty" id="filterempty">Писем нет</div>' if not rows else '<div id="filterempty"></div>'
     banner = f'<div class="healthbar">⚠️ {escape(warning)}</div>' if warning else ""
-    body = (banner + head + fbar +
+    body = (banner + head + fbar + funnel +
             f'<div class="maillist" id="maillist">{render_rows(rows)}</div>{empty}'
             f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>')
     return _page("inbox", body, _COMPOSE_MODAL)
+
+
+def render_keyword_settings(rules: dict[str, list[str]], saved: bool = False,
+                            updated: int = 0, error: str = "") -> str:
+    labels = {
+        "interview": ("Собеседование", "Только явные приглашения или назначение времени."),
+        "offer": ("Оффер", "Фразы из письма с предложением работы."),
+        "rejection": ("Отказ", "Фразы о прекращении процесса или выборе другого кандидата."),
+        "ack": ("Заявка принята", "Подтверждения получения или рассмотрения заявки."),
+    }
+    cards = []
+    for kind in ("interview", "offer", "rejection", "ack"):
+        title, help_text = labels[kind]
+        value = "\n".join(rules.get(kind, []))
+        cards.append(
+            f'<section class="keyword-card"><h2>{title}</h2><p>{help_text}</p>'
+            f'<textarea name="{kind}" aria-label="Ключевые слова: {title}" '
+            f'placeholder="Одна фраза на строку">{escape(value)}</textarea></section>')
+    note = ""
+    if saved:
+        note = f'<div class="keyword-note">Сохранено. Пересчитано писем: <b>{updated}</b>.</div>'
+    elif error:
+        note = f'<div class="healthbar">{escape(error)}</div>'
+    body = (
+        '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
+        '<a href="/mail">Инбокс</a><a class="active" href="/mail/keywords">Ключевые слова</a>'
+        '</div></div></div>' + note +
+        '<p class="keyword-intro">Одна фраза на строку. Регистр не важен: если фраза есть '
+        'в теме или тексте письма, ему сразу назначается категория. Приоритет: оффер → отказ → '
+        'собеседование → заявка принята.</p>'
+        '<form method="post" action="/mail/keywords"><div class="keyword-grid">'
+        + "".join(cards) + '</div><div class="keyword-actions">'
+        '<button class="primary" type="submit">Сохранить и пересчитать письма</button></div></form>'
+        '<form method="post" action="/mail/keywords/reset" class="keyword-actions">'
+        '<button class="ghost" type="submit">Вернуть стандартные слова</button>'
+        '<a class="ghost" href="/mail">Назад в инбокс</a></form>')
+    return _page("inbox", body)
 
 
 def _fmt_size(n: int) -> str:
@@ -444,14 +512,14 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
             params["q"] = query
         href = "/mail/candidates" + ("?" + urlencode(params) if params else "")
         return f'<a class="{cls}" href="{escape(href, quote=True)}">{label} <b>{n}</b></a>'
-    funnel = ('<div class="funnel">'
+    funnel = ('<div class="funnel" data-filter-list="mbxlist">'
               + fb("", "Все", total)
               + fb("submitted", "📤 Отправлено", counts.get("submitted", 0))
               + fb("ack", "✅ Принято", counts.get("ack", 0))
               + fb("interview", "📞 Собеседование", counts.get("interview", 0))
               + fb("offer", "🎉 Оффер", counts.get("offer", 0))
               + fb("rejection", "✕ Отказ", counts.get("rejection", 0))
-              + '</div>')
+              + '</div><div class="filter-status" role="status" aria-live="polite"></div>')
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
@@ -464,7 +532,7 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
               + '<button class="primary" type="submit">Найти</button>'
               + ('<a class="ghost" href="/mail/candidates">Сбросить</a>' if query else '')
               + '</form>')
-    empty = '<div class="empty">Никого в этой корзине</div>' if not cands else ""
+    empty = '<div class="empty" id="filterempty">Никого в этой корзине</div>' if not cands else '<div id="filterempty"></div>'
     body = (head + search + funnel
             + f'<div class="mbxlist" id="mbxlist">{render_candidate_rows(cands)}</div>{empty}'
             + f'<div id="mbxmore" data-more="{has_more}" style="height:1px"></div>')
@@ -521,6 +589,38 @@ async function sendMail(e){
   return false;
 }
 function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=doc.createElement('style');st.textContent='html{-webkit-text-size-adjust:100%;}html,body{margin:0;padding:0;background:transparent;font-family:"Hanken Grotesk",-apple-system,sans-serif;color:#202124;font-size:14.5px;line-height:1.6;}body{width:auto!important;}img{max-width:100%!important;height:auto;}a{color:#1a73e8;word-break:break-word;}table{max-width:100%!important;}td,th,div,p,pre,blockquote{max-width:100%!important;}pre{white-space:pre-wrap;word-break:break-word;}';doc.head.appendChild(st);try{doc.querySelectorAll('img').forEach(function(im){if(im.complete&&im.naturalWidth===0){im.style.display='none';}im.addEventListener('error',function(){this.style.display='none';});});}catch(_){}var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth;if(natW>avail+2){var s=Math.max(avail/natW,0.72);f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+s+')';var h=doc.body.scrollHeight;f.style.height=h+'px';wrap.style.height=(h*s+8)+'px';}else{f.style.width='100%';f.style.transform='none';var hh=doc.body.scrollHeight+24;f.style.height=hh+'px';wrap.style.height=hh+'px';}}catch(e){f.style.height='600px';}}
+// Funnel filters update in place. A loading state appears on the first tap and
+// blocks duplicate taps while the server response is in flight.
+(function(){
+  var filtering=false;
+  document.addEventListener('click',async function(e){
+    var a=e.target.closest('.funnel[data-filter-list] .fbtn');
+    if(!a||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
+    e.preventDefault();if(filtering)return;filtering=true;
+    var funnel=a.closest('.funnel'),target=funnel.dataset.filterList,
+        list=document.getElementById(target),status=funnel.nextElementSibling;
+    funnel.classList.add('busy');a.classList.add('pending');
+    if(status&&status.classList.contains('filter-status'))status.textContent='Фильтруем…';
+    try{
+      var r=await fetch(a.href,{headers:{'X-Filter':'1'}});if(!r.ok)throw new Error('http');
+      var doc=new DOMParser().parseFromString(await r.text(),'text/html'),
+          nf=doc.querySelector('.funnel[data-filter-list="'+target+'"]'),nl=doc.getElementById(target),
+          nm=doc.getElementById(target==='maillist'?'loadmore':'mbxmore'),
+          more=document.getElementById(target==='maillist'?'loadmore':'mbxmore'),
+          ne=doc.getElementById('filterempty'),empty=document.getElementById('filterempty');
+      if(!nf||!nl||!list)throw new Error('html');
+      funnel.innerHTML=nf.innerHTML;list.innerHTML=nl.innerHTML;
+      if(more&&nm){more.dataset.more=nm.dataset.more;more.dataset.offset=nm.dataset.offset||'';}
+      if(empty&&ne)empty.innerHTML=ne.innerHTML;
+      history.pushState({},'',a.href);
+      var active=funnel.querySelector('.fbtn.active');
+      if(active)active.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'});
+      if(status&&status.classList.contains('filter-status')){status.textContent='Готово';setTimeout(function(){status.textContent='';},1200);}
+    }catch(err){location.href=a.href;return;}
+    funnel.classList.remove('busy');filtering=false;
+  });
+  window.addEventListener('popstate',function(){location.reload();});
+})();
 // infinite scroll (keyset) + auto-hide header + SSE live refresh
 (function(){
   var list=document.getElementById('maillist'), more=document.getElementById('loadmore');
@@ -537,7 +637,7 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   }
   var head=document.querySelector('.page-head'),lastY=window.scrollY;
   window.addEventListener('scroll',function(){var y=window.scrollY;if(window.innerHeight+y>=document.documentElement.scrollHeight-400)loadMore();if(y>lastY&&y>90)head.classList.add('hide');else if(y<lastY)head.classList.remove('hide');lastY=y;},{passive:true});
-  async function refreshList(){if(document.querySelector('.modal.open'))return;try{var r=await fetch(location.href,{headers:{'X-Poll':'1'}});if(!r.ok)return;var doc=new DOMParser().parseFromString(await r.text(),'text/html');var fl=doc.getElementById('maillist');if(fl)list.innerHTML=fl.innerHTML;var sn=doc.querySelector('.seg-nav');if(sn)document.querySelector('.seg-nav').innerHTML=sn.innerHTML;}catch(e){}}
+  async function refreshList(){if(document.querySelector('.modal.open'))return;try{var r=await fetch(location.href,{headers:{'X-Poll':'1'}});if(!r.ok)return;var doc=new DOMParser().parseFromString(await r.text(),'text/html');var fl=doc.getElementById('maillist');if(fl)list.innerHTML=fl.innerHTML;var sn=doc.querySelector('.seg-nav');if(sn)document.querySelector('.seg-nav').innerHTML=sn.innerHTML;var nf=doc.querySelector('.funnel[data-filter-list="maillist"]'),cf=document.querySelector('.funnel[data-filter-list="maillist"]');if(nf&&cf&&!cf.classList.contains('busy'))cf.innerHTML=nf.innerHTML;}catch(e){}}
   var last=null,pollTimer=null;
   function startPoll(){if(pollTimer)return;pollTimer=setInterval(async function(){if(document.hidden||document.querySelector('.modal.open'))return;try{var r=await fetch('/mail/count'+location.search);if(!r.ok)return;var j=await r.json();if(j.n!==last){if(last!==null)await refreshList();last=j.n;}}catch(e){}},10000);}
   if(window.EventSource){try{var es=new EventSource('/mail/events');es.onmessage=function(){refreshList();};es.onerror=function(){startPoll();};}catch(e){startPoll();}}else{startPoll();}

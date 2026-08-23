@@ -61,7 +61,7 @@ def run_once():
     rows once so old false positives are corrected too. Returns (updated, pruned)."""
     known = mail_db.all_path_hashes()
     try:
-        refresh_kinds = mail_db.get_meta("classifier_version") != mailcrm.CLASSIFIER_VERSION
+        refresh_kinds = mail_db.get_meta("classifier_version") != mailcrm.classifier_version()
     except Exception:
         refresh_kinds = True
     on_disk: set[str] = set()
@@ -89,7 +89,7 @@ def run_once():
             refresh_failed = refresh_failed or refresh_kinds
     pruned = mail_db.delete_paths(known - on_disk)
     if refresh_kinds and not refresh_failed:
-        mail_db.set_meta("classifier_version", mailcrm.CLASSIFIER_VERSION)
+        mail_db.set_meta("classifier_version", mailcrm.classifier_version())
     mail_health.heartbeat()   # a full reconcile completed -> the backstop is alive
     return updated, pruned
 

@@ -17,6 +17,7 @@ import os
 import re
 import smtplib
 import ssl
+import threading
 from datetime import datetime, timezone
 from email import policy
 from email.message import EmailMessage
@@ -37,56 +38,107 @@ SMTP_HOST, SMTP_PORT = "127.0.0.1", 587
 MAX_BODY = 200_000
 
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
-# Bump this whenever the rules change. mail_indexer uses it to refresh existing
-# Postgres rows once, so fixing a false positive also fixes mail already indexed.
-CLASSIFIER_VERSION = "2026-08-23-conservative-v1"
+# Rules are phrases, not regexes: they are editable from /mail/keywords and each
+# saved phrase has transparent "text contains phrase" semantics.
+CLASSIFIER_VERSION = "2026-08-24-editable-keywords-v1"
+KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
+KEYWORD_KINDS = ("offer", "rejection", "interview", "ack")
+DEFAULT_KEYWORDS = {
+    "interview": [
+        "interview invitation", "invitation to interview", "invitation to an interview",
+        "schedule an interview", "schedule interview", "technical interview",
+        "phone screen invitation", "invite you to an interview", "invite you for an interview",
+        "choose a time for your interview", "select a time for your interview",
+        "share your availability for an interview", "assessment invitation",
+        "приглашение на собеседование", "приглашение на интервью",
+        "приглашаем вас на собеседование", "приглашаем вас на интервью",
+        "собеседование назначено", "назначить собеседование", "назначить звонок",
+        "приглашение на тестовое задание",
+    ],
+    "offer": [
+        "offer letter", "pleased to offer", "extend an offer", "job offer",
+        "welcome aboard", "предлагаем вам", "направляем оффер", "оффер",
+    ],
+    "rejection": [
+        "not moving forward", "not be moving forward", "decided not to", "won't be proceeding",
+        "will not be proceeding", "regret to inform", "other candidates",
+        "not a good fit", "application was declined", "к сожалению",
+        "не готовы продолжить", "не подошли", "отказ",
+    ],
+    "ack": [
+        "application received", "application has been received", "application submitted",
+        "thank you for applying", "thanks for applying", "thanks for your application",
+        "we received your application", "we've received your application",
+        "we have received your application", "application is under review",
+        "application is being reviewed", "got your application", "отклик принят",
+        "отклик получен", "заявка принята", "заявка получена", "заявка отправлена",
+        "ваша заявка на рассмотрении", "ваша заявка рассматривается",
+    ],
+}
+_KEYWORDS_CACHE: dict[str, Any] = {"mtime": None, "rules": None}
+_KEYWORDS_LOCK = threading.Lock()
 
-# A bare "next steps", "screening" or "move forward" is deliberately NOT an
-# interview signal: acknowledgement templates routinely contain those words.
-# Require an explicit invitation/scheduling action instead.
-_INTERVIEW_SUBJECT = re.compile(
-    r"\b(interview invitation|invitation to (?:an? )?interview|"
-    r"schedule (?:an? )?(?:interview|call|meeting)|phone screen(?:ing)? invitation|"
-    r"assessment invitation|technical interview|"
-    r"приглашение на (?:собеседование|интервью)|"
-    r"собеседование назначено|назначить (?:звонок|собеседование)|"
-    r"приглашение на тестовое задание)\b", re.I)
-_INTERVIEW_BODY = re.compile(
-    r"\b(?:we(?:'d| would) like to|we want to|please|kindly) "
-    r"(?:invite you to|schedule|arrange|book|set up) (?:an? )?"
-    r"(?:interview|call|meeting|phone screen)|"
-    r"\binvite you (?:to|for) (?:an? )?(?:interview|phone screen|assessment)|"
-    r"\b(?:choose|select|book) (?:an? )?(?:available )?(?:time|slot) "
-    r"(?:for (?:your |an? )?(?:interview|call)|to (?:interview|speak|meet))|"
-    r"\b(?:share|send) (?:us )?your availability (?:for|to) "
-    r"(?:an? )?(?:interview|call|meeting)|"
-    r"\b(?:приглашаем|хотим пригласить) вас на (?:собеседование|интервью|тестовое задание)|"
-    r"\b(?:выберите|забронируйте|сообщите) (?:удобное )?(?:время|слот) "
-    r"(?:для|на) (?:собеседовани[ея]|интервью|звонок)|"
-    r"\b(?:готовы|хотели бы) (?:назначить|провести) (?:с вами )?"
-    r"(?:собеседование|интервью|звонок)", re.I)
-_REJECT = re.compile(r"\b(unfortunately|not moving forward|decided not to|other candidates|won'?t be proceeding|not a (good )?fit|regret to inform|we will not|declined|к сожалению|отказ|не подошли)\b", re.I)
-_OFFER = re.compile(r"\b(offer letter|pleased to offer|extend an offer|welcome aboard|предлагаем вам|оффер|job offer)\b", re.I)
-_ACK = re.compile(
-    r"\b(application (?:has been )?(?:received|submitted)|"
-    r"thanks? for (?:applying|your application)|we (?:have )?received your|"
-    r"has been received|application is (?:being |now )?(?:reviewed|under review)|"
-    r"получили (?:ваш[еу]?|заявку)|заявка (?:принята|получена|отправлена)|"
-    r"отклик (?:принят|получен)|ваша заявка (?:на рассмотрении|рассматривается))\b", re.I)
+
+def _normalise_phrase(value: str) -> str:
+    return " ".join((value or "").casefold().split())
+
+
+def _clean_keyword_rules(data: dict | None) -> dict[str, list[str]]:
+    data = data if isinstance(data, dict) else {}
+    out: dict[str, list[str]] = {}
+    for kind in KEYWORD_KINDS:
+        raw = data.get(kind, DEFAULT_KEYWORDS[kind])
+        if not isinstance(raw, list):
+            raw = DEFAULT_KEYWORDS[kind]
+        seen, items = set(), []
+        for value in raw[:100]:
+            phrase = _normalise_phrase(str(value))[:120]
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                items.append(phrase)
+        out[kind] = items
+    return out
+
+
+def keyword_rules() -> dict[str, list[str]]:
+    try:
+        mtime = KEYWORDS_FILE.stat().st_mtime_ns
+    except OSError:
+        mtime = -1
+    with _KEYWORDS_LOCK:
+        if _KEYWORDS_CACHE["rules"] is not None and _KEYWORDS_CACHE["mtime"] == mtime:
+            return {k: list(v) for k, v in _KEYWORDS_CACHE["rules"].items()}
+        try:
+            data = json.loads(KEYWORDS_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = DEFAULT_KEYWORDS
+        rules = _clean_keyword_rules(data)
+        _KEYWORDS_CACHE.update({"mtime": mtime, "rules": rules})
+        return {k: list(v) for k, v in rules.items()}
+
+
+def save_keyword_rules(data: dict[str, list[str]]) -> dict[str, list[str]]:
+    rules = _clean_keyword_rules(data)
+    KEYWORDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = KEYWORDS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rules, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, KEYWORDS_FILE)
+    with _KEYWORDS_LOCK:
+        _KEYWORDS_CACHE.update({"mtime": KEYWORDS_FILE.stat().st_mtime_ns, "rules": rules})
+    return {k: list(v) for k, v in rules.items()}
+
+
+def classifier_version() -> str:
+    payload = json.dumps(keyword_rules(), ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return f"{CLASSIFIER_VERSION}:{hashlib.sha1(payload).hexdigest()[:12]}"
 
 
 def classify(subject: str, body: str) -> str:
-    subject = subject or ""
-    body = body or ""
-    t = f"{subject}\n{body}"
-    if _OFFER.search(t):
-        return "offer"
-    if _REJECT.search(t):
-        return "rejection"
-    if _INTERVIEW_SUBJECT.search(subject) or _INTERVIEW_BODY.search(body):
-        return "interview"
-    if _ACK.search(t):
-        return "ack"
+    text = _normalise_phrase(f"{subject or ''}\n{body or ''}")
+    rules = keyword_rules()
+    for kind in KEYWORD_KINDS:
+        if any(phrase in text for phrase in rules[kind]):
+            return kind
     return "other"
 
 
@@ -233,7 +285,7 @@ def _iter_mailbox_files(maildir: str):
             yield os.path.join(d, fn), seen
 
 
-def _snippet(msg) -> str:
+def _message_text(msg) -> str:
     try:
         body = msg.get_body(preferencelist=("plain", "html"))
         text = body.get_content() if body else ""
@@ -241,7 +293,11 @@ def _snippet(msg) -> str:
         text = ""
     text = re.sub(r"<[^>]+>", " ", text or "")
     text = re.sub(r"\s+", " ", text).strip()
-    return text[:280]
+    return text[:MAX_BODY]
+
+
+def _snippet(msg) -> str:
+    return _message_text(msg)[:280]
 
 
 def _health_fallback(where: str) -> None:
@@ -267,14 +323,15 @@ def build_index_row(path: str, seen: int) -> dict | None:
         return None
     frm = str(msg["From"] or "")
     subj = str(msg["Subject"] or "")
-    snip = _snippet(msg)
+    full_text = _message_text(msg)
+    snip = full_text[:280]
     from_email = _email_only(frm)
     return {
         "mailbox": box["email"], "candidate": box["name"], "candidate_id": box["id"],
         "path": path, "path_hash": _pid(path),
         "from_name": _display_name(frm), "from_email": from_email,
         "subject": subj, "snippet": snip,
-        "kind": classify(subj, snip), "thread_key": _norm_subject(subj),
+        "kind": classify(subj, full_text), "thread_key": _norm_subject(subj),
         "has_att": any(p.get_filename() for p in msg.walk()),
         "outbound": from_email.lower() == box["email"],
         "date_ts": _date_ts(msg, path), "seen": bool(seen),
@@ -283,20 +340,21 @@ def build_index_row(path: str, seen: int) -> dict | None:
 
 def list_messages(mailbox: str | None = None, q: str = "",
                   limit: int = 50, before_ts: int | None = None,
-                  before_id: str | None = None) -> list[dict]:
+                  before_id: str | None = None, stage: str = "") -> list[dict]:
     """Newest-first message rows. Reads the Postgres index (fast); falls back to a
     live Maildir scan if the index is unavailable."""
     try:
         return mail_db.list_messages(mailbox=mailbox, q=(q or None), limit=limit,
-                                     before_ts=before_ts, before_id=before_id)
+                                     before_ts=before_ts, before_id=before_id,
+                                     stage=stage or None)
     except Exception:
         _health_fallback("list_messages")
-        return _scan_messages(mailbox, q, limit, before_ts, before_id)
+        return _scan_messages(mailbox, q, limit, before_ts, before_id, stage)
 
 
 def _scan_messages(mailbox: str | None = None, q: str = "",
                    limit: int = 50, before_ts: int | None = None,
-                   before_id: str | None = None) -> list[dict]:
+                   before_id: str | None = None, stage: str = "") -> list[dict]:
     """Fallback: newest-first rows straight off disk (keyset by date_ts,id)."""
     boxes = candidates()
     if mailbox:
@@ -314,13 +372,21 @@ def _scan_messages(mailbox: str | None = None, q: str = "",
             subj = str(msg["Subject"] or "")
             if ql and ql not in frm.lower() and ql not in subj.lower():
                 continue
-            snip = _snippet(msg)
+            full_text = _message_text(msg)
+            snip = full_text[:280]
+            outbound = _email_only(frm).lower() == c["email"]
+            kind = classify(subj, full_text)
+            if stage == "sent" and not outbound:
+                continue
+            if stage in ("ack", "interview", "offer", "rejection") \
+                    and (outbound or kind != stage):
+                continue
             rows.append({
                 "id": _pid(path), "path": path, "mailbox": c["email"],
                 "candidate": c["name"], "candidate_id": c["id"],
                 "from": frm, "from_name": _display_name(frm), "from_email": _email_only(frm),
                 "subject": subj, "snippet": snip, "date_ts": _date_ts(msg, path),
-                "seen": seen, "kind": classify(subj, snip),
+                "seen": seen, "kind": kind, "outbound": outbound,
                 "thread": _norm_subject(subj),
                 "has_att": any(p.get_filename() for p in msg.walk()),
             })
@@ -653,3 +719,31 @@ def _scan_counts() -> dict[str, int]:
         except OSError:
             pass
     return {"unread": unread, "mailboxes": mbx}
+
+
+def stage_counts() -> dict[str, int]:
+    try:
+        return mail_db.stage_counts()
+    except Exception:
+        rows = _scan_messages(limit=1_000_000)
+        out = {"all": len(rows), "sent": 0, "ack": 0, "interview": 0,
+               "offer": 0, "rejection": 0}
+        for row in rows:
+            if row.get("outbound"):
+                out["sent"] += 1
+            elif row.get("kind") in out:
+                out[row["kind"]] += 1
+        return out
+
+
+def reclassify_existing() -> int:
+    """Apply the currently saved keyword rules to all indexed mail immediately."""
+    updates = []
+    for path, seen in mail_db.indexed_paths():
+        row = build_index_row(path, int(bool(seen)))
+        if not row:
+            continue
+        updates.append((row["kind"], row["path_hash"]))
+    updated = mail_db.update_kinds(updates)
+    mail_db.set_meta("classifier_version", classifier_version())
+    return updated

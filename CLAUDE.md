@@ -132,10 +132,13 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `dashboard_app._start_mail_poller()` (defined, never invoked), `tools/mail_dashboard.py` (zero importers).
 - **Inbox actions + classification.** Reply data is passed through `.reply-action` data attributes (not
   executable inline arguments — recruiter subjects/Message-IDs contain quotes). `/mail/delete` moves the
-  whole thread into the candidate Maildir's recoverable `.Trash/cur` and prunes its index rows. Interview
-  classification requires an explicit invitation/scheduling action; bare acknowledgement-template words
-  such as `next steps`, `screening`, and `move forward` are not interview signals. Bump
-  `mailcrm.CLASSIFIER_VERSION` after future rule changes: `mail_indexer` then refreshes existing rows once.
+  whole thread into the candidate Maildir's recoverable `.Trash/cur` and prunes its index rows. `/mail`
+  has the same stage funnel as Candidates; its filters update in place and block repeated taps while loading.
+  Classification is driven by editable plain-text phrases at `/mail/keywords` (persisted in
+  `uploads/mail_keywords.json`); saving atomically rewrites the rules and immediately reclassifies existing
+  Postgres rows. `mailcrm.classifier_version()` includes a hash of the saved rules so `mail_indexer` also
+  repairs stale rows after a restart. Defaults intentionally require explicit interview invitations and do
+  not include broad acknowledgement-template words such as `next steps`, `screening`, or `move forward`.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

@@ -15,7 +15,8 @@ Public API (stable contract used by mail_indexer.py, mailcrm.py, mail_retention.
   upsert_message(**fields) / delete_paths(hashes) / all_path_hashes() / mark_seen(...)
   get_meta(key) / set_meta(key, value)
   list_messages(...) / get_row(h) / thread_rows(mailbox, thread_key)
-  counts() / unread_by_mailbox()
+  counts() / stage_counts() / unread_by_mailbox()
+  indexed_paths() / update_kinds(...)
   protected_thread_keys() / deletable_rows(kinds, cutoff_ts)
 """
 from __future__ import annotations
@@ -182,7 +183,8 @@ def _dict(r) -> dict:
     return d
 
 
-def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None) -> list:
+def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None,
+                  stage=None) -> list:
     """Newest-first message rows, keyset-paginated by (date_ts, id). Optional mailbox
     filter and full-text search on subject/from."""
     where, args = [], []
@@ -193,6 +195,11 @@ def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None
         where.append("to_tsvector('simple', coalesce(subject,'')||' '||coalesce(from_email,'')"
                      "||' '||coalesce(from_name,'')) @@ plainto_tsquery('simple', %s)")
         args.append(q)
+    if stage == "sent":
+        where.append("outbound=TRUE")
+    elif stage in ("ack", "interview", "offer", "rejection"):
+        where.append("kind=%s AND outbound=FALSE")
+        args.append(stage)
     if before_ts is not None and before_id is not None:
         # cursor is (date_ts, path_hash) — path_hash is the string id used in URLs
         where.append("(date_ts, path_hash) < (%s, %s)")
@@ -226,6 +233,35 @@ def counts() -> dict:
         cur.execute("SELECT COUNT(DISTINCT mailbox) FROM mail_index")
         mboxes = cur.fetchone()[0]
     return {"unread": unread, "mailboxes": mboxes}
+
+
+def stage_counts() -> dict:
+    """Message totals for the inbox funnel. Outbound mail is a separate stage."""
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT kind, COUNT(*) FROM mail_index WHERE NOT outbound GROUP BY kind")
+        out = {k: n for k, n in cur.fetchall()}
+        cur.execute("SELECT COUNT(*) FROM mail_index WHERE outbound=TRUE")
+        out["sent"] = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM mail_index")
+        out["all"] = cur.fetchone()[0]
+        return out
+
+
+def indexed_paths() -> list[tuple[str, bool]]:
+    """Paths and seen flags used for a full-body classification refresh."""
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT path, seen FROM mail_index")
+        return [(path, bool(seen)) for path, seen in cur.fetchall()]
+
+
+def update_kinds(updates) -> int:
+    """Bulk-update (kind, path_hash) pairs in one transaction."""
+    updates = list(updates or [])
+    if not updates:
+        return 0
+    with _cur(dict_rows=False) as cur:
+        cur.executemany("UPDATE mail_index SET kind=%s WHERE path_hash=%s", updates)
+        return len(updates)
 
 
 def unread_by_mailbox() -> dict:

@@ -759,10 +759,12 @@ def _start_mail_poller():
 # --- Self-hosted candidate mail CRM (Gmail-style): reads the Dovecot Maildir on
 #     our own server, sends via our own Postfix. No Mailgun, no third party.
 @app.get("/mail", response_class=HTMLResponse)
-def mail_page(q: str = "", mailbox: str = ""):
+def mail_page(q: str = "", mailbox: str = "", stage: str = ""):
     from backend.tools import mail_health, mailcrm, mailcrm_ui
-    rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50)
+    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection") else ""
+    rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50, stage=stage)
     counts = mailcrm.counts()
+    scounts = mailcrm.stage_counts()
     # counts["mailboxes"] is only the mailboxes that already have indexed mail (~3);
     # the Кандидаты tab means ALL provisioned candidates, so expose the real total.
     counts["candidates"] = len(mailcrm.candidates())
@@ -774,15 +776,57 @@ def mail_page(q: str = "", mailbox: str = ""):
     except Exception:
         warning = ""
     return HTMLResponse(mailcrm_ui.render_inbox(rows, counts, q=q, mailbox=mailbox,
-                                                mailbox_name=name, warning=warning))
+                                                mailbox_name=name, warning=warning,
+                                                stage=stage, stage_counts=scounts))
 
 
 @app.get("/mail/more", response_class=HTMLResponse)
-def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = ""):
+def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = "",
+              stage: str = ""):
     from backend.tools import mailcrm, mailcrm_ui
+    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection") else ""
     rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50,
-                                 before_ts=ts or None, before_id=id or None)
+                                 before_ts=ts or None, before_id=id or None, stage=stage)
     return HTMLResponse(mailcrm_ui.render_rows(rows))
+
+
+@app.get("/mail/keywords", response_class=HTMLResponse)
+def mail_keywords(saved: int = 0, updated: int = 0, error: str = ""):
+    from backend.tools import mailcrm, mailcrm_ui
+    return HTMLResponse(mailcrm_ui.render_keyword_settings(
+        mailcrm.keyword_rules(), saved=bool(saved), updated=max(updated, 0), error=error))
+
+
+def _keyword_form(interview: str, offer: str, rejection: str, ack: str) -> dict:
+    return {"interview": interview.splitlines(), "offer": offer.splitlines(),
+            "rejection": rejection.splitlines(), "ack": ack.splitlines()}
+
+
+@app.post("/mail/keywords")
+def mail_keywords_save(interview: str = Form(""), offer: str = Form(""),
+                       rejection: str = Form(""), ack: str = Form("")):
+    from urllib.parse import urlencode
+    from backend.tools import mailcrm
+    try:
+        mailcrm.save_keyword_rules(_keyword_form(interview, offer, rejection, ack))
+        updated = mailcrm.reclassify_existing()
+        query = urlencode({"saved": 1, "updated": updated})
+    except Exception as exc:
+        query = urlencode({"error": f"Слова сохранены не полностью: {str(exc)[:160]}"})
+    return RedirectResponse("/mail/keywords?" + query, status_code=303)
+
+
+@app.post("/mail/keywords/reset")
+def mail_keywords_reset():
+    from urllib.parse import urlencode
+    from backend.tools import mailcrm
+    try:
+        mailcrm.save_keyword_rules(mailcrm.DEFAULT_KEYWORDS)
+        updated = mailcrm.reclassify_existing()
+        query = urlencode({"saved": 1, "updated": updated})
+    except Exception as exc:
+        query = urlencode({"error": f"Не удалось вернуть настройки: {str(exc)[:160]}"})
+    return RedirectResponse("/mail/keywords?" + query, status_code=303)
 
 
 def _submitted_mailboxes() -> set:

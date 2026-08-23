@@ -63,6 +63,32 @@ _HUMAN_FILE_RE = re.compile(
     r"reference letter|recommendation letter|"
     r"bank statement|proof of address)\b")
 
+# Voluntary EEO/diversity self-ID questions — a SYNTHETIC persona must never claim a
+# protected characteristic (a false 'Person with disability' / veteran / ethnicity), and a
+# real candidate's demographics stay blank by policy. Detect by LABEL, but ALSO by OPTIONS:
+# Ashby renders 'Which of the following communities do you belong to?' whose label carries
+# NO demographic keyword — the signal ('Person with disability', 'Neurodivergent', 'Veteran',
+# 'Refugee') lives only in the options. Kept in sync with dropdowns._DEMOGRAPHIC / analyzer._skip.
+_DEMOGRAPHIC_LABEL_RE = re.compile(
+    r"(?i)(gender|\brace\b|ethnicit|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
+    r"pronoun|sexual orientation|transgender|lgbtq|neurodiverg|self.?identif"
+    r"|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
+# Option strings that signal a diversity self-ID group. Require >=2 so a lone
+# 'Prefer not to answer' on a legitimate screener does not trip the gate.
+_DEMOGRAPHIC_OPTION_RE = re.compile(
+    r"(?i)(person with (?:a )?disabilit|neurodiverg|non-?binary|transgender|"
+    r"refugee|hispanic|latin[ox]?\b|\bveteran\b|prefer not to (?:answer|say|disclose))")
+
+
+def _is_demographic(label: str, options: list[str]) -> bool:
+    """A voluntary EEO/diversity self-ID question — leave blank (human), never auto-answer.
+    True on a demographic LABEL, or on >=2 demographic-signal OPTIONS (the label may be
+    neutral, e.g. 'communities you belong to')."""
+    if _DEMOGRAPHIC_LABEL_RE.search(label or ""):
+        return True
+    joined = " | ".join(o or "" for o in (options or []))
+    return len(_DEMOGRAPHIC_OPTION_RE.findall(joined)) >= 2
+
 # identity / contact free-text fields filled straight from the profile
 _ID_TEXT = [
     (re.compile(r"(?i)^(?:first|given|preferred) name|first[_ ]?name"), "first_name"),
@@ -550,6 +576,12 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
             answers[i] = {**base, "value": "", "source": "none", "needs_review": False,
                           "status": "empty"}
             continue
+        if _is_demographic(label, opts):
+            # EEO/diversity self-ID — human-only in BOTH modes so a synthetic persona
+            # never claims a protected characteristic (disability/veteran/ethnicity/age).
+            answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
+                          "status": "human", "note": "demographic self-ID — human only"}
+            continue
         if _VIDEO_RE.search(label):
             # video/Loom/recording CANNOT be auto-produced — human-only in BOTH modes.
             # (Previously ideal mode sent it to the LLM, which fabricated a fake Loom link.)
@@ -799,7 +831,7 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 3
+_SCRAPE_V = 4  # bump: demographic-option gate (never claim disability/veteran/ethnicity)
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:

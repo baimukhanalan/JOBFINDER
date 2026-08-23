@@ -487,7 +487,16 @@ class ApplyStrategy(ABC):
                 # no LLM round-trip. Only exact question + exact option text replay.
                 pending: list[tuple[str, dict]] = []
                 for kind, c in customs:
-                    known = known_clean.get(c["question_text"])
+                    qt = c["question_text"]
+                    known = known_clean.get(qt)
+                    if known is None:
+                        # The drafted key and the live harvested label are truncated at
+                        # DIFFERENT caps (scraper [:300] vs button-group harvest [:200]), so a
+                        # long (>200-char) Ashby Yes/No label never string-equals its drafted
+                        # key -> the already-drafted answer is discarded and a REQUIRED field
+                        # is left blank. Recover via a prefix match (one key starts the other).
+                        known = next((v for k, v in known_clean.items()
+                                      if k and (k.startswith(qt) or qt.startswith(k))), None)
                     if known in c["options"]:
                         idx = c["options"].index(known)
                         if kind == "rs":

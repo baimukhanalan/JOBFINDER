@@ -208,57 +208,49 @@ async def fill_field(page: Page, field: dict) -> bool:
                         # a bare city segment geocodes more often than 'City, Country'
                         state = await _type_and_poll(value.split(",")[0].strip())
                     if state == "ready":
+                        # A genuine geocode suggestion is present — commit it. This is the
+                        # ONLY case Lever persists (a real geocode object backs the value);
+                        # verify the input actually took the value and report honestly.
                         await page.keyboard.press("ArrowDown")
                         await page.keyboard.press("Enter")
                         await page.wait_for_timeout(300)
-                    stuck = ""
-                    try:
-                        stuck = (await element.input_value(timeout=1500)).strip()
-                    except Exception:
-                        stuck = ""
-                    if not stuck:
-                        # Geocode never resolved (common on a datacenter IP). Write the value
-                        # straight into the visible input AND the hidden selectedLocation
-                        # (native setter + input/change events) so the form carries a
-                        # location the human can see and adjust.
                         try:
-                            await element.evaluate(
-                                """(el, val) => {
-                                    const set = (node, v) => {
-                                        if (!node) return;
-                                        const d = Object.getOwnPropertyDescriptor(
-                                            window.HTMLInputElement.prototype, 'value').set;
-                                        d.call(node, v);
-                                        node.dispatchEvent(new Event('input', {bubbles: true}));
-                                        node.dispatchEvent(new Event('change', {bubbles: true}));
-                                    };
-                                    set(el, val);
-                                    set(el.form && el.form.querySelector(
-                                        '[name="selectedLocation"]'), val);
-                                }""", value)
-                            logger.info("Lever location geocode empty; set "
-                                        "value+selectedLocation directly '%s'", value[:40])
-                        except Exception as e2:
-                            logger.debug("lever location direct-set failed: %s", e2)
-                    else:
-                        logger.info("Filled Lever location typeahead '%s'", value[:40])
-                    # HONEST return: True only if the visible input OR the hidden
-                    # selectedLocation carries a value — a genuine failure now reaches the
-                    # submit gate instead of masquerading as filled.
-                    final = ""
-                    try:
-                        final = (await element.input_value(timeout=1500)).strip()
-                    except Exception:
-                        final = ""
-                    if not final:
-                        try:
-                            final = (await element.evaluate(
-                                "el => { const f=el.form;"
-                                " const h=f&&f.querySelector('[name=\"selectedLocation\"]');"
-                                " return (h&&h.value)||''; }") or "").strip()
+                            final = (await element.input_value(timeout=1500)).strip()
                         except Exception:
                             final = ""
-                    return bool(final)
+                        if final:
+                            logger.info("Filled Lever location typeahead '%s'", final[:40])
+                            return True
+                    # Geocode never resolved (common on a datacenter IP): no real suggestion
+                    # exists, so Lever will CLEAR any directly-set value on its next reconcile
+                    # (verified: both the visible input and the hidden selectedLocation end up
+                    # empty). We still JS-set both as a best-effort submit aid, but report
+                    # HONESTLY as NOT filled — the required 'Current location' then surfaces as
+                    # unfilled and the human completes it where the geocode resolves. Reading
+                    # the transient post-set value here would falsely report "filled" (the
+                    # clear happens later than any fixed wait/blur can force).
+                    try:
+                        await element.evaluate(
+                            """(el, val) => {
+                                const set = (node, v) => {
+                                    if (!node) return;
+                                    const tr = node._valueTracker;
+                                    if (tr) tr.setValue('');
+                                    const d = Object.getOwnPropertyDescriptor(
+                                        window.HTMLInputElement.prototype, 'value').set;
+                                    d.call(node, v);
+                                    node.dispatchEvent(new Event('input', {bubbles: true}));
+                                    node.dispatchEvent(new Event('change', {bubbles: true}));
+                                };
+                                set(el, val);
+                                set(el.form && el.form.querySelector(
+                                    '[name="selectedLocation"]'), val);
+                            }""", value)
+                        logger.info("Lever location geocode dead; best-effort set "
+                                    "'%s', reporting unfilled for the human", value[:40])
+                    except Exception as e2:
+                        logger.debug("lever location direct-set failed: %s", e2)
+                    return False
                 except Exception as e:
                     logger.debug("lever location typeahead failed: %s", e)
             try:

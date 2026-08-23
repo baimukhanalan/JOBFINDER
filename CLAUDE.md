@@ -206,6 +206,27 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 - **`frontend/` (Vite/React) is not the deployed UI** — the live app is `dashboard_app.py`'s
   server-rendered HTML. The React app is an old job-browser talking to `backend.main` `/api` with no
   inbox/roles; not deployed.
+- **Demographic self-ID is gated by LABEL *and* OPTIONS (`catalog_drafts._is_demographic`).** A
+  synthetic persona must NEVER claim a protected characteristic. `_DEMOGRAPHIC` (dropdowns/analyzer) only
+  tests the LABEL, but Ashby renders "Which of the following communities do you belong to?" whose label
+  has NO demographic keyword — the signal ('Person with disability', 'Neurodivergent', 'Veteran',
+  'Refugee') lives only in the OPTIONS, so the LLM ideal-fill was checking "Person with disability" (a
+  false disability self-ID on a live EEO field). `generate_draft` now routes any question matching
+  `_DEMOGRAPHIC_LABEL_RE` (label) OR ≥2 `_DEMOGRAPHIC_OPTION_RE` option hits to human/blank in BOTH modes
+  — before the video/file/select branches. The ≥2-option threshold keeps a lone 'Prefer not to answer' on
+  a real screener (hear-about) from tripping it; `age` matches only 'your/current age'/'age range'/'DOB'
+  (NOT "18 years of age"). `_SCRAPE_V` bumped to 4 so cached drafts regenerate without the false claims.
+  A REQUIRED demographic (e.g. Greenhouse Pronouns) is still left blank by policy — the human sets it.
+- **Long Ashby Yes/No labels: replay is prefix-tolerant (`strategies/base.prefill` custom-widget loop).**
+  The scraper truncates a question label to `[:300]` (drafted-answer key) while `dropdowns.shape_button_group`
+  truncates the live harvested label to `[:200]`; a >200-char label (e.g. 1Password's work-auth screener)
+  makes the two keys unequal, so the exact `known_clean.get(qt)` replay missed and a REQUIRED Yes/No fell
+  to the LLM and was left blank. The section-3 replay now falls back to a prefix match (`k.startswith(qt)
+  or qt.startswith(k)`) so the already-drafted 'Yes' is recovered.
+- **`analyze_page` dedups `display_parts` on a NORMALIZED key.** A leaky whitespace/case-variant part
+  (Greenhouse aria-label ' Twitter' vs label 'Twitter') otherwise yields display_text 'Twitter Twitter',
+  which the exact known-answer match can't hit (`_clean_text`'s A+A collapse needs ≥4 words), so the field
+  stayed blank. Strip+lower each part before the dedup so variants collapse.
 - **Draft-generator eligibility polarity (`catalog_drafts._identity_choice`).** Work-auth questions come
   in two polarities and MUST be told apart: `_SPONSOR_RE` (do you *require/need* sponsorship → **No**)
   vs `_AUTH_RE`/`_WITHOUT_SPON_RE` (are you *authorized … without* sponsorship / can you present proof →

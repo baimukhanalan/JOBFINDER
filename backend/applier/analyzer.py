@@ -735,9 +735,16 @@ async def analyze_page(
             f["name"], f["id"], f["title"], f["nearbyText"],
         ]))
         display_parts = []
+        _seen_parts: set[str] = set()
         for part in (f["label"], f["ariaLabel"], f["placeholder"], f["nearbyText"]):
-            if part and part not in display_parts:  # label==nearbyText on merged groups
-                display_parts.append(part)
+            # dedup on a NORMALIZED key so whitespace/case variants of the same text
+            # collapse: a leaky aria-label ' Twitter' vs label 'Twitter' otherwise yields
+            # display_text 'Twitter Twitter', which defeats the exact known-answer match
+            # and leaves the field blank.
+            norm = re.sub(r"\s+", " ", (part or "").strip()).lower()
+            if part and norm and norm not in _seen_parts:
+                _seen_parts.add(norm)
+                display_parts.append(part.strip())
         display_text = _clean_text(" ".join(display_parts))
         if not display_text:  # nothing human-readable -> cleaned name/id beats nothing
             display_text = _clean_text(match_text)

@@ -178,11 +178,17 @@ def _cancel_watch() -> None:
     _S["watch"] = None
 
 
-async def _watch_submit(page, profile: str, jid: str) -> None:
-    """Submit DETECTION only — never submission. After a prefill, poll the live
-    page for the confirmation text/URL that appears once the HUMAN clicks Submit,
-    and auto-mark the job. Read-only: never clicks, types, or navigates."""
+async def _watch_submit(page, profile: str, jid: str,
+                        applicant_email: str = "", load_ts: float = 0.0) -> None:
+    """Submit DETECTION + email-code AUTO-FILL — never submission. Polls the live page:
+      (1) when a Greenhouse-style 'enter the emailed security code' step appears (after the
+          HUMAN clicks Submit), read that code from the candidate's OWN mailbox and fill it.
+          This confirms EMAIL CONTROL only — the reCAPTCHA/anti-bot and the FINAL Submit stay
+          with the human; this never clicks a submit and never touches the captcha.
+      (2) when the confirmation text/URL appears, mark the job submitted.
+    Read-only otherwise: never navigates."""
     deadline = time.time() + WATCH_MAX
+    code_done = False
     while time.time() < deadline:
         await asyncio.sleep(WATCH_INTERVAL)
         try:
@@ -193,6 +199,36 @@ async def _watch_submit(page, profile: str, jid: str) -> None:
                 status_store.mark(profile, jid, "submitted")
                 logger.info("submit detected for %s/%s — marked submitted", profile, jid)
                 return
+            if (applicant_email and not code_done
+                    and re.search(r"(?i)verification code|security code|enter the .{0,20}code", text)):
+                state = await page.evaluate(
+                    "() => { const i = document.querySelector("
+                    "\"input[aria-label*='code' i],input[placeholder*='code' i],"
+                    "input[name*='code' i],input[id*='security' i],input[id*='code' i]\");"
+                    " return i ? ((i.value||'').trim() ? 'filled':'empty') : 'nofield'; }")
+                if state == "empty":
+                    from backend.tools.verify_code import read_code
+                    code = read_code(applicant_email, load_ts)
+                    if code:
+                        for sel in ("input[aria-label*='code' i]", "input[placeholder*='code' i]",
+                                    "input[name*='code' i]", "input[id*='security' i]",
+                                    "input[id*='code' i]"):
+                            try:
+                                el = page.locator(sel).first
+                                if await el.count() and await el.is_visible(timeout=1000):
+                                    # The code field is often a SEGMENTED OTP (one box per
+                                    # char), so TYPE the code with real keystrokes — the widget
+                                    # auto-advances box-to-box; .fill() would drop all but the
+                                    # first char. Works for a single input too.
+                                    await el.click()
+                                    await page.keyboard.press("Control+A")
+                                    await page.keyboard.press("Backspace")
+                                    await page.keyboard.type(code, delay=60)
+                                    code_done = True
+                                    logger.info("auto-filled email security code for %s", applicant_email)
+                                    break
+                            except Exception:
+                                continue
         except Exception:
             continue  # transient (mid-navigation, detached body) — keep polling
 
@@ -333,7 +369,8 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
             _S["owner"] = profile
             _S["loaded_at"] = time.time()
             # Watch (read-only) for the human's Submit so the queue auto-advances.
-            _S["watch"] = asyncio.create_task(_watch_submit(page, profile, jobid))
+            _S["watch"] = asyncio.create_task(_watch_submit(
+                page, profile, jobid, (form.get("email") or "").strip(), time.time()))
             return JSONResponse({"loaded": jobid, "company": company, "title": title,
                                  "filled": result.get("filled"),
                                  "unfilled": len(result.get("unfilled") or []),

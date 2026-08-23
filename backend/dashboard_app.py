@@ -627,8 +627,9 @@ def _do_fill(job_id: int, gender: str | None = None) -> None:
 def catalog_fill(job_id: int, gender: str = Form("")):
     """Start the one-click fill in the background and return immediately (poll
     /catalog/{id}/fill_status). Generates the ideal draft if missing, wires it into the
-    co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC).
-    Never submits. `gender` ('male'/'female' from the M/Ж buttons) picks the persona's sex."""
+    co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC), then
+    the co-pilot clicks Submit automatically. `gender` ('male'/'female' from the M/Ж
+    buttons) picks the persona's sex."""
     import threading
     g = gender if gender in ("male", "female") else None
     st = _FILL_JOBS.get(job_id)

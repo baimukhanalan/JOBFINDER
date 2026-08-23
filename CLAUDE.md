@@ -151,10 +151,18 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   touch the extractor's field-recognition (`_JS`) — it works; only the wait/retry/persistence is the fix.
   Pure helpers (`_looks_partial`/`_poll_stable`/`_retry_loads`) are unit-tested in
   `tests/test_catalog_forms_wait.py` (no network).
-- **No auto-submit — by design** (commit `a8ab56e`). Real submits from a datacenter IP get
-  spam-flagged/banned. Do NOT re-add. **Submit DETECTION is not submission**: the extension's
-  `installSubmitWatch` and `copilot.py`'s confirmation poller only *record* a human's submit into
-  `status.json`; they never click. `CONFIRM_RE` lives in `extension/content.js` with a copy in
+- **Auto-submit: the co-pilot NOW clicks Submit (enabled 2026-08-23 by explicit owner request).**
+  After the one-click fill, `copilot.py`'s `/load` calls `_click_submit_after_fill(page, result)`
+  which presses the ATS Submit button (strategy `submit_selector`, else `analyzer.find_submit_button`,
+  clicked via `filler.click_submit`). This intentionally reverses the original human-submit-only design
+  (commit `a8ab56e`) — so **`/catalog` «Заполнить» and the co-pilot `Fill →` button both auto-submit**,
+  including the SYNTHETIC demo persona to real ATS. Owner accepted the datacenter-IP / takhet.com
+  spam-ban risk that `a8ab56e` was avoiding. It's best-effort (a missing/blocked button never breaks
+  the load). To turn it OFF again, no-op `_click_submit_after_fill`. NOTE: the **extension** path and
+  the strategy layer are UNCHANGED — the extension's `installSubmitWatch` and `copilot.py`'s
+  `_watch_submit` poller still only *record* the confirmation into `status.json` (they never click),
+  and `strategies/base`/`prefill_application` still expose no submit path (regression test
+  `test_no_auto_submit_path` still passes). `CONFIRM_RE` lives in `extension/content.js` with a copy in
   `copilot.py` that must stay in sync.
 - **Comboboxes are dropdowns.py's, NOT the analyzer's — never text-fill them.** A Greenhouse
   `.select__container` input AND a Workable readonly `input[role=combobox]` (aria-haspopup=listbox)

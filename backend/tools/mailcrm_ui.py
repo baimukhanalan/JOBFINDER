@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from html import escape
+from urllib.parse import urlencode
 
 _MONTHS = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 _KIND = {
@@ -111,7 +112,7 @@ button.primary:hover{background:var(--accent-deep);}
 .mitem.unread .mdate{color:var(--accent);}
 .empty{text-align:center;padding:48px;color:var(--ink-mute);}
 .healthbar{background:#fef7e0;border:1px solid #fdd663;color:#7c5b00;border-radius:10px;padding:11px 14px;margin:0 0 14px;font-size:13.5px;font-weight:500;}
-.msg-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:20px;}
+.msg-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap;}
 .msg-toolbar .spacer{flex:1;}.msg-toolbar form{margin:0;}
 .msg-page{max-width:840px;}
 .msg-subject{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 18px;line-height:1.25;}
@@ -135,6 +136,8 @@ button.primary:hover{background:var(--accent-deep);}
 .att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
 .att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
 .funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
+.candidate-tools{display:flex;align-items:center;gap:8px;margin:0 0 14px;}
+.candidate-tools input{width:min(420px,100%);}
 .fbtn{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:var(--r-full);border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;min-height:38px;}
 .fbtn b{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink);}
 .fbtn:hover{border-color:var(--accent);text-decoration:none;}
@@ -186,6 +189,18 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
+@media(max-width:760px){
+  .candidate-tools{display:none;}
+  .funnel{flex-wrap:nowrap;overflow-x:auto;margin-left:-12px;margin-right:-12px;padding:0 12px 12px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
+  .fbtn{scroll-snap-align:start;}
+  .msg-toolbar{align-items:stretch;margin-bottom:16px;}
+  .msg-toolbar .spacer{display:none;}
+  .msg-toolbar .hbtn{justify-content:center;min-height:44px;}
+  .msg-toolbar .reply-action,.msg-toolbar .delete-action{flex:1 1 calc(50% - 4px);}
+  .msg-toolbar>a:nth-child(2){flex:1 1 auto;}
+  .mbxrow{padding:11px 12px;gap:9px;}
+  .mbxrow .em{display:none;}
+}
 /* NB: the catalog's own .cat-search is hidden inside catalog_ui _CAT_CSS, whose
    later .cat-search{display:flex} would otherwise override a rule placed here. */
 """
@@ -412,7 +427,7 @@ def render_candidate_rows(cands: list[dict]) -> str:
 
 def render_candidates(cands: list[dict], counts: dict | None = None,
                       active_filter: str = "", total: int | None = None,
-                      has_more: int = 0) -> str:
+                      has_more: int = 0, query: str = "") -> str:
     counts = counts or {}
     total = total if total is not None else len(cands)
 
@@ -422,8 +437,13 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
         if n == 0 and key and active_filter != key:
             return ""
         cls = "fbtn" + (" active" if active_filter == key else "")
-        href = "/mail/candidates" + (f"?filter={key}" if key else "")
-        return f'<a class="{cls}" href="{href}">{label} <b>{n}</b></a>'
+        params = {}
+        if key:
+            params["filter"] = key
+        if query:
+            params["q"] = query
+        href = "/mail/candidates" + ("?" + urlencode(params) if params else "")
+        return f'<a class="{cls}" href="{escape(href, quote=True)}">{label} <b>{n}</b></a>'
     funnel = ('<div class="funnel">'
               + fb("", "Все", total)
               + fb("submitted", "📤 Отправлено", counts.get("submitted", 0))
@@ -436,8 +456,16 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
             '</div></div></div>')
+    search = ('<form class="candidate-tools" method="get" action="/mail/candidates" role="search">'
+              f'<input type="search" name="q" value="{escape(query, quote=True)}" '
+              'placeholder="Поиск по имени или email" autocomplete="off">'
+              + (f'<input type="hidden" name="filter" value="{escape(active_filter, quote=True)}">'
+                 if active_filter else '')
+              + '<button class="primary" type="submit">Найти</button>'
+              + ('<a class="ghost" href="/mail/candidates">Сбросить</a>' if query else '')
+              + '</form>')
     empty = '<div class="empty">Никого в этой корзине</div>' if not cands else ""
-    body = (head + funnel
+    body = (head + search + funnel
             + f'<div class="mbxlist" id="mbxlist">{render_candidate_rows(cands)}</div>{empty}'
             + f'<div id="mbxmore" data-more="{has_more}" style="height:1px"></div>')
     return _page("candidates", body)

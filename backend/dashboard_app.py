@@ -56,8 +56,8 @@ def _inbox_html(profile: str) -> str:
     data = _load_inbox(profile)
     msgs = data.get("messages", [])
     if not msgs:
-        return ("<details class='inbox'><summary>📬 Inbox (0)</summary>"
-                "<div class='empty'>No mail yet.</div></details>")
+        return ("<details class='inbox'><summary>Входящие (0)</summary>"
+                "<div class='empty'>Писем пока нет.</div></details>")
     counts = data.get("counts", {})
     # Priority first: interviews/assessments on top regardless of date.
     rank = {c: i for i, c in enumerate(_CAT_ORDER)}
@@ -79,7 +79,7 @@ def _inbox_html(profile: str) -> str:
             f"<div class='mprev'>{escape(m.get('preview',''))}</div>"
             "</div>")
     open_attr = " open" if (counts.get("interview") or counts.get("assessment")) else ""
-    return (f"<details class='inbox'{open_attr}><summary>📬 Inbox ({data.get('total',0)}) {chips}</summary>"
+    return (f"<details class='inbox'{open_attr}><summary>Входящие ({data.get('total',0)}) {chips}</summary>"
             f"<div class='maillist'>{''.join(rows)}</div></details>")
 
 app = FastAPI(title="JobFinder apply dashboard")
@@ -178,22 +178,22 @@ def _apply_mark(profile: str, jid: str, to: str) -> None:
 def _badge(job: dict, status: str) -> tuple[str, str]:
     """(label, css-class) for the job's current stage."""
     if status == "submitted":
-        return "SUBMITTED", "sub"
+        return "ОТПРАВЛЕНО", "sub"
     if status == "interview":
-        return "INTERVIEW", "intv"
+        return "СОБЕСЕДОВАНИЕ", "intv"
     if status == "rejected":
-        return "REJECTED", "rej"
+        return "ОТКАЗ", "rej"
     unfilled = job.get("unfilled") or []
     blob = " ".join(str(u) for u in unfilled).lower()
     if any(k in blob for k in ("loom", "video", "record a")):
-        return "NEEDS VIDEO", "warn"
+        return "НУЖНО ВИДЕО", "warn"
     if any(k in blob for k in ("python", "coding", "assessment", "skills test", "take-home", "write a")):
-        return "NEEDS TEST", "warn"
+        return "НУЖЕН ТЕСТ", "warn"
     if unfilled:
-        return f"NEEDS INFO ({len(unfilled)})", "warn"
+        return f"НУЖНЫ ДАННЫЕ ({len(unfilled)})", "warn"
     if job.get("review_items"):
-        return f"NEEDS REVIEW ({len(job['review_items'])})", "warn"
-    return "READY TO SUBMIT", "ready"
+        return f"НУЖНА ПРОВЕРКА ({len(job['review_items'])})", "warn"
+    return "ГОТОВО К ОТПРАВКЕ", "ready"
 
 
 def _current_urls(profile: str) -> set | None:
@@ -330,6 +330,18 @@ img.shot{width:100%;border-radius:8px;border:1px solid #232a33;margin-top:9px}
 .mcat{font-size:13px}.msubj{font-size:13px;font-weight:600;color:#e7ebf0}
 .mfrom{font-size:11px;color:#7b8593;margin-top:3px}
 .mprev{font-size:12px;color:#aab3c0;margin-top:5px;line-height:1.4}
+/* Match the shared light JobFinder shell used by Candidates, Catalog and Apply. */
+body{font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f8fc;color:#202124}
+.wrap{max-width:760px;padding:18px 20px 36px}
+.queue-head{display:flex;align-items:center;gap:12px;margin:0 0 16px}
+.queue-back{display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;border:1px solid #dadce0;border-radius:999px;color:#5f6368;text-decoration:none;font-weight:600;background:#fff}
+.queue-back:hover{background:#f1f3f4}.queue-title{min-width:0}.queue-title h1{font-size:22px;line-height:1.2;margin:0}.queue-title p{margin:3px 0 0;color:#80868b;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stat,.card,.inbox{background:#fff;border-color:#e8eaed}.stat span,.meta,.mfrom{color:#80868b}.ti,.mprev{color:#5f6368}.stat.alert,.blockbanner{background:#fce8e6;border-color:#f3c7c2}.stat.alert b,.blockbanner b{color:#d93025}.blockbanner{color:#9c2b22}.blockbanner a{color:#1a73e8}
+.tab{background:#fff;border-color:#dadce0;color:#5f6368}.tab.active{background:#1a73e8;border-color:#1a73e8;color:#fff}
+.ready{background:#e6f4ea;color:#188038;border-color:#bcdfc4}.warn{background:#fef7e0;color:#9b6500;border-color:#fdd663}.sub{background:#e8f0fe;color:#1a73e8;border-color:#b8d3f5}.intv{background:#f3e8fd;color:#8430a6;border-color:#dcc0e8}.rej{background:#fce8e6;color:#d93025;border-color:#f3c7c2}
+a.btn,button.btn{min-width:120px;min-height:44px;border:1px solid #dadce0}.open{background:#1a73e8;color:#fff;border-color:#1a73e8!important}.res{background:#fff;color:#5f6368}.copilot{background:#f3e8fd;color:#8430a6;border-color:#dcc0e8}.done{background:#e6f4ea;color:#188038;border-color:#bcdfc4}.undo{background:#f1f3f4;color:#5f6368}
+summary{color:#5f6368}.ans,.mail{background:#f6f8fc;border-color:#e8eaed}.ans .q{color:#80868b}.ans .a,.msubj,.inbox>summary{color:#202124}.empty{color:#80868b}.extbar{background:#e6f4ea;color:#188038;border-color:#bcdfc4}
+@media(max-width:560px){.wrap{padding:12px}.queue-head{align-items:flex-start}.queue-title h1{font-size:19px}.stats{display:grid;grid-template-columns:repeat(3,1fr)}.stat{min-width:0}.row{display:grid;grid-template-columns:1fr}.row form{width:100%}.top{flex-direction:column}.badge{align-self:flex-start}.tabs{position:sticky;top:0;z-index:5;background:#f6f8fc;padding:8px 0}.queue-back{padding:9px 12px}}
 """
 
 
@@ -341,7 +353,7 @@ function showTab(t){
   });
 }
 async function copilotLoad(jid,btn){
-  btn.disabled=true; btn.textContent='Loading\\u2026';
+  btn.disabled=true; btn.textContent='Загрузка\\u2026';
   // open the co-pilot screen right away (a popup after the slow fill round-trip
   // would be blocked); the fill result lands on the button when it returns
   window.open('/copilot/?profile='+encodeURIComponent(PROFILE),'_blank');
@@ -350,8 +362,8 @@ async function copilotLoad(jid,btn){
       headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body:'jobid='+encodeURIComponent(jid)+'&profile='+encodeURIComponent(PROFILE)});
     const j=await r.json();
-    btn.textContent = j.error ? ('\\u2717 '+String(j.error).slice(0,60)) : '\\u2713 sent to co-pilot';
-  }catch(e){btn.textContent='\\u2717 connection error';}
+    btn.textContent = j.error ? ('Ошибка: '+String(j.error).slice(0,60)) : 'Передано помощнику';
+  }catch(e){btn.textContent='Ошибка соединения';}
   btn.disabled=false;
 }
 (function(){ // deep links (#job-<jid>) may target a card in the hidden tab
@@ -377,7 +389,7 @@ def _card_html(j: dict, profile: str, blocked: bool) -> str:
             f"<span class='badge warn'>{escape(str(r.get('kind') or 'review'))}</span></div>"
             f"<div class='a'>{escape(str(r.get('answer','')))}</div>"
             for r in rev_items)
-        rev_html = (f"<details open><summary>Needs review ({len(rev_items)})</summary>"
+        rev_html = (f"<details open><summary>Нужна проверка ({len(rev_items)})</summary>"
                     f"<div class='ans'>{rev_blocks}</div></details>")
     ans = j.get("drafted_answers") or {}
     ans_html = ""
@@ -390,45 +402,45 @@ def _card_html(j: dict, profile: str, blocked: bool) -> str:
             + (" <span class='badge warn'>review</span>" if review.get(q) else "")
             + f"</div><div class='a'>{escape(str(a))}</div>"
             for q, a in clean.items())
-        ans_html = (f"<details><summary>Answers to paste ({len(ans)})</summary>"
+        ans_html = (f"<details><summary>Ответы для вставки ({len(ans)})</summary>"
                     f"<div class='ans'>{blocks}</div></details>")
     submitted = j["_status"] == "submitted"
     mark = (f"<form method='post' action='/mark/{escape(j['_id'])}?profile={escape(profile)}' style='flex:1'>"
             f"<input type='hidden' name='to' value='{'' if submitted else 'submitted'}'>"
             f"<button class='btn {'undo' if submitted else 'done'}'>"
-            f"{'↩ undo' if submitted else '✓ mark submitted'}</button></form>")
+            f"{'Отменить отметку' if submitted else 'Отметить отправленной'}</button></form>")
     resume_btn = (f"<a class='btn res' href='/resume/{escape(j['_id'])}?profile={escape(profile)}'"
-                  " target='_blank'>Résumé PDF</a>")
+                  " target='_blank'>Резюме PDF</a>")
     if blocked:
         apply_row = resume_btn  # viewing only — nothing that leads to a submit
     else:
         apply_row = (
             f"<a class='btn open' href='{escape(j.get('apply_url',''))}#aa={escape(profile)}:{escape(j['_id'])}'"
-            " target='_blank' rel='noopener'>Apply (1-click) →</a>"
-            f"<a class='btn res' href='{escape(j.get('apply_url',''))}' target='_blank' rel='noopener'>Open form →</a>"
+            " target='_blank' rel='noopener'>Подать в один клик</a>"
+            f"<a class='btn res' href='{escape(j.get('apply_url',''))}' target='_blank' rel='noopener'>Открыть форму</a>"
             f"{resume_btn}"
-            f"<button class='btn copilot' onclick=\"copilotLoad('{escape(j['_id'])}',this)\">Open in co-pilot</button>")
+            f"<button class='btn copilot' onclick=\"copilotLoad('{escape(j['_id'])}',this)\">Открыть в помощнике</button>")
     return (
         f"<div class='card' id='job-{escape(j['_id'])}'>"
         f"<div class='top'><div><div class='co'>{escape(j.get('company',''))}</div>"
         f"<div class='ti'>{escape(j.get('job_title',''))}</div>"
-        f"<div class='meta'>résumé: {escape(str(j.get('resume_niche') or '—'))} · match {j.get('match_score','?')}</div></div>"
+        f"<div class='meta'>резюме: {escape(str(j.get('resume_niche') or '—'))} · совпадение {j.get('match_score','?')}</div></div>"
         f"<span class='badge {j['_cls']}'>{escape(j['_badge'])}</span></div>"
         f"<div class='row'>{apply_row}</div>"
         f"<div class='row'>{mark}</div>"
         f"{rev_html}"
         f"{ans_html}"
-        f"<details><summary>Pre-fill screenshot</summary>"
+        f"<details><summary>Скриншот заполнения</summary>"
         f"<img class='shot' loading='lazy' src='/shot/{escape(j['_id'])}?profile={escape(profile)}'></details>"
         "</div>")
 
 
 def _blocked_banner(profile: str, problems: list[str]) -> str:
     items = "".join(f"<li>{escape(p)}</li>" for p in problems)
-    return ("<div class='blockbanner'><b>⚠ Applications are paused for this profile</b> — "
-            "recruiters could not reach the person as it is set up now:"
+    return ("<div class='blockbanner'><b>Заявки для этого профиля приостановлены</b>: "
+            "с текущими данными рекрутер не сможет связаться с кандидатом."
             f"<ul>{items}</ul>"
-            f"<a href='/setup?profile={escape(profile)}'>Fix in Setup →</a></div>")
+            f"<a href='/setup?profile={escape(profile)}'>Исправить в настройках</a></div>")
 
 
 def _render(profile: str) -> str:
@@ -449,37 +461,53 @@ def _render(profile: str) -> str:
 
     age = _last_review_days(profile)
     rev_alert = " alert" if age is not None and age > 2 else ""
-    rev_txt = "never" if age is None else ("today" if age < 1 else f"{int(age)}d ago")
+    rev_txt = "никогда" if age is None else ("сегодня" if age < 1 else f"{int(age)} дн. назад")
+
+    profile_name = getattr(prof, "full_name", "") if prof is not None else ""
+    try:
+        from backend.tools import mailcrm
+        profile_name = profile_name or next((c.get("name") for c in mailcrm.candidates()
+                                             if c.get("id") == profile), "")
+    except Exception:
+        pass
+    if not profile_name:
+        # Generated profile ids end with a readable first/last name. Keep the
+        # internal id as secondary context, never as the main page heading.
+        parts = [p for p in profile.split("_") if p]
+        profile_name = " ".join(parts[3:] if len(parts) > 4 else parts).title() or "Кандидат"
 
     ready_cards = "".join(_card_html(j, profile, blocked) for j in tabs["ready"])
     info_cards = "".join(_card_html(j, profile, blocked) for j in tabs["info"])
     if not (ready_cards or info_cards or n_skip):
-        body = "<div class='empty'>No pre-filled jobs yet. Run a batch first.</div>"
+        body = "<div class='empty'>Пока нет заполненных заявок. Сначала запустите обработку.</div>"
     else:
         body = (
             "<div class='tabs'>"
-            f"<button class='tab active' id='tab-ready' onclick=\"showTab('ready')\">Ready ({n_ready})</button>"
-            f"<button class='tab' id='tab-info' onclick=\"showTab('info')\">Needs info ({len(tabs['info'])})</button>"
+            f"<button class='tab active' id='tab-ready' onclick=\"showTab('ready')\">Готовы ({n_ready})</button>"
+            f"<button class='tab' id='tab-info' onclick=\"showTab('info')\">Нужны данные ({len(tabs['info'])})</button>"
             "</div>"
-            f"<div id='pane-ready'>{ready_cards or '<div class=empty>Nothing ready to submit yet.</div>'}</div>"
+            f"<div id='pane-ready'>{ready_cards or '<div class=empty>Пока нет заявок, готовых к отправке.</div>'}</div>"
             f"<div id='pane-info' style='display:none'>"
-            f"{info_cards or '<div class=empty>Nothing needs extra info.</div>'}</div>")
+            f"{info_cards or '<div class=empty>Дополнительные данные не требуются.</div>'}</div>")
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Apply — {escape(profile)}</title><style>{_CSS}</style></head><body><div class='wrap'>"
-        f"<h1>Apply queue — {escape(profile)}</h1>"
+        "<link rel='preconnect' href='https://fonts.googleapis.com'>"
+        "<link href='https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap' rel='stylesheet'>"
+        f"<title>Заявки — {escape(str(profile_name))}</title><style>{_CSS}</style></head><body><div class='wrap'>"
+        "<header class='queue-head'><a class='queue-back' href='/apply'>Назад</a>"
+        f"<div class='queue-title'><h1>{escape(str(profile_name))}</h1><p>{escape(profile)}</p></div></header>"
         + (_blocked_banner(profile, problems) if blocked else "") +
         "<div class='stats'>"
-        f"<div class='stat'><b>{len(jobs) - n_skip}</b><span>in queue</span></div>"
-        f"<div class='stat'><b>{n_ready}</b><span>ready</span></div>"
-        f"<div class='stat'><b>{n_sub}</b><span>submitted</span></div>"
-        f"<div class='stat'><b>{n_intv}</b><span>interview</span></div>"
-        f"<div class='stat'><b>{n_rej}</b><span>rejected</span></div>"
-        f"<div class='stat'><b>{n_skip}</b><span>skipped: no form</span></div>"
-        f"<div class='stat{rev_alert}'><b>{rev_txt}</b><span>last review</span></div>"
+        f"<div class='stat'><b>{len(jobs) - n_skip}</b><span>в очереди</span></div>"
+        f"<div class='stat'><b>{n_ready}</b><span>готово</span></div>"
+        f"<div class='stat'><b>{n_sub}</b><span>отправлено</span></div>"
+        f"<div class='stat'><b>{n_intv}</b><span>собеседования</span></div>"
+        f"<div class='stat'><b>{n_rej}</b><span>отказы</span></div>"
+        f"<div class='stat'><b>{n_skip}</b><span>без формы</span></div>"
+        f"<div class='stat{rev_alert}'><b>{rev_txt}</b><span>проверено</span></div>"
         "</div>"
-        "<a class='extbar' href='/extension'>⬇ Install the Apply Assist extension (it fills forms in your Chrome)</a>"
+        "<a class='extbar' href='/extension'>Установить расширение Apply Assist для заполнения форм</a>"
         f"{_inbox_html(profile)}"
         f"{body}"
         f"<script>const PROFILE={json.dumps(profile)};{_JS}</script>"
@@ -824,7 +852,7 @@ def mail_candidates(filter: str = "", q: str = ""):
     has_more = 1 if len(cands) > CANDIDATES_PAGE else 0
     return HTMLResponse(mailcrm_ui.render_candidates(
         page, counts=counts, active_filter=(filter or "").lower(),
-        total=total, has_more=has_more))
+        total=total, has_more=has_more, query=q))
 
 
 @app.get("/mail/candidates/more", response_class=HTMLResponse)

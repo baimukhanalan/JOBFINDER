@@ -60,6 +60,23 @@ class ReplyUiTests(unittest.TestCase):
         self.assertIn("Recruiter&#x27;s &quot;next&quot; step", page)
         self.assertIn("document.querySelectorAll('.reply-action')", page)
 
+    def test_candidate_search_is_available_on_desktop_and_preserves_filter(self):
+        page = mailcrm_ui.render_candidates(
+            [{"name": "Dinara", "email": "dinara@example.com", "unread": 0}],
+            counts={"interview": 1}, active_filter="interview", total=539,
+            query="dinara", has_more=1,
+        )
+        self.assertIn('class="candidate-tools"', page)
+        self.assertIn('value="dinara"', page)
+        self.assertIn('name="filter" value="interview"', page)
+        self.assertIn('filter=interview&amp;q=dinara', page)
+
+    def test_mobile_css_keeps_filters_and_message_actions_accessible(self):
+        page = mailcrm_ui.render_candidates([], total=0)
+        self.assertIn(".funnel{flex-wrap:nowrap;overflow-x:auto", page)
+        thread = mailcrm_ui.render_thread({"messages": []})
+        self.assertIn(".msg-toolbar .reply-action,.msg-toolbar .delete-action", thread)
+
 
 class DeleteThreadTests(unittest.TestCase):
     @staticmethod

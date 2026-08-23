@@ -317,18 +317,24 @@ _CAT_CSS = """<style>
 .cat-qtype{flex:0 0 auto;font-family:var(--ff-mono,monospace);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
 .cat-fill-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:9px}
-.cat-fill-lbl{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.85}
-.cat-fill{color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
-.cat-fill-m{background:#1a73e8;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
-.cat-fill-f{background:#c2559b;box-shadow:0 2px 8px -2px rgba(194,85,155,.5)}
-.cat-fill:hover{filter:brightness(1.06)}
+.cat-fill-lbl{font-size:13px;font-weight:600;color:var(--ink-soft,#5f6368)}
+.cat-fill{color:var(--ink,#202124);border:1px solid var(--line-strong,#dadce0);background:var(--panel,#fff);border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:40px}
+.cat-fill-m,.cat-fill-f{box-shadow:none}
+.cat-fill:hover{background:var(--accent-soft,#e8f0fe);border-color:var(--accent,#1a73e8);color:var(--accent-deep,#1762c4)}
 .cat-fill:disabled{opacity:.75;cursor:default;box-shadow:none}
 .cat-fill-res a{color:#1a73e8;font-weight:700;font-size:13px;text-decoration:none}
 .cat-fill-res a:hover{text-decoration:underline}
 /* Hide the inline catalog search on mobile — the Gmail top pill already searches
    the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
    the later .cat-search{display:flex} in this same stylesheet). */
-@media(max-width:760px){.cat-h-title{font-size:17px}.cat-title{font-size:15px}.cat-search{display:none}}
+@media(max-width:760px){
+  .cat-h-title{font-size:17px}.cat-title{font-size:15px}.cat-search{display:none}
+  .cat-regions{margin-left:-12px;margin-right:-12px;padding:2px 12px 12px;scroll-snap-type:x proximity;scrollbar-width:thin}
+  .cat-reg{scroll-snap-align:start;min-height:44px}
+  .cat-fill-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .cat-fill-lbl,.cat-fill-res{grid-column:1/-1}
+  .cat-fill{width:100%;min-height:44px}
+}
 </style>"""
 
 _CAT_JS = """<script>

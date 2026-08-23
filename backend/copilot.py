@@ -216,6 +216,42 @@ async def release(profile: str = Form("michael")):
     return {"released": owner is None, "owner": owner}
 
 
+@app.post("/goto")
+async def goto(url: str = Form(...)):
+    """Fast navigation ONLY — point the shared headful browser at a job's apply URL so
+    noVNC shows the RIGHT job the instant "Заполнить" is clicked, BEFORE the (slower)
+    draft-gen + /load fill. Without this the browser stays on the PREVIOUS job during
+    draft generation and noVNC shows a stale page. No fill; ownership is claimed later by
+    /load. Preempts a demo owner (every catalog click is a fresh demo persona) but leaves
+    a real human's mid-review page alone."""
+    url = (url or "").strip()
+    if not url.startswith("http"):
+        return JSONResponse({"error": "bad url"}, status_code=400)
+    if str(_S.get("owner") or "").startswith("demo_"):
+        _S["owner"] = None
+    if not can_load(_S["owner"], _S["loaded_at"], "__preview__", time.time()):
+        return JSONResponse({"busy": _S.get("owner")}, status_code=423)
+    async with _S["lock"]:
+        _cancel_watch()
+        page = await _ensure_browser()
+        try:
+            await page.evaluate("1")
+        except Exception:
+            browser, _S["browser"], _S["page"] = _S.get("browser"), None, None
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            page = await _ensure_browser()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            _S["current"] = None  # not owned yet — the following /load fill claims it
+        except Exception as e:
+            return JSONResponse({"error": str(e)[:200]}, status_code=500)
+    return JSONResponse({"navigated": url})
+
+
 @app.post("/load")
 async def load(jobid: str = Form(...), profile: str = Form("michael")):
     profile = _safe_id(profile) or "michael"

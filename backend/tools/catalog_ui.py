@@ -326,31 +326,23 @@ _CAT_CSS = """<style>
 </style>"""
 
 _CAT_JS = """<script>
-// One-click: generate (if needed) + fill the LIVE ATS form via the co-pilot, then
-// point at noVNC. Global (used by cards added via infinite scroll too).
+// One-click: start the fill (the server first points the co-pilot at THIS job, then
+// generates + fills in the background) and go straight to noVNC to WATCH that job fill.
+// Redirect the SAME tab — window.open('_blank') is popup-blocked on mobile (that was the
+// "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
+// noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
 window.fillJob = async function(btn){
   var id=btn.dataset.id, res=btn.parentNode.querySelector('.cat-fill-res');
   if(btn.disabled) return;
   var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
-  btn.disabled=true; btn.textContent='⏳ Запускаю…'; if(res) res.textContent='';
+  btn.disabled=true; btn.textContent='⏳ Открываю…'; if(res) res.textContent='';
   try{
     var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST'})).json();
-    var novnc=j.novnc||NOVNC;
-    // open noVNC right away so you WATCH it navigate + fill live
-    try{ window.open(novnc,'_blank'); }catch(e){}
-    if(res) res.innerHTML=' <a href="'+novnc+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
-    btn.textContent='⏳ Готовлю и заполняю… (~50с)';
-    // poll status — the fill runs in the background, so no long-held request to drop
-    var poll=setInterval(async function(){
-      try{
-        var s=await (await fetch('/catalog/'+id+'/fill_status')).json();
-        if(s.state==='done'){ clearInterval(poll);
-          btn.textContent='✅ Заполнено '+(s.filled||0)+' полей'+(s.unfilled?(' · '+s.unfilled+' вручную'):''); }
-        else if(s.state==='error'){ clearInterval(poll);
-          btn.textContent='⚠ '+((s.error||'ошибка').slice(0,55)); btn.disabled=false; }
-      }catch(e){/* keep polling */}
-    },2500);
-  }catch(e){ btn.textContent='⚠ не удалось запустить — повторить'; btn.disabled=false; }
+    window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
+  }catch(e){
+    btn.textContent='⚠ не удалось запустить — повторить'; btn.disabled=false;
+    if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
+  }
 };
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');

@@ -633,6 +633,19 @@ def catalog_fill(job_id: int):
     st = _FILL_JOBS.get(job_id)
     if not (st and st.get("state") == "running"):
         _FILL_JOBS[job_id] = {"state": "running", "phase": "generating"}
+        # Point the co-pilot at THIS job's apply URL right now (fast — no draft gen) so
+        # noVNC shows the requested job immediately instead of the previous one while the
+        # draft generates in the background thread below. Best-effort: /load navigates too.
+        try:
+            import httpx
+
+            from backend.tools import catalog_db, catalog_drafts
+            job = catalog_db.get_job(job_id)
+            aurl = catalog_drafts.apply_url_for_job(job) if job else ""
+            if aurl:
+                httpx.post("http://127.0.0.1:8102/goto", data={"url": aurl}, timeout=30)
+        except Exception:
+            pass
         threading.Thread(target=_do_fill, args=(job_id,), daemon=True).start()
     return JSONResponse({"started": True, "novnc": _NOVNC_URL})
 

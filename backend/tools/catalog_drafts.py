@@ -836,29 +836,30 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
         for lbl in ("Location (City)", "Location", "City", "Current location", "City/Town"):
             drafted.setdefault(lbl, city)
 
-    # Give the co-pilot the real APPLY-form URL, not the raw posting: Workable's raw
-    # /j/<code> is the job LISTING (page_type=job_listing, nothing to fill) — the form
-    # is at +/apply; Ashby needs /application. _apply_url handles each ATS.
-    from backend.tools.catalog_forms import _apply_url
-    # greenhouse: the raw hosted form is the EMBED endpoint (never redirects, unlike the
-    # board URL / company careers wrapper). It needs the numeric gh job id — which lives in
-    # the URL (?gh_jid=<id> or /jobs/<id>); trust the URL FIRST because `external_id` can be
-    # a collector sha1 fallback (e.g. nebius stored 63f8… while the real gh_jid 4930024101 is
-    # in the URL). Fall back to a numeric external_id, then to the plain apply URL.
-    gh_id = ""
-    if job.get("ats") == "greenhouse":
-        m = re.search(r"(?:/jobs/|[?&]gh_jid=)(\d+)", job.get("url", "") or "")
-        gh_id = m.group(1) if m else (str(job["external_id"]) if str(job.get("external_id") or "").isdigit() else "")
-    if gh_id and job.get("company_key"):
-        apply_url = f"https://boards.greenhouse.io/embed/job_app?for={job['company_key']}&token={gh_id}"
-    else:
-        apply_url = _apply_url(job.get("ats", ""), job.get("url", "")) or job.get("url", "")
+    # The co-pilot needs the real APPLY-form URL, not the raw posting (see apply_url_for_job).
+    apply_url = apply_url_for_job(job)
 
     report = {"apply_url": apply_url, "job_title": job.get("title", ""),
               "company": job.get("company", ""), "profile": profile_id,
               "resume_niche": None, "drafted_answers": drafted, "submitted": False}
     (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return profile_id, jobid
+
+
+def apply_url_for_job(job: dict) -> str:
+    """The LIVE ATS apply-form URL for a catalog job — fast (no draft gen), so the
+    co-pilot can navigate to the RIGHT job the instant "Заполнить" is clicked (before the
+    slow draft generation), instead of noVNC showing the previous job. Greenhouse -> the
+    embed form keyed by the gh_jid FROM THE URL (never redirects); others -> `_apply_url`.
+    Kept in sync with materialize_prefill, which calls it."""
+    from backend.tools.catalog_forms import _apply_url
+    gh_id = ""
+    if job.get("ats") == "greenhouse":
+        m = re.search(r"(?:/jobs/|[?&]gh_jid=)(\d+)", job.get("url", "") or "")
+        gh_id = m.group(1) if m else (str(job["external_id"]) if str(job.get("external_id") or "").isdigit() else "")
+    if gh_id and job.get("company_key"):
+        return f"https://boards.greenhouse.io/embed/job_app?for={job['company_key']}&token={gh_id}"
+    return _apply_url(job.get("ats", ""), job.get("url", "")) or job.get("url", "")
 
 
 # Bump when the scraper/generator changes in a way that should force a fresh draft on

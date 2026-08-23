@@ -13,6 +13,7 @@ retention job can all share it. DSN comes from `CRM_PG_DSN` in backend/.env.
 Public API (stable contract used by mail_indexer.py, mailcrm.py, mail_retention.py):
   ensure_schema()
   upsert_message(**fields) / delete_paths(hashes) / all_path_hashes() / mark_seen(...)
+  get_meta(key) / set_meta(key, value)
   list_messages(...) / get_row(h) / thread_rows(mailbox, thread_key)
   counts() / unread_by_mailbox()
   protected_thread_keys() / deletable_rows(kinds, cutoff_ts)
@@ -113,6 +114,11 @@ def ensure_schema() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS mail_idx_fts ON mail_index USING gin "
                     "(to_tsvector('simple', coalesce(subject,'')||' '||coalesce(from_email,'')"
                     "||' '||coalesce(from_name,'')));")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS mail_meta (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );""")
 
 
 _COLS = ("mailbox", "candidate", "candidate_id", "path", "path_hash", "from_name",
@@ -122,14 +128,28 @@ _COLS = ("mailbox", "candidate", "candidate_id", "path", "path_hash", "from_name
 
 # ---- writes (indexer) ----------------------------------------------------------
 def upsert_message(**f) -> None:
-    """Insert one message row, or update path/seen if the path_hash already exists."""
+    """Insert a message row or refresh all parsed metadata for an existing row."""
     vals = [f.get(c) for c in _COLS]
     ph = ",".join(["%s"] * len(_COLS))
+    updates = ",".join(f"{c}=EXCLUDED.{c}" for c in _COLS if c != "path_hash")
     with _cur(dict_rows=False) as cur:
         cur.execute(
             f"INSERT INTO mail_index ({','.join(_COLS)}) VALUES ({ph}) "
-            "ON CONFLICT (path_hash) DO UPDATE SET path=EXCLUDED.path, seen=EXCLUDED.seen",
+            f"ON CONFLICT (path_hash) DO UPDATE SET {updates}",
             vals)
+
+
+def get_meta(key: str) -> str | None:
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT value FROM mail_meta WHERE key=%s", (key,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def set_meta(key: str, value: str) -> None:
+    with _cur(dict_rows=False) as cur:
+        cur.execute("INSERT INTO mail_meta (key,value) VALUES (%s,%s) "
+                    "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
 
 
 def delete_paths(path_hashes) -> int:

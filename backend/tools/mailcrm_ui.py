@@ -370,16 +370,23 @@ def render_thread(t: dict) -> str:
     # reply prefills from the candidate mailbox to the last INBOUND sender
     inbound = [m for m in msgs if not m.get("outbound")]
     tgt = inbound[-1] if inbound else (msgs[-1] if msgs else {})
-    reply_args = (f"'{escape(t.get('mailbox',''))}','{escape(tgt.get('from_email',''))}',"
-                  f"\"{escape((t.get('subject') or '').replace(chr(34), ''))}\","
-                  f"'{escape(tgt.get('message_id',''))}'")
+    # Values stay in data attributes instead of executable onclick text. Subjects
+    # and Message-IDs commonly contain quotes; entity decoding made the old inline
+    # JavaScript syntactically invalid, so the Reply button appeared to do nothing.
+    reply_attrs = (
+        f'data-from="{escape(t.get("mailbox", ""), quote=True)}" '
+        f'data-to="{escape(tgt.get("from_email", ""), quote=True)}" '
+        f'data-subject="{escape(t.get("subject", ""), quote=True)}" '
+        f'data-mid="{escape(tgt.get("message_id", ""), quote=True)}"')
+    thread_id = next((m.get("id") for m in reversed(msgs) if m.get("id")), "")
     cards = "".join(_msg_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
     body = (
         '<div class="msg-toolbar">'
         '<a class="hbtn" href="/mail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>К списку</a>'
         f'<a class="hbtn" href="/mail?mailbox={escape(t.get("mailbox",""))}">Ящик кандидата</a>'
         '<div class="spacer"></div>'
-        f'<button class="hbtn" onclick="reply({reply_args})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
+        f'<button type="button" class="hbtn reply-action" {reply_attrs}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
+        f'<button type="button" class="hbtn danger delete-action" data-id="{escape(thread_id, quote=True)}" data-mailbox="{escape(t.get("mailbox", ""), quote=True)}">Удалить</button>'
         '</div>'
         f'<div class="msg-page"><h1 class="msg-subject">{escape(t.get("subject","") or "(без темы)")}'
         f'<span class="tcount">{len(msgs)}</span></h1>'
@@ -455,7 +462,21 @@ _JS = """
 <script>
 function openCompose(){document.getElementById('composeModal').classList.add('open');document.body.style.overflow='hidden';document.getElementById('sendmsg').textContent='';}
 function closeCompose(){document.getElementById('composeModal').classList.remove('open');document.body.style.overflow='';}
-function reply(from,to,subj,mid){var f=document.getElementById('composeForm');f.from_email.value=from;f.to.value=to;f.subject.value=(subj&&subj.indexOf('Re:')===0?subj:'Re: '+(subj||''));f.in_reply_to.value=mid||'';openCompose();setTimeout(function(){f.body.focus();},50);}
+function reply(from,to,subj,mid){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value=to||'';field('subject').value=(/^re:/i.test(subj||'')?subj:'Re: '+(subj||''));field('in_reply_to').value=mid||'';openCompose();setTimeout(function(){field('body').focus();},50);}
+document.querySelectorAll('.reply-action').forEach(function(b){b.addEventListener('click',function(){reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid);});});
+async function deleteThread(b){
+  var id=b.dataset.id;if(!id)return;
+  if(!confirm('Переместить всю цепочку в корзину? При необходимости её можно восстановить на сервере.'))return;
+  b.disabled=true;var old=b.textContent;b.textContent='Удаление…';
+  try{
+    var r=await fetch('/mail/delete',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({id:id})});
+    var j=await r.json();
+    if(j.ok){var u='/mail';if(b.dataset.mailbox)u+='?mailbox='+encodeURIComponent(b.dataset.mailbox);location.href=u;return;}
+    alert('Не удалось удалить: '+(j.error||'ошибка сервера'));
+  }catch(e){alert('Не удалось удалить: ошибка сети');}
+  b.disabled=false;b.textContent=old;
+}
+document.querySelectorAll('.delete-action').forEach(function(b){b.addEventListener('click',function(){deleteThread(b);});});
 document.querySelectorAll('.modal').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)closeCompose();});});
 document.addEventListener('keydown',function(e){if(e.key==='Escape')closeCompose();});
 async function sendMail(e){

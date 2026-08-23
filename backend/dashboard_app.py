@@ -868,6 +868,14 @@ def mail_send(from_email: str = Form(...), to: str = Form(...),
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
+@app.post("/mail/delete")
+def mail_delete(id: str = Form(...)):
+    """Move one conversation to the candidate mailbox's recoverable Trash."""
+    from backend.tools import mailcrm
+    res = mailcrm.delete_thread(id)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
+
 @app.get("/mail/count")
 def mail_count(q: str = "", mailbox: str = ""):
     from backend.tools import mailcrm

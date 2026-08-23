@@ -37,19 +37,53 @@ SMTP_HOST, SMTP_PORT = "127.0.0.1", 587
 MAX_BODY = 200_000
 
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
-_INTERVIEW = re.compile(r"\b(interview|schedule a call|book a time|calendly|assessment|next steps?|screening|phone screen|move forward|shortlist|собеседовани|интервью|назначить звонок|следующий этап|тестовое задание)\b", re.I)
+# Bump this whenever the rules change. mail_indexer uses it to refresh existing
+# Postgres rows once, so fixing a false positive also fixes mail already indexed.
+CLASSIFIER_VERSION = "2026-08-23-conservative-v1"
+
+# A bare "next steps", "screening" or "move forward" is deliberately NOT an
+# interview signal: acknowledgement templates routinely contain those words.
+# Require an explicit invitation/scheduling action instead.
+_INTERVIEW_SUBJECT = re.compile(
+    r"\b(interview invitation|invitation to (?:an? )?interview|"
+    r"schedule (?:an? )?(?:interview|call|meeting)|phone screen(?:ing)? invitation|"
+    r"assessment invitation|technical interview|"
+    r"приглашение на (?:собеседование|интервью)|"
+    r"собеседование назначено|назначить (?:звонок|собеседование)|"
+    r"приглашение на тестовое задание)\b", re.I)
+_INTERVIEW_BODY = re.compile(
+    r"\b(?:we(?:'d| would) like to|we want to|please|kindly) "
+    r"(?:invite you to|schedule|arrange|book|set up) (?:an? )?"
+    r"(?:interview|call|meeting|phone screen)|"
+    r"\binvite you (?:to|for) (?:an? )?(?:interview|phone screen|assessment)|"
+    r"\b(?:choose|select|book) (?:an? )?(?:available )?(?:time|slot) "
+    r"(?:for (?:your |an? )?(?:interview|call)|to (?:interview|speak|meet))|"
+    r"\b(?:share|send) (?:us )?your availability (?:for|to) "
+    r"(?:an? )?(?:interview|call|meeting)|"
+    r"\b(?:приглашаем|хотим пригласить) вас на (?:собеседование|интервью|тестовое задание)|"
+    r"\b(?:выберите|забронируйте|сообщите) (?:удобное )?(?:время|слот) "
+    r"(?:для|на) (?:собеседовани[ея]|интервью|звонок)|"
+    r"\b(?:готовы|хотели бы) (?:назначить|провести) (?:с вами )?"
+    r"(?:собеседование|интервью|звонок)", re.I)
 _REJECT = re.compile(r"\b(unfortunately|not moving forward|decided not to|other candidates|won'?t be proceeding|not a (good )?fit|regret to inform|we will not|declined|к сожалению|отказ|не подошли)\b", re.I)
 _OFFER = re.compile(r"\b(offer letter|pleased to offer|extend an offer|welcome aboard|предлагаем вам|оффер|job offer)\b", re.I)
-_ACK = re.compile(r"\b(application received|thanks? for applying|we received your|has been received|получили ваш|заявка принята)\b", re.I)
+_ACK = re.compile(
+    r"\b(application (?:has been )?(?:received|submitted)|"
+    r"thanks? for (?:applying|your application)|we (?:have )?received your|"
+    r"has been received|application is (?:being |now )?(?:reviewed|under review)|"
+    r"получили (?:ваш[еу]?|заявку)|заявка (?:принята|получена|отправлена)|"
+    r"отклик (?:принят|получен)|ваша заявка (?:на рассмотрении|рассматривается))\b", re.I)
 
 
 def classify(subject: str, body: str) -> str:
+    subject = subject or ""
+    body = body or ""
     t = f"{subject}\n{body}"
     if _OFFER.search(t):
         return "offer"
     if _REJECT.search(t):
         return "rejection"
-    if _INTERVIEW.search(t):
+    if _INTERVIEW_SUBJECT.search(subject) or _INTERVIEW_BODY.search(body):
         return "interview"
     if _ACK.search(t):
         return "ack"
@@ -486,6 +520,59 @@ def get_attachment(path_hash: str, i: int):
             return (part.get_filename() or f"attachment-{i}",
                     part.get_content_type() or "application/octet-stream", data)
     return None
+
+
+def delete_thread(path_hash: str) -> dict[str, Any]:
+    """Move a whole conversation out of Inbox into the mailbox's .Trash.
+
+    The operation is recoverable on disk and removes the corresponding index rows
+    immediately. The inotify indexer also sees the move and independently prunes
+    them, so a temporary DB failure cannot make a deleted thread reappear forever.
+    """
+    thread = get_thread(path_hash, mark=False)
+    if not thread or not thread.get("messages"):
+        return {"ok": False, "error": "message not found"}
+    box = _by_email().get((thread.get("mailbox") or "").lower())
+    if not box:
+        return {"ok": False, "error": "candidate mailbox not found"}
+
+    maildir = os.path.realpath(box["maildir"])
+    trash_root = os.path.join(maildir, ".Trash")
+    trash_cur = os.path.join(trash_root, "cur")
+    for sub in ("cur", "new", "tmp"):
+        os.makedirs(os.path.join(trash_root, sub), exist_ok=True)
+
+    moved_hashes: list[str] = []
+    for message in thread["messages"]:
+        path = os.path.realpath(message.get("path") or "")
+        try:
+            if os.path.commonpath((maildir, path)) != maildir or not os.path.isfile(path):
+                continue
+        except ValueError:
+            continue
+        name = os.path.basename(path)
+        if ":2," not in name:
+            name += ":2,ST"
+        else:
+            base, flags = name.split(":2,", 1)
+            name = f"{base}:2,{''.join(sorted(set(flags + 'ST')))}"
+        dst = os.path.join(trash_cur, name)
+        if os.path.exists(dst):
+            dst += "." + os.urandom(4).hex()
+        try:
+            os.replace(path, dst)
+            moved_hashes.append(_pid(path))
+        except OSError:
+            continue
+
+    if moved_hashes:
+        try:
+            mail_db.delete_paths(moved_hashes)
+        except Exception:
+            pass
+    return {"ok": bool(moved_hashes), "deleted": len(moved_hashes),
+            "recoverable": True, "mailbox": box["email"],
+            "error": "could not move messages to Trash" if not moved_hashes else ""}
 
 
 # ---- sending (self-hosted Postfix submission, as the candidate) ------------

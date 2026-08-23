@@ -130,6 +130,12 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `mail_db.py` is the psycopg2 layer). DEAD leftovers — do NOT wire them expecting `/mail` to change:
   `mail_sink.py` / `mail_sink --poll` / `mail_sink.json` (Mailgun/Mailpit era),
   `dashboard_app._start_mail_poller()` (defined, never invoked), `tools/mail_dashboard.py` (zero importers).
+- **Inbox actions + classification.** Reply data is passed through `.reply-action` data attributes (not
+  executable inline arguments — recruiter subjects/Message-IDs contain quotes). `/mail/delete` moves the
+  whole thread into the candidate Maildir's recoverable `.Trash/cur` and prunes its index rows. Interview
+  classification requires an explicit invitation/scheduling action; bare acknowledgement-template words
+  such as `next steps`, `screening`, and `move forward` are not interview signals. Bump
+  `mailcrm.CLASSIFIER_VERSION` after future rule changes: `mail_indexer` then refreshes existing rows once.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

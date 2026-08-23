@@ -57,30 +57,41 @@ def _iter_candidate_files():
 # ---- full reconcile --------------------------------------------------------
 def run_once():
     """Reconcile the whole index against disk. Insert files not yet indexed, prune
-    rows whose files disappeared. Returns (inserted, pruned)."""
+    rows whose files disappeared. When the classifier version changes, refresh all
+    rows once so old false positives are corrected too. Returns (updated, pruned)."""
     known = mail_db.all_path_hashes()
+    try:
+        refresh_kinds = mail_db.get_meta("classifier_version") != mailcrm.CLASSIFIER_VERSION
+    except Exception:
+        refresh_kinds = True
     on_disk: set[str] = set()
-    inserted = 0
+    updated = 0
+    refresh_failed = False
     for path, seen in _iter_candidate_files():
         h = _pid(path)
         on_disk.add(h)
-        if h in known:
+        if h in known and not refresh_kinds:
             continue
         try:
             row = mailcrm.build_index_row(path, seen)
         except Exception as e:
             print(f"index parse error {path}: {e}", flush=True)
+            refresh_failed = refresh_failed or refresh_kinds
             continue
         if not row:
+            refresh_failed = refresh_failed or (refresh_kinds and h in known)
             continue
         try:
             mail_db.upsert_message(**row)
-            inserted += 1
+            updated += 1
         except Exception as e:
             print(f"upsert error {path}: {e}", flush=True)
+            refresh_failed = refresh_failed or refresh_kinds
     pruned = mail_db.delete_paths(known - on_disk)
+    if refresh_kinds and not refresh_failed:
+        mail_db.set_meta("classifier_version", mailcrm.CLASSIFIER_VERSION)
     mail_health.heartbeat()   # a full reconcile completed -> the backstop is alive
-    return inserted, pruned
+    return updated, pruned
 
 
 # ---- single-file index / prune (used by the watcher) -----------------------

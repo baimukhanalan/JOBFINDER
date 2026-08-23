@@ -558,6 +558,22 @@ async def extract_form_fields(page: Page) -> list[dict]:
                 if not visible and el_type != "file":
                     continue
 
+                # Skip DUMMY/TEMPLATE inputs some ATSs render as 1x1 aria-hidden fields
+                # (e.g. Workable's CA_/QA_ shadow inputs): Playwright's is_visible() passes a
+                # 1x1 visibility:visible box, so they slipped in as REQUIRED-unfilled fields
+                # and falsely blocked an otherwise-complete form (verified on Workable/zyte).
+                # A real field is neither aria-hidden nor collapsed to ~0px (file inputs are
+                # legitimately tiny, so they're exempt).
+                if el_type != "file":
+                    try:
+                        if await el.evaluate(
+                            "el => { const r = el.getBoundingClientRect();"
+                            " return el.closest('[aria-hidden=\"true\"]') !== null"
+                            " || (r.width <= 2 && r.height <= 2); }"):
+                            continue
+                    except Exception:
+                        pass
+
                 # React-Select (Greenhouse) renders a typeahead <input> inside its
                 # div widget; Workable renders a fixed-list select as a readonly
                 # input[role=combobox]. NEITHER is an open-text field: a text `fill`

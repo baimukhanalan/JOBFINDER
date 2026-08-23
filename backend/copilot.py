@@ -258,11 +258,18 @@ def _apply_identity(u: str) -> tuple:
     except Exception:
         return ("", "")
     host = (p.netloc or "").lower()
-    seg = (p.path or "").strip("/").split("/")
-    seg0 = seg[0].lower() if seg and seg[0] else ""
+    seg = [s for s in (p.path or "").strip("/").split("/") if s]
+    seg0 = seg[0].lower() if seg else ""
     if "greenhouse.io" in host:
         forq = parse_qs(p.query or "").get("for", [""])[0].lower()
         return ("greenhouse", forq or seg0)
+    if "workable.com" in host:
+        # Workable redirects /j/<shortcode>/apply -> /<company>/j/<shortcode>/apply on load,
+        # so the first path segment flips from 'j' to the company slug. Identify by the STABLE
+        # shortcode after '/j/' instead — else that legit same-form redirect reads as a page
+        # drift and the race guard falsely aborts EVERY Workable submit.
+        if "j" in seg and seg.index("j") + 1 < len(seg):
+            return ("workable", seg[seg.index("j") + 1].lower())
     return (host, seg0)
 
 

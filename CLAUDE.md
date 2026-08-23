@@ -194,6 +194,18 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a real IP where the geocode resolves) instead of a phantom "complete". OPTIONAL locations aren't in
   `failed_required`, so they stay silently blank. Lever marks the location `required` in the DOM even with
   no visible asterisk, so most Lever forms carry this one human task — that is honest, not a regression.
+- **Structured Greenhouse Employment/Education work-history block.** Newer Greenhouse hosted forms render
+  an EMPLOYMENT block (Company name, Title, Start/End date month+year, a 'Current role' checkbox) and an
+  EDUCATION block (School, Discipline, Degree). `materialize_prefill` supplies these as exact-label known
+  answers from the persona's résumé `experience[0]`/`education[0]`: Company name, Title, Start date
+  year (parsed from `dates`), Start date month='January' (résumé dates are year-only); a 'Present'/'Current'
+  role sets `Current role='Yes'` (ticks the checkbox, which WAIVES the End date) else End date year/month
+  is parsed. **The availability `_start_date` rule is negative-lookahead-guarded** (`start.?date(?!\s+(month|year))`)
+  so it no longer types `available_start` ('Immediately' → garbage 'Imme') into a work-history 'Start date
+  year' field. `_known_answer_exact` also collapses a doubled label ('Title Title' → 'Title') so a
+  Greenhouse label duplicated across sibling nodes still matches its single-word drafted key. `_SCRAPE_V`
+  bumped so cached drafts regenerate. (School/Discipline are slow remote-search react-select typeaheads —
+  optional, best-effort.)
 - **Known-answer replay is EXACT-match-first (`analyzer._best_known_answer`).** `analyze_page`'s known-
   answers loop used to bind the FIRST fuzzy `_known_answer_matches` hit (word-overlap ≥ max(2, sig//2)),
   so two Yes/No screeners sharing only generic words — "authorized to work…for our company?" (Yes) and

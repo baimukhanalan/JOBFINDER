@@ -801,6 +801,31 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
             drafted.setdefault("School", e0["school"])
         if e0.get("degree"):
             drafted.setdefault("Degree", e0["degree"])
+        if e0.get("field"):
+            drafted.setdefault("Discipline", e0["field"])  # field of study
+
+    # Structured EMPLOYMENT work-history block (newer Greenhouse hosted forms): Company name,
+    # Title, Start/End date components, and a 'Current role' checkbox — the persona's most
+    # recent role (experience[0]) carries all of it. Résumé dates are year-only ('2022-Present'),
+    # so the month defaults to January; a 'Present'/'Current' role ticks 'Current role' (which
+    # waives the End date), else the end year is parsed from the range.
+    exp = ((d.get("resume") or {}).get("experience") or [])
+    if exp:
+        x0 = exp[0]
+        if x0.get("company"):
+            drafted.setdefault("Company name", x0["company"])
+        if x0.get("title"):
+            drafted.setdefault("Title", x0["title"])
+        dates = str(x0.get("dates") or "")
+        years = re.findall(r"\d{4}", dates)
+        if years:
+            drafted.setdefault("Start date year", years[0])
+            drafted.setdefault("Start date month", "January")
+        if re.search(r"(?i)present|current", dates):
+            drafted.setdefault("Current role", "Yes")
+        elif len(years) >= 2:
+            drafted.setdefault("End date year", years[-1])
+            drafted.setdefault("End date month", "December")
 
     # Location/City is usually a live geo-typeahead NOT in the scraped questions, so no
     # drafted answer exists for it (the co-pilot then leaves it blank). Supply the persona's
@@ -839,7 +864,7 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 6  # bump: single-option choice auth (Lever Yes/No checkbox scraped as ["Yes"]) -> pick "Yes", not prose
+_SCRAPE_V = 7  # bump: structured Employment/Education work-history known answers (Company/Title/dates/Discipline)
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:

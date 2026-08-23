@@ -83,7 +83,10 @@ FIELD_PATTERNS = [
     (r"(?i)(salary|compensation|pay.?expect|desired.?pay)", "_salary", "fill"),
 
     # Start date / availability
-    (r"(?i)(start.?date|available.?to.?start|earliest.?start|when.?can.?you.?start|availability)", "_start_date", "fill"),
+    # `start.?date` is negative-lookahead-guarded against a work-history date COMPONENT
+    # ('Start date month'/'Start date year' in a Greenhouse Employment block): the
+    # availability value ('Immediately') otherwise typed prose into a year field ('Imme').
+    (r"(?i)(start.?date(?!\s+(?:month|year))|available.?to.?start|earliest.?start|when.?can.?you.?start|availability)", "_start_date", "fill"),
     (r"(?i)(notice.?period|how (much|long) notice)", "_fact:notice_period", "fill"),
 
     # Remote / relocation
@@ -989,9 +992,14 @@ def _known_answer_exact(q_text: str, match_text: str) -> bool:
     """True when the cached question and the field label are the SAME text (normalized:
     whitespace/asterisk-insensitive, trailing '(Optional)'/'(Required)' dropped). An exact
     match is unambiguous and is preferred over any fuzzy word-overlap hit."""
+    # Also collapse a consecutive duplicated word run ('Title Title' -> 'Title',
+    # 'Twitter Twitter' -> 'Twitter'): a Greenhouse label whose <label> and a sibling node
+    # both carry the text yields a doubled display_text that otherwise never exact-matches
+    # the single-word drafted key.
     _n = lambda s: re.sub(
-        r"\s*\(?(optional|required)\)?\s*$", "",
-        re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip())
+        r"\b(\w[\w-]*)(?:\s+\1\b)+", r"\1",
+        re.sub(r"\s*\(?(optional|required)\)?\s*$", "",
+               re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip()))
     return bool(_n(q_text)) and _n(q_text) == _n(match_text)
 
 

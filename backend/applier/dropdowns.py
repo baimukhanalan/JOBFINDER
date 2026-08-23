@@ -315,6 +315,53 @@ async def fill_demographics_decline(page) -> dict:
             filled.append((grp or "")[:40])
         except Exception:
             continue
+    # 4) Workable-style input[role=combobox] demographic (e.g. 'Preferred pronouns') — NOT a
+    #    .select__container / native <select> / radio, so 1-3 miss it. Runs AFTER
+    #    fill_comboboxes_known (base.prefill order), so opening these can't disrupt the already
+    #    filled skill/availability comboboxes. Open, pick the decline option, else leave blank.
+    try:
+        combos = await page.query_selector_all(_COMBO_SEL)
+    except Exception:
+        combos = []
+    for box in combos:
+        try:
+            # Close any listbox left open by the previous combobox, AND remove the Workable
+            # `data-ui="backdrop"` overlay it leaves behind — that backdrop intercepts the next
+            # combobox's click (why a 2nd demographic like 'pronouns' stayed blank after
+            # 'gender' was declined: "<div data-ui=backdrop> intercepts pointer events").
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(120)
+            try:
+                await page.evaluate(
+                    "() => document.querySelectorAll('[data-ui=\"backdrop\"]')"
+                    ".forEach(e => e.remove())")
+            except Exception:
+                pass
+            if (await box.evaluate("el=>el.value") or "").strip():
+                continue  # already answered
+            label = _clean_text(await _combo_label(box)).strip(" *").lower()
+            if not _DEMOGRAPHIC.search(label):
+                continue
+            await box.click()
+            await page.wait_for_timeout(300)
+            picked = None
+            for o in await page.query_selector_all("[role='option']"):
+                if _DECLINE_RE.search((await o.inner_text()) or ""):
+                    picked = o
+                    break
+            if picked:
+                await picked.click()
+                await page.wait_for_timeout(200)
+                if (await box.evaluate("el=>el.value") or "").strip():
+                    filled.append(label[:40])
+                    continue
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(120)
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
     if filled:
         logger.info("demographics declined (%d): %s", len(filled), filled)
     return {"filled": len(filled), "handled": filled}
@@ -605,6 +652,26 @@ def _geo_shorten(want: str) -> list[str]:
     return out
 
 
+# An availability / start-date select whose options are durations, not the drafted prose
+# ("I am available to start immediately" matches no option). A synthetic persona is available
+# soonest, so pick the "immediately"/"now" option, else the first (these lists are ordered
+# soonest-first by convention).
+_AVAILABILITY_RE = re.compile(
+    r"(?i)availab|when.{0,10}start|earliest.{0,10}(start|date)|notice period|start date")
+_IMMEDIATE_RE = re.compile(
+    r"(?i)immediat|right away|\basap\b|\bnow\b|available now|less than a week|within a week"
+    r"|1 week|one week|1-2 week")
+
+
+def _availability_pick_index(otexts: list[str]) -> int:
+    """Index of the soonest availability option: an explicit immediate/now option, else 0
+    (availability option lists are conventionally ordered soonest-first)."""
+    for i, t in enumerate(otexts):
+        if _IMMEDIATE_RE.search(t or ""):
+            return i
+    return 0
+
+
 async def fill_comboboxes_known(page, known: dict) -> dict:
     """Fill Ashby-style input[role=combobox] dropdowns/typeaheads (What brought you…,
     Current Location) from explicit known answers: type the value, click the matching
@@ -633,6 +700,8 @@ async def fill_comboboxes_known(page, known: dict) -> dict:
             label = await _combo_label(box)
             key = _clean_text(label).strip(" *").lower()
             want = norm.get(key)
+            # Demographics are handled by fill_demographics_decline (its own combobox pass) —
+            # opening them in THIS known-answer flow disrupted the following comboboxes.
             if not want or _DEMOGRAPHIC.search(key):
                 continue
             await box.click()
@@ -692,6 +761,10 @@ async def fill_comboboxes_known(page, known: dict) -> dict:
                         best_i = min(range(len(otexts)),
                                      key=lambda i: _lang_option_rank(otexts[i]) or 99)
                     opt = opts[best_i]
+                elif readonly and _AVAILABILITY_RE.search(key):
+                    # availability/start-date select: the drafted answer is prose that
+                    # matches no option — pick the soonest (immediate) one truthfully.
+                    opt = opts[_availability_pick_index(otexts)]
                 elif not readonly:
                     opt = opts[0]  # geo/typeahead: best first result
                 # readonly non-language select with no match -> leave for the human
@@ -880,3 +953,82 @@ async def apply_button_choice(page, selector: str) -> bool:
     except Exception as e:
         logger.debug("button choice click failed for %s: %s", selector, e)
         return False
+
+
+# Workable renders a YES/NO screener as a <fieldset> of <div role="radio"> options with a
+# hidden <input type=radio> — NOT <button> (harvest_button_groups misses it) and the hidden
+# input is invisible to the analyzer, so nothing else fills these. Harvest [role=radio] groups
+# with their question label and a click selector per option.
+_HARVEST_ROLE_RADIO_JS = r"""
+() => {
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const groups = new Map();
+  for (const r of document.querySelectorAll('[role=radio]')) {
+    const p = r.parentElement; if (!p) continue;
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(r);
+  }
+  window.__aaRrSeq = window.__aaRrSeq || 0;
+  const out = [];
+  for (const [par, rs] of groups) {
+    if (rs.length < 2 || rs.length > 5) continue;
+    if (rs.some(r => r.getAttribute('aria-checked') === 'true')) continue;  // already answered
+    let q = '', node = par;
+    for (let d = 0; d < 6 && node && !q; d++) {
+      const lab = node.querySelector ? node.querySelector('[id$="_label"], label, legend') : null;
+      if (lab) { const t = clean(lab.textContent); if (t.length > 6) q = t; }
+      if (!q) { let sib = node.previousElementSibling;
+        while (sib && !q) { const t = clean(sib.textContent);
+          if (t.length > 6 && t.length < 90) q = t; sib = sib.previousElementSibling; } }
+      node = node.parentElement;
+    }
+    if (!q) continue;
+    const opts = [], sels = [];
+    for (const r of rs) {
+      const i = window.__aaRrSeq++;
+      r.setAttribute('data-aa-rr', String(i));
+      opts.push(clean(r.textContent));
+      sels.push('[data-aa-rr="' + i + '"]');
+    }
+    out.push({question: q, options: opts, selectors: sels});
+  }
+  return out;
+}
+"""
+
+
+async def fill_role_radio_known(page, known: dict) -> dict:
+    """Fill Workable-style [role=radio] toggle groups (YES/NO screeners) from known answers:
+    click the option whose text matches the drafted answer. Skips demographics (declined
+    elsewhere). Isolated from the analyzer/combobox paths; only touches [role=radio] groups
+    whose question matches a drafted key."""
+    if not known:
+        return {"filled": 0, "handled": []}
+    norm = {_clean_text(k).strip(" *").lower(): str(v).strip().lower()
+            for k, v in known.items() if v and str(v).strip()}
+    try:
+        groups = await page.evaluate(_HARVEST_ROLE_RADIO_JS)
+    except Exception as e:
+        logger.debug("role-radio harvest failed: %s", e)
+        return {"filled": 0, "handled": []}
+    filled: list[str] = []
+    for g in groups or []:
+        key = _clean_text(g.get("question") or "").strip(" *").lower()
+        want = norm.get(key)
+        if not want or _DEMOGRAPHIC.search(key):
+            continue
+        for opt, sel in zip(g.get("options") or [], g.get("selectors") or []):
+            ol = (opt or "").strip().lower()
+            if not ol:
+                continue
+            if ol == want or ol.startswith(want[:6]) or want.startswith(ol[:6]):
+                try:
+                    await page.locator(sel).first.click(timeout=3000)
+                    await page.wait_for_timeout(150)
+                    filled.append(key[:40])
+                except Exception:
+                    pass
+                break
+    if filled:
+        logger.info("role-radio known-filled %d: %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}

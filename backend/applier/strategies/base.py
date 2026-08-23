@@ -21,6 +21,7 @@ from backend.applier.dropdowns import (
     fill_demographics_decline,
     fill_react_selects,
     fill_react_selects_known,
+    fill_role_radio_known,
     harvest_button_groups,
     harvest_react_selects,
     list_unanswered_react_selects,
@@ -263,6 +264,14 @@ class ApplyStrategy(ABC):
             success += dcb["filled"]
         except Exception as exc:
             logger.debug("fill_comboboxes_known raised unexpectedly: %s", exc)
+
+        # Workable [role=radio] YES/NO screeners (hidden input + <div role=radio>) from known
+        # answers — not <button> (button-harvest misses them), hidden input invisible to analyzer.
+        try:
+            drr = await fill_role_radio_known(page, known_clean)
+            success += drr["filled"]
+        except Exception as exc:
+            logger.debug("fill_role_radio_known raised unexpectedly: %s", exc)
 
         # EEO/diversity self-ID fields: answer the explicit 'Prefer not to answer' option
         # (never a real protected characteristic), so a REQUIRED demographic completes.

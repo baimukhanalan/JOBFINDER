@@ -136,6 +136,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   per-request egress. `tools/roles_dashboard.py` **stays but is unrouted** — it still holds the
   `_is_remote` / `_workplace` helpers that `apply_bot` + `online_roles` import. `online_roles.py` is NOT
   wired into any dashboard route (apply-side only).
+  **`/catalog` UI (`tools/catalog_ui.py`) is decluttered (2026-08-23):** the top is ONE wide search
+  input that **live-filters as you type** (250ms debounce → `GET /catalog/more?q=&region=&offset=`
+  replaces `#catlist`; Enter is intercepted, no reload) — on mobile the shared Gmail top pill
+  (`.gm-search input`) IS that search (the page's own `.cat-q` is hidden ≤760px), on desktop `#catq`
+  is. Everything secondary — region chips, «Подать на все», the proxy pool upload — lives in ONE
+  collapsed **«Фильтры»** sheet (`#catSettings`, toggled by `toggleFilters()`); the button shows the
+  active region as a tag. Cards: the TITLE is the link to the posting (no separate «Открыть»), a
+  compact text **М/Ж** sex toggle (`pickSex()` sets `.cat-sex-b.on`; `fillJob` reads it) + one primary
+  «Заполнить»; Описание/Вопросы are scroll-capped `<details>`; **no decorative emoji** anywhere. Live
+  search + pagination share `curQ`/`region` state in the one scroll IIFE — don't reintroduce a second
+  search box.
 - **Custom-ATS form scrape: WAIT for the React form to render, then RETRY on empty/partial**
   (`tools/catalog_forms.py`). Ashby/Lever/Workable apply pages are React SPAs — `networkidle` fires
   before the fields hydrate, so the old fixed 2.2s sleep-then-extract silently stored partial/empty

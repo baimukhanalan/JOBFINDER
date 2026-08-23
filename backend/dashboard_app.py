@@ -604,10 +604,22 @@ def _do_fill(job_id: int, gender: str | None = None) -> None:
         return
     _FILL_JOBS[job_id] = {"state": "running", "phase": "filling",
                           "generated": generated, "profile": pid}
+    # Assign this application its own egress IP from the proxy pool (round-robin). The
+    # co-pilot builds a fresh browser context for it. Empty pool -> no proxy -> direct.
+    load_data = {"jobid": jid, "profile": pid}
+    try:
+        from backend.tools import proxy_pool
+        px = proxy_pool.next_proxy()
+    except Exception:
+        px = None
+    if px and px.get("server"):
+        load_data["proxy_server"] = px["server"]
+        if px.get("username"):
+            load_data["proxy_username"] = px["username"]
+            load_data["proxy_password"] = px.get("password") or ""
     try:
         httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
-        r = httpx.post("http://127.0.0.1:8102/load",
-                       data={"jobid": jid, "profile": pid}, timeout=240)
+        r = httpx.post("http://127.0.0.1:8102/load", data=load_data, timeout=240)
         res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
     except Exception as exc:
         _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {exc}"[:200],
@@ -727,6 +739,33 @@ def catalog_fill_all_stop():
     """Request the bulk run to stop; it halts after the CURRENT job finishes."""
     _FILL_ALL_STOP.set()
     return JSONResponse({"stopping": True, **_fill_all_public()})
+
+
+# ---- Proxy pool (rotating egress IPs for applications) ---------------------
+@app.post("/proxies/upload")
+def proxies_upload(text: str = Form("")):
+    """Parse + validate a pasted proxy list; keep the working ones, drop the dead
+    ones. Returns {received, kept, dropped, count, ips}."""
+    from backend.tools import proxy_pool
+    try:
+        return JSONResponse(proxy_pool.upload(text))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
+
+
+@app.get("/proxies")
+def proxies_list():
+    from backend.tools import proxy_pool
+    try:
+        return JSONResponse(proxy_pool.summary())
+    except Exception as exc:
+        return JSONResponse({"count": 0, "ips": [], "error": str(exc)[:200]})
+
+
+@app.post("/proxies/clear")
+def proxies_clear():
+    from backend.tools import proxy_pool
+    return JSONResponse(proxy_pool.clear())
 
 
 # ---- Application drafts review (job_catalog.draft) --------------------------

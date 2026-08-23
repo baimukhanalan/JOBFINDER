@@ -254,9 +254,25 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">▶▶ Подать на все</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">■ Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
+    # Proxy pool: upload a list, dead proxies dropped on validation, applications rotate
+    # through the survivors (a different egress IP per submit). N = current pool size.
+    proxy_panel = (
+        '<div class="cat-proxy" id="catproxy">'
+        '<button class="cat-proxy-toggle" id="pxToggle" onclick="pxPanel()">'
+        '🛡️ Прокси (<span id="pxCount">…</span>)</button>'
+        '<div class="cat-proxy-body" id="pxBody" style="display:none">'
+        '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
+        'user:pass@host:port&#10;socks5://host:port&#10;(по одному в строке)"></textarea>'
+        '<div class="cat-proxy-hint">http/https проверяются реальным запросом (виден egress-IP); '
+        'socks5 — только проверка доступности, и в браузере socks5 работает лишь без логина/пароля.</div>'
+        '<div class="cat-proxy-row">'
+        '<button class="cat-proxy-go" onclick="pxUpload()">Загрузить и проверить</button>'
+        '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
+        '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
+        '<div class="cat-proxy-list" id="pxList"></div></div></div>')
     empty = '<div class="empty">Вакансий не найдено</div>' if not jobs else ""
     body = (
-        _CAT_CSS + head + bulk_bar
+        _CAT_CSS + head + bulk_bar + proxy_panel
         + _region_bar(region, q, company, by_region, remote_total)
         + f'<div class="cat-list" id="catlist">{cards}</div>{empty}'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
@@ -338,6 +354,18 @@ _CAT_CSS = """<style>
 .cat-bulk-go:disabled{opacity:.55;cursor:default;box-shadow:none}
 .cat-bulk-stop{background:#c5221f;color:#fff;border:none;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;min-height:44px}
 .cat-bulk-prog{font-size:13px;font-weight:700;color:var(--fg,#202124);opacity:.9}
+.cat-proxy{margin:8px 0 2px}
+.cat-proxy-toggle{background:var(--panel,#f1f3f4);color:var(--fg,#202124);border:1px solid var(--line,#dadce0);border-radius:9px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
+.cat-proxy-toggle:hover{filter:brightness(.98)}
+.cat-proxy-body{margin-top:10px;padding:12px;border:1px solid var(--line,#dadce0);border-radius:10px;background:var(--panel,#f8f9fa);max-width:640px}
+.cat-proxy-body textarea{width:100%;min-height:120px;box-sizing:border-box;font-family:var(--ff-mono,monospace);font-size:12.5px;border:1px solid var(--line,#dadce0);border-radius:8px;padding:9px;resize:vertical;background:var(--bg,#fff);color:var(--fg,#202124)}
+.cat-proxy-hint{font-size:11.5px;color:var(--ink-mute,#5f6368);margin:4px 0 8px}
+.cat-proxy-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cat-proxy-go{background:#1a73e8;color:#fff;border:none;border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
+.cat-proxy-clr{background:var(--panel,#f1f3f4);color:#c5221f;border:1px solid var(--line,#dadce0);border-radius:8px;padding:9px 15px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:40px}
+.cat-proxy-msg{font-size:12.5px;font-weight:700;color:var(--fg,#202124);opacity:.9}
+.cat-proxy-list{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+.px-ip{font-family:var(--ff-mono,monospace);font-size:11.5px;color:#0b8043;background:rgba(11,128,67,.1);border-radius:6px;padding:2px 8px}
 /* Hide the inline catalog search on mobile — the Gmail top pill already searches
    the catalog there (this rule lives here, not in mailcrm _CSS, so it wins over
    the later .cat-search{display:flex} in this same stylesheet). */
@@ -413,6 +441,46 @@ async function bulkPoll(){
   }catch(e){ setTimeout(bulkPoll, 5000); }
 }
 bulkPoll();   // resume progress if a batch is already running when the page loads
+
+// Proxy pool: upload a list, invalid ones are dropped on validation, applications
+// then rotate through the survivors (a different egress IP per submit).
+window.pxPanel=function(){
+  var b=document.getElementById('pxBody');
+  b.style.display=(b.style.display==='none')?'block':'none';
+  if(b.style.display==='block') pxRefresh();
+};
+async function pxRefresh(){
+  var c=document.getElementById('pxCount'), list=document.getElementById('pxList');
+  try{
+    var s=await (await fetch('/proxies')).json();
+    if(c) c.textContent=s.count||0;
+    if(list) list.innerHTML=(s.ips||[]).map(function(x){
+      return '<span class="px-ip">'+((x.ip||x.server||'')+'').replace(/</g,'&lt;')+'</span>';}).join('');
+  }catch(e){}
+}
+window.pxUpload=async function(){
+  var t=document.getElementById('pxText').value, msg=document.getElementById('pxMsg');
+  if(!t.trim()){ if(msg) msg.textContent='Вставь список прокси'; return; }
+  if(msg) msg.textContent='Проверяю…';
+  try{
+    var j=await (await fetch('/proxies/upload',{method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'text='+encodeURIComponent(t)})).json();
+    if(j.error){ if(msg) msg.textContent='Ошибка: '+j.error; return; }
+    if(msg) msg.textContent='Оставлено '+j.kept+' · отброшено '+j.dropped+' · в пуле '+j.count;
+    var c=document.getElementById('pxCount'); if(c) c.textContent=j.count||0;
+    pxRefresh();
+  }catch(e){ if(msg) msg.textContent='Ошибка запроса'; }
+};
+window.pxClear=async function(){
+  if(!confirm('Очистить весь пул прокси?')) return;
+  try{ await fetch('/proxies/clear',{method:'POST'}); }catch(e){}
+  var msg=document.getElementById('pxMsg'); if(msg) msg.textContent='Пул очищен';
+  var c=document.getElementById('pxCount'); if(c) c.textContent='0';
+  var list=document.getElementById('pxList'); if(list) list.innerHTML='';
+};
+pxRefresh();   // show the current pool size on load
+
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');
   if(!list||!more)return;

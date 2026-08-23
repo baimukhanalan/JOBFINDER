@@ -58,7 +58,8 @@ WATCH_INTERVAL = 2.0        # seconds between confirmation polls
 WATCH_MAX = 10 * 60         # give up after 10 minutes
 
 app = FastAPI(title="JobFinder co-pilot")
-_S: dict = {"pw": None, "browser": None, "page": None, "lock": asyncio.Lock(),
+_S: dict = {"pw": None, "browser": None, "page": None, "ctx": None,
+            "proxy_server": "", "lock": asyncio.Lock(),
             "current": None, "owner": None, "loaded_at": 0.0, "watch": None}
 
 
@@ -125,10 +126,15 @@ async def _ensure_browser():
             _S["pw"] = await async_playwright().start()
         # Pass DISPLAY explicitly — playwright doesn't reliably forward it, and without it
         # headful Chromium renders to no display (invisible to noVNC).
+        # proxy={"server":"per-context"} lets each context pick its OWN proxy (Chromium
+        # otherwise forces one process-global proxy). Contexts created without a proxy
+        # still go DIRECT — so this is backward-compatible when the pool is empty.
         _S["browser"] = await _S["pw"].chromium.launch(
             headless=False, args=["--start-maximized", "--no-sandbox", "--disable-dev-shm-usage"],
+            proxy={"server": "per-context"},
             env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
         ctx = await _S["browser"].new_context(no_viewport=True)
+        _S["ctx"], _S["proxy_server"] = ctx, ""
         _S["page"] = await ctx.new_page()
         # Intercept any button-triggered file picker so the NATIVE OS "Open File" dialog
         # never appears (it would block the shared page + cover the form in noVNC).
@@ -147,6 +153,40 @@ async def _ensure_browser():
             except Exception:
                 pass
         raise
+
+
+async def _use_proxy_context(server: str, username: str | None, password: str | None):
+    """Route the active page through `server` by (re)building the browser context with
+    that proxy — a fresh IP per application. Reuses the current context when the proxy
+    is unchanged; server="" means a plain DIRECT context. Returns the page to fill.
+
+    The old context (and its noVNC window) is closed after the new one is ready, so the
+    watch-screen briefly flickers to the new page — expected. On any failure the caller
+    falls back to the direct browser."""
+    await _ensure_browser()  # guarantees _S["browser"] is alive
+    want = server or ""
+    if (_S.get("page") is not None and not _S["page"].is_closed()
+            and _S.get("proxy_server", "") == want):
+        return _S["page"]
+    proxy_cfg = None
+    if server:
+        proxy_cfg = {"server": server}
+        if username:
+            proxy_cfg["username"] = username
+            proxy_cfg["password"] = password or ""
+    old_ctx = _S.get("ctx")
+    ctx = (await _S["browser"].new_context(no_viewport=True, proxy=proxy_cfg)
+           if proxy_cfg else await _S["browser"].new_context(no_viewport=True))
+    page = await ctx.new_page()
+    page.on("filechooser", _on_filechooser)
+    await page.goto("about:blank")
+    _S["ctx"], _S["page"], _S["proxy_server"] = ctx, page, want
+    if old_ctx is not None:
+        try:
+            await old_ctx.close()
+        except Exception:
+            pass
+    return page
 
 
 @app.on_event("startup")
@@ -463,7 +503,9 @@ async def goto(url: str = Form(...)):
 
 
 @app.post("/load")
-async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: str = Form("")):
+async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: str = Form(""),
+               proxy_server: str = Form(""), proxy_username: str = Form(""),
+               proxy_password: str = Form("")):
     profile = _safe_id(profile) or "michael"
     jobid = _safe_id(jobid)
     is_dry = str(dry_run).strip().lower() in ("1", "true", "yes", "on")
@@ -503,6 +545,18 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
                 except Exception:
                     pass
             page = await _ensure_browser()
+        # Give THIS application its assigned egress IP (fresh context per proxy). Empty
+        # proxy_server -> stay on the current (direct) context. Best-effort: a proxy that
+        # fails to build must not sink the fill — fall back to the direct browser.
+        if proxy_server.strip():
+            try:
+                page = await _use_proxy_context(proxy_server.strip(),
+                                                proxy_username.strip() or None,
+                                                proxy_password)
+            except Exception:
+                logger.warning("proxy context setup failed (%s) — continuing direct",
+                               proxy_server, exc_info=True)
+                page = await _ensure_browser()
         try:
             prof = get_profile(profile)
             facts = load_facts(profile)

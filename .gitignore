@@ -10,6 +10,7 @@ secrets/
 # Real people's PII / sessions - NEVER commit (keep .example.json + .template.json only)
 backend/data/profiles.json
 backend/data/profiles.real.json
+backend/data/proxies.json
 backend/data/facts/*
 !backend/data/facts/sample.json
 backend/data/etalons/*

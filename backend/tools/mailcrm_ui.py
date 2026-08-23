@@ -156,6 +156,11 @@ button.primary:hover{background:var(--accent-deep);}
 .modal-actions{margin-top:16px;}.modal-actions .primary{width:100%;}
 .sendmsg{margin-top:10px;font-size:13px;}
 @media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;}.sidebar{justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
+/* iOS auto-zooms the page when a focused input's font-size is < 16px. The generic
+   `input,select,textarea{font-size:16px}` above is low-specificity, so a class rule
+   (e.g. .cat-company input[list]) can shrink it back below 16 and re-trigger the zoom.
+   Force >=16px on EVERY form control on mobile so tapping any input never zooms. */
+@media(max-width:760px){input,select,textarea,input[list]{font-size:16px!important;}}
 /* Gmail-style mobile top bar + slide-out drawer (mobile only; desktop keeps .sidebar) */
 .gm-topbar{display:none;padding:8px 12px 4px;}
 .gm-pill{display:flex;align-items:center;gap:4px;background:var(--panel-2);border-radius:var(--r-full);padding:4px 6px 4px 4px;}

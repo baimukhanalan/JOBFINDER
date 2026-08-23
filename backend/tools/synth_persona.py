@@ -183,9 +183,11 @@ _NAMES = {
          "Gulzhan", "Indira", "Karlygash", "Moldir", "Nazgul", "Perizat", "Raushan", "Symbat",
          "Togzhan", "Ulzhan", "Venera", "Zhibek", "Aiym", "Bayan", "Elnara", "Gulmira", "Inkar",
          "Kymbat", "Nurgul", "Saule", "Tolganay", "Zhaniya"],
+        # Male/base forms only — a female KZ persona's surname is feminized at pick time
+        # (_feminize_kz): -ov/-ev/-in -> +a, -uly -> -kyzy. Do NOT put -ova/-kyzy forms here.
         "last": ["Serikuly", "Zhaksybek", "Toleubek", "Amirkhan", "Beisenov", "Yesenov", "Nurpeisov",
-         "Sagatov", "Iskakov", "Bekova", "Omarov", "Kassymova", "Zhumabek", "Tulegenov", "Abenov",
-         "Dosanova", "Kaliyev", "Seitkali", "Baibek", "Nurlanuly", "Akhmetov", "Suleimenov",
+         "Sagatov", "Iskakov", "Bekov", "Omarov", "Kassymov", "Zhumabek", "Tulegenov", "Abenov",
+         "Dosanov", "Kaliyev", "Seitkali", "Baibek", "Nurlanuly", "Akhmetov", "Suleimenov",
          "Zhaparov", "Musin", "Aitkali", "Bolatov", "Mukhamedzhanov", "Sadykov", "Tazhibaev",
          "Utegenov", "Karimov", "Rakhimov", "Bekbolat", "Zhaksylyk", "Amanzhol", "Serikbay",
          "Turlybek", "Ospanov", "Duisenbek", "Khamitov", "Abdrakhmanov", "Baimukhanov", "Yerzhanov",
@@ -333,18 +335,38 @@ def _first_bank(country: str, gender: str) -> list:
     return banks["male"] + banks["female"]
 
 
+def _feminize_kz(surname: str) -> str:
+    """A Kazakh/Russian-style surname in its FEMALE form. Kazakh surnames are gendered — a
+    woman is 'Sadykova', not 'Sadykov'. Male -ov/-ev/-in take a trailing -a (Sadykov->Sadykova,
+    Kaliyev->Kaliyeva, Musin->Musina); the Kazakh -uly ('son of') becomes -kyzy ('daughter of')
+    (Nurlanuly->Nurlankyzy). Unmarked stems (-bek/-bay/-khan/-zhan/...) are unisex — unchanged."""
+    if surname.endswith("uly"):
+        return surname[:-3] + "kyzy"
+    if surname.endswith(("ov", "ev", "in")):
+        return surname + "a"
+    return surname
+
+
+def _pick_last(country: str, gender: str) -> str:
+    """A random surname for the country, feminized for a female Kazakh persona so the surname
+    ending matches the (female) first name — the rest of the world's surnames aren't gendered."""
+    last = random.choice(_NAMES.get(country, _GENERIC_NAMES)["last"])
+    if country == "Kazakhstan" and gender == "female":
+        last = _feminize_kz(last)
+    return last
+
+
 def _pick_name(country: str, gender: str = "either") -> str:
     """A random 'First Last' for the country + gender ('male'/'female'/'either'), avoiding
     names used in the recent history so consecutive fills don't show the same person. Falls
     back to a plain random pick if the (bounded) history-avoidance loop is exhausted."""
     first_bank = _first_bank(country, gender)
-    last_bank = _NAMES.get(country, _GENERIC_NAMES)["last"]
     used = set(_load_used())
     for _ in range(20):
-        full = f"{random.choice(first_bank)} {random.choice(last_bank)}"
+        full = f"{random.choice(first_bank)} {_pick_last(country, gender)}"
         if full.lower() not in used:
             return full
-    return f"{random.choice(first_bank)} {random.choice(last_bank)}"
+    return f"{random.choice(first_bank)} {_pick_last(country, gender)}"
 
 
 def _llm_persona(job: dict, country: str, name: str = "") -> dict | None:

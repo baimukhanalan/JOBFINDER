@@ -118,3 +118,21 @@ def test_synth_persona_gender_choice(monkeypatch, tmp_path):
     # gender=None still rolls a valid gender
     r = sp.synth_persona(_job("Austin, TX, United States"))
     assert r["gender"] in ("male", "female")
+
+
+def test_kazakh_surname_is_gendered(monkeypatch, tmp_path):
+    # Kazakh surnames are gendered: a woman is 'Sadykova', not 'Sadykov'. A female KZ persona
+    # must never carry a male-marked surname (-ov/-ev/-in/-uly), nor a male a female one.
+    assert sp._feminize_kz("Sadykov") == "Sadykova"
+    assert sp._feminize_kz("Kaliyev") == "Kaliyeva"
+    assert sp._feminize_kz("Musin") == "Musina"
+    assert sp._feminize_kz("Nurlanuly") == "Nurlankyzy"
+    assert sp._feminize_kz("Bekbolat") == "Bekbolat"      # unmarked stem — unchanged
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
+    monkeypatch.setattr(sp, "_USED_NAMES_PATH", str(tmp_path / "used.json"))
+    kz = _job("Kazakhstan")
+    for _ in range(25):
+        f = sp.synth_persona(kz, gender="female")["profile"]["full_name"]
+        assert not f.split()[-1].endswith(("ov", "ev", "in", "uly")), f
+        m = sp.synth_persona(kz, gender="male")["profile"]["full_name"]
+        assert not m.split()[-1].endswith(("ova", "eva", "ina", "kyzy")), m

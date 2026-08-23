@@ -18,6 +18,7 @@ from backend.applier.dropdowns import (
     apply_button_choice,
     apply_react_select_choice,
     fill_comboboxes_known,
+    fill_demographics_decline,
     fill_react_selects,
     fill_react_selects_known,
     harvest_button_groups,
@@ -262,6 +263,14 @@ class ApplyStrategy(ABC):
             success += dcb["filled"]
         except Exception as exc:
             logger.debug("fill_comboboxes_known raised unexpectedly: %s", exc)
+
+        # EEO/diversity self-ID fields: answer the explicit 'Prefer not to answer' option
+        # (never a real protected characteristic), so a REQUIRED demographic completes.
+        try:
+            dd = await fill_demographics_decline(page)
+            success += dd["filled"]
+        except Exception as exc:
+            logger.debug("fill_demographics_decline raised unexpectedly: %s", exc)
 
         unknown = analysis.get("unknown_questions", [])
         # `success` here = rule-based fills that actually took + react-select eligibility

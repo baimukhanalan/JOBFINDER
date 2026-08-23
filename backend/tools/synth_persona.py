@@ -193,6 +193,23 @@ def _fallback_persona(job: dict, country: str) -> dict:
     }
 
 
+def _postal(country: str) -> str:
+    """A plausible, country-appropriate postal/ZIP for the invented persona so a required
+    'Zip Code' field fills with a real value instead of the LLM's 'Not provided' non-answer."""
+    c = country or ""
+    if c == "United States":
+        return f"{random.randint(1000, 99999):05d}"
+    if c == "Canada":
+        L, D = "ABCEGHJKLMNPRSTVXY", "0123456789"
+        return (random.choice(L) + random.choice(D) + random.choice(L) + " "
+                + random.choice(D) + random.choice(L) + random.choice(D))
+    if c == "United Kingdom":
+        L = "ABDEFGHJLNPQRSTUWXYZ"
+        return (random.choice(L) + random.choice(L) + str(random.randint(1, 20))
+                + " " + str(random.randint(1, 9)) + random.choice(L) + random.choice(L))
+    return f"{random.randint(1000, 999999)}"
+
+
 def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     job_title = job.get("title", "") if job else (raw.get("headline") or "")
     name = str(raw.get("full_name") or "").strip()
@@ -228,9 +245,10 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     pid = f"demo_{slug}{num}"
     loc = f"{city}, {country}"
     phone = str(raw.get("phone") or "").strip() or _fictional_phone()
+    zipc = str(raw.get("zip_code") or raw.get("postal_code") or "").strip() or _postal(country)
     resume = {
         "personal_info": {"name": name, "email": email, "phone": phone, "location": loc,
-                          "address": street},
+                          "address": street, "zip_code": zipc},
         "preferred_titles": [job_title], "headline": str(raw.get("headline") or job_title),
         "summary": str(raw.get("summary") or ""), "experience": exp,
         "skills_grouped": {"Skills": skills} if skills else {},
@@ -239,6 +257,7 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     profile = {
         "id": pid, "full_name": name, "email": email, "phone": phone,
         "location": loc, "city": city, "street_address": street, "country": country,
+        "zip_code": zipc,
         "linkedin_url": f"https://www.linkedin.com/in/{slug}",
         "work_authorization": _citizen(country), "needs_sponsorship": "No",
         "years_experience": yoe, "is_synthetic": True, "is_sample": True, "resume": resume,

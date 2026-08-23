@@ -151,6 +151,17 @@ _YESNO_START = re.compile(r"(?i)^\s*(are|do|does|did|can|could|will|would|have|h
 # into it produces garbage (live Workable turned 'Immediately' into '03/05/4583').
 _DATE_MASK = re.compile(r"(?i)\b(?:mm|dd)\s*[/.-]\s*(?:mm|dd)\s*[/.-]\s*y{2,4}\b"
                         r"|\byyyy-mm-dd\b")
+# A "Pick date…" / "Select a date" placeholder is ALSO a datepicker even without a
+# mm/dd/yyyy mask (Ashby's react-datepicker renders exactly this) — the class/wrapper
+# check in extract_form_fields is the primary signal; this catches it label-side too.
+_DATE_PLACEHOLDER = re.compile(r"(?i)\b(?:pick|select|choose|enter)\s+(?:a\s+)?date\b"
+                               r"|\bdate\s*\.{2,}")
+
+
+def _looks_like_date(v) -> bool:
+    """A value that could be a real date (M/D/Y, ISO, etc.) rather than prose. Used to
+    reject an open-text known answer that was mis-routed to a datepicker widget."""
+    return bool(re.search(r"\d{1,4}[/.\-]\d{1,2}[/.\-]\d{1,4}", str(v or "")))
 
 
 def _looks_like_question(text: str) -> bool:
@@ -379,7 +390,14 @@ def _resolve_value(key: str, profile: dict, cover_letter: str, known_answers: di
         ns = str(profile.get("needs_sponsorship") or "No").strip().lower()
         return "Yes" if ns in ("yes", "true", "1") else "No"
     if key == "_start_date":
-        return profile.get("available_start") or "Immediately"
+        # A concrete near-future date answers "when can you start?" everywhere — a free-text
+        # box AND a react-datepicker (which can't accept the prose 'Immediately'). Honor an
+        # explicit availability the person set (unless it's vague like 'Immediately'/'ASAP').
+        v = (profile.get("available_start") or "").strip()
+        if v and not re.search(r"(?i)immediate|asap|flexible|negotiable|\bnow\b|any", v):
+            return v
+        from datetime import date, timedelta
+        return (date.today() + timedelta(days=21)).strftime("%m/%d/%Y")
     if key == "_no":
         return "No"
     if key == "_yes":
@@ -545,9 +563,24 @@ async def extract_form_fields(page: Page) -> list[dict]:
                 title = await el.get_attribute("title") or ""
                 required = await el.get_attribute("required") is not None or await el.get_attribute("aria-required") == "true"
 
-                # Date-mask placeholder -> it's a datepicker, not a free-text field
-                if tag == "input" and el_type in ("", "text") and _DATE_MASK.search(placeholder):
-                    el_type = "date"
+                # Datepicker widget (NOT a free-text field): a date-mask placeholder
+                # (mm/dd/yyyy), a "Pick date…" placeholder, or a react-datepicker /
+                # *-input-date widget class. Typing prose into any of these leaves the
+                # value invalid (a react-datepicker even clears it on blur), so a REQUIRED
+                # start-date field ends up silently empty. Mark it `date` so the open-text
+                # known answer is rejected (below) and the _start_date rule fills a real date.
+                if tag == "input" and el_type in ("", "text"):
+                    is_dp = bool(_DATE_MASK.search(placeholder)
+                                 or _DATE_PLACEHOLDER.search(placeholder))
+                    if not is_dp:
+                        try:
+                            is_dp = bool(await el.evaluate(
+                                "el => !!el.closest('.react-datepicker-wrapper')"
+                                " || /(?:^|[\\s_-])(?:datepicker|input-date)/i.test(el.className||'')"))
+                        except Exception:
+                            is_dp = False
+                    if is_dp:
+                        el_type = "date"
 
                 # Try to find label text
                 label = ""
@@ -594,6 +627,17 @@ async def extract_form_fields(page: Page) -> list[dict]:
 
                 nth = valueless_seen.get((el_type, el_name), 0)
                 selector = _field_selector(el_id, el_name, aria_label, el_type, el_value, nth, data_qa)
+                if not selector and tag == "input":
+                    # Ashby react-datepicker / custom inputs carry NO id/name/aria-label/data-qa
+                    # (the <label for> targets the container's data-field-path UUID, not the
+                    # input), so they were silently dropped. Target via the container attribute.
+                    try:
+                        selector = await el.evaluate(
+                            "el => { const c = el.closest('[data-field-path]');"
+                            " const p = c && c.getAttribute('data-field-path');"
+                            " return p ? '[data-field-path=\"'+p+'\"] input' : ''; }") or ""
+                    except Exception:
+                        selector = ""
                 if not selector:
                     continue
                 if el_type in ("radio", "checkbox") and el_name and not el_value:
@@ -760,6 +804,13 @@ async def analyze_page(
         # over dict order), so a work-auth 'Yes' doesn't cross-bind onto the sponsorship
         # radio via shared generic words (see _best_known_answer).
         _best = _best_known_answer(known_answers, display_text)
+        # A datepicker can't accept an open-text known answer: the draft for a "When can
+        # you start?" field is a PROSE availability sentence, which a react-datepicker
+        # rejects (clears on blur), leaving the REQUIRED field empty AND pre-empting the
+        # _start_date rule that would supply a real date. Drop a non-date known answer for
+        # date widgets so it falls through to _match_field -> _start_date below.
+        if _best and f["type"] == "date" and not _looks_like_date(_best[1]):
+            _best = None
         for q_text, answer in ([_best] if _best else []):
             if True:
                 if f["type"] in ("radio_group", "checkbox_group"):
@@ -786,9 +837,21 @@ async def analyze_page(
                            or f.get("name") or "").strip().lower()
                     wants = {w.strip().lower()
                              for w in re.split(r"\s*[,;]\s*", str(answer)) if w.strip()}
-                    affirmative = str(answer).strip().lower() in (
-                        "yes", "true", "1", "on")
-                    if affirmative or (own and own in wants):
+                    _ans = str(answer).strip()
+                    affirmative = _ans.lower() in ("yes", "true", "1", "on")
+                    # A lone affirmative-consent checkbox (e.g. an arbitration/attestation
+                    # acknowledgement) carries its OWN sentence as the answer. When that
+                    # sentence contains commas, splitting it into `wants` shreds it and the
+                    # full `own` label matches no fragment -> a REQUIRED consent box was left
+                    # silently unchecked. A whole-string echo of the label, OR an answer that
+                    # OPENS with an acknowledgement/consent phrase, IS a check. (A multi-select
+                    # option's answer is a bare option label, so it never opens that way.)
+                    echoes_label = bool(own) and (own == _ans.lower()
+                                                  or (len(own) > 12 and own in _ans.lower()))
+                    ack = bool(re.match(
+                        r"(?i)\s*(i\s+(?:acknowledge|confirm|agree|understand|consent|certify"
+                        r"|accept|have\s+(?:read|opened))|yes\b)", _ans))
+                    if affirmative or ack or echoes_label or (own and own in wants):
                         fields.append({"selector": f["selector"], "action": "check",
                                        "value": "true",
                                        "matched": f"known_answer:{q_text[:30]}"})

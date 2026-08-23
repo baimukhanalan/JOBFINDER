@@ -184,6 +184,142 @@ async def harvest_react_selects(page) -> list[dict]:
     return out
 
 
+# Degree-level mapping: a résumé degree string ('MSc Bioinformatics') -> the level word,
+# then to the option label ('Master's Degree') on a fixed Degree react-select. Only strong
+# degree signals so a non-degree value never trips it.
+_DEGREE_LEVEL = [
+    (re.compile(r"(?i)\b(ph\.?d|doctora?te?|dphil|d\.?phil)\b"), "doctor"),
+    (re.compile(r"(?i)\b(m\.?sc|m\.?eng|m\.?phil|mba|master'?s?|masters)\b"), "master"),
+    (re.compile(r"(?i)\b(b\.?sc|b\.?eng|b\.?tech|bachelor'?s?|bachelors|undergrad\w*)\b"), "bachelor"),
+    (re.compile(r"(?i)\b(associate'?s?|associates|\ba\.?a\.?\b|\ba\.?s\.?\b)\b"), "associate"),
+    (re.compile(r"(?i)\b(high[- ]school|secondary|\bged\b|diploma)\b"), "high_school"),
+]
+_OPT_LEVEL = {
+    "doctor": re.compile(r"(?i)doctor|ph\.?d|d\.?phil"),
+    "master": re.compile(r"(?i)master|graduate"),
+    "bachelor": re.compile(r"(?i)bachelor|undergrad"),
+    "associate": re.compile(r"(?i)associate"),
+    "high_school": re.compile(r"(?i)high[- ]school|secondary|diploma|\bged\b"),
+}
+
+
+def _degree_level(text: str) -> str | None:
+    for rx, lvl in _DEGREE_LEVEL:
+        if rx.search(text or ""):
+            return lvl
+    return None
+
+
+# The explicit NON-DISCLOSURE option on an EEO/diversity self-ID field. Selecting it answers
+# a (often required) demographic WITHOUT ever claiming a protected characteristic.
+_DECLINE_RE = re.compile(
+    r"(?i)prefer not to (?:answer|say|disclose|respond|state|identify)"
+    r"|decline to (?:self.?identif|answer|state|respond|disclose)"
+    r"|(?:don'?t|do not) wish to (?:answer|disclose|self.?identif|respond|provide)"
+    r"|choose not to (?:answer|disclose|identify)"
+    r"|i (?:prefer|choose) not to\b|rather not (?:say|answer)|not to disclose")
+
+_LABEL_JS = r"""el => {
+  const clean = s => (s||'').replace(/\s+/g,' ').trim();
+  const a = el.getAttribute('aria-labelledby');
+  if (a) { const l = document.getElementById(a.split(' ')[0]); if (l) return clean(l.innerText); }
+  if (el.id) { const l = document.querySelector('label[for="'+CSS.escape(el.id)+'"]'); if (l) return clean(l.innerText); }
+  const c = el.closest('label,fieldset,li,.field,[class*="field"],[class*="question"]');
+  return c ? clean(c.innerText).slice(0,120) : clean((el.getAttribute('aria-label')||el.name||''));
+}"""
+
+
+async def fill_demographics_decline(page) -> dict:
+    """EEO/diversity self-ID fields are answered with the explicit NON-DISCLOSURE option
+    ('Prefer not to answer' / 'Decline to self-identify') when the field offers one, rather
+    than left blank — so a REQUIRED demographic (e.g. Affirm 'Pronouns *') completes without
+    ever claiming a protected characteristic. Handles react-selects, native <select> and radio
+    groups; a demographic with no decline option stays blank (nothing safe to pick)."""
+    filled: list[str] = []
+    # 1) react-select demographic dropdowns
+    try:
+        conts = await page.query_selector_all(".select__container")
+    except Exception:
+        conts = []
+    for c in conts:
+        try:
+            if await c.query_selector(".select__single-value") or await c.query_selector(".select__multi-value"):
+                continue
+            le = await c.query_selector("label, .select__label")
+            label = (await le.inner_text()).strip() if le else ""
+            if not _DEMOGRAPHIC.search(_clean_text(label).lower()):
+                continue
+            control = await c.query_selector(".select__control")
+            if not control:
+                continue
+            await control.click()
+            await page.wait_for_timeout(300)
+            picked = None
+            for o in await page.query_selector_all(".select__option"):
+                if _DECLINE_RE.search((await o.inner_text()) or ""):
+                    picked = o
+                    break
+            if picked:
+                await picked.click()
+                await page.wait_for_timeout(200)
+                if await c.query_selector(".select__single-value"):
+                    filled.append(label[:40])
+            else:
+                await page.keyboard.press("Escape")
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+    # 2) native <select> demographic
+    try:
+        sels = await page.query_selector_all("select")
+    except Exception:
+        sels = []
+    for s in sels:
+        try:
+            if (await s.evaluate("el=>el.value") or "").strip():
+                continue
+            label = await s.evaluate(_LABEL_JS)
+            if not _DEMOGRAPHIC.search((label or "").lower()):
+                continue
+            val = await s.evaluate(
+                "el=>{for(const o of el.options){if(/prefer not|decline|wish to|choose not|"
+                "rather not|not to (answer|say|disclose)/i.test(o.text)) return o.value;}return null;}")
+            if val is not None:
+                await s.select_option(val)
+                filled.append((label or "")[:40])
+        except Exception:
+            continue
+    # 3) radio-group demographic — check the decline radio
+    try:
+        radios = await page.query_selector_all("input[type=radio]")
+    except Exception:
+        radios = []
+    for r in radios:
+        try:
+            if await r.is_checked():
+                continue
+            own = await r.evaluate(_LABEL_JS)
+            if not (own and _DECLINE_RE.search(own)):
+                continue
+            grp = await r.evaluate(
+                "el=>{const g=el.closest('fieldset,[role=radiogroup],[class*=question],li,.field');"
+                " return g?g.innerText.slice(0,160):'';}")
+            if not _DEMOGRAPHIC.search((grp or "").lower()):
+                continue
+            try:
+                await r.check(timeout=2500)
+            except Exception:
+                await r.evaluate("el=>{const w=el.closest('label,[role=radio]'); (w||el).click();}")
+            filled.append((grp or "")[:40])
+        except Exception:
+            continue
+    if filled:
+        logger.info("demographics declined (%d): %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
 async def apply_react_select_choice(page, container_index: int,
                                     option_text: str, allow_first: bool = False) -> bool:
     """Pick `option_text` in the react-select at `container_index` (harvest order):
@@ -220,25 +356,46 @@ async def apply_react_select_choice(page, container_index: int,
             return []
 
         opts = await _type_and_poll(option_text)
-        # A remote-search typeahead returns NOTHING for an over-specific query (e.g.
-        # 'University of Texas School of Law' -> 0 hits, but 'University of Texas' -> the list).
-        # When we're allowed the first hit, retry with progressively fewer words until options
-        # appear, then pick the best/first below.
+        # A search typeahead returns NOTHING for an over-specific query (e.g. 'University of
+        # Texas School of Law' -> 0 hits, but 'University of Texas' -> the list); a fixed
+        # client-filtered taxonomy (Greenhouse 'Discipline') returns 0 for a value not in it
+        # ('Bioinformatics') but a shorter prefix surfaces the near-label ('Bio' -> Biology).
+        # When allowed the first hit, retry with fewer words, then shorter PREFIXES of the
+        # first token (down to 1 word / a 3-char stem) until options appear.
         if not opts and allow_first:
             words = option_text.split()
-            for n in range(len(words) - 1, 1, -1):
+            for n in range(len(words) - 1, 0, -1):            # reach a single word
                 opts = await _type_and_poll(" ".join(words[:n]))
                 if opts:
                     break
+            if not opts and words:
+                first = words[0]
+                for k in (8, 6, 4, 3):                        # shorter prefixes of the first word
+                    if len(first) > k:
+                        opts = await _type_and_poll(first[:k])
+                        if opts:
+                            break
         want = option_text.strip().lower()
+        otexts = [(await o.inner_text()).strip() for o in opts]
         opt = None
-        for o in opts:
-            t = (await o.inner_text()).strip().lower()
-            if t == want:
+        for o, t in zip(opts, otexts):
+            tl = t.lower()
+            if tl == want:
                 opt = o
                 break
-            if opt is None and t.startswith(want[:40]):
+            if opt is None and (tl.startswith(want[:40]) or (len(want) > 4 and want in tl)):
                 opt = o
+        if opt is None and opts:
+            # A degree field ('Degree' = 'MSc Bioinformatics') is a NON-searchable react-select
+            # (typing doesn't filter), so a blind first-option pick would claim the WRONG level.
+            # Match the known value's degree LEVEL against the option labels instead.
+            lvl = _degree_level(want)
+            if lvl:
+                rx = _OPT_LEVEL[lvl]
+                for o, t in zip(opts, otexts):
+                    if rx.search(t):
+                        opt = o
+                        break
         if opt is None and allow_first and opts:
             opt = opts[0]           # remote-search typeahead: the top hit is the answer
         if opt is None:

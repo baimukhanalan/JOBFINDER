@@ -865,7 +865,7 @@ def apply_url_for_job(job: dict) -> str:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 7  # bump: structured Employment/Education work-history known answers (Company/Title/dates/Discipline)
+_SCRAPE_V = 9  # bump: drop stray postal_code key from synth persona profile (crashed Profile.from_dict in co-pilot /load)
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:

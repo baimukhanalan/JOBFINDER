@@ -163,9 +163,15 @@ _NOISE = re.compile(
     r"|\b(type\s+here|mm/dd/yyyy|dd/mm/yyyy|required)(?:\.{1,3}|\b)")          # placeholders
 
 
+_REQ_MARK = str.maketrans({"✱": " ", "＊": " ", "*": " "})
+
+
 def _clean_text(text: str) -> str:
     """Human question text only: strip internal ids/placeholders, collapse repeats."""
-    t = _NOISE.sub(" ", text or "")
+    # Strip the required-marker glyph (✱/＊/*) the SAME way drafts_ui._clean_label does when
+    # it keys drafted answers — else a live label 'Language 1✱' never matches the 'Language 1'
+    # key and every required field silently drops its drafted answer.
+    t = _NOISE.sub(" ", (text or "").translate(_REQ_MARK))
     t = re.sub(r"\s+", " ", t).strip()
     # A+A duplication ('Which shift? Which shift?' from label==nearbyText) -> keep one
     words = t.split(" ")
@@ -909,8 +915,18 @@ async def analyze_page(
 
 def _known_answer_matches(q_text: str, match_text: str) -> bool:
     """A cached answer may only fill a field whose text genuinely overlaps the
-    cached question — >=2 significant words, not one common word ("work")."""
+    cached question — >=2 significant words, not one common word ("work").
+
+    Exception: an EXACT label match (normalized) is unambiguous and fills even
+    with a single significant word — Ashby renders short question TITLES
+    ("Segment", "Performance") as the field label, and those carry an exact
+    drafted-answer key. The >=2-hit heuristic below can never pass for a
+    one-word title (max(2, …) demands 2 hits), so without this the exact answer
+    is silently dropped and the field is left unfilled."""
     mt = match_text.lower()
+    _n = lambda s: re.sub(r"\s+", " ", re.sub(r"[✱*]", "", s or "").lower()).strip()
+    if _n(q_text) and _n(q_text) == _n(match_text):
+        return True
     sig = {w.lower() for w in q_text.split() if len(w) > 3}
     hits = sum(1 for w in sig if w in mt)
     return bool(sig) and hits >= max(2, len(sig) // 2)

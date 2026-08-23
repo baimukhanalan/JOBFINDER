@@ -551,11 +551,10 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
                           "status": "empty"}
             continue
         if _VIDEO_RE.search(label):
-            if ideal:
-                ideal_idx.append(i)  # test fill: write an intro script rather than blank
-            else:
-                answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
-                              "status": "human", "note": "video/recording — human only"}
+            # video/Loom/recording CANNOT be auto-produced — human-only in BOTH modes.
+            # (Previously ideal mode sent it to the LLM, which fabricated a fake Loom link.)
+            answers[i] = {**base, "value": "", "source": "human", "needs_review": True,
+                          "status": "human", "note": "video/recording — human only"}
             continue
         if qtype in _FILE_TYPES:
             if _PHOTO_RE.search(label):     # no portrait on file — never the résumé PDF
@@ -610,8 +609,10 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
             choice_idx.append(i)
             choice_qs.append({"question_text": label, "options": opts})
             continue
-        # identity / contact free text
-        idkey = next((k for rx, k in _ID_TEXT if rx.search(label)), None)
+        # identity / contact free text — single-line inputs ONLY. A TEXTAREA labelled
+        # e.g. "...email..." is a prose question ("describe your outreach email"), not the
+        # contact field, and must NOT be filled with the candidate's email address.
+        idkey = None if qtype == "textarea" else next((k for rx, k in _ID_TEXT if rx.search(label)), None)
         if idkey:
             val = _profile_value(idkey, profile)
             if val:

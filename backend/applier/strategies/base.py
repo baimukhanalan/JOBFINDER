@@ -201,6 +201,14 @@ class ApplyStrategy(ABC):
             await self.autofill_from_resume(page, resume_path)
         except Exception as exc:
             logger.debug("autofill_from_resume raised: %s", exc)
+        # Attach the résumé to the form's real file input. autofill_from_resume only feeds
+        # Ashby's separate PARSER input; without this the required résumé upload on
+        # Workable/Lever/etc. was never populated (form silently unsubmittable). Direct
+        # set_input_files, so no filechooser race; attach_resume skips photo/avatar inputs.
+        try:
+            await self.attach_resume(page, resume_path)
+        except Exception as exc:
+            logger.debug("attach_resume raised: %s", exc)
         # known_answers may carry the '[review]' wire prefix (replayed
         # drafted_answers) — the analyzer types values verbatim into fields, so
         # strip here; the flags are reinstated from the originals further down.

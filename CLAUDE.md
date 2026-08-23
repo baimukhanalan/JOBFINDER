@@ -167,7 +167,10 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   (opts[0] is 'cannot speak'). A Workable combobox has a SEPARATE `[name=…]` backing input the analyzer
   sees as an empty text field → `base.prefill` re-reads live values when building `unfilled` so a
   combobox-filled field isn't falsely reported unfilled. `dismiss_overlays()` runs in `base.prefill`
-  (cookie/consent backdrop otherwise intercepts the combobox click). Tests: `test_dropdowns.py`.
+  (cookie/consent backdrop otherwise intercepts the combobox click). An Ashby **geo** typeahead that
+  returns 0 options for an over-qualified query ('Denver, Colorado, United States.') retries progressively
+  shorter queries (`_geo_shorten`: strip punctuation → drop trailing comma-segments → city) until the
+  geocode resolves. Tests: `test_dropdowns.py`.
 - **Deterministic Yes/No screeners in `services/tailor/choices.py::deterministic_choices`.** Three
   families answer WITHOUT the LLM (so they don't fall through to `choose_options` and get left blank):
   prior-employer ('worked with us before?' → **No**, unbacked/review), OFAC sanctioned-territory
@@ -175,7 +178,10 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   C1?' → **Yes** only when `facts.english_level` BACKS the asked CEFR level, else defer — never
   over-claim). `_english_yesno_pick` must run BEFORE `_language_pick` (a Yes/No pair sent to
   `_language_pick` defaults to `len(opts)//2` = 'No'). `_prior_employer_pick`/`_sanctions_pick` only
-  fire on a clean 2-option Yes/No pair. Tests: `test_choices.py`.
+  fire on a clean 2-option Yes/No pair. **SMS/text-contact consent** (`_consent_pick`) → the affirmative
+  option, detected by LABEL (`communicationConsent`), option SENTENCES, OR the `given`/`notGiven` VALUE
+  pair — the live analyzer extracts a radio's `value` attr as its option "text", so a sentence-only match
+  misses; unbacked → review. Tests: `test_choices.py`.
 - **Lever geocode 'Current location' is dead on this datacenter IP.** `filler.py`'s `is_lever_loc`
   branch polls `.dropdown-location` for a REAL suggestion (skipping 'Loading'/'No location found') and
   only presses ArrowDown+Enter when one exists (a blind Enter wipes the typed text); if the geocode
@@ -215,8 +221,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `_DEMOGRAPHIC_LABEL_RE` (label) OR ≥2 `_DEMOGRAPHIC_OPTION_RE` option hits to human/blank in BOTH modes
   — before the video/file/select branches. The ≥2-option threshold keeps a lone 'Prefer not to answer' on
   a real screener (hear-about) from tripping it; `age` matches only 'your/current age'/'age range'/'DOB'
-  (NOT "18 years of age"). `_SCRAPE_V` bumped to 4 so cached drafts regenerate without the false claims.
+  (NOT "18 years of age"). `_SCRAPE_V` bumped so cached drafts regenerate without the false claims.
   A REQUIRED demographic (e.g. Greenhouse Pronouns) is still left blank by policy — the human sets it.
+  All three `_DEMOGRAPHIC` regexes (dropdowns / analyzer `_skip` / catalog_drafts) use `rac(e|ial)` +
+  `ethnic` (bare `race`/`ethnicit` missed 'racial'/'ethnic', leaking a race question as a false "1 left
+  for the human"), and the analyzer location rule is `\bcity\b` (bare `city` substring-matched inside
+  'Ethni**city**' → a demographic resolved to `_location`). In the ETALON `ideal_fill` path,
+  `_AFFIRM_NO_RE` answers "contractual obligations/agreements/commitments that would **impede/interfere
+  with** your ability to join" → **No** (was a self-disqualifying Yes).
 - **Long Ashby Yes/No labels: replay is prefix-tolerant (`strategies/base.prefill` custom-widget loop).**
   The scraper truncates a question label to `[:300]` (drafted-answer key) while `dropdowns.shape_button_group`
   truncates the live harvested label to `[:200]`; a >200-char label (e.g. 1Password's work-auth screener)

@@ -70,7 +70,7 @@ _HUMAN_FILE_RE = re.compile(
 # NO demographic keyword — the signal ('Person with disability', 'Neurodivergent', 'Veteran',
 # 'Refugee') lives only in the options. Kept in sync with dropdowns._DEMOGRAPHIC / analyzer._skip.
 _DEMOGRAPHIC_LABEL_RE = re.compile(
-    r"(?i)(gender|\brace\b|ethnicit|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
     r"pronoun|sexual orientation|transgender|lgbtq|neurodiverg|self.?identif"
     r"|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
 # Option strings that signal a diversity self-ID group. Require >=2 so a lone
@@ -330,7 +330,10 @@ _AFFIRM_NO_RE = re.compile(
     r"previously (?:worked|employed|applied)|former(?:ly)? (?:employ|work)|"
     r"worked (?:with|at|for) (?:us|our|your|this)\b|ever worked (?:with|for|at) (?:us|our)|"
     r"worked (?:here|with us).{0,20}(?:before|previously)|current or (?:previous|former) employee|"
-    r"hired (?:through|by)")
+    r"hired (?:through|by)|"
+    # contractual obligations / agreements / commitments that would impede joining -> No
+    r"(?:obligation|commitment|agreement|relationship)s?.{0,80}"
+    r"(?:impede|interfere|impact|prevent|preclude|conflict)")
 
 
 def _affirm_override(label: str, options: list[str]) -> int | None:
@@ -831,7 +834,7 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 4  # bump: demographic-option gate (never claim disability/veteran/ethnicity)
+_SCRAPE_V = 5  # bump: obligations-that-impede -> No (was self-disqualifying Yes)
 
 
 def ensure_and_wire(job_id: int) -> tuple[str, str, bool]:

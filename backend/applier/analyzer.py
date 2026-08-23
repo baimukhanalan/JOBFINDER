@@ -52,8 +52,12 @@ FIELD_PATTERNS = [
     (r"(?i)(driver'?s?.?licen[sc]e)", "_fact:drivers_license", "select_or_fill"),
     (r"(?i)((quiet|dedicated|distraction.?free).{0,25}(work.?space|work.?area|home.?office))", "_fact:quiet_workspace", "select_or_fill"),
 
-    # Location
-    (r"(?i)(city|location|where.?located|current.?location|address)", "_location", "fill"),
+    # Location. `city` is word-bounded: bare `city` substring-matched INSIDE
+    # "Ethni(city)" (and capacity/authenticity/velocity/…), so a "Race/Ethnicity"
+    # demographic radio group resolved to _location — checked BEFORE the demographic
+    # _skip rule below — and leaked into unknown_questions as a false "1 left for the
+    # human" instead of being silently skipped like Gender/Veteran/Disability.
+    (r"(?i)(\bcity\b|location|where.?located|current.?location|address)", "_location", "fill"),
     # "state" as a NOUN only: "Please state your salary..." is a verb -> must fall through
     (r"(?i)(\bstate\b(?!\s+(your|the|a|an|any|why|how|what|wh))(?! .*authoriz)|\bprovince\b)", "_state", "fill"),
     (r"(?i)(zip|postal|postcode)", "_zip", "fill"),
@@ -102,7 +106,7 @@ FIELD_PATTERNS = [
     # Gender/demographics (optional, skip)
     # keep in sync with dropdowns._DEMOGRAPHIC — a narrower list left 'sexual orientation'/
     # 'pronouns'/'hispanic' etc. flowing into the fill+unfilled path (wrongly "1 left for human").
-    (r"(?i)(gender|race|ethnicit|veteran|disabilit|demographic|hispanic|latin[ox]?|pronoun|sexual\s*orientation|transgender|lgbtq)", "_skip", None),
+    (r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|hispanic|latin[ox]?|pronoun|sexual\s*orientation|transgender|lgbtq)", "_skip", None),
 ]
 
 # Submit button patterns

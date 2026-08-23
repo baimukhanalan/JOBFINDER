@@ -214,6 +214,24 @@ def test_english_yesno_backed_when_fact_meets_level():
     assert choices.deterministic_choices([q], {})[0]["index"] is None
 
 
+def test_sms_consent_picks_affirmative():
+    """SMS/text-message contact consent -> the affirmative option, across the shapes it
+    takes: the analyzer's 'given'/'notGiven' value pair, the human sentences, and the
+    useless 'communicationConsent' label. Unbacked -> review. A plain non-consent Yes/No
+    must NOT be caught."""
+    for q in (
+        {"question_text": "communicationConsent", "options": ["given", "notGiven"]},
+        {"question_text": "Phone",
+         "options": ["Yes - I consent to receiving text messages",
+                     "No - I do not consent to receiving text messages"]},
+    ):
+        out = choices.deterministic_choices([q], {})[0]
+        assert out["index"] == 0
+        assert out["backed"] is False
+    # unrelated Yes/No is left alone
+    assert choices._consent_pick("Are you at least 18?", ["Yes", "No"]) is None
+
+
 def test_choose_options_forces_capability_yes_over_llm_no(monkeypatch):
     """Even if the weak LLM picks No for a capability question, the override forces Yes."""
     q = {"question_text": "Do you have SaaS experience?", "options": ["Yes", "No"]}

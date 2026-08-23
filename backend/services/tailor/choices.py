@@ -250,6 +250,36 @@ def _sanctions_pick(question_text: str, options: list[str]) -> int | None:
     return _yesno_option_index(options, "no")
 
 
+# SMS / text-message contact consent -> Yes (an applicant wants to be reachable about the
+# role). Detected THREE ways because the shape varies: the Ashby field label is the useless
+# id 'communicationConsent'; the live analyzer extracts the radio VALUES ('given'/'notGiven')
+# as the option "text"; the scraper stored the human sentences ('Yes - I consent to receiving
+# text messages'). Pick the affirmative option. Unbacked -> review.
+_CONSENT_LABEL_RE = re.compile(
+    r"(?i)communication.?consent|consent.{0,20}contact|contact.{0,20}consent")
+_CONSENT_TEXT_RE = re.compile(
+    r"(?i)consent.{0,40}(?:receiv\w*\s+)?(?:text message|sms|phone call)"
+    r"|(?:text message|sms).{0,25}consent|contact me about")
+_CONSENT_AFFIRM_RE = re.compile(r"(?i)^(?:given|yes\b|i consent|consent|i agree|agree|opt.?in)")
+
+
+def _consent_pick(question_text: str, options: list[str]) -> int | None:
+    """SMS/text-message contact consent -> the affirmative option. Fires on the label,
+    the option sentences, OR the 'given'/'notGiven' value pair (analyzer sees the values)."""
+    if len(options) != 2:
+        return None
+    norm = {(o or "").strip().lower() for o in options}
+    label_hit = bool(_CONSENT_LABEL_RE.search(question_text or ""))
+    text_hit = any(_CONSENT_TEXT_RE.search(o or "") for o in options)
+    val_hit = norm >= {"given", "notgiven"}
+    if not (label_hit or text_hit or val_hit):
+        return None
+    for i, o in enumerate(options):
+        if _CONSENT_AFFIRM_RE.search((o or "").strip()):
+            return i
+    return None
+
+
 # English-proficiency asked as a Yes/No ("Do you master English at C1 level?") — distinct
 # from the _ENGLISH_RE dropdown ("English Level"). Answer Yes only when a fact BACKS it,
 # so we never claim unproven proficiency. NOT routed through _language_pick: on a Yes/No
@@ -321,6 +351,8 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
             idx = _prior_employer_pick(qt, opts)  # prior-employer -> No, UNBACKED (review)
         if idx is None:
             idx = _sanctions_pick(qt, opts)  # sanctioned-territory -> No, UNBACKED (review)
+        if idx is None:
+            idx = _consent_pick(qt, opts)  # SMS/text contact consent -> Yes, UNBACKED (review)
         if idx is None:
             idx, backed = _english_yesno_pick(qt, opts, facts)  # English Yes/No -> Yes if backed
         if idx is None:

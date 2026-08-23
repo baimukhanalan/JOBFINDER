@@ -118,7 +118,7 @@ MAX_RS_OPTIONS = 50  # cap options read per dropdown (huge country lists etc.)
 # EEOC/demographic survey questions are intentionally left blank (same policy as
 # the analyzer's `_skip` rule) — never auto-answered, never reported as unfilled.
 _DEMOGRAPHIC = re.compile(
-    r"(?i)(gender|race|ethnicit|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|hispanic|latin[ox]?\b|"
     r"pronoun|sexual orientation|transgender|lgbtq)")
 
 
@@ -430,6 +430,23 @@ def _looks_language_options(texts: list[str]) -> bool:
     return len(ranked) >= 2
 
 
+def _geo_shorten(want: str) -> list[str]:
+    """Progressively-shorter geo queries for a typeahead that returned no options on the
+    full string: 'Denver, Colorado, United States.' -> 'Denver, Colorado' -> 'Denver'.
+    A geocode often fails on an over-qualified query (trailing punctuation, full country)
+    but resolves the city alone."""
+    base = str(want or "").strip().rstrip(" .,")
+    parts = [p.strip() for p in base.split(",") if p.strip()]
+    variants = [base] + [", ".join(parts[:k]) for k in range(len(parts) - 1, 0, -1)]
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in variants:
+        if v and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 async def fill_comboboxes_known(page, known: dict) -> dict:
     """Fill Ashby-style input[role=combobox] dropdowns/typeaheads (What brought you…,
     Current Location) from explicit known answers: type the value, click the matching
@@ -476,6 +493,24 @@ async def fill_comboboxes_known(page, known: dict) -> dict:
                 await page.wait_for_timeout(650)
             wl = str(want).strip().lower()
             opts = await page.query_selector_all("[role='option']")
+            # Geo typeahead that returned nothing for the full string (over-qualified query:
+            # trailing punctuation / full country name) — retry progressively shorter queries
+            # ('Denver, Colorado, United States.' -> 'Denver, Colorado' -> 'Denver') until the
+            # geocode resolves. Only for a real typeahead (not a readonly fixed list).
+            if not readonly and not opts:
+                for variant in _geo_shorten(want):
+                    try:
+                        await box.click()
+                        await page.keyboard.press("Control+A")
+                        await page.keyboard.press("Backspace")
+                        await page.keyboard.type(variant[:60], delay=15)
+                        await page.wait_for_timeout(650)
+                        opts = await page.query_selector_all("[role='option']")
+                    except Exception:
+                        opts = []
+                    if opts:
+                        wl = variant.strip().lower()
+                        break
             otexts = [((await o.inner_text()) or "").strip() for o in opts]
             opt = None
             for o, t in zip(opts, otexts):

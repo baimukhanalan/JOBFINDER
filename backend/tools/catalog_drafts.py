@@ -869,24 +869,17 @@ _SCRAPE_V = 9  # bump: drop stray postal_code key from synth persona profile (cr
 
 
 def ensure_and_wire(job_id: int, gender: str | None = None) -> tuple[str, str, bool]:
-    """One-click backend for the /catalog "Заполнить" button. Generates the ideal draft
-    (100% fill, region-matched candidate) unless a CURRENT one (_scrape_v) already
-    exists. For custom ATS (ashby/lever/workable) it re-scrapes THIS job's questions
-    live first — their screeners are DOM-scraped (not from an API), so a fresh scrape
-    guarantees every question (selects/comboboxes/capability) is captured. Then
-    materializes for the co-pilot. Returns (profile_id, jobid, was_generated).
-
-    `gender` ('male'/'female', from the M/Ж choice) picks a gender-appropriate synthetic
-    persona. A cached draft is reused only when the requested gender is None OR matches the
-    cached persona's gender — otherwise a fresh persona of the requested gender is generated."""
+    """One-click backend for the /catalog "Заполнить" button. ALWAYS generates a FRESH
+    synthetic persona + ideal draft on every click — no cache reuse — so each click shows a
+    brand-new person (per the user's request; cost is not a concern). For custom ATS
+    (ashby/lever/workable) it re-scrapes THIS job's questions live first — their screeners
+    are DOM-scraped (not from an API), so a fresh scrape guarantees every question
+    (selects/comboboxes/capability) is captured. Then materializes for the co-pilot.
+    Returns (profile_id, jobid, was_generated=True). `gender` ('male'/'female', from the M/Ж
+    choice) picks a gender-appropriate persona; None rolls a random gender."""
     job = catalog_db.get_job(job_id)
     if not job:
         raise ValueError("job not found")
-    draft = job.get("draft")
-    if (draft and draft.get("_scrape_v") == _SCRAPE_V
-            and (gender is None or draft.get("gender") == gender)):
-        pid, jid = materialize_prefill(job_id)
-        return pid, jid, False
 
     from backend.config import settings
     if settings.llm_model != "gpt-5.6-luna":  # fast tier for on-demand gen

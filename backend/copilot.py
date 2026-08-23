@@ -20,6 +20,7 @@ import re
 import time
 from html import escape
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -195,6 +196,12 @@ async def _watch_submit(page, profile: str, jid: str,
         try:
             if page.is_closed():
                 return
+            # Shared single browser: if a concurrent job took over the co-pilot, this
+            # session is stale — STOP so we never mark the wrong job submitted, nor fill a
+            # code / click confirm on someone else's page. (_cancel_watch already fires on a
+            # new /load or /goto; this guards the in-flight iteration.)
+            if _S.get("current") != jid or _S.get("owner") not in (None, profile):
+                return
             text = await page.inner_text("body", timeout=5000)
             if looks_submitted(text, page.url):
                 status_store.mark(profile, jid, "submitted")
@@ -242,30 +249,115 @@ async def _watch_submit(page, profile: str, jid: str,
             continue  # transient (mid-navigation, detached body) — keep polling
 
 
-async def _click_submit_after_fill(page, result: dict) -> bool:
-    """Click the ATS Submit button once the fill is done. Enabled by explicit user
-    request — this intentionally reverses the historical human-submit-only design
-    (commit a8ab56e), so every one-click fill now presses Submit itself. Prefers the
-    strategy's detected submit_selector, falling back to a live scan. Best-effort: a
-    missing/blocked button never breaks the load (the human can still submit in noVNC),
-    and the read-only _watch_submit records the resulting confirmation into status.json."""
+def _apply_identity(u: str) -> tuple:
+    """Company/job identity of an apply URL, host-normalized. Greenhouse embed
+    (?for=cresta) and board (/cresta/jobs/..) collapse to ('greenhouse','cresta');
+    ashby/lever/workable identify by host + first path segment (the company slug)."""
+    try:
+        p = urlparse(u or "")
+    except Exception:
+        return ("", "")
+    host = (p.netloc or "").lower()
+    seg = (p.path or "").strip("/").split("/")
+    seg0 = seg[0].lower() if seg and seg[0] else ""
+    if "greenhouse.io" in host:
+        forq = parse_qs(p.query or "").get("for", [""])[0].lower()
+        return ("greenhouse", forq or seg0)
+    return (host, seg0)
+
+
+def _same_apply_page(actual: str, expected: str) -> bool:
+    """True when the live page is still the SAME company/job we filled — the race guard
+    for the shared single browser."""
+    return bool(actual) and bool(expected) and _apply_identity(actual) == _apply_identity(expected)
+
+
+# Post-submit block/validation/captcha signals — turns a silent 'no confirmation' into a
+# diagnosable outcome (a datacenter-IP submit is often gated by anti-bot / a required field).
+_SUBMIT_BLOCK_RE = re.compile(
+    r"(verify (you|that you).{0,20}human|are you (a )?robot|recaptcha|hcaptcha|captcha|"
+    r"press (and hold|&)|we're updating your forms|please try again|something went wrong|"
+    r"this field is required|please (fill|complete|correct|enter)|is required)", re.I)
+
+
+async def _submit_evidence(page, shot_dir) -> dict:
+    """Snapshot the page right after the submit click: url, a full-page screenshot, whether
+    a confirmation OR a block/validation banner is visible. Best-effort, never raises."""
+    ev = {"post_url": None, "confirmed": None, "blocked": None, "screenshot": None}
+    try:
+        ev["post_url"] = page.url
+    except Exception:
+        pass
+    try:
+        txt = await page.inner_text("body", timeout=4000)
+        ev["confirmed"] = bool(looks_submitted(txt, ev.get("post_url") or ""))
+        m = _SUBMIT_BLOCK_RE.search(txt or "")
+        ev["blocked"] = m.group(0)[:60] if m else None
+    except Exception:
+        pass
+    try:
+        if shot_dir is not None:
+            path = str(Path(shot_dir) / "after_submit.png")
+            await page.screenshot(path=path, full_page=True)
+            ev["screenshot"] = path
+    except Exception:
+        pass
+    return ev
+
+
+async def _click_submit_after_fill(page, result: dict, *, expected_url: str = "",
+                                   profile: str = "", shot_dir=None) -> dict:
+    """Press the ATS Submit button after the fill — but ONLY when it is safe to. Enabled by
+    explicit user request (reverses the human-submit-only design, commit a8ab56e), yet it
+    refuses to submit when doing so would be wrong:
+      - INCOMPLETE: any unfilled required field (e.g. Lever 'Current location' the datacenter
+        geocode can't set) -> leave it for the human.
+      - NEEDS REVIEW: any answer flagged for human review ([review] safety contract — a
+        synthetic persona's behavioral/unbacked answers must be seen before they go live).
+      - RACE: the shared co-pilot page drifted to a different company/job, or another run
+        took ownership -> abort (never submit the wrong form).
+    On a real click it captures post-submit evidence (screenshot + block/confirm detection).
+    Returns a dict describing the outcome; never raises."""
+    unfilled = (result.get("unfilled") or []) if isinstance(result, dict) else []
+    review = (result.get("review_items") or []) if isinstance(result, dict) else []
+    if unfilled:
+        logger.info("auto-submit skipped: %d unfilled required field(s): %s", len(unfilled), unfilled[:5])
+        return {"clicked": False, "reason": "incomplete", "unfilled": unfilled[:8]}
+    if review:
+        logger.info("auto-submit skipped: %d answer(s) need human review", len(review))
+        return {"clicked": False, "reason": "needs_review",
+                "review": [str(r)[:60] for r in review[:8]]}
+    if _S.get("owner") not in (None, profile):
+        return {"clicked": False, "reason": "preempted", "owner": _S.get("owner")}
+    try:
+        cur_url = page.url
+    except Exception:
+        cur_url = ""
+    if expected_url and not _same_apply_page(cur_url, expected_url):
+        logger.warning("auto-submit ABORTED (page drift): live=%s expected=%s", cur_url, expected_url)
+        return {"clicked": False, "reason": "page_drift", "actual": cur_url, "expected": expected_url}
     try:
         from backend.applier import analyzer, filler
-        sel = result.get("submit_selector") if isinstance(result, dict) else None
-        if not sel:
-            sel = await analyzer.find_submit_button(page)
+        sel = (result.get("submit_selector") if isinstance(result, dict) else None) \
+            or await analyzer.find_submit_button(page)
         if not sel:
             logger.warning("auto-submit: no submit button found on the page")
-            return False
-        # Let any async form validation / react state settle before the click, and give
-        # a just-started résumé upload a moment to land (Ashby rejects a same-instant Submit).
+            return {"clicked": False, "reason": "no_button"}
+        # Let async validation / a just-started résumé upload settle (Ashby rejects a
+        # same-instant Submit), then re-check the page hasn't drifted before the click.
         await page.wait_for_timeout(1500)
+        if expected_url and not _same_apply_page(page.url, expected_url):
+            return {"clicked": False, "reason": "page_drift", "actual": page.url, "expected": expected_url}
         clicked = await filler.click_submit(page, {"submit_selector": sel})
-        logger.info("auto-submit: clicked=%s selector=%s", clicked, sel)
-        return clicked
+        await page.wait_for_timeout(1500)
+        ev = await _submit_evidence(page, shot_dir)
+        logger.info("auto-submit: clicked=%s sel=%s post=%s confirmed=%s blocked=%s",
+                    clicked, sel, ev.get("post_url"), ev.get("confirmed"), ev.get("blocked"))
+        return {"clicked": bool(clicked), "reason": "clicked" if clicked else "click_failed",
+                "selector": sel, **ev}
     except Exception:
         logger.warning("auto-submit failed", exc_info=True)
-        return False
+        return {"clicked": False, "reason": "error"}
 
 
 # Confirm/submit button on the emailed-security-code step (Greenhouse & co). Verify/Confirm
@@ -435,16 +527,19 @@ async def load(jobid: str = Form(...), profile: str = Form("michael")):
             _S["current"] = jobid
             _S["owner"] = profile
             _S["loaded_at"] = time.time()
-            # AUTO-SUBMIT: press the ATS Submit button right after the fill (explicit
-            # user request — see _click_submit_after_fill). The watch below then records
-            # the confirmation page into status.json.
-            submitted_click = await _click_submit_after_fill(page, result)
+            # AUTO-SUBMIT: press the ATS Submit button right after the fill (explicit user
+            # request — see _click_submit_after_fill), but ONLY when the form is complete,
+            # nothing needs review, and the shared page is still ours. The watch below then
+            # records the confirmation page into status.json.
+            submit_result = await _click_submit_after_fill(
+                page, result, expected_url=url, profile=profile, shot_dir=d)
             # Watch (read-only) for the resulting confirmation so the queue auto-advances
             # (also auto-fills an emailed security-code step if the ATS shows one).
             _S["watch"] = asyncio.create_task(_watch_submit(
                 page, profile, jobid, (form.get("email") or "").strip(), time.time()))
             return JSONResponse({"loaded": jobid, "company": company, "title": title,
-                                 "submitted_click": submitted_click,
+                                 "submitted_click": submit_result.get("clicked"),
+                                 "submit_result": submit_result,
                                  "filled": result.get("filled"),
                                  "unfilled": len(result.get("unfilled") or []),
                                  "unfilled_list": result.get("unfilled") or [],
@@ -495,7 +590,8 @@ async function loadJob(jid){
       body:'jobid='+encodeURIComponent(jid)+'&profile='+encodeURIComponent(PROFILE)});
     const j=await r.json();
     if(j.error){if(r.status===423){alert(j.error);}s.textContent='Error: '+j.error;return;}
-    s.textContent='✓ Filled '+(j.company||'')+(j.submitted_click?' — submitted automatically.':' — review the screen above.')+' (filled '+j.filled+', left '+j.unfilled+')';
+    var sr=j.submit_result||{}; var msg=sr.clicked?('Submit pressed'+(sr.confirmed?' — confirmed':(sr.blocked?' — blocked: '+sr.blocked:' — awaiting confirmation'))):('not submitted ('+(sr.reason||'?')+') — review above');
+    s.textContent='✓ Filled '+(j.company||'')+' — '+msg+'. (filled '+j.filled+', left '+j.unfilled+')';
     document.getElementById('vnc').contentWindow.location.reload();
   }catch(e){s.textContent='Error: '+e;}
 }

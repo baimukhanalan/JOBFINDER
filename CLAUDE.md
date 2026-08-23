@@ -151,14 +151,30 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   touch the extractor's field-recognition (`_JS`) — it works; only the wait/retry/persistence is the fix.
   Pure helpers (`_looks_partial`/`_poll_stable`/`_retry_loads`) are unit-tested in
   `tests/test_catalog_forms_wait.py` (no network).
-- **Auto-submit: the co-pilot NOW clicks Submit (enabled 2026-08-23 by explicit owner request).**
-  After the one-click fill, `copilot.py`'s `/load` calls `_click_submit_after_fill(page, result)`
-  which presses the ATS Submit button (strategy `submit_selector`, else `analyzer.find_submit_button`,
-  clicked via `filler.click_submit`). This intentionally reverses the original human-submit-only design
-  (commit `a8ab56e`) — so **`/catalog` «Заполнить» and the co-pilot `Fill →` button both auto-submit**,
-  including the SYNTHETIC demo persona to real ATS. Owner accepted the datacenter-IP / takhet.com
-  spam-ban risk that `a8ab56e` was avoiding. It's best-effort (a missing/blocked button never breaks
-  the load). To turn it OFF again, no-op `_click_submit_after_fill`. It also finishes a
+- **Auto-submit: the co-pilot clicks Submit — but ONLY when safe (enabled 2026-08-23 by explicit
+  owner request; GATED 2026-08-23 after a live 3-job smoke).** After the one-click fill, `copilot.py`'s
+  `/load` calls `_click_submit_after_fill(page, result, expected_url, profile, shot_dir)` which presses
+  the ATS Submit button (strategy `submit_selector`, else `analyzer.find_submit_button`, via
+  `filler.click_submit`) — reversing the original human-submit-only design (commit `a8ab56e`) — so
+  **`/catalog` «Заполнить» and the co-pilot `Fill →` both auto-submit**, incl. the SYNTHETIC demo
+  persona to real ATS. Owner accepted the datacenter-IP / takhet.com spam-ban risk `a8ab56e` avoided.
+  **It REFUSES to click in four cases (each returns a `submit_result` reason, never raises):**
+  (1) `incomplete` — any unfilled required field (`result["unfilled"]`, e.g. Lever 'Current location'
+  the dead datacenter geocode can't set) → leave for the human; (2) `needs_review` — any
+  `result["review_items"]` (the `[review]` safety contract: a synth persona's behavioral/unbacked
+  answers must be human-seen before going live); (3) `page_drift`/`preempted` — the SHARED single
+  co-pilot browser drifted to a different company/job or another run took ownership (`_same_apply_page`
+  / `_apply_identity` compare host+company; greenhouse embed and board collapse to one identity). The
+  live smoke caught a cresta fill whose page had been raced to a salmon-group Ashby page — the guard
+  now aborts instead of submitting the wrong form. On a real click it captures **post-submit evidence**
+  (`_submit_evidence`: `after_submit.png` screenshot + `confirmed`/`blocked` via `looks_submitted` /
+  `_SUBMIT_BLOCK_RE`) so a silent 'no confirmation' is diagnosable. **KNOWN LIMIT:** from a datacenter
+  IP the final submit is often anti-bot/captcha-gated, so a click ≠ a completed application (the smoke
+  got 0/3 confirmations); `status.json` only reaches `submitted` on a REAL confirmation the watch sees,
+  never on the click. `_watch_submit` also bails the moment `_S["current"]`/`owner` shows another job
+  took the shared browser (so a stale watch never marks the wrong job or clicks a stranger's page). To
+  turn it OFF again, no-op `_click_submit_after_fill`. Offline gates test: scratchpad `test_gate.py`.
+  It also finishes a
   **Greenhouse-style emailed-security-code step**: `_watch_submit` fills the code from the candidate's
   own mailbox AND now clicks that step's confirm/submit button (`_click_code_confirm`) to finalize —
   it still never touches a captcha (a captcha-gated step just waits for the human). NOTE: the

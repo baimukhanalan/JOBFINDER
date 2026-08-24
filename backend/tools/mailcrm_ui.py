@@ -232,8 +232,13 @@ button.primary:hover{background:var(--accent-deep);}
   .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
     bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
     border:none;border-radius:16px;height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
-    cursor:pointer;box-shadow:0 6px 18px -4px rgba(26,115,232,.55);}
-  .fab-compose svg{width:22px;height:22px;}
+    cursor:pointer;box-shadow:0 6px 18px -4px rgba(26,115,232,.55);overflow:hidden;
+    transition:width .22s ease,padding .22s ease,border-radius .22s ease,gap .22s ease;}
+  .fab-compose svg{width:22px;height:22px;flex:0 0 auto;}
+  .fab-compose span{white-space:nowrap;max-width:120px;transition:max-width .22s ease,opacity .16s ease;}
+  /* scrolling down collapses it to a round pen (Gmail); scrolling up expands it back */
+  .fab-compose.collapsed{width:52px;padding:0;gap:0;border-radius:50%;justify-content:center;}
+  .fab-compose.collapsed span{max-width:0;opacity:0;}
   .fab-compose:active{transform:translateY(1px);}
   main{padding-bottom:92px;}
 }
@@ -747,8 +752,12 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
       if(r.ok){var html=await r.text();var added=(html.match(/class=.mrow/g)||[]).length;if(added)list.insertAdjacentHTML('beforeend',html);if(added<PAGE)more.dataset.more='0';}
     }catch(e){}finally{loading=false;}
   }
-  var head=document.querySelector('.page-head'),lastY=window.scrollY;
-  window.addEventListener('scroll',function(){var y=window.scrollY;if(window.innerHeight+y>=document.documentElement.scrollHeight-400)loadMore();if(y>lastY&&y>90)head.classList.add('hide');else if(y<lastY)head.classList.remove('hide');lastY=y;},{passive:true});
+  var head=document.querySelector('.page-head'),fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
+  window.addEventListener('scroll',function(){var y=window.scrollY;if(window.innerHeight+y>=document.documentElement.scrollHeight-400)loadMore();
+    var down=y>lastY&&y>90;
+    if(down){head.classList.add('hide');if(fab)fab.classList.add('collapsed');}
+    else if(y<lastY){head.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
+    lastY=y;},{passive:true});
   async function refreshList(){if(document.querySelector('.modal.open'))return;try{var r=await fetch(location.href,{headers:{'X-Poll':'1'}});if(!r.ok)return;var doc=new DOMParser().parseFromString(await r.text(),'text/html');var fl=doc.getElementById('maillist');if(fl)list.innerHTML=fl.innerHTML;var sn=doc.querySelector('.seg-nav');if(sn)document.querySelector('.seg-nav').innerHTML=sn.innerHTML;var nf=doc.querySelector('.funnel[data-filter-list="maillist"]'),cf=document.querySelector('.funnel[data-filter-list="maillist"]');if(nf&&cf&&!cf.classList.contains('busy'))cf.innerHTML=nf.innerHTML;}catch(e){}}
   var last=null,pollTimer=null;
   function startPoll(){if(pollTimer)return;pollTimer=setInterval(async function(){if(document.hidden||document.querySelector('.modal.open'))return;try{var r=await fetch('/mail/count'+location.search);if(!r.ok)return;var j=await r.json();if(j.n!==last){if(last!==null)await refreshList();last=j.n;}}catch(e){}},10000);}

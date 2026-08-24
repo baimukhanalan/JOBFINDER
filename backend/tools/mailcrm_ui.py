@@ -142,7 +142,12 @@ button.primary:hover{background:var(--accent-deep);}
 .mitem.unread .mdate{color:var(--accent);}
 .empty{text-align:center;padding:48px;color:var(--ink-mute);}
 .healthbar{background:#fef7e0;border:1px solid #fdd663;color:#7c5b00;border-radius:10px;padding:11px 14px;margin:0 0 14px;font-size:13.5px;font-weight:500;}
-.msg-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap;}
+.msg-toolbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 0;flex-wrap:nowrap;background:var(--bg-app);}
+.mf-reply{flex:0 0 auto;margin-left:auto;align-self:flex-start;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;background:transparent;color:var(--ink-soft);border-radius:50%;cursor:pointer;}
+.mf-reply:hover{background:rgba(60,64,67,.09);color:var(--accent);}
+.mf-reply svg{width:19px;height:19px;}
+.reply-btn.primary-btn{background:var(--accent);border-color:var(--accent);color:#fff;}
+.reply-btn.primary-btn:hover{background:var(--accent-deep);border-color:var(--accent-deep);color:#fff;}
 .msg-toolbar .spacer{flex:1;}.msg-toolbar form{margin:0;}
 .msg-page{max-width:840px;}
 .msg-subject{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 18px;line-height:1.25;}
@@ -312,8 +317,11 @@ button.primary:hover{background:var(--accent-deep);}
   .fm-card{max-width:none;}
   .kw-fields{grid-template-columns:1fr;}      /* stack keyword fields on narrow screens */
   .msg-toolbar{align-items:center;margin-bottom:16px;}
-  .msg-toolbar .reply-action{flex:1 1 auto;justify-content:center;min-height:44px;}
   .msg-toolbar .iconbtn{width:44px;height:44px;}
+  /* Open-message full screen: fix the back/delete bar to the top so you never scroll up to
+     leave (position:fixed is reliable here; sticky breaks under the body overflow-x:hidden). */
+  body.full-view .msg-toolbar{position:fixed;top:0;left:0;right:0;z-index:30;margin:0;padding:8px 10px;background:var(--bg-app);box-shadow:0 1px 0 var(--line);}
+  body.full-view main{padding-top:60px;}
   .mbxrow{padding:11px 12px;gap:9px;}
   .mbxrow .em{display:none;}
   .keyword-grid{grid-template-columns:1fr}.keyword-card textarea{min-height:180px}.keyword-actions>*{flex:1 1 auto;text-align:center;justify-content:center;min-height:44px;}
@@ -390,13 +398,16 @@ def _drawer(active: str) -> str:
             f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav></aside>')
 
 
-def _page(active: str, body: str, modal: str = "") -> str:
+def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
+    # topbar=False → a dedicated full screen (the open-message view): no Gmail search pill /
+    # drawer, just the message's own sticky toolbar, like tapping a mail in Gmail.
+    chrome = f"{_topbar(active)}{_drawer(active)}" if topbar else ""
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>JobFinder — почта кандидатов</title>" + _FONTS +
-        f"<style>{_CSS}</style></head><body>"
-        f"{_topbar(active)}{_drawer(active)}"
+        f"<style>{_CSS}</style></head><body{'' if topbar else ' class=full-view'}>"
+        f"{chrome}"
         f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}"
         + _JS + "</body></html>")
 
@@ -628,7 +639,7 @@ def _att_chips(m: dict) -> str:
     return f'<div class="atts">{"".join(chips)}</div>'
 
 
-def _msg_card(m: dict) -> str:
+def _msg_card(m: dict, thread_subject: str = "") -> str:
     sender = m.get("from_name") or m.get("from_email") or "?"
     side = " out" if m.get("outbound") else ""
     who = "Вы (кандидат)" if m.get("outbound") else escape(sender)
@@ -637,11 +648,23 @@ def _msg_card(m: dict) -> str:
                    f'onload="fitFrame(this)" srcdoc="{escape(m["html"])}"></iframe></div>')
     else:
         content = f'<div class="msg-content">{escape(m.get("plain","") or "(пустое письмо)")}</div>'
+    # reply icon right in the sender row (Gmail-style) — replies to THIS message's other party
+    rt_to = m.get("to", "") if m.get("outbound") else m.get("from_email", "")
+    reply_attrs = (
+        f'data-from="{escape(m.get("mailbox",""), quote=True)}" '
+        f'data-to="{escape(rt_to, quote=True)}" '
+        f'data-subject="{escape(thread_subject, quote=True)}" '
+        f'data-mid="{escape(m.get("message_id",""), quote=True)}"')
+    reply_ic = (f'<button type="button" class="mf-reply reply-action" {reply_attrs} title="Ответить" '
+                'aria-label="Ответить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+                '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg></button>')
     return (
         f'<div class="tcard{side}">'
         f'<div class="msg-from"><span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
         f'<div class="mf-meta"><div class="mf-line"><b>{who}</b><span class="mf-addr">{escape(m.get("from_email",""))}</span>{_kind_tag(m.get("kind","other"))}</div>'
-        f'<div class="mf-to">кому: {escape(m.get("to","") or m.get("mailbox",""))}<span class="mf-dot">·</span>{escape(m.get("date",""))}</div></div></div>'
+        f'<div class="mf-to">кому: {escape(m.get("to","") or m.get("mailbox",""))}<span class="mf-dot">·</span>{escape(m.get("date",""))}</div></div>'
+        f'{reply_ic}</div>'
         f'{content}{_att_chips(m)}</div>')
 
 
@@ -659,22 +682,32 @@ def render_thread(t: dict) -> str:
         f'data-subject="{escape(t.get("subject", ""), quote=True)}" '
         f'data-mid="{escape(tgt.get("message_id", ""), quote=True)}"')
     thread_id = next((m.get("id") for m in reversed(msgs) if m.get("id")), "")
-    cards = "".join(_msg_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
+    subj = t.get("subject", "")
+    cards = "".join(_msg_card(m, subj) for m in msgs) or '<div class="empty">Пусто</div>'
+    last = msgs[-1] if msgs else {}
+    fwd_body = (last.get("plain", "") or "")[:4000]
+    fwd_attrs = (
+        f'data-from="{escape(t.get("mailbox", ""), quote=True)}" '
+        f'data-subject="{escape(subj, quote=True)}" '
+        f'data-body="{escape(fwd_body, quote=True)}"')
     body = (
+        # BLOCK 1 — sticky top toolbar (back + delete): no scrolling up to leave the message
         '<div class="msg-toolbar">'
         '<a class="iconbtn" href="/mail" onclick="if(document.referrer&&history.length>1){history.back();return false;}" title="Назад" aria-label="Назад к списку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></a>'
         '<div class="spacer"></div>'
         f'<button type="button" class="iconbtn danger delete-action" data-id="{escape(thread_id, quote=True)}" data-mailbox="{escape(t.get("mailbox", ""), quote=True)}" title="Удалить" aria-label="Удалить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg></button>'
         '</div>'
-        f'<div class="msg-page"><h1 class="msg-subject">{escape(t.get("subject","") or "(без темы)")}'
+        # BLOCK 2 — subject · BLOCK 3 — sender rows + body (per card) · BLOCK 4 — reply/forward footer
+        f'<div class="msg-page"><h1 class="msg-subject">{escape(subj or "(без темы)")}'
         f'<span class="tcount">{len(msgs)}</span></h1>'
         f'<div class="tsub">Ящик: {escape(t.get("candidate",""))} &lt;{escape(t.get("mailbox",""))}&gt;</div>'
         f'{cards}'
-        # Gmail-style reply bar at the end of the conversation
-        f'<div class="reply-bar"><button type="button" class="reply-btn reply-action" {reply_attrs}>'
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button></div>'
+        f'<div class="reply-bar"><button type="button" class="reply-btn reply-action primary-btn" {reply_attrs}>'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
+        f'<button type="button" class="reply-btn fwd-action" {fwd_attrs} title="Переслать">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>Переслать</button></div>'
         '</div>')
-    return _page("inbox", body, _COMPOSE_MODAL)
+    return _page("inbox", body, _COMPOSE_MODAL, topbar=False)
 
 
 def render_candidate_rows(cands: list[dict]) -> str:
@@ -825,6 +858,8 @@ function clearSel(){document.querySelectorAll('.maillist .mitem.selected').forEa
 async function markSelRead(){var sel=document.querySelectorAll('.maillist .mitem.selected');if(!sel.length)return;var ids=[];sel.forEach(function(it){if(it.dataset.id)ids.push(it.dataset.id);});try{var r=await fetch('/mail/mark_read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ids:ids.join(',')})});if(r.ok){sel.forEach(function(it){it.classList.remove('unread','selected');});_updateSel();}}catch(e){}}
 function reply(from,to,subj,mid){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value=to||'';field('subject').value=(/^re:/i.test(subj||'')?subj:'Re: '+(subj||''));field('in_reply_to').value=mid||'';openCompose();setTimeout(function(){field('body').focus();},50);}
 document.querySelectorAll('.reply-action').forEach(function(b){b.addEventListener('click',function(){reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid);});});
+function forward(from,subj,bodyText){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value='';field('subject').value=(/^fwd:/i.test(subj||'')?subj:'Fwd: '+(subj||''));field('in_reply_to').value='';field('body').value='\n\n---------- Пересылаемое сообщение ----------\n'+(bodyText||'');openCompose();setTimeout(function(){field('to').focus();},50);}
+document.querySelectorAll('.fwd-action').forEach(function(b){b.addEventListener('click',function(){forward(b.dataset.from,b.dataset.subject,b.dataset.body);});});
 async function deleteThread(b){
   var id=b.dataset.id;if(!id)return;
   if(!confirm('Переместить всю цепочку в корзину? При необходимости её можно восстановить на сервере.'))return;

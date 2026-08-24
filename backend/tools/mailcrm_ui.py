@@ -934,7 +934,7 @@ async function sendMail(e){
   }catch(err){msg.style.color='#d93025';msg.textContent='Ошибка сети';}
   return false;
 }
-function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=doc.createElement('style');st.textContent='html{-webkit-text-size-adjust:100%;}html,body{margin:0;padding:0;background:transparent;font-family:"Hanken Grotesk",-apple-system,sans-serif;color:#202124;font-size:14.5px;line-height:1.6;}body{width:auto!important;}img{max-width:100%!important;height:auto;}a{color:#1a73e8;word-break:break-word;}table{max-width:100%!important;}td,th,div,p,pre,blockquote{max-width:100%!important;}pre{white-space:pre-wrap;word-break:break-word;}';doc.head.appendChild(st);try{doc.querySelectorAll('img').forEach(function(im){if(im.complete&&im.naturalWidth===0){im.style.display='none';}im.addEventListener('error',function(){this.style.display='none';});});}catch(_){}
+function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=doc.createElement('style');st.textContent='html{-webkit-text-size-adjust:100%;}html,body{margin:0;padding:0;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#202124;font-size:14.5px;line-height:1.6;}body{width:auto!important;}img{max-width:100%!important;height:auto;}a{color:#1a73e8;word-break:break-word;}table{max-width:100%!important;}td,th,div,p,pre,blockquote{max-width:100%!important;}pre{white-space:pre-wrap;word-break:break-word;}';doc.head.appendChild(st);try{doc.querySelectorAll('img').forEach(function(im){if(im.complete&&im.naturalWidth===0){im.style.display='none';}im.addEventListener('error',function(){this.style.display='none';});});}catch(_){}
   // Re-measure the height whenever the content reflows (fonts, injected styles, images),
   // else a tall HTML email gets truncated to whatever height was ready at onload.
   function docH(){return Math.max(doc.body.scrollHeight,doc.documentElement.scrollHeight,doc.body.offsetHeight);}
@@ -944,9 +944,8 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth,h,wh,sc=null;if(natW>avail+2){sc=Math.max(avail/natW,0.72);h=docH();wh=Math.round(h*sc+8);}else{h=docH()+24;wh=h;}if(Math.abs(wh-applied)<=3)return;applied=wh;if(sc!==null){f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+sc+')';}else{f.style.width='100%';f.style.transform='none';}f.style.height=h+'px';wrap.style.height=wh+'px';}
   // Measure on the next frame (after the injected style lays out) + a couple of settle passes.
   // NO synchronous first call (it measures before layout → a tiny value → a visible jump).
-  requestAnimationFrame(measure);[250,800].forEach(function(t){setTimeout(measure,t);});
+  requestAnimationFrame(measure);setTimeout(measure,300);
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
-  if(doc.fonts&&doc.fonts.ready){doc.fonts.ready.then(measure);}
 }catch(e){f.style.height='600px';}}
 // Wire the HTML-email iframes here (NOT via inline onload="fitFrame" — that fires while the
 // body is still parsing, before fitFrame is defined → "fitFrame is not defined", so the frame

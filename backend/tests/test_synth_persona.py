@@ -64,7 +64,7 @@ def test_synth_persona_uses_fallback_without_llm(monkeypatch):
     cand = sp.synth_persona(_job("Brazil (Remote)"))
     p = cand["profile"]
     assert p["country"] == "Brazil"
-    assert p["work_authorization"] == "Brazil Citizen"
+    assert p["work_authorization"] == "Brazilian Citizen"
     assert p["email"].endswith("@takhet.com")
     assert p["street_address"]
 
@@ -118,6 +118,48 @@ def test_synth_persona_gender_choice(monkeypatch, tmp_path):
     # gender=None still rolls a valid gender
     r = sp.synth_persona(_job("Austin, TX, United States"))
     assert r["gender"] in ("male", "female")
+
+
+# ---- LatAm-exclusive employers: a location-less GoFasti-style role -> a LatAm persona -------
+def _latam_job(desc, location="Remote", region="OTHER"):
+    return {"title": "Sales Development Rep", "company": "GoFasti", "description": desc,
+            "location": location, "regions": ([region] if region else None)}
+
+
+def test_requires_latam_signal():
+    assert sp._requires_latam(_latam_job("We need someone based in Latin America, remote."))
+    assert sp._requires_latam(_latam_job("TopTalent from LatAm. Designers from LatAm."))
+    assert sp._requires_latam(_latam_job("Open to candidates in Latin America only."))
+    # a mere MARKET mention (not a residence requirement) must NOT trip it
+    assert not sp._requires_latam(_latam_job("We serve customers across Latin America and Europe."))
+    assert not sp._requires_latam(_latam_job("Popular with Latino communities worldwide."))
+
+
+def test_country_of_latam_exclusive_when_location_uninformative():
+    job = _latam_job("GoFasti hires TopTalent from LatAm; you must be based in Latin America.")
+    assert sp._country_of(job) in sp.LATAM_COUNTRIES
+
+
+def test_country_of_concrete_location_beats_latam_market_mention():
+    # a US-located role that merely mentions the LatAm market stays a US persona
+    job = {"title": "SRE", "location": "Remote - US", "regions": ["US"],
+           "description": "You'll support customers across Latin America."}
+    assert sp._country_of(job) == "United States"
+
+
+def test_latam_persona_is_internally_consistent(monkeypatch, tmp_path):
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
+    monkeypatch.setattr(sp, "_USED_NAMES_PATH", str(tmp_path / "used.json"))
+    job = _latam_job("Based in Latin America. TopTalent from LatAm.")
+    for _ in range(20):
+        p = sp.synth_persona(job, gender="female")["profile"]
+        assert p["country"] in sp.LATAM_COUNTRIES
+        # city, citizenship and the name bank must all agree with the chosen country
+        assert p["location"].endswith(p["country"])
+        assert p["work_authorization"] == sp._CITIZEN[p["country"]]
+        first, last = p["full_name"].split(" ", 1)
+        bank = sp._NAMES[p["country"]]
+        assert first in bank["female"] and last in bank["last"]
 
 
 def test_kazakh_surname_is_gendered(monkeypatch, tmp_path):

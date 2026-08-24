@@ -191,6 +191,18 @@ _COUNTRY_RE = re.compile(r"(?i)country (?:of )?(?:residence|residency|location|b
                          r"which country|country (?:in which|where)|in which country|"
                          r"your country|country are you")
 
+# Latin-America residence gate. Some employers (GoFasti et al.) hire ONLY LatAm-resident talent
+# and put a "Are you based in a Latin American country?" YES/NO screener on the form; the etalon
+# for such a role is synthesized as a real LatAm person (see synth_persona), so this must answer
+# YES from the persona's country instead of falling to the LLM. Single source of truth for which
+# countries count as Latin America (imported by synth_persona to pick the persona's country).
+LATAM_COUNTRIES = ("Mexico", "Colombia", "Argentina", "Chile", "Peru", "Brazil")
+_LATAM_COUNTRY_SET = frozenset(c.lower() for c in LATAM_COUNTRIES)
+_LATAM_RESIDENCE_Q_RE = re.compile(
+    r"(?i)(?:based|located|reside|residing|living|live|are you|do you)\b.{0,40}?"
+    r"(?:latin\s*america\b|latam\b|latin\s*american\s+countr)"
+    r"|latin\s*american\s+countr")
+
 
 def _split_name(full: str) -> tuple[str, str]:
     parts = (full or "").split()
@@ -281,6 +293,11 @@ def _identity_choice(label: str, options: list[str], profile: dict) -> int | Non
     # authorized candidate even when the SAME sentence also contains a "sponsorship now or in
     # the future" clause that _SPONSOR_RE would read as the NO-direction trigger (e.g.
     # "authorized to work in the US without requiring sponsorship now or in the future?").
+    # "Are you based in a Latin American country?" -> answer from the persona's real country
+    # (LatAm etalons are synthesized as LatAm residents; a non-LatAm persona truthfully -> No).
+    if _LATAM_RESIDENCE_Q_RE.search(lab):
+        in_latam = (profile.get("country") or "").strip().lower() in _LATAM_COUNTRY_SET
+        return (_yes_option(options) if in_latam else _no_option(options))
     if _WITHOUT_SPON_RE.search(lab):
         return (_yes_option(options) if authorized else _no_option(options))
     if _AUTH_RE.search(lab) and not _SPONSOR_RE.search(lab):
@@ -631,7 +648,8 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
                     continue
         # eligibility selects gated deterministically from the region-matched profile
         if opts and (_AUTH_RE.search(label) or _SPONSOR_RE.search(label)
-                     or _WITHOUT_SPON_RE.search(label) or _COUNTRY_RE.search(label)):
+                     or _WITHOUT_SPON_RE.search(label) or _COUNTRY_RE.search(label)
+                     or _LATAM_RESIDENCE_Q_RE.search(label)):
             pick = _identity_choice(label, opts, profile)
             if pick is not None:
                 answers[i] = {**base, "value": opts[pick], "source": "identity",

@@ -196,3 +196,29 @@ def test_real_latino_demographic_still_gated():
     assert cd._is_demographic("Are you Latinx?", ["Yes", "No"]) is True
     assert cd._is_demographic("Gender", ["Male", "Female", "Prefer not to say"]) is True
     assert cd._is_demographic("Disability Status", ["Yes", "No", "I do not want to answer"]) is True
+
+
+# ---- unit: "based in a Latin American country?" answered from the persona's country -------
+# LatAm-exclusive employers (GoFasti) auto-reject non-LatAm applicants; the etalon for such a
+# role is synthesized as a real LatAm resident, so the screener must answer YES from the
+# persona's country (a non-LatAm persona truthfully answers NO).
+def test_latam_residence_screener_yes_for_latam_persona():
+    q = "Are you based in a Latin American country?"
+    assert cd._LATAM_RESIDENCE_Q_RE.search(q)
+    for country in cd.LATAM_COUNTRIES:
+        prof = {"country": country, "needs_sponsorship": "No"}
+        assert cd._identity_choice(q, ["Yes", "No"], prof) == 0, country
+
+
+def test_latam_residence_screener_no_for_non_latam_persona():
+    q = "Are you based in a Latin American country?"
+    for country in ("Kazakhstan", "United States", "Canada", ""):
+        prof = {"country": country, "needs_sponsorship": "No"}
+        assert cd._identity_choice(q, ["Yes", "No"], prof) == 1, country
+
+
+def test_latam_residence_regex_variants():
+    for q in ("Are you based in a Latin American country?",
+              "Do you currently reside in Latin America?",
+              "Are you located in LatAm?"):
+        assert cd._LATAM_RESIDENCE_Q_RE.search(q), q

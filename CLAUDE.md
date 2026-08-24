@@ -432,7 +432,21 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     Netherlands role gets a Dutch person ("authorized in NL: yes"), a Tbilisi role a Georgian, never a
     Kazakhstani in Almaty claiming US authorization. **Multi-country location** (e.g. Salmon's "Kazakhstan;
     Kyrgyzstan"): if **Kazakhstan** is one of the listed countries it wins (the agency's own market); else the
-    **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule. **The NAME is OURS, not the LLM's** —
+    **first country named in the location text** (by position, not `_LOC_COUNTRY` order). Keep this rule.
+    **LatAm-exclusive employers** (GoFasti et al. auto-reject anyone not resident in Latin America — verified
+    live: a KZ persona got "As GoFasti hires talent exclusively based in Latin America, we won't move
+    forward"): when the location names NO concrete country but the JD text signals LatAm residence
+    (`synth_persona._LATAM_RESIDENCE_RE` — "based in Latin America" / "TopTalent from LatAm" / "from LatAm" /
+    "Latin American country"; a mere *market* mention like "customers across Latin America" does NOT trip it),
+    `_country_of` returns a real LatAm country (`catalog_drafts.LATAM_COUNTRIES` = Mexico/Colombia/Argentina/
+    Chile/Peru/Brazil; Spanish `_LATAM_ES_NAMES` bank for all but Brazil's Portuguese `_LATAM_PT_NAMES`, plus
+    cities + gendered-agnostic surnames). The "Are you based in a Latin American country?" YES/NO screener is
+    then answered deterministically from the persona's country by `catalog_drafts._identity_choice`
+    (`_LATAM_RESIDENCE_Q_RE`, added to the eligibility gate): country ∈ `LATAM_COUNTRIES` → Yes, else No — so
+    it never falls to the LLM and a non-LatAm persona still truthfully answers No. Real apply is unaffected
+    (GoFasti is `regions=['OTHER']` → `pick_candidate` returns None → skipped). Tests:
+    `test_synth_persona.py::test_requires_latam_signal` / `test_latam_persona_is_internally_consistent`,
+    `test_catalog_drafts.py::test_latam_residence_screener_*`. **The NAME is OURS, not the LLM's** —
     `_pick_name` chooses first+last from the large per-country `_NAMES` banks, AVOIDING names in a rolling
     recent-history file (`backend/data/demo_used_names.json`, gitignored, atomic write, best-effort; `synth_persona`
     records each pick immediately). The local LLM is stateless (no generation history) so left to itself it

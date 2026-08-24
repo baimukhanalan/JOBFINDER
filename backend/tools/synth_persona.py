@@ -10,8 +10,10 @@ The persona's NATIONALITY matches the JOB'S COUNTRY (parsed from the location, f
 to the region tag, else Kazakhstan) so that work-authorization answers are truthful and
 consistent: a US-based role gets an American ("authorized in the US: yes"), a Netherlands
 role gets a Dutch person, a Tbilisi role a Georgian, etc. — never a Kazakhstani in Almaty
-claiming US work authorization. Built by the local LLM with a deterministic fallback so a
-demo click never fails.
+claiming US work authorization. A location-less role for a LatAm-EXCLUSIVE employer (e.g.
+GoFasti's "TopTalent from LatAm" / "based in Latin America") gets a real Latin-American
+persona so the honest "based in Latin America? -> Yes" isn't a guaranteed geo rejection.
+Built by the local LLM with a deterministic fallback so a demo click never fails.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ import random
 import re
 
 from backend.services.tailor.tailor import _llm_complete
-from backend.tools.catalog_drafts import derive_email
+from backend.tools.catalog_drafts import LATAM_COUNTRIES, derive_email
 
 # --- resolve the job's country --------------------------------------------------
 # location keyword -> canonical country (first match wins; order matters for overlaps)
@@ -56,8 +58,35 @@ _LOC_COUNTRY = [
 _REGION_COUNTRY = {"US": "United States", "CA": "Canada", "UK": "United Kingdom"}
 _DEFAULT_COUNTRY = "Kazakhstan"       # rest-of-world default (the agency's own market)
 
+# Some employers hire EXCLUSIVELY talent RESIDENT in Latin America (GoFasti et al.) and
+# auto-reject anyone outside the region regardless of a perfect fill. When the location does
+# NOT already pin a concrete country, this signal in the JD text routes the etalon to a real
+# LatAm country so "based in Latin America? -> Yes" is truthful. Kept narrow (a residence /
+# hiring / talent context next to "Latin America"/"LatAm") so a mere market mention
+# ("customers across Latin America") does not trip it.
+_LATAM_RESIDENCE_RE = re.compile(
+    r"(?i)(?:"
+    r"(?:based|located|reside|residing|living|live|work(?:ing)?)\s+(?:remotely\s+)?"
+    r"(?:in|from|within|across)\s+(?:latin\s*america|latam)"
+    r"|(?:talent|developers?|designers?|engineers?|candidates?|professionals?|hires?|"
+    r"team\s+members?)\s+(?:from|based\s+in|located\s+in|in)\s+(?:latin\s*america|latam)"
+    r"|from\s+latam\b"
+    r"|top\s*talent\s+from\s+latam"
+    r"|latin\s*american\s+(?:countr|candidate|talent|resident|national|professional)"
+    r"|(?:hir\w+|recruit\w+)\s+(?:talent\s+)?(?:exclusively\s+)?(?:based\s+)?(?:in|from)\s+"
+    r"(?:latin\s*america|latam)"
+    r")")
+
+
+def _requires_latam(job: dict) -> bool:
+    text = " ".join(str(job.get(k) or "") for k in ("title", "location", "description"))
+    return bool(_LATAM_RESIDENCE_RE.search(text))
+
 _CITIZEN = {"United States": "U.S. Citizen", "United Kingdom": "British Citizen",
-            "Canada": "Canadian Citizen"}
+            "Canada": "Canadian Citizen", "Mexico": "Mexican Citizen",
+            "Colombia": "Colombian Citizen", "Argentina": "Argentine Citizen",
+            "Chile": "Chilean Citizen", "Peru": "Peruvian Citizen",
+            "Brazil": "Brazilian Citizen"}
 
 # Name banks per country, split by gender (male/female/last) so the /catalog "Заполнить" M/Ж
 # choice picks a gender-appropriate first name. OUR source of names (not just the LLM fallback):
@@ -226,6 +255,46 @@ _GENERIC_NAMES = {
      "Kaur", "Leroy", "Mikkelsen", "Nakamura", "Okafor", "Petit", "Rahman", "Suzuki", "Traore",
      "Vermeulen", "Yildiz", "Zaman"]}
 
+# Latin America name banks. Some employers hire EXCLUSIVELY LatAm-based talent (e.g. GoFasti:
+# "TopTalent from LatAm" / "based in Latin America") and auto-reject anyone outside the region —
+# so an etalon for such a role must be a genuinely LatAm person (see `_country_of` + the
+# `_LATAM_RESIDENCE_RE` signal), otherwise the honest "based in Latin America? -> No" answer is a
+# guaranteed rejection. Spanish-speaking countries share one Spanish bank; Brazil uses Portuguese
+# names. Spanish/Portuguese surnames are NOT gendered, so no feminization step is needed.
+_LATAM_ES_NAMES = {
+    "male": ["Mateo", "Santiago", "Sebastián", "Nicolás", "Diego", "Alejandro", "Samuel",
+     "Benjamín", "Emiliano", "Tomás", "Joaquín", "Martín", "Lucas", "Felipe", "Andrés",
+     "Bruno", "Ignacio", "Maximiliano", "Agustín", "Facundo", "Bautista", "Cristóbal",
+     "Vicente", "Rodrigo", "Julián", "Gael", "Adrián", "Leonardo", "Franco", "Matías",
+     "Emanuel", "Álvaro", "Javier", "Gonzalo", "Ramiro", "Esteban", "Camilo", "Fernando"],
+    "female": ["Sofía", "Isabella", "Valentina", "Camila", "Valeria", "Mariana", "Gabriela",
+     "Daniela", "Victoria", "Martina", "Lucía", "Emilia", "Renata", "Antonella", "Catalina",
+     "Julieta", "Fernanda", "Regina", "Ximena", "Micaela", "Guadalupe", "Florencia", "Agustina",
+     "Paula", "Constanza", "Josefina", "Antonia", "Carolina", "Natalia", "Andrea", "Manuela",
+     "Salomé", "Trinidad", "Mariana", "Amparo", "Rocío", "Pilar", "Bárbara"],
+    "last": ["García", "Rodríguez", "Martínez", "López", "González", "Pérez", "Sánchez",
+     "Ramírez", "Torres", "Flores", "Rivera", "Gómez", "Díaz", "Cruz", "Morales", "Reyes",
+     "Gutiérrez", "Ortiz", "Chávez", "Ramos", "Ruiz", "Vargas", "Castillo", "Jiménez",
+     "Mendoza", "Herrera", "Medina", "Aguilar", "Vega", "Rojas", "Molina", "Cáceres",
+     "Fuentes", "Cortés", "Delgado", "Guerrero", "Ríos", "Navarro", "Campos", "Peralta",
+     "Acosta", "Ibáñez", "Suárez", "Paredes", "Cabrera", "Núñez", "Sandoval", "Bravo"]}
+_LATAM_PT_NAMES = {
+    "male": ["Miguel", "Arthur", "Heitor", "Bernardo", "Davi", "Théo", "Pedro", "Lorenzo",
+     "Matheus", "Rafael", "Enzo", "Gustavo", "João", "Lucas", "Bruno", "Vinícius", "Thiago",
+     "Leonardo", "Guilherme", "Rodrigo", "Caio", "Otávio", "Murilo", "André", "Fábio",
+     "Ricardo", "Eduardo", "Henrique", "Igor", "Renato", "Marcelo", "Rogério", "Vitor"],
+    "female": ["Helena", "Alice", "Laura", "Sophia", "Manuela", "Valentina", "Heloísa", "Luiza",
+     "Júlia", "Beatriz", "Marina", "Larissa", "Camila", "Bruna", "Fernanda", "Gabriela",
+     "Amanda", "Carolina", "Letícia", "Mariana", "Rafaela", "Isadora", "Bianca", "Patrícia",
+     "Renata", "Vitória", "Clara", "Yasmin", "Cristiane", "Aline", "Débora", "Priscila"],
+    "last": ["Silva", "Santos", "Oliveira", "Souza", "Lima", "Pereira", "Ferreira", "Almeida",
+     "Costa", "Gomes", "Ribeiro", "Martins", "Carvalho", "Rocha", "Araújo", "Barbosa",
+     "Nascimento", "Cardoso", "Correia", "Teixeira", "Fernandes", "Moraes", "Cavalcanti",
+     "Azevedo", "Melo", "Nunes", "Mendes", "Freitas", "Ramos", "Pinto", "Moreira", "Batista"]}
+for _c in ("Mexico", "Colombia", "Argentina", "Chile", "Peru"):
+    _NAMES[_c] = _LATAM_ES_NAMES
+_NAMES["Brazil"] = _LATAM_PT_NAMES
+
 # Guard: the banks are large and hand-maintained — dedupe each list (order-preserving) so an
 # accidental repeat can never skew the random pick or the history-based "no repeat" guarantee.
 def _dedup(seq):
@@ -237,6 +306,12 @@ _CITIES = {
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
     "United Kingdom": ["London", "Manchester", "Bristol", "Leeds"],
     "Kazakhstan": ["Almaty", "Astana", "Shymkent", "Karaganda"],
+    "Mexico": ["Mexico City", "Guadalajara", "Monterrey", "Querétaro"],
+    "Colombia": ["Bogotá", "Medellín", "Cali", "Barranquilla"],
+    "Argentina": ["Buenos Aires", "Córdoba", "Rosario", "Mendoza"],
+    "Chile": ["Santiago", "Valparaíso", "Concepción", "Viña del Mar"],
+    "Peru": ["Lima", "Arequipa", "Trujillo", "Cusco"],
+    "Brazil": ["São Paulo", "Rio de Janeiro", "Belo Horizonte", "Curitiba"],
 }
 
 
@@ -256,6 +331,9 @@ def _country_of(job: dict) -> str:
             return "Kazakhstan"
         found.sort(key=lambda t: t[0])   # else the first country named in the location string
         return found[0][1]
+    # location gave no concrete country: a LatAm-exclusive employer needs a LatAm resident
+    if _requires_latam(job):
+        return random.choice(LATAM_COUNTRIES)
     regions = job.get("regions") or []
     for tag in ("US", "CA", "UK"):
         if tag in regions:

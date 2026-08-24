@@ -126,12 +126,15 @@ async def _ensure_browser():
             _S["pw"] = await async_playwright().start()
         # Pass DISPLAY explicitly — playwright doesn't reliably forward it, and without it
         # headful Chromium renders to no display (invisible to noVNC).
-        # proxy={"server":"per-context"} lets each context pick its OWN proxy (Chromium
-        # otherwise forces one process-global proxy). Contexts created without a proxy
-        # still go DIRECT — so this is backward-compatible when the pool is empty.
+        # Do NOT launch with proxy={"server":"per-context"}: in Playwright 1.49 that sentinel
+        # makes EVERY context that doesn't set its own proxy fail with
+        # net::ERR_PROXY_CONNECTION_FAILED (Chromium tries to reach a proxy literally named
+        # "per-context") — i.e. an empty proxy pool → "no internet" in noVNC on every fill.
+        # A plain launch still honors a per-CONTEXT proxy (verified: a context created with
+        # proxy=… routes through it, one without goes DIRECT), so _use_proxy_context's
+        # rotation keeps working while the empty-pool/direct case has real internet.
         _S["browser"] = await _S["pw"].chromium.launch(
             headless=False, args=["--start-maximized", "--no-sandbox", "--disable-dev-shm-usage"],
-            proxy={"server": "per-context"},
             env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
         ctx = await _S["browser"].new_context(no_viewport=True)
         _S["ctx"], _S["proxy_server"] = ctx, ""

@@ -345,9 +345,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `next_proxy()` hands them out round-robin. `dashboard._do_fill` picks one per fill and passes
   `proxy_server/username/password` to co-pilot `/load`; `copilot._use_proxy_context` builds a FRESH
   browser context (⇒ new IP) per proxy — so every submit (single **and** the bulk «Подать на все»
-  queue) rotates IPs. The persistent headful browser is now launched with
-  `proxy={"server":"per-context"}` (verified: `browser:true` still — contexts w/o a proxy stay DIRECT,
-  so an empty pool = today's behavior). **Limits:** socks5 with auth won't route in the browser
+  queue) rotates IPs. **The persistent headful browser is launched PLAIN (no launch-level proxy).**
+  It used to launch with `proxy={"server":"per-context"}`, but in Playwright 1.49 that sentinel makes
+  every context WITHOUT its own proxy fail with `net::ERR_PROXY_CONNECTION_FAILED` (Chromium tries to
+  reach a proxy literally named "per-context") — so with the **empty pool** (the normal state) EVERY
+  fill showed **"no internet" in noVNC** and nothing could be filled (root-caused + reproduced
+  2026-08-25; `direct://` as a context proxy fails too). A plain launch still honors a per-CONTEXT
+  proxy — verified sequentially in one browser: a context with `proxy=…` routes through it, one without
+  goes DIRECT and has real internet, and switching direct↔proxy↔direct works — so `_use_proxy_context`
+  rotation is unchanged while the empty-pool/direct case actually reaches the internet. **Do NOT re-add
+  the `per-context` launch arg.** **Limits:** socks5 with auth won't route in the browser
   (Playwright can't authenticate socks5); the fast preview `/goto` stays on the direct IP (throwaway —
   only the real fill+submit is proxied); a fresh context per job briefly flickers the noVNC window.
   Parse/rotation are unit-tested (`tests/test_proxy_pool.py`, no network).

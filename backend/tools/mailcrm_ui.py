@@ -90,7 +90,8 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .iconbtn.danger{color:var(--danger);}
 .iconbtn.danger:hover{background:rgba(217,48,37,.1);color:var(--danger);}
 /* Gmail-style reply bar at the end of a conversation. */
-.reply-bar{display:flex;gap:10px;margin-top:20px;}
+.reply-bar{display:flex;gap:12px;margin-top:20px;}
+.reply-bar .reply-btn{flex:1;justify-content:center;}
 .reply-btn{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink);border-radius:var(--r-full);padding:11px 24px;font-size:14.5px;font-weight:600;cursor:pointer;min-height:46px;}
 .reply-btn svg{width:18px;height:18px;}
 .reply-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-deep);}
@@ -162,9 +163,11 @@ button.primary:hover{background:var(--accent-deep);}
 .clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
 .tcount{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 9px;margin-left:10px;vertical-align:middle;}
 .tsub{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);margin:-8px 0 18px;}
-.tcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin-bottom:14px;}
-.tcard.out{background:#f2f8f2;border-color:#cfe6d2;}
-.tcard .msg-from{padding-bottom:14px;margin-bottom:14px;}
+/* Full-width message body — no boxed card; messages are separated by a hairline only. */
+.tcard{background:transparent;border:0;border-radius:0;padding:18px 0;margin:0;}
+.tcard + .tcard{border-top:1px solid var(--line);}
+.tcard.out .mf-line b{color:var(--accent-deep);}   /* our own messages: name tinted, no green box */
+.tcard .msg-from{padding-bottom:14px;margin-bottom:16px;}
 .atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
 .att{display:inline-flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 12px;color:var(--ink);max-width:280px;}
 .att:hover{background:#e8f0fe;border-color:var(--accent);text-decoration:none;}
@@ -321,7 +324,12 @@ button.primary:hover{background:var(--accent-deep);}
   /* Open-message full screen: fix the back/delete bar to the top so you never scroll up to
      leave (position:fixed is reliable here; sticky breaks under the body overflow-x:hidden). */
   body.full-view .msg-toolbar{position:fixed;top:0;left:0;right:0;z-index:30;margin:0;padding:8px 10px;background:var(--bg-app);box-shadow:0 1px 0 var(--line);}
-  body.full-view main{padding-top:60px;}
+  body.full-view main{padding-top:60px;padding-bottom:78px;}
+  /* Reply + Forward = a fixed bottom bar that moves with scroll: Ответить at the left edge,
+     Переслать at the right edge. */
+  .reply-bar{position:fixed;left:0;right:0;bottom:0;z-index:25;margin:0;gap:10px;
+    padding:9px 12px calc(9px + env(safe-area-inset-bottom));background:var(--bg-app);
+    border-top:1px solid var(--line);}
   .mbxrow{padding:11px 12px;gap:9px;}
   .mbxrow .em{display:none;}
   .keyword-grid{grid-template-columns:1fr}.keyword-card textarea{min-height:180px}.keyword-actions>*{flex:1 1 auto;text-align:center;justify-content:center;min-height:44px;}
@@ -858,7 +866,7 @@ function clearSel(){document.querySelectorAll('.maillist .mitem.selected').forEa
 async function markSelRead(){var sel=document.querySelectorAll('.maillist .mitem.selected');if(!sel.length)return;var ids=[];sel.forEach(function(it){if(it.dataset.id)ids.push(it.dataset.id);});try{var r=await fetch('/mail/mark_read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ids:ids.join(',')})});if(r.ok){sel.forEach(function(it){it.classList.remove('unread','selected');});_updateSel();}}catch(e){}}
 function reply(from,to,subj,mid){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value=to||'';field('subject').value=(/^re:/i.test(subj||'')?subj:'Re: '+(subj||''));field('in_reply_to').value=mid||'';openCompose();setTimeout(function(){field('body').focus();},50);}
 document.querySelectorAll('.reply-action').forEach(function(b){b.addEventListener('click',function(){reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid);});});
-function forward(from,subj,bodyText){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value='';field('subject').value=(/^fwd:/i.test(subj||'')?subj:'Fwd: '+(subj||''));field('in_reply_to').value='';field('body').value='\n\n---------- Пересылаемое сообщение ----------\n'+(bodyText||'');openCompose();setTimeout(function(){field('to').focus();},50);}
+function forward(from,subj,bodyText){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value='';field('subject').value=(/^fwd:/i.test(subj||'')?subj:'Fwd: '+(subj||''));field('in_reply_to').value='';field('body').value='\\n\\n---------- Пересылаемое сообщение ----------\\n'+(bodyText||'');openCompose();setTimeout(function(){field('to').focus();},50);}
 document.querySelectorAll('.fwd-action').forEach(function(b){b.addEventListener('click',function(){forward(b.dataset.from,b.dataset.subject,b.dataset.body);});});
 async function deleteThread(b){
   var id=b.dataset.id;if(!id)return;

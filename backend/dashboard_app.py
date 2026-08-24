@@ -982,6 +982,19 @@ def mail_candidates_more(filter: str = "", q: str = "", offset: int = 0):
     return HTMLResponse(mailcrm_ui.render_candidate_rows(rows))
 
 
+@app.get("/candidates/{cid}", response_class=HTMLResponse)
+def candidate_applications(cid: str):
+    """A candidate's applications: where the bot applied + the résumé PDF it used
+    (downloadable via /resume/<jobid>?profile=<cid>). Reached from the 📄 chip on the
+    Кандидаты list."""
+    from backend.tools import candidate_apps, mailcrm, mailcrm_ui
+    cid = _safe_id(cid)
+    cand = next((c for c in mailcrm.candidates() if c["id"] == cid),
+                {"id": cid, "name": cid, "email": ""})
+    apps = candidate_apps.applications_for(cid)
+    return HTMLResponse(mailcrm_ui.render_candidate_apps(cand, apps))
+
+
 @app.get("/mail/message", response_class=HTMLResponse)
 def mail_message(id: str = ""):
     from backend.tools import mailcrm, mailcrm_ui

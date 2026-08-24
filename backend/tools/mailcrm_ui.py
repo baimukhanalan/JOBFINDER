@@ -146,6 +146,28 @@ button.primary:hover{background:var(--accent-deep);}
 .mbxrow .nm{font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .mbxrow .em{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);margin-left:auto;flex:0 1 auto;min-width:0;max-width:52%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:10px;}
 .mbxrow .cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;}
+.mbxrow .apps-chip{flex:0 0 auto;font-size:11.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px;cursor:pointer;white-space:nowrap;}
+.mbxrow .apps-chip:hover{background:#d7e6fd;}
+/* Candidate applications page */
+.capp-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 16px;}
+.capp-back{font-size:13px;color:var(--ink-soft);}
+.capp-name{font-size:20px;font-weight:700;color:var(--ink);}
+.capp-em{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink-mute);}
+.capp-list{display:flex;flex-direction:column;gap:10px;}
+.capp-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;}
+.capp-co{font-size:12px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em;}
+.capp-ttl{font-size:15.5px;font-weight:600;color:var(--ink);margin:2px 0 6px;line-height:1.3;}
+.capp-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-mute);margin-bottom:11px;}
+.capp-tag{font-size:11px;font-weight:700;border-radius:var(--r-full);padding:2px 9px;}
+.capp-sub{color:#188038;background:#e6f4ea;}
+.capp-nosub{color:var(--ink-mute);background:var(--panel-2);}
+.capp-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.capp-btn{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:600;min-height:38px;text-decoration:none;cursor:pointer;}
+.capp-btn.dl{background:var(--accent);color:#fff;border:none;}
+.capp-btn.dl:hover{background:var(--accent-deep);text-decoration:none;}
+.capp-btn.dl.off{background:var(--panel-2);color:var(--ink-mute);pointer-events:none;}
+.capp-btn.ext{background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);}
+.capp-btn.ext:hover{border-color:var(--accent);color:var(--ink);text-decoration:none;}
 .modal{position:fixed;inset:0;z-index:50;display:none;align-items:flex-start;justify-content:center;padding:8vh 16px;background:rgba(32,33,36,.5);overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .modal.open{display:flex;}
 .modal-card{width:100%;max-width:480px;background:var(--panel);border-radius:var(--r);padding:22px 24px;box-shadow:0 12px 40px -8px rgba(32,33,36,.3);}
@@ -391,14 +413,22 @@ def render_thread(t: dict) -> str:
 def render_candidate_rows(cands: list[dict]) -> str:
     """One <a.mbxrow> per candidate — shared by the full page and the
     /mail/candidates/more infinite-scroll fragment."""
+    from backend.tools import candidate_apps
     out = []
     for c in cands:
         n = c.get("unread", 0)
         badge = f'<span class="cnt">{n}</span>' if n else ""
+        na = candidate_apps.app_count(c["id"])
+        # applications chip → the candidate's applications page (résumé downloads + where
+        # they applied). It lives inside the row <a>, so it stops the click from also
+        # opening the inbox.
+        apps = (f'<span class="apps-chip" title="Заявки — куда подавались + резюме" '
+                f'onclick="event.preventDefault();event.stopPropagation();'
+                f"location.href='/candidates/{escape(c['id'])}'\">📄 {na}</span>") if na else ""
         out.append(
             f'<a class="mbxrow" href="/mail?mailbox={escape(c["email"])}">'
             f'<span class="avatar" style="background:{_avatar_color(c["name"])};width:30px;height:30px;font-size:13px">{escape(_initial(c["name"]))}</span>'
-            f'<span class="nm">{escape(c["name"])}</span>{badge}'
+            f'<span class="nm">{escape(c["name"])}</span>{badge}{apps}'
             f'<span class="em">{escape(c["email"])}</span></a>')
     return "".join(out)
 
@@ -433,6 +463,47 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
     body = (head + funnel
             + f'<div class="mbxlist" id="mbxlist">{render_candidate_rows(cands)}</div>{empty}'
             + f'<div id="mbxmore" data-more="{has_more}" style="height:1px"></div>')
+    return _page("candidates", body)
+
+
+def render_candidate_apps(cand: dict, apps: list[dict]) -> str:
+    """A candidate's applications: where the bot applied + the résumé PDF it used
+    (downloadable). `apps` from candidate_apps.applications_for()."""
+    from datetime import datetime
+    name = escape(cand.get("name") or cand.get("id") or "")
+    email = escape(cand.get("email") or "")
+    cid = escape(cand.get("id") or "")
+    inbox = (f'<a class="hbtn" href="/mail?mailbox={email}">Ящик кандидата</a>'
+             if email else "")
+    head = (
+        '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
+        '<a href="/mail/candidates">← Кандидаты</a></div></div></div>'
+        f'<div class="capp-head"><div><div class="capp-name">{name}</div>'
+        f'<div class="capp-em">{email}</div></div>{inbox}</div>')
+    if not apps:
+        return _page("candidates", head + '<div class="empty">Заявок пока нет</div>')
+
+    cards = []
+    for a in apps:
+        try:
+            d = datetime.fromtimestamp(a["ts"]).strftime("%d.%m.%Y")
+        except Exception:
+            d = ""
+        tag = ('<span class="capp-tag capp-sub">Отправлено</span>' if a["submitted"]
+               else '<span class="capp-tag capp-nosub">Заполнено</span>')
+        jid = escape(str(a["jobid"]))
+        dl = (f'<a class="capp-btn dl" href="/resume/{jid}?profile={cid}" '
+              f'download="{cid}_{jid}.pdf">Скачать резюме</a>' if a["has_resume"]
+              else '<span class="capp-btn dl off">Резюме нет</span>')
+        ext = (f'<a class="capp-btn ext" href="{escape(a["apply_url"])}" target="_blank" '
+               f'rel="noopener">Вакансия ↗</a>' if a["apply_url"] else "")
+        cards.append(
+            '<div class="capp-card">'
+            f'<div class="capp-co">{escape(a["company"]) or "—"}</div>'
+            f'<div class="capp-ttl">{escape(a["title"]) or "(без названия)"}</div>'
+            f'<div class="capp-meta"><span>{d}</span>{tag}</div>'
+            f'<div class="capp-actions">{dl}{ext}</div></div>')
+    body = head + f'<div class="capp-list">{"".join(cards)}</div>'
     return _page("candidates", body)
 
 

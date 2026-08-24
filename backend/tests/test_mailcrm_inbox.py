@@ -107,12 +107,17 @@ class ReplyUiTests(unittest.TestCase):
         self.assertIn('name="filter" value="interview"', page)
         self.assertIn('filter=interview&amp;q=dinara', page)
 
-    def test_mobile_stage_filter_is_a_dropdown_and_actions_accessible(self):
-        # On mobile the stage funnel is a compact <select> picker (the chip slider is
-        # desktop-only); the desktop chips still render in the HTML for the swap.
-        page = mailcrm_ui.render_candidates([], total=0)
-        self.assertIn('class="funnel-picker"', page)
-        self.assertIn('class="funnel-select"', page)
+    def test_mobile_filter_is_a_compact_button_plus_modal(self):
+        # On mobile the stage funnel + keyword editor are unified into one modal opened by a
+        # compact «Фильтр» button; the desktop chip slider still renders in the HTML for the
+        # swap. keyword_rules pre-fills the modal's textareas.
+        page = mailcrm_ui.render_candidates([], total=0,
+                                            keyword_rules={"interview": ["звонок"]})
+        self.assertIn('class="filter-btn"', page)              # compact mobile trigger
+        self.assertIn('id="filterModal"', page)                # unified filter modal
+        self.assertIn('class="fm-stages"', page)               # stage picker inside it
+        self.assertIn("openFilter(", page)                     # opens the modal
+        self.assertIn("звонок", page)                          # keyword rules pre-filled
         self.assertIn(".funnel{display:none;}", page)          # chips hidden on mobile
         self.assertIn('data-filter-list="mbxlist"', page)      # desktop chips still present
         thread = mailcrm_ui.render_thread({"messages": []})

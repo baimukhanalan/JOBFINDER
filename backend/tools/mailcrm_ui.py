@@ -138,7 +138,10 @@ button.primary:hover{background:var(--accent-deep);}
 .att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
 .att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
 .funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
-.funnel-picker{display:none;}
+/* Compact mobile filter trigger + the stage section of the filter modal: desktop hides
+   both (it uses the inline chip slider), mobile shows them. */
+.filter-btn{display:none;}
+.fm-stages{display:none;}
 .candidate-tools{display:flex;align-items:center;gap:8px;margin:0 0 14px;}
 .candidate-tools input{width:min(420px,100%);}
 .funnel.busy{opacity:.65;pointer-events:none}.fbtn.pending{border-color:var(--accent);color:var(--accent);}
@@ -185,6 +188,23 @@ button.primary:hover{background:var(--accent-deep);}
 .modal form input,.modal form textarea,.modal form select{width:100%;}
 .modal-actions{margin-top:16px;}.modal-actions .primary{width:100%;}
 .sendmsg{margin-top:10px;font-size:13px;}
+/* Filter modal (stage picker + keyword editor combined) */
+.fm-card{max-width:520px;}
+.fm-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-mute);margin:4px 0 8px;}
+.fm-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;}
+.fm-kw{border-top:1px solid var(--line);margin-top:14px;padding-top:6px;}
+.fm-kw>summary{list-style:none;cursor:pointer;font-size:15px;font-weight:600;color:var(--ink);padding:10px 2px;display:flex;align-items:center;gap:8px;}
+.fm-kw>summary::-webkit-details-marker{display:none;}
+.fm-kw>summary::before{content:"";width:8px;height:8px;border-right:2px solid var(--ink-mute);border-bottom:2px solid var(--ink-mute);transform:rotate(-45deg);transition:transform .18s;}
+.fm-kw[open]>summary::before{transform:rotate(45deg);}
+.fm-hint{font-size:12.5px;color:var(--ink-mute);margin:0 0 12px;line-height:1.5;}
+.kw-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
+.kw-field{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft);}
+.kw-field textarea{min-height:78px;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 10px;background:var(--panel);color:var(--ink);resize:vertical;}
+.fm-kw .primary{width:100%;}
+.fm-reset{margin-top:10px;}.fm-reset .ghost{width:100%;justify-content:center;}
+.kw-toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,16px);z-index:80;background:var(--ink);color:#fff;font-size:13.5px;font-weight:500;padding:11px 18px;border-radius:var(--r-full);box-shadow:0 8px 24px -6px rgba(32,33,36,.5);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;max-width:88vw;text-align:center;}
+.kw-toast.show{opacity:1;transform:translate(-50%,0);}
 .keyword-intro{max-width:760px;color:var(--ink-soft);margin:-4px 0 18px;}
 .keyword-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:920px;}
 .keyword-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;}
@@ -224,38 +244,38 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
 /* Mobile inbox: Compose becomes a Gmail-style floating action button (bottom-right); the
-   keyword-filters button collapses to just its icon so the header stays clean. */
+   header keyword button is hidden (keywords live in the «Фильтр» modal on mobile). */
 @media(max-width:760px){
   .head-actions{gap:6px;}
-  .hbtn-compose{display:none;}
-  .hbtn-kw{padding:0;width:40px;min-width:40px;justify-content:center;}
-  .hbtn-kw .hbtn-lbl{display:none;}
+  .hbtn-compose,.hbtn-kw{display:none;}
   .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
     bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
     border:none;border-radius:16px;height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
     cursor:pointer;box-shadow:0 6px 18px -4px rgba(26,115,232,.55);overflow:hidden;
-    transition:width .22s ease,padding .22s ease,border-radius .22s ease,gap .22s ease;}
+    transition:padding .26s cubic-bezier(.4,0,.2,1),gap .26s cubic-bezier(.4,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1);}
   .fab-compose svg{width:22px;height:22px;flex:0 0 auto;}
-  .fab-compose span{white-space:nowrap;max-width:120px;transition:max-width .22s ease,opacity .16s ease;}
-  /* scrolling down collapses it to a round pen (Gmail); scrolling up expands it back */
-  .fab-compose.collapsed{width:52px;padding:0;gap:0;border-radius:50%;justify-content:center;}
+  .fab-compose span{white-space:nowrap;overflow:hidden;max-width:130px;transition:max-width .26s cubic-bezier(.4,0,.2,1),opacity .2s ease;}
+  /* scrolling down collapses it to a round pen (Gmail); scrolling up expands it back.
+     Width is left auto so it follows the animating label — no jump from an `auto` width. */
+  .fab-compose.collapsed{padding:0 15px;gap:0;border-radius:50%;}
   .fab-compose.collapsed span{max-width:0;opacity:0;}
   .fab-compose:active{transform:translateY(1px);}
   main{padding-bottom:92px;}
 }
 @media(max-width:760px){
   .candidate-tools{display:none;}
-  /* The chip slider is desktop-only; mobile swaps it for a compact dropdown picker. */
+  /* The chip slider is desktop-only; mobile uses a compact «Фильтр» button + a modal that
+     holds the stage picker and the keyword editor together. */
   .funnel{display:none;}
-  .funnel-picker{display:flex;align-items:center;gap:9px;margin:2px 0 14px;}
-  .fp-lbl{flex:0 0 auto;font-size:14px;font-weight:600;color:var(--ink-soft);}
-  .funnel-select{flex:1 1 auto;min-width:0;max-width:300px;min-height:44px;
-    border:1px solid var(--line-strong);border-radius:var(--r-full);
-    background-color:var(--panel);color:var(--ink);font-size:15px;font-weight:600;
-    padding:0 40px 0 16px;-webkit-appearance:none;appearance:none;
-    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6368' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-    background-repeat:no-repeat;background-position:right 14px center;}
-  .funnel-select:focus{outline:none;border-color:var(--accent);}
+  .filter-btn{display:inline-flex;align-items:center;gap:8px;margin:2px 0 14px;min-height:42px;
+    max-width:100%;padding:0 16px;border:1px solid var(--line-strong);border-radius:var(--r-full);
+    background:var(--panel);color:var(--ink);font-size:14.5px;font-weight:600;cursor:pointer;}
+  .filter-btn svg{width:17px;height:17px;flex:0 0 auto;color:var(--ink-soft);}
+  .filter-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .filter-btn:active{background:var(--panel-2);}
+  .fm-stages{display:block;}                  /* stage picker shows inside the modal on mobile */
+  .fm-card{max-width:none;}
+  .kw-fields{grid-template-columns:1fr;}      /* stack keyword fields on narrow screens */
   .msg-toolbar{align-items:stretch;margin-bottom:16px;}
   .msg-toolbar .spacer{display:none;}
   .msg-toolbar .hbtn{justify-content:center;min-height:44px;}
@@ -385,22 +405,58 @@ def _strip_lead_icon(s: str) -> str:
     return s
 
 
-def _stage_select(rows: list[dict]) -> str:
-    """Mobile stage filter as a compact native <select> that navigates on change. Desktop
-    shows the chip slider (`.funnel`); mobile shows this picker (CSS swaps them). Each row:
-    {label, href, count, active}."""
-    opts = "".join(
-        f'<option value="{escape(r["href"], quote=True)}"{" selected" if r["active"] else ""}>'
-        f'{escape(r["label"])} ({r["count"]})</option>' for r in rows)
-    return ('<div class="funnel-picker"><span class="fp-lbl">Фильтр:</span>'
-            '<select class="funnel-select" aria-label="Фильтр по стадии" '
-            'onchange="if(this.value)location.href=this.value">'
-            f'{opts}</select></div>')
+_KW_FIELDS = [("interview", "Собеседование"), ("offer", "Оффер"),
+              ("rejection", "Отказ"), ("ack", "Заявка принята")]
+
+
+def _filter_trigger(rows: list[dict]) -> str:
+    """Compact mobile «Фильтр» button (shows the active stage) that opens the filter modal.
+    Desktop hides it — there the chip slider + the header keyword button are used instead."""
+    active = next((_strip_lead_icon(r["label"]) for r in rows if r["active"]), "Все")
+    return ('<button type="button" class="filter-btn" onclick="openFilter(false)" '
+            'aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+            '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>'
+            f'<span>{escape(active)}</span></button>')
+
+
+def _filter_modal(rows: list[dict], keyword_rules: dict | None, current_path: str) -> str:
+    """One modal that unifies the two filters: pick a stage (top) and edit the stage
+    keyword rules (a collapsible section). Replaces the separate /mail/keywords page and the
+    big mobile dropdown. Stage chips are links (full navigation); the keyword form posts to
+    the existing endpoint with a `next` back-link."""
+    chips = "".join(
+        f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
+        f'{r["label"]} <b>{r["count"]}</b></a>' for r in rows)
+    rules = keyword_rules or {}
+    fields = "".join(
+        f'<label class="kw-field"><span>{title}</span>'
+        f'<textarea name="{k}" rows="3" placeholder="Одна фраза на строку">'
+        f'{escape(chr(10).join(rules.get(k, [])))}</textarea></label>'
+        for k, title in _KW_FIELDS)
+    nxt = escape(current_path, quote=True)
+    return (
+        '<div class="modal" id="filterModal"><div class="modal-card fm-card">'
+        '<div class="modal-head"><h3>Фильтр</h3>'
+        '<button class="x" onclick="closeFilter()" aria-label="Закрыть">×</button></div>'
+        f'<div class="fm-stages"><div class="fm-lbl">Стадия</div>'
+        f'<div class="fm-chips">{chips}</div></div>'
+        '<details class="fm-kw"><summary>Ключевые слова</summary>'
+        '<p class="fm-hint">Одна фраза на строку. Если фраза есть в теме или тексте письма — '
+        'ему назначается стадия. Приоритет: оффер → отказ → собеседование → принято.</p>'
+        f'<form method="post" action="/mail/keywords"><input type="hidden" name="next" value="{nxt}">'
+        f'<div class="kw-fields">{fields}</div>'
+        '<button class="primary" type="submit">Сохранить и пересчитать</button></form>'
+        f'<form method="post" action="/mail/keywords/reset" class="fm-reset">'
+        f'<input type="hidden" name="next" value="{nxt}">'
+        '<button class="ghost" type="submit">Стандартные слова</button></form>'
+        '</details></div></div>')
 
 
 def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
                  mailbox_name: str = "", page_size: int = 50, warning: str = "",
-                 stage: str = "", stage_counts: dict | None = None) -> str:
+                 stage: str = "", stage_counts: dict | None = None,
+                 keyword_rules: dict | None = None) -> str:
     has_more = 1 if len(rows) == page_size else 0
     unread = counts.get("unread", 0)
     ncand = counts.get("candidates", counts.get("mailboxes", 0))  # ALL candidates, not just those with mail
@@ -410,7 +466,9 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
         f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
         '</div><div class="head-actions">'
-        '<a class="hbtn hbtn-kw" href="/mail/keywords" title="Ключевые слова" aria-label="Ключевые слова">'
+        # keyword editor lives in the filter modal now; the button opens it (href = no-JS fallback)
+        '<a class="hbtn hbtn-kw" href="/mail/keywords" onclick="openFilter(true);return false;" '
+        'title="Ключевые слова" aria-label="Ключевые слова">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--panel)"/><circle cx="15" cy="16" r="2.2" fill="var(--panel)"/></svg>'
         '<span class="hbtn-lbl">Ключевые слова</span></a>'
         '<button class="hbtn hbtn-compose" onclick="openCompose()">'
@@ -436,13 +494,15 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         return "/mail" + ("?" + urlencode(params) if params else "")
     def _n(key: str) -> int:
         return sc.get("all" if not key else key, 0)
+    stage_rows = [{"label": l, "href": _href(k), "count": _n(k), "active": stage == k}
+                  for k, l in _stages]
     chips = "".join(
-        f'<a class="fbtn{" active" if stage == k else ""}" href="{escape(_href(k), quote=True)}">'
-        f'{l} <b>{_n(k)}</b></a>' for k, l in _stages)
+        f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
+        f'{r["label"]} <b>{r["count"]}</b></a>' for r in stage_rows)
     funnel = ('<div class="funnel" data-filter-list="maillist">' + chips + '</div>'
-              + _stage_select([{"label": _strip_lead_icon(l), "href": _href(k),
-                                "count": _n(k), "active": stage == k} for k, l in _stages])
+              + _filter_trigger(stage_rows)
               + '<div class="filter-status" role="status" aria-live="polite"></div>')
+    modal = _COMPOSE_MODAL + _filter_modal(stage_rows, keyword_rules, _href(stage))
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
     empty = '<div class="empty" id="filterempty">Писем нет</div>' if not rows else '<div id="filterempty"></div>'
@@ -457,7 +517,7 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     body = (banner + head + fbar + funnel +
             f'<div class="maillist" id="maillist">{render_rows(rows)}</div>{empty}'
             f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>' + fab)
-    return _page("inbox", body, _COMPOSE_MODAL)
+    return _page("inbox", body, modal)
 
 
 def render_keyword_settings(rules: dict[str, list[str]], saved: bool = False,
@@ -593,7 +653,8 @@ def render_candidate_rows(cands: list[dict]) -> str:
 
 def render_candidates(cands: list[dict], counts: dict | None = None,
                       active_filter: str = "", total: int | None = None,
-                      has_more: int = 0, query: str = "") -> str:
+                      has_more: int = 0, query: str = "",
+                      keyword_rules: dict | None = None) -> str:
     counts = counts or {}
     total = total if total is not None else len(cands)
 
@@ -615,13 +676,15 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
     def _show(key: str, n: int) -> bool:
         return not (n == 0 and key and active_filter != key)
     shown = [(k, l, n) for k, l, n in _cstages if _show(k, n)]
+    stage_rows = [{"label": l, "href": _chref(k), "count": n, "active": active_filter == k}
+                  for k, l, n in shown]
     chips = "".join(
-        f'<a class="fbtn{" active" if active_filter == k else ""}" href="{escape(_chref(k), quote=True)}">'
-        f'{l} <b>{n}</b></a>' for k, l, n in shown)
-    picker = _stage_select([{"label": _strip_lead_icon(l), "href": _chref(k), "count": n,
-                             "active": active_filter == k} for k, l, n in shown])
+        f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
+        f'{r["label"]} <b>{r["count"]}</b></a>' for r in stage_rows)
     funnel = ('<div class="funnel" data-filter-list="mbxlist">' + chips + '</div>'
-              + picker + '<div class="filter-status" role="status" aria-live="polite"></div>')
+              + _filter_trigger(stage_rows)
+              + '<div class="filter-status" role="status" aria-live="polite"></div>')
+    modal = _filter_modal(stage_rows, keyword_rules, _chref(active_filter))
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
@@ -638,7 +701,7 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
     body = (head + search + funnel
             + f'<div class="mbxlist" id="mbxlist">{render_candidate_rows(cands)}</div>{empty}'
             + f'<div id="mbxmore" data-more="{has_more}" style="height:1px"></div>')
-    return _page("candidates", body)
+    return _page("candidates", body, modal)
 
 
 def render_candidate_apps(cand: dict, apps: list[dict]) -> str:
@@ -701,6 +764,8 @@ _JS = """
 <script>
 function openCompose(){document.getElementById('composeModal').classList.add('open');document.body.style.overflow='hidden';document.getElementById('sendmsg').textContent='';}
 function closeCompose(){document.getElementById('composeModal').classList.remove('open');document.body.style.overflow='';}
+function openFilter(expandKw){var m=document.getElementById('filterModal');if(!m)return;var d=m.querySelector('.fm-kw');if(d)d.open=!!expandKw;m.classList.add('open');document.body.style.overflow='hidden';}
+function closeFilter(){var m=document.getElementById('filterModal');if(m)m.classList.remove('open');document.body.style.overflow='';}
 function reply(from,to,subj,mid){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value=to||'';field('subject').value=(/^re:/i.test(subj||'')?subj:'Re: '+(subj||''));field('in_reply_to').value=mid||'';openCompose();setTimeout(function(){field('body').focus();},50);}
 document.querySelectorAll('.reply-action').forEach(function(b){b.addEventListener('click',function(){reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid);});});
 async function deleteThread(b){
@@ -716,8 +781,10 @@ async function deleteThread(b){
   b.disabled=false;b.textContent=old;
 }
 document.querySelectorAll('.delete-action').forEach(function(b){b.addEventListener('click',function(){deleteThread(b);});});
-document.querySelectorAll('.modal').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m)closeCompose();});});
-document.addEventListener('keydown',function(e){if(e.key==='Escape')closeCompose();});
+document.querySelectorAll('.modal').forEach(function(m){m.addEventListener('click',function(e){if(e.target===m){m.classList.remove('open');document.body.style.overflow='';}});});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.querySelectorAll('.modal.open').forEach(function(m){m.classList.remove('open');});document.body.style.overflow='';}});
+// toast after saving keyword rules from the filter modal (?kwsaved=N / ?kwerror=...)
+(function(){try{var sp=new URLSearchParams(location.search);var k=sp.get('kwsaved'),e=sp.get('kwerror');if(k===null&&!e)return;var t=document.createElement('div');t.className='kw-toast';t.textContent=e?e:('Сохранено. Пересчитано писем: '+k);document.body.appendChild(t);requestAnimationFrame(function(){t.classList.add('show');});setTimeout(function(){t.classList.remove('show');setTimeout(function(){t.remove();},300);},3200);sp.delete('kwsaved');sp.delete('kwerror');history.replaceState({},'',location.pathname+(sp.toString()?'?'+sp.toString():''));}catch(_){}})();
 async function sendMail(e){
   e.preventDefault();
   var f=e.target, msg=document.getElementById('sendmsg');

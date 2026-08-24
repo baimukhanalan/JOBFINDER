@@ -923,7 +923,8 @@ def mail_page(q: str = "", mailbox: str = "", stage: str = ""):
         warning = ""
     return HTMLResponse(mailcrm_ui.render_inbox(rows, counts, q=q, mailbox=mailbox,
                                                 mailbox_name=name, warning=warning,
-                                                stage=stage, stage_counts=scounts))
+                                                stage=stage, stage_counts=scounts,
+                                                keyword_rules=mailcrm.keyword_rules()))
 
 
 @app.get("/mail/more", response_class=HTMLResponse)
@@ -948,31 +949,39 @@ def _keyword_form(interview: str, offer: str, rejection: str, ack: str) -> dict:
             "rejection": rejection.splitlines(), "ack": ack.splitlines()}
 
 
+def _kw_back(next_to: str, updated=None, error: str = ""):
+    """Redirect after a keyword save. When the form came from the inbox/candidates filter
+    modal it carries a `next` back-link — return there with a kwsaved/kwerror toast param.
+    The standalone /mail/keywords page sends no `next` → keep its own saved/error behavior."""
+    from urllib.parse import urlencode
+    if next_to.startswith("/") and not next_to.startswith("//"):
+        params = {"kwerror": error} if error else {"kwsaved": updated if updated is not None else 0}
+        sep = "&" if "?" in next_to else "?"
+        return RedirectResponse(next_to + sep + urlencode(params), status_code=303)
+    params = {"error": error} if error else {"saved": 1, "updated": updated or 0}
+    return RedirectResponse("/mail/keywords?" + urlencode(params), status_code=303)
+
+
 @app.post("/mail/keywords")
 def mail_keywords_save(interview: str = Form(""), offer: str = Form(""),
-                       rejection: str = Form(""), ack: str = Form("")):
-    from urllib.parse import urlencode
+                       rejection: str = Form(""), ack: str = Form(""),
+                       next_to: str = Form("", alias="next")):
     from backend.tools import mailcrm
     try:
         mailcrm.save_keyword_rules(_keyword_form(interview, offer, rejection, ack))
-        updated = mailcrm.reclassify_existing()
-        query = urlencode({"saved": 1, "updated": updated})
+        return _kw_back(next_to, updated=mailcrm.reclassify_existing())
     except Exception as exc:
-        query = urlencode({"error": f"Слова сохранены не полностью: {str(exc)[:160]}"})
-    return RedirectResponse("/mail/keywords?" + query, status_code=303)
+        return _kw_back(next_to, error=f"Слова сохранены не полностью: {str(exc)[:160]}")
 
 
 @app.post("/mail/keywords/reset")
-def mail_keywords_reset():
-    from urllib.parse import urlencode
+def mail_keywords_reset(next_to: str = Form("", alias="next")):
     from backend.tools import mailcrm
     try:
         mailcrm.save_keyword_rules(mailcrm.DEFAULT_KEYWORDS)
-        updated = mailcrm.reclassify_existing()
-        query = urlencode({"saved": 1, "updated": updated})
+        return _kw_back(next_to, updated=mailcrm.reclassify_existing())
     except Exception as exc:
-        query = urlencode({"error": f"Не удалось вернуть настройки: {str(exc)[:160]}"})
-    return RedirectResponse("/mail/keywords?" + query, status_code=303)
+        return _kw_back(next_to, error=f"Не удалось вернуть настройки: {str(exc)[:160]}")
 
 
 def _submitted_mailboxes() -> set:
@@ -1042,7 +1051,7 @@ def mail_candidates(filter: str = "", q: str = ""):
     has_more = 1 if len(cands) > CANDIDATES_PAGE else 0
     return HTMLResponse(mailcrm_ui.render_candidates(
         page, counts=counts, active_filter=(filter or "").lower(),
-        total=total, has_more=has_more, query=q))
+        total=total, has_more=has_more, query=q, keyword_rules=mailcrm.keyword_rules()))
 
 
 @app.get("/mail/candidates/more", response_class=HTMLResponse)

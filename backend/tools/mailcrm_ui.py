@@ -46,6 +46,28 @@ def maildate(ts: int) -> str:
     return d.strftime("%d.%m.%y")
 
 
+def _clean_addr(s: str) -> str:
+    """One clean address for the 'кому:' line. A header like '"a@b" <a@b>' shows the email
+    TWICE; collapse it: real display name if it differs from the address, else the address."""
+    import email.utils
+    name, addr = email.utils.parseaddr(s or "")
+    name = (name or "").strip().strip('"').strip()
+    if name and name.casefold() != (addr or "").casefold():
+        return name
+    return addr or (s or "").strip()
+
+
+def _fulldate(ts: int) -> str:
+    """Readable message timestamp for the message header, e.g. '24 авг 2026, 06:07'."""
+    if not ts:
+        return ""
+    try:
+        d = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
+        return f"{d.day} {_MONTHS[d.month]} {d.year}, {d:%H:%M}"
+    except Exception:
+        return ""
+
+
 def fulldate(ts: int) -> str:
     if not ts:
         return ""
@@ -152,7 +174,7 @@ button.primary:hover{background:var(--accent-deep);}
 .msg-toolbar .spacer{flex:1;}.msg-toolbar form{margin:0;}
 .msg-page{max-width:840px;}
 .msg-subject{font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 18px;line-height:1.25;}
-.msg-from{display:flex;gap:13px;align-items:flex-start;padding-bottom:18px;margin-bottom:20px;border-bottom:1px solid var(--line);}
+.msg-from{display:flex;gap:13px;align-items:flex-start;padding-bottom:0;margin-bottom:14px;}
 .msg-from .avatar{width:42px;height:42px;font-size:17px;}
 .mf-meta{min-width:0;flex:1;}.mf-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
 .mf-line b{font-size:15px;color:var(--ink);}
@@ -685,7 +707,7 @@ def _msg_card(m: dict, thread_subject: str = "") -> str:
         f'<div class="tcard{side}">'
         f'<div class="msg-from"><span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
         f'<div class="mf-meta"><div class="mf-line"><b>{who}</b><span class="mf-addr">{escape(m.get("from_email",""))}</span>{_kind_tag(m.get("kind","other"))}</div>'
-        f'<div class="mf-to">кому: {escape(m.get("to","") or m.get("mailbox",""))}<span class="mf-dot">·</span>{escape(m.get("date",""))}</div></div>'
+        f'<div class="mf-to">кому: {escape(_clean_addr(m.get("to","") or m.get("mailbox","")))}<span class="mf-dot">·</span>{escape(_fulldate(m.get("date_ts", 0)) or m.get("date",""))}</div></div>'
         f'{reply_ic}</div>'
         f'{content}{_att_chips(m)}</div>')
 

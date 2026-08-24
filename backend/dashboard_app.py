@@ -632,6 +632,8 @@ def _do_fill(job_id: int, gender: str | None = None) -> None:
         return
     _FILL_JOBS[job_id] = {"state": "done", "generated": generated, "novnc": _NOVNC_URL,
                           "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+                          "unfilled_list": res.get("unfilled_list"),
+                          "submit": res.get("submit_result"),
                           "company": res.get("company"), "title": res.get("title")}
 
 
@@ -683,13 +685,17 @@ def _fill_all_public() -> dict:
     """A poll-friendly view of the bulk run (drops the big per-job results list)."""
     s = _FILL_ALL
     return {k: s.get(k) for k in ("state", "total", "done", "ok", "failed",
-                                  "current", "current_id")}
+                                  "current", "current_id", "run_id")}
 
 
 def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
+    from backend.tools import bulk_log
+    run = bulk_log.start(len(job_ids))
+    _FILL_ALL["run_id"] = run["run_id"]
     for i, jid in enumerate(job_ids):
         if _FILL_ALL_STOP.is_set():
             _FILL_ALL["state"] = "stopped"
+            bulk_log.finish(run, "stopped")
             return
         _FILL_ALL["current_id"] = jid
         try:
@@ -702,6 +708,15 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
         _FILL_ALL["ok"] = _FILL_ALL.get("ok", 0) + (1 if ok else 0)
         _FILL_ALL["failed"] = _FILL_ALL.get("failed", 0) + (0 if ok else 1)
         _FILL_ALL["current"] = st.get("company") or st.get("title") or ""
+        try:
+            bulk_log.record(run, jobid=jid, company=st.get("company") or "",
+                            title=st.get("title") or "", state=st.get("state") or "",
+                            filled=st.get("filled"), unfilled=st.get("unfilled"),
+                            unfilled_list=st.get("unfilled_list"),
+                            submit=st.get("submit"), error=st.get("error"))
+        except Exception:              # logging must never break the queue
+            logging.getLogger(__name__).warning("bulk_log.record failed", exc_info=True)
+    bulk_log.finish(run, "done")
     _FILL_ALL["state"] = "done"
 
 
@@ -739,6 +754,26 @@ def catalog_fill_all_stop():
     """Request the bulk run to stop; it halts after the CURRENT job finishes."""
     _FILL_ALL_STOP.set()
     return JSONResponse({"stopping": True, **_fill_all_public()})
+
+
+@app.get("/catalog/fill_all_report")
+def catalog_fill_all_report():
+    """Last bulk run's report (counts + per-job records), read from disk so it
+    survives a dashboard restart."""
+    from backend.tools import bulk_log
+    return JSONResponse(bulk_log.last_report() or {"state": "none"})
+
+
+@app.get("/catalog/fill_all_log")
+def catalog_fill_all_log():
+    """The append-only bulk-apply text log, as a file download."""
+    from backend.tools import bulk_log
+    p = bulk_log.log_path()
+    if not p.exists():
+        return Response("(лог пуст — «Подать на все» ещё не запускался)",
+                        media_type="text/plain; charset=utf-8")
+    return FileResponse(str(p), media_type="text/plain; charset=utf-8",
+                        filename="bulk_apply.log")
 
 
 # ---- Proxy pool (rotating egress IPs for applications) ---------------------

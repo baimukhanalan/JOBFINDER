@@ -264,7 +264,8 @@ def render_page(company: str = "", q: str = "", region: str = "",
     settings = (
         '<div class="cat-settings" id="catSettings" hidden>'
         f'<div class="cs-sec"><div class="cs-label">Регион</div>{region_chips}</div>'
-        f'<div class="cs-sec"><div class="cs-label">Массовая подача</div>{bulk_bar}</div>'
+        f'<div class="cs-sec"><div class="cs-label">Массовая подача</div>{bulk_bar}'
+        '<div class="cat-bulk-report" id="bulkReport"></div></div>'
         '<div class="cs-sec"><div class="cs-label">Прокси <b id="pxCount">0</b></div>'
         f'<div class="cat-proxy-body">{proxy_block}</div></div>'
         '</div>')
@@ -369,6 +370,11 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-bulk-go:disabled{opacity:.5;cursor:default;box-shadow:none}
 .cat-bulk-stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--danger);color:#fff;border:none;border-radius:var(--r-full);padding:10px 16px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
 .cat-bulk-prog{flex:1 1 100%;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:0}
+.cat-bulk-report{margin-top:10px;font-size:12.5px;color:var(--ink-soft);line-height:1.55}
+.cat-bulk-report:empty{display:none}
+.cat-bulk-report .r-sub{color:var(--ink-mute)}
+.cat-bulk-report a{color:var(--accent);font-weight:600;text-decoration:none}
+.cat-bulk-report a:hover{text-decoration:underline}
 .cat-proxy-body{max-width:640px}
 .cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
 .cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
@@ -465,6 +471,7 @@ async function bulkPoll(){
     }else if(s.state==='done'||s.state==='stopped'){
       stop.style.display='none'; go.style.display=''; go.disabled=false;
       prog.textContent=(s.state==='stopped'?'Остановлено':'Готово')+': '+line;
+      bulkReport();
     }else{
       go.disabled=false;
     }
@@ -477,10 +484,25 @@ window.toggleFilters=function(){
   var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
   if(!s) return;
   var willOpen=s.hasAttribute('hidden');
-  if(willOpen){ s.removeAttribute('hidden'); pxRefresh(); bulkPoll(); }
+  if(willOpen){ s.removeAttribute('hidden'); pxRefresh(); bulkPoll(); bulkReport(); }
   else{ s.setAttribute('hidden',''); }
   if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
+// Last bulk-run report (survives restart — read from logs/bulk_apply_last.json).
+async function bulkReport(){
+  var el=document.getElementById('bulkReport'); if(!el) return;
+  try{
+    var r=await (await fetch('/catalog/fill_all_report')).json();
+    if(!r || !r.run_id){ el.innerHTML=''; return; }
+    var st=r.state==='running'?'идёт':(r.state==='stopped'?'остановлен':'завершён');
+    el.innerHTML=
+      '<div>Прогон <b>'+r.run_id+'</b> — '+st+'</div>'+
+      '<div class="r-sub">заполнено '+(r.filled_ok||0)+' · ошибок '+(r.errors||0)+
+      ' · клик Submit '+(r.submit_clicked||0)+' · подтверждено '+(r.submit_confirmed||0)+
+      ' · пропущено '+(r.skipped||0)+' из '+(r.total||0)+'</div>'+
+      '<div><a href="/catalog/fill_all_log" download>Скачать лог</a></div>';
+  }catch(e){}
+}
 // Proxy pool: upload a list, invalid ones dropped on validation, applications then
 // rotate through the survivors (a different egress IP per submit).
 async function pxRefresh(){

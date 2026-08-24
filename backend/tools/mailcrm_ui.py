@@ -999,11 +999,12 @@ document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=functi
   }
   var head=document.querySelector('.page-head'),pill=document.querySelector('.gm-topbar'),fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
   window.addEventListener('scroll',function(){var y=window.scrollY;if(window.innerHeight+y>=document.documentElement.scrollHeight-400)loadMore();
-    var down=y>lastY&&y>90;
-    // hide the search pill + tabs together on scroll down, reveal both on scroll up (Gmail)
-    if(down){head.classList.add('hide');if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
-    else if(y<lastY){head.classList.remove('hide');if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
-    lastY=y;},{passive:true});
+    // Only react to a net move of >6px — momentum scroll jitters direction by 1px, which was
+    // rapidly toggling the pill hide/show → flicker. Below the threshold, keep lastY as anchor.
+    var dy=y-lastY;if(Math.abs(dy)<=6)return;lastY=y;
+    if(dy>0&&y>90){head.classList.add('hide');if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
+    else if(dy<0){head.classList.remove('hide');if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
+    },{passive:true});
   async function refreshList(){if(document.querySelector('.modal.open'))return;try{var r=await fetch(location.href,{headers:{'X-Poll':'1'}});if(!r.ok)return;var doc=new DOMParser().parseFromString(await r.text(),'text/html');var fl=doc.getElementById('maillist');if(fl)list.innerHTML=fl.innerHTML;var sn=doc.querySelector('.seg-nav');if(sn)document.querySelector('.seg-nav').innerHTML=sn.innerHTML;var nf=doc.querySelector('.funnel[data-filter-list="maillist"]'),cf=document.querySelector('.funnel[data-filter-list="maillist"]');if(nf&&cf&&!cf.classList.contains('busy'))cf.innerHTML=nf.innerHTML;}catch(e){}}
   var last=null,pollTimer=null;
   function startPoll(){if(pollTimer)return;pollTimer=setInterval(async function(){if(document.hidden||document.querySelector('.modal.open'))return;try{var r=await fetch('/mail/count'+location.search);if(!r.ok)return;var j=await r.json();if(j.n!==last){if(last!==null)await refreshList();last=j.n;}}catch(e){}},10000);}

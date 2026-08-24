@@ -91,7 +91,7 @@ class ReplyUiTests(unittest.TestCase):
                 "subject": "Subject", "plain": "Hello", "outbound": False,
             }],
         })
-        self.assertIn('class="hbtn reply-action"', page)
+        self.assertIn('reply-btn reply-action', page)
         self.assertNotIn('onclick="reply(', page)
         self.assertIn("Recruiter&#x27;s &quot;next&quot; step", page)
         self.assertIn("document.querySelectorAll('.reply-action')", page)
@@ -121,9 +121,9 @@ class ReplyUiTests(unittest.TestCase):
         self.assertIn(".funnel{display:none;}", page)          # chips hidden on mobile
         self.assertIn('data-filter-list="mbxlist"', page)      # desktop chips still present
         thread = mailcrm_ui.render_thread({"messages": []})
-        # Gmail-style message toolbar: a back icon button, a reply button, a delete icon button
+        # Gmail-style message view: back icon + delete icon (top), reply bar (bottom)
         self.assertIn('class="iconbtn"', thread)               # back
-        self.assertIn('class="hbtn reply-action"', thread)     # reply
+        self.assertIn('reply-btn reply-action', thread)        # reply (bottom bar)
         self.assertIn('iconbtn danger delete-action', thread)  # delete (trash icon)
 
     def test_inbox_duplicates_stage_funnel_and_preserves_context(self):

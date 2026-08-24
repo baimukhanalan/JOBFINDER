@@ -1116,6 +1116,18 @@ def mail_delete(id: str = Form(...)):
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
+@app.post("/mail/mark_read")
+def mail_mark_read(ids: str = Form("")):
+    """Flag the selected messages read (Gmail-style select → mark read)."""
+    from backend.tools import mail_db
+    hashes = [h for h in (ids or "").split(",") if h]
+    try:
+        n = mail_db.mark_read(hashes)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)[:160]}, status_code=500)
+    return JSONResponse({"ok": True, "n": n})
+
+
 @app.get("/mail/count")
 def mail_count(q: str = "", mailbox: str = ""):
     from backend.tools import mailcrm

@@ -175,6 +175,16 @@ def mark_seen(old_hash: str, new_path: str, new_hash: str) -> None:
                     (new_path, new_hash, old_hash))
 
 
+def mark_read(path_hashes) -> int:
+    """Flag the given messages seen=TRUE (the CRM 'mark as read' action). Returns rowcount."""
+    ph = [h for h in (path_hashes or []) if h]
+    if not ph:
+        return 0
+    with _cur(dict_rows=False) as cur:
+        cur.execute("UPDATE mail_index SET seen=TRUE WHERE path_hash = ANY(%s)", (ph,))
+        return cur.rowcount
+
+
 # ---- reads (CRM) ---------------------------------------------------------------
 def _dict(r) -> dict:
     d = dict(r)
@@ -192,9 +202,13 @@ def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None
         where.append("mailbox=%s")
         args.append(mailbox.lower())
     if q:
-        where.append("to_tsvector('simple', coalesce(subject,'')||' '||coalesce(from_email,'')"
-                     "||' '||coalesce(from_name,'')) @@ plainto_tsquery('simple', %s)")
-        args.append(q)
+        # match subject/from (full-text) OR the mailbox address OR the candidate name, so
+        # typing a candidate's @takhet.com email in the inbox search surfaces that mailbox's
+        # whole conversation (the address lives in `mailbox`, not in subject/from).
+        where.append("(to_tsvector('simple', coalesce(subject,'')||' '||coalesce(from_email,'')"
+                     "||' '||coalesce(from_name,'')) @@ plainto_tsquery('simple', %s)"
+                     " OR mailbox ILIKE %s OR candidate ILIKE %s)")
+        args += [q, f"%{q}%", f"%{q}%"]
     if stage == "sent":
         where.append("outbound=TRUE")
     elif stage in ("ack", "interview", "offer", "rejection"):

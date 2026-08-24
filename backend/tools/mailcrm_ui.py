@@ -89,6 +89,11 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .iconbtn svg{width:20px;height:20px;}
 .iconbtn.danger{color:var(--danger);}
 .iconbtn.danger:hover{background:rgba(217,48,37,.1);color:var(--danger);}
+/* Gmail-style reply bar at the end of a conversation. */
+.reply-bar{display:flex;gap:10px;margin-top:20px;}
+.reply-btn{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink);border-radius:var(--r-full);padding:11px 24px;font-size:14.5px;font-weight:600;cursor:pointer;min-height:46px;}
+.reply-btn svg{width:18px;height:18px;}
+.reply-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-deep);}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 input,select,textarea{font:inherit;color:var(--ink);padding:9px 13px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--panel);}
 input::placeholder,textarea::placeholder{color:var(--ink-mute);}
@@ -105,8 +110,25 @@ button.primary:hover{background:var(--accent-deep);}
 .mitem:last-child{border-bottom:0;}
 .mitem:hover{background:#f8fafd;}
 .mitem.unread{background:#f8fbff;}
-.mrow{flex:1;min-width:0;display:flex;gap:13px;align-items:flex-start;padding:11px 18px;color:var(--ink);}
+.mitem.selected{background:var(--accent-soft);}
+.mrow{flex:1;min-width:0;display:flex;align-items:flex-start;padding:11px 18px 11px 0;color:var(--ink);}
 .mrow:hover{text-decoration:none;}
+/* avatar = Gmail-style select toggle: tap it to select the row (checkmark), tap the body to open */
+.msel{position:relative;flex:0 0 auto;border:0;background:transparent;padding:0;margin:12px 13px 0 18px;width:34px;height:34px;border-radius:50%;cursor:pointer;}
+.msel .avatar{margin:0;transition:opacity .1s;}
+.msel .selcheck{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:var(--accent);color:#fff;border-radius:50%;}
+.msel .selcheck svg{width:18px;height:18px;}
+.msel:hover::after{content:"";position:absolute;inset:-4px;border-radius:50%;background:rgba(60,64,67,.09);}
+.mitem.selected .msel .avatar{opacity:0;}
+.mitem.selected .msel .selcheck{display:flex;}
+/* selection action bar (shown when >=1 row is selected) */
+.sel-bar{display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:7px 10px;background:var(--accent-soft);border-radius:var(--r);}
+.sel-bar[hidden]{display:none;}
+.sel-count{font-weight:700;color:var(--accent-deep);font-size:15px;min-width:18px;text-align:center;}
+.sel-link{border:0;background:transparent;color:var(--accent);font-weight:600;font-size:14px;cursor:pointer;padding:7px 9px;border-radius:var(--r-sm);}
+.sel-link:hover{background:rgba(26,115,232,.12);}
+.sel-bar .iconbtn{color:var(--accent-deep);}
+.sel-bar .iconbtn:hover{background:rgba(26,115,232,.14);color:var(--accent-deep);}
 .avatar{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;margin-top:1px;}
 .mbody{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px;}
 .mtop{display:flex;align-items:baseline;gap:8px;}
@@ -316,8 +338,9 @@ _FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
 _IC_CANDIDATES = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>'
 _IC_CATALOG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>'
 _IC_APPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
+_IC_INBOX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
 _NAV = [
-    ("/mail/candidates", "candidates", "Кандидаты", _IC_CANDIDATES),
+    ("/mail", "inbox", "Инбокс", _IC_INBOX),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
     ("/apply", "apply", "Заявки", _IC_APPLY),
 ]
@@ -395,9 +418,14 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
         clip = ('<span class="clip" title="есть вложение">📎</span>'
                 if m.get("has_att") else "")
         out.append(
-            f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}">'
-            f'<a class="mrow" href="/mail/message?id={escape(m["id"])}">'
+            f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}" '
+            f'data-mailbox="{escape(m.get("mailbox","") or "", quote=True)}">'
+            # avatar doubles as the Gmail-style select toggle; tapping it selects the row,
+            # tapping the body opens the message
+            f'<button type="button" class="msel" onclick="toggleSel(this)" aria-label="Выбрать сообщение">'
             f'<span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
+            '<span class="selcheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></button>'
+            f'<a class="mrow" href="/mail/message?id={escape(m["id"])}">'
             f'<span class="mbody"><span class="mtop">'
             f'<span class="msender">{escape(sender)}</span>{_kind_tag(m.get("kind","other"))}{mbox}'
             f'{clip}<span class="mdate">{maildate(m.get("date_ts",0))}</span></span>'
@@ -527,7 +555,15 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
            'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>'
            '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
            '<span>Написать</span></button>')
-    body = (banner + head + fbar + funnel +
+    sel_bar = (
+        '<div class="sel-bar" id="selBar" hidden>'
+        '<button type="button" class="iconbtn" onclick="clearSel()" aria-label="Снять выделение"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>'
+        '<span class="sel-count" id="selCount">0</span>'
+        '<button type="button" class="sel-link" onclick="selectAll()">Выбрать все</button>'
+        '<div class="spacer"></div>'
+        '<button type="button" class="iconbtn" onclick="markSelRead()" title="Отметить прочитанным" aria-label="Отметить прочитанным"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><polyline points="22 7 12 13 2 7"/><polyline points="16 17 18 19 22 15"/></svg></button>'
+        '</div>')
+    body = (banner + head + fbar + funnel + sel_bar +
             f'<div class="maillist" id="maillist">{render_rows(rows)}</div>{empty}'
             f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>' + fab)
     return _page("inbox", body, modal)
@@ -624,19 +660,20 @@ def render_thread(t: dict) -> str:
         f'data-mid="{escape(tgt.get("message_id", ""), quote=True)}"')
     thread_id = next((m.get("id") for m in reversed(msgs) if m.get("id")), "")
     cards = "".join(_msg_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
-    back_url = (f'/mail?mailbox={escape(t.get("mailbox",""), quote=True)}'
-                if t.get("mailbox") else '/mail')
     body = (
         '<div class="msg-toolbar">'
-        f'<a class="iconbtn" href="{back_url}" title="Назад" aria-label="Назад к списку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></a>'
+        '<a class="iconbtn" href="/mail" onclick="if(document.referrer&&history.length>1){history.back();return false;}" title="Назад" aria-label="Назад к списку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></a>'
         '<div class="spacer"></div>'
-        f'<button type="button" class="hbtn reply-action" {reply_attrs}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
         f'<button type="button" class="iconbtn danger delete-action" data-id="{escape(thread_id, quote=True)}" data-mailbox="{escape(t.get("mailbox", ""), quote=True)}" title="Удалить" aria-label="Удалить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg></button>'
         '</div>'
         f'<div class="msg-page"><h1 class="msg-subject">{escape(t.get("subject","") or "(без темы)")}'
         f'<span class="tcount">{len(msgs)}</span></h1>'
         f'<div class="tsub">Ящик: {escape(t.get("candidate",""))} &lt;{escape(t.get("mailbox",""))}&gt;</div>'
-        f'{cards}</div>')
+        f'{cards}'
+        # Gmail-style reply bar at the end of the conversation
+        f'<div class="reply-bar"><button type="button" class="reply-btn reply-action" {reply_attrs}>'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button></div>'
+        '</div>')
     return _page("inbox", body, _COMPOSE_MODAL)
 
 
@@ -780,6 +817,12 @@ function openCompose(){document.getElementById('composeModal').classList.add('op
 function closeCompose(){document.getElementById('composeModal').classList.remove('open');document.body.style.overflow='';}
 function openFilter(expandKw){var m=document.getElementById('filterModal');if(!m)return;var d=m.querySelector('.fm-kw');if(d)d.open=!!expandKw;m.classList.add('open');document.body.style.overflow='hidden';}
 function closeFilter(){var m=document.getElementById('filterModal');if(m)m.classList.remove('open');document.body.style.overflow='';}
+// Gmail-style row selection: the avatar toggles selection; a bar offers select-all + mark-read.
+function _updateSel(){var bar=document.getElementById('selBar');if(!bar)return;var sel=document.querySelectorAll('.maillist .mitem.selected');if(sel.length){bar.hidden=false;var c=document.getElementById('selCount');if(c)c.textContent=sel.length;}else{bar.hidden=true;}}
+function toggleSel(btn){var it=btn.closest('.mitem');if(it){it.classList.toggle('selected');_updateSel();}}
+function selectAll(){document.querySelectorAll('.maillist .mitem').forEach(function(it){it.classList.add('selected');});_updateSel();}
+function clearSel(){document.querySelectorAll('.maillist .mitem.selected').forEach(function(it){it.classList.remove('selected');});_updateSel();}
+async function markSelRead(){var sel=document.querySelectorAll('.maillist .mitem.selected');if(!sel.length)return;var ids=[];sel.forEach(function(it){if(it.dataset.id)ids.push(it.dataset.id);});try{var r=await fetch('/mail/mark_read',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ids:ids.join(',')})});if(r.ok){sel.forEach(function(it){it.classList.remove('unread','selected');});_updateSel();}}catch(e){}}
 function reply(from,to,subj,mid){var f=document.getElementById('composeForm');if(!f)return;var field=function(n){return f.elements.namedItem(n);};field('from_email').value=from||'';field('to').value=to||'';field('subject').value=(/^re:/i.test(subj||'')?subj:'Re: '+(subj||''));field('in_reply_to').value=mid||'';openCompose();setTimeout(function(){field('body').focus();},50);}
 document.querySelectorAll('.reply-action').forEach(function(b){b.addEventListener('click',function(){reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid);});});
 async function deleteThread(b){

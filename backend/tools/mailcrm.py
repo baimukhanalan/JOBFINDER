@@ -448,8 +448,14 @@ def _mark_read(path: str) -> str:
 
 
 def _mailbox_of(path: str) -> dict | None:
+    # Match on a PATH-SEGMENT boundary, not a bare substring: a candidate maildir
+    # ".../takhet.com/aibek.sarsenov" must NOT match a file under a DIFFERENT mailbox
+    # whose name it is merely a prefix of (".../takhet.com/aibek.sarsenov531/cur/..").
+    # Demo personas use numeric-suffix locals (first.last<NUM>), so this collision is
+    # common and would mis-attribute their mail (wrong mailbox → thread never groups).
     for c in candidates():
-        if c["maildir"] in path:
+        md = c["maildir"]
+        if path == md or path.startswith(md + "/"):
             return c
     return None
 

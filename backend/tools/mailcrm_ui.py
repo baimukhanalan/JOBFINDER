@@ -83,6 +83,12 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .hbtn-lbl{display:inline;}
 .fab-compose{display:none;}
 .hbtn.danger{color:var(--danger);border-color:#f3c7c2;}.hbtn.danger:hover{background:var(--danger);color:#fff;}
+/* Round borderless icon buttons (Gmail-style message toolbar: back, delete). */
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:40px;height:40px;min-width:40px;border:0;background:transparent;color:var(--ink-soft);border-radius:50%;cursor:pointer;padding:0;}
+.iconbtn:hover{background:rgba(60,64,67,.09);color:var(--ink);text-decoration:none;}
+.iconbtn svg{width:20px;height:20px;}
+.iconbtn.danger{color:var(--danger);}
+.iconbtn.danger:hover{background:rgba(217,48,37,.1);color:var(--danger);}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 input,select,textarea{font:inherit;color:var(--ink);padding:9px 13px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--panel);}
 input::placeholder,textarea::placeholder{color:var(--ink-mute);}
@@ -191,7 +197,13 @@ button.primary:hover{background:var(--accent-deep);}
 /* Filter modal (stage picker + keyword editor combined) */
 .fm-card{max-width:520px;}
 .fm-lbl{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-mute);margin:4px 0 8px;}
-.fm-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;}
+.fm-list{display:flex;flex-direction:column;gap:2px;margin-bottom:6px;}
+.fm-stage{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:var(--r-sm);color:var(--ink-soft);font-size:14.5px;font-weight:500;}
+.fm-stage:hover{background:var(--panel-2);color:var(--ink);text-decoration:none;}
+.fm-stage-lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.fm-stage-n{flex:0 0 auto;font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 9px;min-width:24px;text-align:center;}
+.fm-stage.active{background:var(--accent-soft);color:var(--accent-deep);font-weight:600;}
+.fm-stage.active .fm-stage-n{background:var(--accent);color:#fff;}
 .fm-kw{border-top:1px solid var(--line);margin-top:14px;padding-top:6px;}
 .fm-kw>summary{list-style:none;cursor:pointer;font-size:15px;font-weight:600;color:var(--ink);padding:10px 2px;display:flex;align-items:center;gap:8px;}
 .fm-kw>summary::-webkit-details-marker{display:none;}
@@ -200,7 +212,7 @@ button.primary:hover{background:var(--accent-deep);}
 .fm-hint{font-size:12.5px;color:var(--ink-mute);margin:0 0 12px;line-height:1.5;}
 .kw-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;}
 .kw-field{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:var(--ink-soft);}
-.kw-field textarea{min-height:78px;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 10px;background:var(--panel);color:var(--ink);resize:vertical;}
+.kw-field textarea{min-height:78px;font-family:var(--ff-mono);font-weight:400;font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 10px;background:var(--panel);color:var(--ink);resize:vertical;}
 .fm-kw .primary{width:100%;}
 .fm-reset{margin-top:10px;}.fm-reset .ghost{width:100%;justify-content:center;}
 .kw-toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,16px);z-index:80;background:var(--ink);color:#fff;font-size:13.5px;font-weight:500;padding:11px 18px;border-radius:var(--r-full);box-shadow:0 8px 24px -6px rgba(32,33,36,.5);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;max-width:88vw;text-align:center;}
@@ -264,23 +276,22 @@ button.primary:hover{background:var(--accent-deep);}
 }
 @media(max-width:760px){
   .candidate-tools{display:none;}
-  /* The chip slider is desktop-only; mobile uses a compact «Фильтр» button + a modal that
-     holds the stage picker and the keyword editor together. */
+  /* The chip slider is desktop-only; mobile uses a compact «Фильтр» button (in the header,
+     right of the tabs) + a modal that holds the stage picker and the keyword editor. */
   .funnel{display:none;}
-  .filter-btn{display:inline-flex;align-items:center;gap:8px;margin:2px 0 14px;min-height:42px;
-    max-width:100%;padding:0 16px;border:1px solid var(--line-strong);border-radius:var(--r-full);
-    background:var(--panel);color:var(--ink);font-size:14.5px;font-weight:600;cursor:pointer;}
-  .filter-btn svg{width:17px;height:17px;flex:0 0 auto;color:var(--ink-soft);}
+  .seg-nav{gap:14px;}
+  .filter-btn{display:inline-flex;align-items:center;gap:6px;margin:0;min-height:36px;max-width:44vw;
+    padding:0 13px;border:1px solid var(--line-strong);border-radius:var(--r-full);
+    background:var(--panel);color:var(--ink);font-size:13.5px;font-weight:600;cursor:pointer;}
+  .filter-btn svg{width:15px;height:15px;flex:0 0 auto;color:var(--ink-soft);}
   .filter-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .filter-btn:active{background:var(--panel-2);}
   .fm-stages{display:block;}                  /* stage picker shows inside the modal on mobile */
   .fm-card{max-width:none;}
   .kw-fields{grid-template-columns:1fr;}      /* stack keyword fields on narrow screens */
-  .msg-toolbar{align-items:stretch;margin-bottom:16px;}
-  .msg-toolbar .spacer{display:none;}
-  .msg-toolbar .hbtn{justify-content:center;min-height:44px;}
-  .msg-toolbar .reply-action,.msg-toolbar .delete-action{flex:1 1 calc(50% - 4px);}
-  .msg-toolbar>a:nth-child(2){flex:1 1 auto;}
+  .msg-toolbar{align-items:center;margin-bottom:16px;}
+  .msg-toolbar .reply-action{flex:1 1 auto;justify-content:center;min-height:44px;}
+  .msg-toolbar .iconbtn{width:44px;height:44px;}
   .mbxrow{padding:11px 12px;gap:9px;}
   .mbxrow .em{display:none;}
   .keyword-grid{grid-template-columns:1fr}.keyword-card textarea{min-height:180px}.keyword-actions>*{flex:1 1 auto;text-align:center;justify-content:center;min-height:44px;}
@@ -425,9 +436,10 @@ def _filter_modal(rows: list[dict], keyword_rules: dict | None, current_path: st
     keyword rules (a collapsible section). Replaces the separate /mail/keywords page and the
     big mobile dropdown. Stage chips are links (full navigation); the keyword form posts to
     the existing endpoint with a `next` back-link."""
-    chips = "".join(
-        f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
-        f'{r["label"]} <b>{r["count"]}</b></a>' for r in rows)
+    stages_html = "".join(
+        f'<a class="fm-stage{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
+        f'<span class="fm-stage-lbl">{r["label"]}</span>'
+        f'<span class="fm-stage-n">{r["count"]}</span></a>' for r in rows)
     rules = keyword_rules or {}
     fields = "".join(
         f'<label class="kw-field"><span>{title}</span>'
@@ -440,7 +452,7 @@ def _filter_modal(rows: list[dict], keyword_rules: dict | None, current_path: st
         '<div class="modal-head"><h3>Фильтр</h3>'
         '<button class="x" onclick="closeFilter()" aria-label="Закрыть">×</button></div>'
         f'<div class="fm-stages"><div class="fm-lbl">Стадия</div>'
-        f'<div class="fm-chips">{chips}</div></div>'
+        f'<div class="fm-list">{stages_html}</div></div>'
         '<details class="fm-kw"><summary>Ключевые слова</summary>'
         '<p class="fm-hint">Одна фраза на строку. Если фраза есть в теме или тексте письма — '
         'ему назначается стадия. Приоритет: оффер → отказ → собеседование → принято.</p>'
@@ -461,25 +473,6 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     unread = counts.get("unread", 0)
     ncand = counts.get("candidates", counts.get("mailboxes", 0))  # ALL candidates, not just those with mail
     inbox_badge = f' <b>{unread}</b>' if unread else ''
-    head = (
-        '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
-        f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
-        f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
-        '</div><div class="head-actions">'
-        # keyword editor lives in the filter modal now; the button opens it (href = no-JS fallback)
-        '<a class="hbtn hbtn-kw" href="/mail/keywords" onclick="openFilter(true);return false;" '
-        'title="Ключевые слова" aria-label="Ключевые слова">'
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--panel)"/><circle cx="15" cy="16" r="2.2" fill="var(--panel)"/></svg>'
-        '<span class="hbtn-lbl">Ключевые слова</span></a>'
-        '<button class="hbtn hbtn-compose" onclick="openCompose()">'
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
-        '<span class="hbtn-lbl">Написать</span></button></div></div>'
-        f'<form method="get" action="/mail" class="toolbar"><input type="search" name="q" value="{escape(q)}" placeholder="Поиск по теме / отправителю">'
-        + (f'<input type="hidden" name="mailbox" value="{escape(mailbox)}">' if mailbox else "")
-        + (f'<input type="hidden" name="stage" value="{escape(stage)}">' if stage else "")
-        + '<button class="ghost" type="submit">Найти</button>'
-        + (f'<a class="ghost" href="/mail">Сброс</a>' if (q or mailbox) else "")
-        + '</form></div>')
     sc = stage_counts or {}
     _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
                ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ")]
@@ -496,11 +489,31 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         return sc.get("all" if not key else key, 0)
     stage_rows = [{"label": l, "href": _href(k), "count": _n(k), "active": stage == k}
                   for k, l in _stages]
+    head = (
+        '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
+        f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
+        f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
+        '</div><div class="head-actions">'
+        # compact «Фильтр» trigger — on mobile it sits at the right of the tabs row
+        + _filter_trigger(stage_rows) +
+        # keyword editor lives in the filter modal now; the button opens it (href = no-JS fallback)
+        '<a class="hbtn hbtn-kw" href="/mail/keywords" onclick="openFilter(true);return false;" '
+        'title="Ключевые слова" aria-label="Ключевые слова">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--panel)"/><circle cx="15" cy="16" r="2.2" fill="var(--panel)"/></svg>'
+        '<span class="hbtn-lbl">Ключевые слова</span></a>'
+        '<button class="hbtn hbtn-compose" onclick="openCompose()">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+        '<span class="hbtn-lbl">Написать</span></button></div></div>'
+        f'<form method="get" action="/mail" class="toolbar"><input type="search" name="q" value="{escape(q)}" placeholder="Поиск по теме / отправителю">'
+        + (f'<input type="hidden" name="mailbox" value="{escape(mailbox)}">' if mailbox else "")
+        + (f'<input type="hidden" name="stage" value="{escape(stage)}">' if stage else "")
+        + '<button class="ghost" type="submit">Найти</button>'
+        + (f'<a class="ghost" href="/mail">Сброс</a>' if (q or mailbox) else "")
+        + '</form></div>')
     chips = "".join(
         f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
         f'{r["label"]} <b>{r["count"]}</b></a>' for r in stage_rows)
     funnel = ('<div class="funnel" data-filter-list="maillist">' + chips + '</div>'
-              + _filter_trigger(stage_rows)
               + '<div class="filter-status" role="status" aria-live="polite"></div>')
     modal = _COMPOSE_MODAL + _filter_modal(stage_rows, keyword_rules, _href(stage))
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
@@ -611,13 +624,14 @@ def render_thread(t: dict) -> str:
         f'data-mid="{escape(tgt.get("message_id", ""), quote=True)}"')
     thread_id = next((m.get("id") for m in reversed(msgs) if m.get("id")), "")
     cards = "".join(_msg_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
+    back_url = (f'/mail?mailbox={escape(t.get("mailbox",""), quote=True)}'
+                if t.get("mailbox") else '/mail')
     body = (
         '<div class="msg-toolbar">'
-        '<a class="hbtn" href="/mail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>К списку</a>'
-        f'<a class="hbtn" href="/mail?mailbox={escape(t.get("mailbox",""))}">Ящик кандидата</a>'
+        f'<a class="iconbtn" href="{back_url}" title="Назад" aria-label="Назад к списку"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg></a>'
         '<div class="spacer"></div>'
-        f'<button type="button" class="hbtn reply-action" {reply_attrs}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
-        f'<button type="button" class="hbtn danger delete-action" data-id="{escape(thread_id, quote=True)}" data-mailbox="{escape(t.get("mailbox", ""), quote=True)}">Удалить</button>'
+        f'<button type="button" class="hbtn reply-action" {reply_attrs}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
+        f'<button type="button" class="iconbtn danger delete-action" data-id="{escape(thread_id, quote=True)}" data-mailbox="{escape(t.get("mailbox", ""), quote=True)}" title="Удалить" aria-label="Удалить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg></button>'
         '</div>'
         f'<div class="msg-page"><h1 class="msg-subject">{escape(t.get("subject","") or "(без темы)")}'
         f'<span class="tcount">{len(msgs)}</span></h1>'
@@ -682,13 +696,13 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
         f'<a class="fbtn{" active" if r["active"] else ""}" href="{escape(r["href"], quote=True)}">'
         f'{r["label"]} <b>{r["count"]}</b></a>' for r in stage_rows)
     funnel = ('<div class="funnel" data-filter-list="mbxlist">' + chips + '</div>'
-              + _filter_trigger(stage_rows)
               + '<div class="filter-status" role="status" aria-live="polite"></div>')
     modal = _filter_modal(stage_rows, keyword_rules, _chref(active_filter))
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'
-            '</div></div></div>')
+            '</div></div><div class="head-actions">'
+            + _filter_trigger(stage_rows) + '</div></div>')
     search = ('<form class="candidate-tools" method="get" action="/mail/candidates" role="search">'
               f'<input type="search" name="q" value="{escape(query, quote=True)}" '
               'placeholder="Поиск по имени или email" autocomplete="off">'

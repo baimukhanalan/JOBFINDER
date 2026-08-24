@@ -108,6 +108,11 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
 - `15 6` `catalog_collector --backfill-regions` — LLM residue pass over `regions IS NULL` rows → `logs/regions.log`.
 - `45 6` `catalog_forms --limit 200` — Playwright question scrape for Ashby/Lever/Workable → `logs/forms.log`.
 - `0 7 * * 0` `applier.discovery` — weekly company/slug discovery refresh → `logs/discovery.log`.
+- `15 4` `prefill_retention --days 20` — delete `uploads/prefill/<cand>/<jobid>/` artifacts (tailored
+  résumé PDF, screenshots, report.json) older than 20 days so résumés don't pile up forever →
+  `logs/prefill_retention.log`. **Added 2026-08-24; this ONE line correctly `cd`s into the LOWERCASE
+  `/home/projects/jobfinder`** — NB every OTHER cron line still `cd`s into the uppercase
+  `/home/projects/JOBFINDER` husk (likely broken, pre-existing — not fixed here).
 
 - **No apply/prefill batch cron in this deploy** — `apply_cli` is a manual tool if used at all (real
   submits are human, from Alan's Mac; see the co-pilot/extension gotchas).
@@ -147,6 +152,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   «Заполнить»; Описание/Вопросы are scroll-capped `<details>`; **no decorative emoji** anywhere. Live
   search + pagination share `curQ`/`region` state in the one scroll IIFE — don't reintroduce a second
   search box.
+- **Candidate applications page (`/candidates/{id}`, added 2026-08-24).** Shows where the bot applied +
+  the tailored résumé PDF it used, per candidate. `tools/candidate_apps.py` reads
+  `uploads/prefill/<id>/<jobid>/report.json` (company, job_title, apply_url) + the candidate-level
+  `status.json` (submitted?). The Кандидаты roster row (`mailcrm_ui.render_candidate_rows`) gets a
+  **📄 N** chip (an `onclick` span inside the row `<a>`, `stopPropagation` so it doesn't also open the
+  inbox) → this page. Résumé download **reuses the existing `/resume/{jobid}?profile=<id>`** route
+  (serves `uploads/prefill/<id>/<jobid>/resume.pdf`). Those artifacts are pruned at 20 days by the
+  `prefill_retention` cron (above), so this page naturally only lists the last 20 days.
 - **Custom-ATS form scrape: WAIT for the React form to render, then RETRY on empty/partial**
   (`tools/catalog_forms.py`). Ashby/Lever/Workable apply pages are React SPAs — `networkidle` fires
   before the fields hydrate, so the old fixed 2.2s sleep-then-extract silently stored partial/empty

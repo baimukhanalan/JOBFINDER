@@ -96,9 +96,18 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   `sample.json` are committed.
 
 ## Cron (user `programmer`, JOBFINDER lines)
+**All cron lines `cd` into the LOWERCASE live `/home/projects/jobfinder` as of 2026-08-24** — before
+that every line except `prefill_retention` still pointed at the dead uppercase `/home/projects/JOBFINDER`
+husk (no `backend/` → each job silently did nothing: catalog never refreshed, retention never pruned,
+health never probed). The uppercase path is fixed for `mail_retention`, `mail_health`, `catalog_collector`
+(both), `catalog_forms`, `applier.discovery`. **The ONE deliberate exception is `mail_sink --poll`,
+left on the uppercase husk on purpose** (it's a dead-end feature — see below). Verified after the fix:
+`mail_health check` → `{"healthy": true}`; a `catalog_collector --ats greenhouse --limit 1` smoke
+fetched 207 jobs and upserted (catalog ~6017 rows). If you ever re-add a cron line, `cd` into lowercase.
 Mail CRM:
 - `*/2` `mail_sink --poll` — **LEGACY / dead-end.** Writes `uploads/inbox/mail_sink.json`, which nothing
-  reads; `/mail` is fed by `mail_indexer`→Postgres, not this. Safe to drop (left in place for now).
+  reads; `/mail` is fed by `mail_indexer`→Postgres, not this. Deliberately still `cd`s into the dead
+  uppercase husk (so it does nothing) — safe to drop, left in place dead for now.
 - `30 4` `mail_retention --days 30` — prune old indexed mail → `logs/retention.log`.
 - `*/10` `mail_health check` — indexer/DB health probe → `logs/health.log`.
 
@@ -110,9 +119,8 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
 - `0 7 * * 0` `applier.discovery` — weekly company/slug discovery refresh → `logs/discovery.log`.
 - `15 4` `prefill_retention --days 20` — delete `uploads/prefill/<cand>/<jobid>/` artifacts (tailored
   résumé PDF, screenshots, report.json) older than 20 days so résumés don't pile up forever →
-  `logs/prefill_retention.log`. **Added 2026-08-24; this ONE line correctly `cd`s into the LOWERCASE
-  `/home/projects/jobfinder`** — NB every OTHER cron line still `cd`s into the uppercase
-  `/home/projects/JOBFINDER` husk (likely broken, pre-existing — not fixed here).
+  `logs/prefill_retention.log`. Added 2026-08-24; `cd`s into the LOWERCASE `/home/projects/jobfinder`
+  (as do all other lines now — see the note at the top of this section).
 
 - **No apply/prefill batch cron in this deploy** — `apply_cli` is a manual tool if used at all (real
   submits are human, from Alan's Mac; see the co-pilot/extension gotchas).

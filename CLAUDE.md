@@ -323,7 +323,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   ONE shared browser) over every **greenhouse+ashby** job — Lever/Workable are skipped (live captcha
   would stall it). Reuses `_do_fill` per job (so it auto-submits AND rotates proxy IPs). Endpoints:
   `POST /catalog/fill_all` (start), `GET /catalog/fill_all_status` (poll), `POST /catalog/fill_all_stop`
-  (halts after the current job). State in `dashboard._FILL_ALL`; survives leaving the page.
+  (halts after the current job). Live counters in `dashboard._FILL_ALL` (in-memory only). **Audit trail
+  (`tools/bulk_log.py`, gitignored `logs/`):** `bulk_apply.log` (append-only, a line per job + a FINISHED
+  summary) + `bulk_apply_last.json` (full last run, rewritten each job so it survives a restart). Served
+  by `GET /catalog/fill_all_report` (JSON) + `GET /catalog/fill_all_log` (download); the Фильтры sheet
+  shows the last-run summary + a «Скачать лог» link. **Honest counters:** `filled_ok` = co-pilot filled
+  (HTTP 200), NOT submitted; `submit_clicked` = Submit pressed; `submit_confirmed` = confirmation seen
+  right after the click (best-effort — captcha-gated ATS confirm later/never; the real confirmation still
+  only lands in per-job `status.json`).
 - **Local LLM default.** `ANTHROPIC_API_KEY` is empty; résumé polish (`--ai`) and answer drafting
   (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without the
   key, tailoring falls back to the deterministic keyword path.

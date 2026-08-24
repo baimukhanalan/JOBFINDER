@@ -239,8 +239,21 @@ button.primary:hover{background:var(--accent-deep);}
 }
 @media(max-width:760px){
   .candidate-tools{display:none;}
-  .funnel{flex-wrap:nowrap;overflow-x:auto;margin-left:-12px;margin-right:-12px;padding:0 12px 12px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
-  .fbtn{scroll-snap-align:start;}
+  /* Prettier mobile filter slider: soft borderless chips that scroll horizontally with a
+     hidden scrollbar and a soft right-edge fade hinting there's more; the active chip is a
+     solid accent pill; counts are subtle inline badges. */
+  .funnel{flex-wrap:nowrap;overflow-x:auto;gap:8px;margin:2px -12px 14px;padding:2px 12px 10px;
+    scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+    -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
+    mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);}
+  .funnel::-webkit-scrollbar{display:none;}
+  .fbtn{scroll-snap-align:start;flex:0 0 auto;gap:7px;padding:0 15px;min-height:40px;
+    background:var(--panel-2);border-color:transparent;color:var(--ink-soft);font-size:13.5px;}
+  .fbtn b{background:rgba(60,64,67,.10);color:var(--ink-soft);border-radius:var(--r-full);
+    min-width:20px;padding:1px 7px;text-align:center;}
+  .fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;
+    box-shadow:0 3px 10px -3px rgba(26,115,232,.55);}
+  .fbtn.active b{background:rgba(255,255,255,.24);color:#fff;}
   .msg-toolbar{align-items:stretch;margin-bottom:16px;}
   .msg-toolbar .spacer{display:none;}
   .msg-toolbar .hbtn{justify-content:center;min-height:44px;}

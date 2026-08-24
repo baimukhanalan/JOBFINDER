@@ -938,10 +938,13 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   // Re-measure the height whenever the content reflows (fonts, injected styles, images),
   // else a tall HTML email gets truncated to whatever height was ready at onload.
   function docH(){return Math.max(doc.body.scrollHeight,doc.documentElement.scrollHeight,doc.body.offsetHeight);}
-  function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth;if(natW>avail+2){var s=Math.max(avail/natW,0.72);f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+s+')';var h=docH();f.style.height=h+'px';wrap.style.height=(h*s+8)+'px';}else{f.style.width='100%';f.style.transform='none';var hh=docH()+24;f.style.height=hh+'px';wrap.style.height=hh+'px';}}
-  // Bounded re-measures only — NO ResizeObserver: measure() changes the iframe size, which
-  // reflows the body, which would re-fire the observer → infinite loop → the page froze.
-  measure();requestAnimationFrame(measure);[80,200,450,900,1600].forEach(function(t){setTimeout(measure,t);});
+  var applied=-1;
+  // Guarded: only touch the DOM when the wrapper height actually changes by >3px. Redundant
+  // re-measures that re-set the same height are what made the frame flicker.
+  function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth,h,wh,sc=null;if(natW>avail+2){sc=Math.max(avail/natW,0.72);h=docH();wh=Math.round(h*sc+8);}else{h=docH()+24;wh=h;}if(Math.abs(wh-applied)<=3)return;applied=wh;if(sc!==null){f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+sc+')';}else{f.style.width='100%';f.style.transform='none';}f.style.height=h+'px';wrap.style.height=wh+'px';}
+  // Measure on the next frame (after the injected style lays out) + a couple of settle passes.
+  // NO synchronous first call (it measures before layout → a tiny value → a visible jump).
+  requestAnimationFrame(measure);[250,800].forEach(function(t){setTimeout(measure,t);});
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
   if(doc.fonts&&doc.fonts.ready){doc.fonts.ready.then(measure);}
 }catch(e){f.style.height='600px';}}

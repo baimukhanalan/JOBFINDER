@@ -285,6 +285,16 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
+/* Mobile: the search pill hides on scroll down and reveals on scroll up (Gmail). It is FIXED
+   (position:sticky is unreliable under the global overflow-x:hidden); the tabs scroll in flow
+   beneath it, so main gets top padding to clear the fixed pill. */
+@media(max-width:760px){
+  .gm-topbar{position:fixed;top:0;left:0;right:0;z-index:16;background:var(--bg-app);transition:transform .28s ease;}
+  .gm-topbar.hide{transform:translateY(-100%);}
+  .page-head{position:static;}
+  .page-head.hide{transform:none;}
+  main{padding-top:62px;}
+}
 /* Mobile inbox: Compose becomes a Gmail-style floating action button (bottom-right); the
    header keyword button is hidden (keywords live in the «Фильтр» modal on mobile). */
 @media(max-width:760px){
@@ -949,11 +959,12 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
       if(r.ok){var html=await r.text();var added=(html.match(/class=.mrow/g)||[]).length;if(added)list.insertAdjacentHTML('beforeend',html);if(added<PAGE)more.dataset.more='0';}
     }catch(e){}finally{loading=false;}
   }
-  var head=document.querySelector('.page-head'),fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
+  var head=document.querySelector('.page-head'),pill=document.querySelector('.gm-topbar'),fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
   window.addEventListener('scroll',function(){var y=window.scrollY;if(window.innerHeight+y>=document.documentElement.scrollHeight-400)loadMore();
     var down=y>lastY&&y>90;
-    if(down){head.classList.add('hide');if(fab)fab.classList.add('collapsed');}
-    else if(y<lastY){head.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
+    // hide the search pill + tabs together on scroll down, reveal both on scroll up (Gmail)
+    if(down){head.classList.add('hide');if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
+    else if(y<lastY){head.classList.remove('hide');if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
     lastY=y;},{passive:true});
   async function refreshList(){if(document.querySelector('.modal.open'))return;try{var r=await fetch(location.href,{headers:{'X-Poll':'1'}});if(!r.ok)return;var doc=new DOMParser().parseFromString(await r.text(),'text/html');var fl=doc.getElementById('maillist');if(fl)list.innerHTML=fl.innerHTML;var sn=doc.querySelector('.seg-nav');if(sn)document.querySelector('.seg-nav').innerHTML=sn.innerHTML;var nf=doc.querySelector('.funnel[data-filter-list="maillist"]'),cf=document.querySelector('.funnel[data-filter-list="maillist"]');if(nf&&cf&&!cf.classList.contains('busy'))cf.innerHTML=nf.innerHTML;}catch(e){}}
   var last=null,pollTimer=null;

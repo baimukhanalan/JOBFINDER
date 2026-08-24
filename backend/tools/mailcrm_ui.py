@@ -689,7 +689,7 @@ def _msg_card(m: dict, thread_subject: str = "") -> str:
     who = "Вы (кандидат)" if m.get("outbound") else escape(sender)
     if m.get("html"):
         content = (f'<div class="mail-frame-wrap"><iframe class="mail-frame" sandbox="allow-same-origin" '
-                   f'onload="fitFrame(this)" srcdoc="{escape(m["html"])}"></iframe></div>')
+                   f'srcdoc="{escape(m["html"])}"></iframe></div>')
     else:
         content = f'<div class="msg-content">{escape(m.get("plain","") or "(пустое письмо)")}</div>'
     # reply icon right in the sender row (Gmail-style) — replies to THIS message's other party
@@ -943,6 +943,10 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
   if(doc.fonts&&doc.fonts.ready){doc.fonts.ready.then(measure);}
 }catch(e){f.style.height='600px';}}
+// Wire the HTML-email iframes here (NOT via inline onload="fitFrame" — that fires while the
+// body is still parsing, before fitFrame is defined → "fitFrame is not defined", so the frame
+// kept its default 150px and truncated tall emails). This runs after the DOM is parsed.
+document.querySelectorAll('iframe.mail-frame').forEach(function(f){try{if(f.contentDocument&&f.contentDocument.body){fitFrame(f);}else{f.addEventListener('load',function(){fitFrame(f);});}}catch(_){f.addEventListener('load',function(){fitFrame(f);});}});
 // Funnel filters update in place. A loading state appears on the first tap and
 // blocks duplicate taps while the server response is in flight.
 (function(){

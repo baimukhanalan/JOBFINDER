@@ -939,13 +939,11 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   // else a tall HTML email gets truncated to whatever height was ready at onload.
   function docH(){return Math.max(doc.body.scrollHeight,doc.documentElement.scrollHeight,doc.body.offsetHeight);}
   function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth;if(natW>avail+2){var s=Math.max(avail/natW,0.72);f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+s+')';var h=docH();f.style.height=h+'px';wrap.style.height=(h*s+8)+'px';}else{f.style.width='100%';f.style.transform='none';var hh=docH()+24;f.style.height=hh+'px';wrap.style.height=hh+'px';}}
-  measure();requestAnimationFrame(measure);[60,150,300,600,1200].forEach(function(t){setTimeout(measure,t);});
-  // most robust: re-measure whenever the email content reflows (fonts/images/late layout) —
-  // this is what makes mobile browsers stop truncating the email to its first line
-  try{if(window.ResizeObserver){var ro=new ResizeObserver(measure);ro.observe(doc.body);ro.observe(doc.documentElement);}}catch(_){}
+  // Bounded re-measures only — NO ResizeObserver: measure() changes the iframe size, which
+  // reflows the body, which would re-fire the observer → infinite loop → the page froze.
+  measure();requestAnimationFrame(measure);[80,200,450,900,1600].forEach(function(t){setTimeout(measure,t);});
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
   if(doc.fonts&&doc.fonts.ready){doc.fonts.ready.then(measure);}
-  window.addEventListener('resize',measure);
 }catch(e){f.style.height='600px';}}
 // Wire the HTML-email iframes here (NOT via inline onload="fitFrame" — that fires while the
 // body is still parsing, before fitFrame is defined → "fitFrame is not defined", so the frame

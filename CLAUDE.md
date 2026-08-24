@@ -7,8 +7,10 @@
 > **Convention: after any nontrivial change, `git add -A && git commit && git push` to this remote
 > straight away — don't let work sit uncommitted — and edit THIS `CLAUDE.md` in the same commit
 > whenever deploy / behavior / gotchas change.** **Live deploy dir is now lowercase
-> `/home/projects/jobfinder`** (the working checkout of `baimukhanalan/JOBFINDER`, branch
-> `feat/jobs-feed-mobile`), NOT uppercase `/home/projects/JOBFINDER`. Repointed 2026-08-21 — see Deploy.
+> `/home/projects/jobfinder`** (the working checkout of `baimukhanalan/JOBFINDER`, branch **`main`** —
+> `feat/jobs-feed-mobile` was fast-forward-merged into `main` and retired 2026-08-24, so `main` is the
+> single source of truth; commit straight to `main`), NOT uppercase `/home/projects/JOBFINDER`.
+> Repointed 2026-08-21 — see Deploy.
 >
 > **This IS the live project** (`jobs.systeam.kz`, pm2 `jobfinder-alan-*`, Postgres `jobfinder_crm`).
 > **Dir map — there are THREE `jobfinder*` dirs, don't get them confused:**

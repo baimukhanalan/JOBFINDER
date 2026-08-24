@@ -68,6 +68,16 @@ def _fulldate(ts: int) -> str:
         return ""
 
 
+import re as _re
+_URL_RE = _re.compile(r'(https?://[^\s<]+)')
+
+
+def _linkify(text: str) -> str:
+    """Make http(s) URLs clickable in ALREADY-ESCAPED plain text (URLs carry no chars that
+    escape() alters except &, which stays valid in an href)."""
+    return _URL_RE.sub(r'<a href="\1" target="_blank" rel="noopener">\1</a>', text)
+
+
 def fulldate(ts: int) -> str:
     if not ts:
         return ""
@@ -687,11 +697,17 @@ def _msg_card(m: dict, thread_subject: str = "") -> str:
     sender = m.get("from_name") or m.get("from_email") or "?"
     side = " out" if m.get("outbound") else ""
     who = "Вы (кандидат)" if m.get("outbound") else escape(sender)
-    if m.get("html"):
+    # Prefer the PLAIN-TEXT part rendered in a normal auto-sizing <div>. The HTML iframe is only
+    # a fallback for HTML-only mail: on iOS Safari an auto-height iframe truncates/flickers no
+    # matter how it's measured, and almost every recruiter/ATS email is multipart with plain text.
+    plain = (m.get("plain") or "").strip()
+    if plain:
+        content = f'<div class="msg-content">{_linkify(escape(plain))}</div>'
+    elif m.get("html"):
         content = (f'<div class="mail-frame-wrap"><iframe class="mail-frame" sandbox="allow-same-origin" '
                    f'srcdoc="{escape(m["html"])}"></iframe></div>')
     else:
-        content = f'<div class="msg-content">{escape(m.get("plain","") or "(пустое письмо)")}</div>'
+        content = '<div class="msg-content">(пустое письмо)</div>'
     # reply icon right in the sender row (Gmail-style) — replies to THIS message's other party
     rt_to = m.get("to", "") if m.get("outbound") else m.get("from_email", "")
     reply_attrs = (

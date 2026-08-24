@@ -939,14 +939,18 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   // else a tall HTML email gets truncated to whatever height was ready at onload.
   function docH(){return Math.max(doc.body.scrollHeight,doc.documentElement.scrollHeight,doc.body.offsetHeight);}
   function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth;if(natW>avail+2){var s=Math.max(avail/natW,0.72);f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+s+')';var h=docH();f.style.height=h+'px';wrap.style.height=(h*s+8)+'px';}else{f.style.width='100%';f.style.transform='none';var hh=docH()+24;f.style.height=hh+'px';wrap.style.height=hh+'px';}}
-  measure();requestAnimationFrame(measure);setTimeout(measure,120);setTimeout(measure,400);
+  measure();requestAnimationFrame(measure);[60,150,300,600,1200].forEach(function(t){setTimeout(measure,t);});
+  // most robust: re-measure whenever the email content reflows (fonts/images/late layout) —
+  // this is what makes mobile browsers stop truncating the email to its first line
+  try{if(window.ResizeObserver){var ro=new ResizeObserver(measure);ro.observe(doc.body);ro.observe(doc.documentElement);}}catch(_){}
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
   if(doc.fonts&&doc.fonts.ready){doc.fonts.ready.then(measure);}
+  window.addEventListener('resize',measure);
 }catch(e){f.style.height='600px';}}
 // Wire the HTML-email iframes here (NOT via inline onload="fitFrame" — that fires while the
 // body is still parsing, before fitFrame is defined → "fitFrame is not defined", so the frame
 // kept its default 150px and truncated tall emails). This runs after the DOM is parsed.
-document.querySelectorAll('iframe.mail-frame').forEach(function(f){try{if(f.contentDocument&&f.contentDocument.body){fitFrame(f);}else{f.addEventListener('load',function(){fitFrame(f);});}}catch(_){f.addEventListener('load',function(){fitFrame(f);});}});
+document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=function(){fitFrame(f);};f.addEventListener('load',go);try{if(f.contentDocument&&f.contentDocument.body){go();}else{setTimeout(go,60);}}catch(_){setTimeout(go,60);}});
 // Funnel filters update in place. A loading state appears on the first tap and
 // blocks duplicate taps while the server response is in flight.
 (function(){

@@ -309,6 +309,10 @@ button.primary:hover{background:var(--accent-deep);}
   /* The chip slider is desktop-only; mobile uses a compact «Фильтр» button (in the header,
      right of the tabs) + a modal that holds the stage picker and the keyword editor. */
   .funnel{display:none;}
+  /* the funnel AJAX status line is desktop-only (mobile filters via full reload) — hide the
+     empty 18px placeholder that left dead space under the Инбокс/Кандидаты tabs. */
+  .filter-status{display:none;}
+  .page-head{margin-bottom:6px;}
   .seg-nav{gap:14px;}
   .filter-btn{display:inline-flex;align-items:center;gap:6px;margin:0;min-height:36px;max-width:44vw;
     padding:0 13px;border:1px solid var(--line-strong);border-radius:var(--r-full);

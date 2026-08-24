@@ -133,7 +133,44 @@ def _tenant(url: str) -> str:
     return urlparse(url).hostname or "default"
 
 
-async def _html_to_pdf(bm: BrowserManager, html: str, out_path: Path) -> None:
+_NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36")
+
+
+def _normalize_pdf_metadata(out_path: Path, title: str = "", author: str = "") -> None:
+    """Headless Chromium stamps every printed PDF with Creator '...HeadlessChrome...' and
+    Title 'about:blank' — a dead giveaway to ATS fraud/spam detection that the résumé was
+    machine-generated, which flags the application EVEN when a human submits it manually.
+    Rewrite the metadata to look like an ordinary 'print to PDF from Chrome' (what millions
+    of real résumés are). Best-effort — a failure here never blocks the résumé."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+    except Exception:
+        return
+    try:
+        reader = PdfReader(str(out_path))
+        writer = PdfWriter()
+        for pg in reader.pages:
+            writer.add_page(pg)
+        md = {k: str(v) for k, v in (reader.metadata or {}).items()}  # keep CreationDate/Producer
+        cur_title = md.get("/Title")
+        md["/Title"] = (f"{title} — Resume") if title else (
+            cur_title if cur_title not in (None, "", "about:blank") else "Resume")
+        if author:
+            md["/Author"] = author
+        cr = md.get("/Creator") or ""
+        md["/Creator"] = cr.replace("HeadlessChrome", "Chrome") if "Headless" in cr else (cr or _NORMAL_UA)
+        writer.add_metadata(md)
+        tmp = out_path.with_suffix(".meta.pdf")
+        with open(tmp, "wb") as f:
+            writer.write(f)
+        tmp.replace(out_path)
+    except Exception as exc:
+        logger.debug("pdf metadata normalize failed: %s", exc)
+
+
+async def _html_to_pdf(bm: BrowserManager, html: str, out_path: Path,
+                       title: str = "", author: str = "") -> None:
     ctx = await bm.new_context()
     page = await ctx.new_page()
     try:
@@ -144,6 +181,8 @@ async def _html_to_pdf(bm: BrowserManager, html: str, out_path: Path) -> None:
     finally:
         await page.close()
         await ctx.close()
+    # Strip the headless-automation fingerprint from the PDF metadata (anti-flag).
+    _normalize_pdf_metadata(out_path, title, author)
 
 
 async def prefill_application(job: dict, profile: Profile, *, headless: bool = True,
@@ -244,7 +283,7 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
     bm = BrowserManager(headless=headless)
     await bm.start()
     try:
-        await _html_to_pdf(bm, html, resume_pdf)
+        await _html_to_pdf(bm, html, resume_pdf, title=profile.full_name, author=profile.full_name)
         profile.resume_path = str(resume_pdf)
         # form was snapshotted BEFORE the résumé was rendered — without this the
         # analyzer sees resume_path='' and silently skips the upload (live bug:

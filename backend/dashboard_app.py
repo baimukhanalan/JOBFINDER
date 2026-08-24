@@ -1037,7 +1037,7 @@ def _filtered_candidates(filter: str, q: str):
 
 @app.get("/mail/candidates", response_class=HTMLResponse)
 def mail_candidates(filter: str = "", q: str = ""):
-    from backend.tools import mail_db, mailcrm_ui
+    from backend.tools import mail_db, mailcrm, mailcrm_ui
     cands, total = _filtered_candidates(filter, q)
     # funnel counts (distinct candidates per bucket)
     try:

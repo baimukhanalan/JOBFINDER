@@ -78,6 +78,25 @@ def _linkify(text: str) -> str:
     return _URL_RE.sub(r'<a href="\1" target="_blank" rel="noopener">\1</a>', text)
 
 
+_BULLET = {"*", "•", "-", "·", "◦", "▪", "‣", "*"}
+
+
+def _clean_plain(text: str) -> str:
+    """Tidy the plain-text body of an HTML email that was flattened badly: HTML lists become
+    a lone bullet marker on one line and the item text on the next ('  *\\nsoft skills…'). Merge
+    each such pair into a single '• item' line, and collapse runs of blank lines."""
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        if lines[i].strip() in _BULLET and i + 1 < len(lines) and lines[i + 1].strip():
+            out.append("• " + lines[i + 1].strip())
+            i += 2
+            continue
+        out.append(lines[i])
+        i += 1
+    return _re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
 def fulldate(ts: int) -> str:
     if not ts:
         return ""
@@ -700,7 +719,7 @@ def _msg_card(m: dict, thread_subject: str = "") -> str:
     # Prefer the PLAIN-TEXT part rendered in a normal auto-sizing <div>. The HTML iframe is only
     # a fallback for HTML-only mail: on iOS Safari an auto-height iframe truncates/flickers no
     # matter how it's measured, and almost every recruiter/ATS email is multipart with plain text.
-    plain = (m.get("plain") or "").strip()
+    plain = _clean_plain(m.get("plain") or "")
     if plain:
         content = f'<div class="msg-content">{_linkify(escape(plain))}</div>'
     elif m.get("html"):

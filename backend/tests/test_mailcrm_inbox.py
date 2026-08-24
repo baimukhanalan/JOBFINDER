@@ -107,9 +107,14 @@ class ReplyUiTests(unittest.TestCase):
         self.assertIn('name="filter" value="interview"', page)
         self.assertIn('filter=interview&amp;q=dinara', page)
 
-    def test_mobile_css_keeps_filters_and_message_actions_accessible(self):
+    def test_mobile_stage_filter_is_a_dropdown_and_actions_accessible(self):
+        # On mobile the stage funnel is a compact <select> picker (the chip slider is
+        # desktop-only); the desktop chips still render in the HTML for the swap.
         page = mailcrm_ui.render_candidates([], total=0)
-        self.assertIn(".funnel{flex-wrap:nowrap;overflow-x:auto", page)
+        self.assertIn('class="funnel-picker"', page)
+        self.assertIn('class="funnel-select"', page)
+        self.assertIn(".funnel{display:none;}", page)          # chips hidden on mobile
+        self.assertIn('data-filter-list="mbxlist"', page)      # desktop chips still present
         thread = mailcrm_ui.render_thread({"messages": []})
         self.assertIn(".msg-toolbar .reply-action,.msg-toolbar .delete-action", thread)
 

@@ -138,6 +138,7 @@ button.primary:hover{background:var(--accent-deep);}
 .att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
 .att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
 .funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
+.funnel-picker{display:none;}
 .candidate-tools{display:flex;align-items:center;gap:8px;margin:0 0 14px;}
 .candidate-tools input{width:min(420px,100%);}
 .funnel.busy{opacity:.65;pointer-events:none}.fbtn.pending{border-color:var(--accent);color:var(--accent);}
@@ -244,21 +245,17 @@ button.primary:hover{background:var(--accent-deep);}
 }
 @media(max-width:760px){
   .candidate-tools{display:none;}
-  /* Prettier mobile filter slider: soft borderless chips that scroll horizontally with a
-     hidden scrollbar and a soft right-edge fade hinting there's more; the active chip is a
-     solid accent pill; counts are subtle inline badges. */
-  .funnel{flex-wrap:nowrap;overflow-x:auto;gap:8px;margin:2px -12px 14px;padding:2px 12px 10px;
-    scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:none;
-    -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);
-    mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 22px),transparent 100%);}
-  .funnel::-webkit-scrollbar{display:none;}
-  .fbtn{scroll-snap-align:start;flex:0 0 auto;gap:7px;padding:0 15px;min-height:40px;
-    background:var(--panel-2);border-color:transparent;color:var(--ink-soft);font-size:13.5px;}
-  .fbtn b{background:rgba(60,64,67,.10);color:var(--ink-soft);border-radius:var(--r-full);
-    min-width:20px;padding:1px 7px;text-align:center;}
-  .fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;
-    box-shadow:0 3px 10px -3px rgba(26,115,232,.55);}
-  .fbtn.active b{background:rgba(255,255,255,.24);color:#fff;}
+  /* The chip slider is desktop-only; mobile swaps it for a compact dropdown picker. */
+  .funnel{display:none;}
+  .funnel-picker{display:flex;align-items:center;gap:9px;margin:2px 0 14px;}
+  .fp-lbl{flex:0 0 auto;font-size:14px;font-weight:600;color:var(--ink-soft);}
+  .funnel-select{flex:1 1 auto;min-width:0;max-width:300px;min-height:44px;
+    border:1px solid var(--line-strong);border-radius:var(--r-full);
+    background-color:var(--panel);color:var(--ink);font-size:15px;font-weight:600;
+    padding:0 40px 0 16px;-webkit-appearance:none;appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235f6368' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 14px center;}
+  .funnel-select:focus{outline:none;border-color:var(--accent);}
   .msg-toolbar{align-items:stretch;margin-bottom:16px;}
   .msg-toolbar .spacer{display:none;}
   .msg-toolbar .hbtn{justify-content:center;min-height:44px;}
@@ -379,6 +376,28 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
     return "".join(out)
 
 
+def _strip_lead_icon(s: str) -> str:
+    """Drop a leading emoji/symbol + space so a chip label ('📤 Отправленные') becomes a
+    clean dropdown-option label ('Отправленные'). No-op when the label starts with a letter."""
+    parts = s.split(" ", 1)
+    if len(parts) == 2 and parts[0] and not parts[0][0].isalnum():
+        return parts[1]
+    return s
+
+
+def _stage_select(rows: list[dict]) -> str:
+    """Mobile stage filter as a compact native <select> that navigates on change. Desktop
+    shows the chip slider (`.funnel`); mobile shows this picker (CSS swaps them). Each row:
+    {label, href, count, active}."""
+    opts = "".join(
+        f'<option value="{escape(r["href"], quote=True)}"{" selected" if r["active"] else ""}>'
+        f'{escape(r["label"])} ({r["count"]})</option>' for r in rows)
+    return ('<div class="funnel-picker"><span class="fp-lbl">Фильтр:</span>'
+            '<select class="funnel-select" aria-label="Фильтр по стадии" '
+            'onchange="if(this.value)location.href=this.value">'
+            f'{opts}</select></div>')
+
+
 def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
                  mailbox_name: str = "", page_size: int = 50, warning: str = "",
                  stage: str = "", stage_counts: dict | None = None) -> str:
@@ -404,7 +423,9 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         + (f'<a class="ghost" href="/mail">Сброс</a>' if (q or mailbox) else "")
         + '</form></div>')
     sc = stage_counts or {}
-    def sf(key: str, label: str) -> str:
+    _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
+               ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ")]
+    def _href(key: str) -> str:
         params = {}
         if key:
             params["stage"] = key
@@ -412,15 +433,16 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
             params["q"] = q
         if mailbox:
             params["mailbox"] = mailbox
-        href = "/mail" + ("?" + urlencode(params) if params else "")
-        cls = "fbtn" + (" active" if stage == key else "")
-        n = sc.get("all" if not key else key, 0)
-        return f'<a class="{cls}" href="{escape(href, quote=True)}">{label} <b>{n}</b></a>'
-    funnel = ('<div class="funnel" data-filter-list="maillist">'
-              + sf("", "Все") + sf("sent", "📤 Отправленные")
-              + sf("ack", "✅ Принято") + sf("interview", "📞 Собеседование")
-              + sf("offer", "🎉 Оффер") + sf("rejection", "✕ Отказ") + '</div>'
-              '<div class="filter-status" role="status" aria-live="polite"></div>')
+        return "/mail" + ("?" + urlencode(params) if params else "")
+    def _n(key: str) -> int:
+        return sc.get("all" if not key else key, 0)
+    chips = "".join(
+        f'<a class="fbtn{" active" if stage == k else ""}" href="{escape(_href(k), quote=True)}">'
+        f'{l} <b>{_n(k)}</b></a>' for k, l in _stages)
+    funnel = ('<div class="funnel" data-filter-list="maillist">' + chips + '</div>'
+              + _stage_select([{"label": _strip_lead_icon(l), "href": _href(k),
+                                "count": _n(k), "active": stage == k} for k, l in _stages])
+              + '<div class="filter-status" role="status" aria-live="polite"></div>')
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
     empty = '<div class="empty" id="filterempty">Писем нет</div>' if not rows else '<div id="filterempty"></div>'
@@ -575,27 +597,31 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
     counts = counts or {}
     total = total if total is not None else len(cands)
 
-    def fb(key, label, n):
-        # Hide empty stage filters (they reappear once populated). Always keep
-        # "Все" (key == "") and whichever filter is currently active.
-        if n == 0 and key and active_filter != key:
-            return ""
-        cls = "fbtn" + (" active" if active_filter == key else "")
+    _cstages = [("", "Все", total),
+                ("submitted", "📤 Отправлено", counts.get("submitted", 0)),
+                ("ack", "✅ Принято", counts.get("ack", 0)),
+                ("interview", "📞 Собеседование", counts.get("interview", 0)),
+                ("offer", "🎉 Оффер", counts.get("offer", 0)),
+                ("rejection", "✕ Отказ", counts.get("rejection", 0))]
+    def _chref(key: str) -> str:
         params = {}
         if key:
             params["filter"] = key
         if query:
             params["q"] = query
-        href = "/mail/candidates" + ("?" + urlencode(params) if params else "")
-        return f'<a class="{cls}" href="{escape(href, quote=True)}">{label} <b>{n}</b></a>'
-    funnel = ('<div class="funnel" data-filter-list="mbxlist">'
-              + fb("", "Все", total)
-              + fb("submitted", "📤 Отправлено", counts.get("submitted", 0))
-              + fb("ack", "✅ Принято", counts.get("ack", 0))
-              + fb("interview", "📞 Собеседование", counts.get("interview", 0))
-              + fb("offer", "🎉 Оффер", counts.get("offer", 0))
-              + fb("rejection", "✕ Отказ", counts.get("rejection", 0))
-              + '</div><div class="filter-status" role="status" aria-live="polite"></div>')
+        return "/mail/candidates" + ("?" + urlencode(params) if params else "")
+    # Hide empty stage filters (they reappear once populated). Always keep "Все"
+    # (key == "") and whichever filter is currently active.
+    def _show(key: str, n: int) -> bool:
+        return not (n == 0 and key and active_filter != key)
+    shown = [(k, l, n) for k, l, n in _cstages if _show(k, n)]
+    chips = "".join(
+        f'<a class="fbtn{" active" if active_filter == k else ""}" href="{escape(_chref(k), quote=True)}">'
+        f'{l} <b>{n}</b></a>' for k, l, n in shown)
+    picker = _stage_select([{"label": _strip_lead_icon(l), "href": _chref(k), "count": n,
+                             "active": active_filter == k} for k, l, n in shown])
+    funnel = ('<div class="funnel" data-filter-list="mbxlist">' + chips + '</div>'
+              + picker + '<div class="filter-status" role="status" aria-live="polite"></div>')
     head = ('<div class="page-head"><div class="ph-left"><div class="seg-nav">'
             '<a href="/mail">Инбокс</a>'
             f'<a class="active" href="/mail/candidates">Кандидаты <b>{total}</b></a>'

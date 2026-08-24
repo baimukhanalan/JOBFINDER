@@ -180,7 +180,7 @@ button.primary:hover{background:var(--accent-deep);}
 .mf-line b{font-size:15px;color:var(--ink);}
 .mf-addr{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);}
 .mf-to{font-size:12.5px;color:var(--ink-mute);margin-top:5px;}.mf-dot{margin:0 7px;opacity:.6;}
-.mail-frame-wrap{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;}.mail-frame{width:100%;border:0;background:transparent;display:block;}
+.mail-frame-wrap{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;}.mail-frame{width:100%;border:0;background:transparent;display:block;opacity:0;}.mail-frame.ready{opacity:1;}
 .msg-content{white-space:pre-wrap;word-break:break-word;color:var(--ink);line-height:1.7;font-size:14.5px;}
 .clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
 .tcount{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 9px;margin-left:10px;vertical-align:middle;}
@@ -359,13 +359,13 @@ button.primary:hover{background:var(--accent-deep);}
   .msg-toolbar .iconbtn{width:44px;height:44px;}
   /* Open-message full screen: fix the back/delete bar to the top so you never scroll up to
      leave (position:fixed is reliable here; sticky breaks under the body overflow-x:hidden). */
-  body.full-view .msg-toolbar{position:fixed;top:0;left:0;right:0;z-index:30;margin:0;padding:8px 10px;background:var(--bg-app);box-shadow:0 1px 0 var(--line);}
+  body.full-view .msg-toolbar{position:fixed;top:0;left:0;right:0;z-index:30;margin:0;padding:8px 10px;background:var(--bg-app);box-shadow:0 1px 0 var(--line);-webkit-backface-visibility:hidden;backface-visibility:hidden;transform:translateZ(0);}
   body.full-view main{padding-top:60px;padding-bottom:78px;}
   /* Reply + Forward = a fixed bottom bar that moves with scroll: Ответить at the left edge,
      Переслать at the right edge. */
   .reply-bar{position:fixed;left:0;right:0;bottom:0;z-index:25;margin:0;gap:10px;
     padding:9px 12px calc(9px + env(safe-area-inset-bottom));background:var(--bg-app);
-    border-top:1px solid var(--line);}
+    border-top:1px solid var(--line);-webkit-backface-visibility:hidden;backface-visibility:hidden;transform:translateZ(0);}
   .mbxrow{padding:11px 12px;gap:9px;}
   .mbxrow .em{display:none;}
   .keyword-grid{grid-template-columns:1fr}.keyword-card textarea{min-height:180px}.keyword-actions>*{flex:1 1 auto;text-align:center;justify-content:center;min-height:44px;}
@@ -941,16 +941,18 @@ function fitFrame(f){try{var doc=f.contentDocument,wrap=f.parentElement;var st=d
   var applied=-1;
   // Guarded: only touch the DOM when the wrapper height actually changes by >3px. Redundant
   // re-measures that re-set the same height are what made the frame flicker.
-  function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth,h,wh,sc=null;if(natW>avail+2){sc=Math.max(avail/natW,0.72);h=docH();wh=Math.round(h*sc+8);}else{h=docH()+24;wh=h;}if(Math.abs(wh-applied)<=3)return;applied=wh;if(sc!==null){f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+sc+')';}else{f.style.width='100%';f.style.transform='none';}f.style.height=h+'px';wrap.style.height=wh+'px';}
+  function measure(){var natW=Math.max(doc.body.scrollWidth,doc.documentElement.scrollWidth),avail=wrap.clientWidth,h,wh,sc=null;if(natW>avail+2){sc=Math.max(avail/natW,0.72);h=docH();wh=Math.round(h*sc+8);}else{h=docH()+24;wh=h;}f.classList.add('ready');if(Math.abs(wh-applied)<=3)return;applied=wh;if(sc!==null){f.style.width=natW+'px';f.style.transformOrigin='top left';f.style.transform='scale('+sc+')';}else{f.style.width='100%';f.style.transform='none';}f.style.height=h+'px';wrap.style.height=wh+'px';}
   // Measure on the next frame (after the injected style lays out) + a couple of settle passes.
-  // NO synchronous first call (it measures before layout → a tiny value → a visible jump).
+  // NO synchronous first call (it measures before layout → a tiny value → a visible jump). The
+  // frame stays opacity:0 until the first measure sets its real height (adds .ready) so the
+  // 150px→full jump is never shown.
   requestAnimationFrame(measure);setTimeout(measure,300);
   try{doc.querySelectorAll('img').forEach(function(im){im.addEventListener('load',measure);});}catch(_){}
-}catch(e){f.style.height='600px';}}
+}catch(e){f.style.height='600px';f.classList.add('ready');}}
 // Wire the HTML-email iframes here (NOT via inline onload="fitFrame" — that fires while the
 // body is still parsing, before fitFrame is defined → "fitFrame is not defined", so the frame
 // kept its default 150px and truncated tall emails). This runs after the DOM is parsed.
-document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=function(){fitFrame(f);};f.addEventListener('load',go);try{if(f.contentDocument&&f.contentDocument.body){go();}else{setTimeout(go,60);}}catch(_){setTimeout(go,60);}});
+document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=function(){fitFrame(f);};f.addEventListener('load',go);try{if(f.contentDocument&&f.contentDocument.body){go();}else{setTimeout(go,60);}}catch(_){setTimeout(go,60);}setTimeout(function(){f.classList.add('ready');},1600);});
 // Funnel filters update in place. A loading state appears on the first tap and
 // blocks duplicate taps while the server response is in flight.
 (function(){

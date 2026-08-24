@@ -44,34 +44,59 @@ CLASSIFIER_VERSION = "2026-08-24-editable-keywords-v1"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 KEYWORD_KINDS = ("offer", "rejection", "interview", "ack")
 DEFAULT_KEYWORDS = {
+    # NOTE: matching is plain SUBSTRING (casefold) over subject+body, priority
+    # offer>rejection>interview>ack. Phrases must be recruiter-specific enough that
+    # they can't sit inside a larger word or a marketing sentence — see the two 2026-08-24
+    # keyword audits (scratchpad kw_audit_*): bare words like "оффер"/"отказ" and common
+    # phrases like "к сожалению"/"welcome aboard"/"job offer"/"decided not to" were removed
+    # because they false-match newsletters/support/promo mail; "technical interview" was
+    # removed (it matched a *process description* in an ack — Cresta). "hr interview" and the
+    # "move forward with your" family were added to catch real invites/rejections that were
+    # being missed (Salmon HR-interview invite, GoFasti "won't be able to move forward").
     "interview": [
         "interview invitation", "invitation to interview", "invitation to an interview",
-        "schedule an interview", "schedule interview", "technical interview",
-        "phone screen invitation", "invite you to an interview", "invite you for an interview",
+        "invitation to a technical interview", "hr interview", "schedule an interview",
+        "schedule interview", "phone screen invitation", "invite you to an interview",
+        "invite you for an interview", "invite you to schedule",
         "choose a time for your interview", "select a time for your interview",
         "share your availability for an interview", "assessment invitation",
         "приглашение на собеседование", "приглашение на интервью",
         "приглашаем вас на собеседование", "приглашаем вас на интервью",
+        "приглашаем на собеседование", "приглашаем на интервью",
         "собеседование назначено", "назначить собеседование", "назначить звонок",
         "приглашение на тестовое задание",
     ],
     "offer": [
-        "offer letter", "pleased to offer", "extend an offer", "job offer",
-        "welcome aboard", "предлагаем вам", "направляем оффер", "оффер",
+        "offer letter", "pleased to offer", "we are pleased to offer you",
+        "would like to offer you", "extend you an offer", "extend an offer of employment",
+        "offer of employment", "offer you the position", "your job offer",
+        "employment offer", "formal offer",
+        "рады предложить вам работу", "рады предложить вам должность",
+        "предлагаем вам работу", "предлагаем вам должность", "предлагаем вам оффер",
+        "направляем оффер", "направляем вам оффер", "высылаем вам оффер",
     ],
     "rejection": [
-        "not moving forward", "not be moving forward", "decided not to", "won't be proceeding",
-        "will not be proceeding", "regret to inform", "other candidates",
-        "not a good fit", "application was declined", "к сожалению",
-        "не готовы продолжить", "не подошли", "отказ",
+        "not moving forward", "not be moving forward",
+        "decided not to move forward", "decided not to proceed", "decided not to continue",
+        "won't be proceeding", "will not be proceeding", "regret to inform",
+        "unable to move forward", "able to move forward with your",
+        "move forward with other candidates", "move forward with another candidate",
+        "pursuing other candidates", "selected other candidates",
+        "not a good fit for this", "not the right fit for this",
+        "application was declined",
+        "к сожалению, мы приняли решение", "к сожалению, вынуждены отказать",
+        "приняли решение отказать", "вынуждены вам отказать", "вам отказано",
+        "не готовы продолжить", "вы не подошли",
     ],
     "ack": [
-        "application received", "application has been received", "application submitted",
+        "application received", "application has been received",
+        "your application has been submitted", "application was submitted",
         "thank you for applying", "thanks for applying", "thanks for your application",
         "we received your application", "we've received your application",
         "we have received your application", "application is under review",
-        "application is being reviewed", "got your application", "отклик принят",
-        "отклик получен", "заявка принята", "заявка получена", "заявка отправлена",
+        "application is being reviewed", "got your application",
+        "отклик принят", "отклик получен", "отклик отправлен",
+        "заявка принята", "заявка получена",
         "ваша заявка на рассмотрении", "ваша заявка рассматривается",
     ],
 }

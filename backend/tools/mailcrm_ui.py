@@ -80,6 +80,8 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .hbtn{display:inline-flex;align-items:center;gap:7px;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);padding:9px 14px;min-height:40px;border-radius:var(--r-full);font-weight:600;font-size:13px;cursor:pointer;}
 .hbtn:hover{background:var(--panel-2);color:var(--ink);}
 .hbtn svg{width:15px;height:15px;}
+.hbtn-lbl{display:inline;}
+.fab-compose{display:none;}
 .hbtn.danger{color:var(--danger);border-color:#f3c7c2;}.hbtn.danger:hover{background:var(--danger);color:#fff;}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 input,select,textarea{font:inherit;color:var(--ink);padding:9px 13px;border:1px solid var(--line-strong);border-radius:var(--r-sm);background:var(--panel);}
@@ -220,6 +222,21 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
+/* Mobile inbox: Compose becomes a Gmail-style floating action button (bottom-right); the
+   keyword-filters button collapses to just its icon so the header stays clean. */
+@media(max-width:760px){
+  .head-actions{gap:6px;}
+  .hbtn-compose{display:none;}
+  .hbtn-kw{padding:0;width:40px;min-width:40px;justify-content:center;}
+  .hbtn-kw .hbtn-lbl{display:none;}
+  .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
+    bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
+    border:none;border-radius:16px;height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
+    cursor:pointer;box-shadow:0 6px 18px -4px rgba(26,115,232,.55);}
+  .fab-compose svg{width:22px;height:22px;}
+  .fab-compose:active{transform:translateY(1px);}
+  main{padding-bottom:92px;}
+}
 @media(max-width:760px){
   .candidate-tools{display:none;}
   .funnel{flex-wrap:nowrap;overflow-x:auto;margin-left:-12px;margin-right:-12px;padding:0 12px 12px;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
@@ -356,10 +373,12 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         f'<a class="active" href="/mail">Инбокс{inbox_badge}</a>'
         f'<a href="/mail/candidates">Кандидаты <b>{ncand}</b></a>'
         '</div><div class="head-actions">'
-        '<a class="hbtn" href="/mail/keywords">Ключевые слова</a>'
-        '<button class="hbtn" onclick="openCompose()">'
+        '<a class="hbtn hbtn-kw" href="/mail/keywords" title="Ключевые слова" aria-label="Ключевые слова">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="8" x2="20" y2="8"/><line x1="4" y1="16" x2="20" y2="16"/><circle cx="9" cy="8" r="2.2" fill="var(--panel)"/><circle cx="15" cy="16" r="2.2" fill="var(--panel)"/></svg>'
+        '<span class="hbtn-lbl">Ключевые слова</span></a>'
+        '<button class="hbtn hbtn-compose" onclick="openCompose()">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
-        'Написать</button></div></div>'
+        '<span class="hbtn-lbl">Написать</span></button></div></div>'
         f'<form method="get" action="/mail" class="toolbar"><input type="search" name="q" value="{escape(q)}" placeholder="Поиск по теме / отправителю">'
         + (f'<input type="hidden" name="mailbox" value="{escape(mailbox)}">' if mailbox else "")
         + (f'<input type="hidden" name="stage" value="{escape(stage)}">' if stage else "")
@@ -388,9 +407,16 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
     empty = '<div class="empty" id="filterempty">Писем нет</div>' if not rows else '<div id="filterempty"></div>'
     banner = f'<div class="healthbar">⚠️ {escape(warning)}</div>' if warning else ""
+    # Gmail-style floating Compose (mobile only — CSS hides it on desktop, where the header
+    # "Написать" button stays).
+    fab = ('<button class="fab-compose" onclick="openCompose()" aria-label="Написать">'
+           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+           'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>'
+           '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+           '<span>Написать</span></button>')
     body = (banner + head + fbar + funnel +
             f'<div class="maillist" id="maillist">{render_rows(rows)}</div>{empty}'
-            f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>')
+            f'<div id="loadmore" data-more="{has_more}" style="height:1px"></div>' + fab)
     return _page("inbox", body, _COMPOSE_MODAL)
 
 

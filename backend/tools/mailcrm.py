@@ -286,18 +286,36 @@ def _norm_subject(s: str) -> str:
     return _RE_PREFIX.sub("", (s or "").strip()).strip().lower() or "(без темы)"
 
 
+def _is_attachment(part) -> bool:
+    """True only for a REAL downloadable attachment. NOT: a cid-referenced inline body image
+    (e.g. a logo in a multipart/related email — it carries a filename == its Content-Id but
+    belongs to the HTML body), a text/plain|text/html body part, or a multipart container.
+    The old `filename or disp==attachment` test flagged the inline logo → a bogus '5 КБ'
+    attachment chip and a false paperclip flag on ATS security-code emails."""
+    if part.get_content_maintype() == "multipart":
+        return False
+    disp = (part.get_content_disposition() or "")
+    if disp == "attachment":
+        return True
+    fn = part.get_filename()
+    if not fn:
+        return False
+    cid = part.get("Content-Id") or part.get("Content-ID")
+    if disp == "inline" and cid:
+        return False                       # inline body image, not an attachment
+    return part.get_content_type() not in ("text/plain", "text/html")
+
+
 def _attachments(msg) -> list[dict]:
     out = []
     i = 0
-    for part in msg.walk():
-        fn = part.get_filename()
-        disp = (part.get_content_disposition() or "")
-        if fn or disp == "attachment":
+    for part in msg.walk():                # keep i aligned with get_attachment's walk
+        if _is_attachment(part):
             try:
                 payload = part.get_payload(decode=True) or b""
             except Exception:
                 payload = b""
-            out.append({"i": i, "filename": fn or f"attachment-{i}",
+            out.append({"i": i, "filename": part.get_filename() or f"attachment-{i}",
                         "type": part.get_content_type(), "size": len(payload)})
         i += 1
     return out
@@ -343,6 +361,23 @@ def _message_text(msg) -> str:
     return text[:MAX_BODY]
 
 
+def _html_to_text(html: str) -> str:
+    """Readable plain-text from an HTML body: drop <style>/<script>, turn block-ends into line
+    breaks, strip tags, unescape entities. Keeps line structure so an HTML-only email reads
+    sensibly in the plain <div> (URLs are linkified by the UI)."""
+    from html import unescape
+    if not html:
+        return ""
+    t = re.sub(r"(?is)<(style|script|head)[^>]*>.*?</\1>", " ", html)
+    t = re.sub(r"(?i)<(br|/p|/div|/tr|/li|/h[1-6]|/table)\s*/?>", "\n", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = unescape(t)
+    t = re.sub(r"[ \t\f\v]+", " ", t)
+    t = re.sub(r" *\n *", "\n", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()[:MAX_BODY]
+
+
 def _snippet(msg) -> str:
     return _message_text(msg)[:280]
 
@@ -379,7 +414,7 @@ def build_index_row(path: str, seen: int) -> dict | None:
         "from_name": _display_name(frm), "from_email": from_email,
         "subject": subj, "snippet": snip,
         "kind": classify(subj, full_text), "thread_key": _norm_subject(subj),
-        "has_att": any(p.get_filename() for p in msg.walk()),
+        "has_att": any(_is_attachment(p) for p in msg.walk()),
         "outbound": from_email.lower() == box["email"],
         "date_ts": _date_ts(msg, path), "seen": bool(seen),
     }
@@ -435,7 +470,7 @@ def _scan_messages(mailbox: str | None = None, q: str = "",
                 "subject": subj, "snippet": snip, "date_ts": _date_ts(msg, path),
                 "seen": seen, "kind": kind, "outbound": outbound,
                 "thread": _norm_subject(subj),
-                "has_att": any(p.get_filename() for p in msg.walk()),
+                "has_att": any(_is_attachment(p) for p in msg.walk()),
             })
     rows.sort(key=lambda r: (r["date_ts"], r["id"]), reverse=True)
     if before_ts is not None:
@@ -499,6 +534,13 @@ def _parse_full(path: str, path_hash: str) -> dict | None:
         html = h.get_content() if h else ""
     except Exception:
         pass
+    # HTML-only mail (many ATS transactional emails — e.g. a Greenhouse "Security code" is a
+    # multipart/related with only a text/html part) has no plain part, so _msg_card would fall
+    # to a sandboxed <iframe srcdoc> that collapses to a BLANK body on mobile Safari. Derive a
+    # readable plain-text from the HTML so the sturdy <div> path renders it (links preserved by
+    # the UI's linkify). The html is still kept for anyone who wants the rich version.
+    if not (plain or "").strip() and (html or "").strip():
+        plain = _html_to_text(html)
     box = _mailbox_of(path)
     frm = str(msg["From"] or "")
     subj = str(msg["Subject"] or "")
@@ -631,7 +673,7 @@ def get_attachment(path_hash: str, i: int):
     except Exception:
         return None
     for idx, part in enumerate(msg.walk()):
-        if idx == i and (part.get_filename() or part.get_content_disposition() == "attachment"):
+        if idx == i and _is_attachment(part):
             try:
                 data = part.get_payload(decode=True) or b""
             except Exception:

@@ -421,10 +421,12 @@ _IC_CATALOG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 _IC_APPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
 _IC_INBOX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
 _IC_UNFINISHED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>'
+_IC_MASS_HIRING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v1"/><circle cx="8.5" cy="7" r="4"/><path d="M18 8v6M15 11h6"/></svg>'
 _NAV = [
     ("/mail", "inbox", "Инбокс", _IC_INBOX),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
     ("/apply", "apply", "Заявки", _IC_APPLY),
+    ("/mass-hiring", "mass_hiring", "Масс-найм", _IC_MASS_HIRING),
     ("/unfinished", "unfinished", "Незавершённые", _IC_UNFINISHED),
 ]
 # Per-screen context for the Gmail-style mobile search pill: active -> (route,
@@ -474,14 +476,15 @@ def _drawer(active: str) -> str:
             f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav></aside>')
 
 
-def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
+def _page(active: str, body: str, modal: str = "", topbar: bool = True,
+          page_title: str = "JobFinder — почта кандидатов") -> str:
     # topbar=False → a dedicated full screen (the open-message view): no Gmail search pill /
     # drawer, just the message's own sticky toolbar, like tapping a mail in Gmail.
     chrome = f"{_topbar(active)}{_drawer(active)}" if topbar else ""
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<title>JobFinder — почта кандидатов</title>" + _FONTS +
+        f"<title>{escape(page_title)}</title>" + _FONTS +
         f"<style>{_CSS}</style></head><body{'' if topbar else ' class=full-view'}>"
         f"{chrome}"
         f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}"

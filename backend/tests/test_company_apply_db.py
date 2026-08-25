@@ -42,11 +42,16 @@ def eligible_row(**overrides):
     return row
 
 
-def test_states_never_contain_automatic_submitted():
+def test_automatic_submission_requires_dedicated_authorized_states():
     assert "submitted" not in db.STATES
     assert "human_submitted" in db.STATES
+    assert "submit_approved" in db.STATES
+    assert "submitting" in db.STATES
+    assert "auto_submitted" in db.STATES
     assert db.TRANSITIONS["ready_for_review"] == {
         "human_submitted", "needs_input", "blocked"}
+    assert db.TRANSITIONS["awaiting_approval"] >= {"submit_approved"}
+    assert db.TRANSITIONS["submitting"] >= {"auto_submitted", "submission_failed"}
 
 
 def test_url_hash_canonicalizes_fragment_case_and_trailing_slash():
@@ -66,7 +71,7 @@ def test_schema_is_isolated_and_has_uniqueness_leases_and_audit(monkeypatch):
     assert "company_remote_application_reviews" in sql
     assert "company_remote_application_profile_leases" in sql
     assert "human_submitted" in sql
-    assert "'submitted'" not in sql.replace("'human_submitted'", "")
+    assert "company_remote_application_batches" in sql
 
 
 def test_enqueue_enforces_all_safety_gates_and_catalog_exclusion(monkeypatch):
@@ -119,6 +124,43 @@ def test_approved_claim_enters_preparing_not_submitted(monkeypatch):
     assert result["state"] == "preparing"
 
 
+def test_submit_authorized_claim_enters_submitting(monkeypatch):
+    row = eligible_row(state="submit_approved")
+    cursor = FakeCursor(fetches=[{"profile_id": "p1"}, row,
+                                 {"id": 3, "state": "submitting"}])
+    fake_cursor(monkeypatch, cursor)
+    result = db.claim_next("p1", "worker", from_states=("submit_approved",))
+    update = next((sql, args) for sql, args in cursor.calls
+                  if "UPDATE company_remote_applications SET state=" in sql)
+    assert update[1][0] == "submitting"
+    assert result["state"] == "submitting"
+
+
+def test_submit_claim_can_be_scoped_to_exact_authorization_batch(monkeypatch):
+    row = eligible_row(state="submit_approved", submission_batch_id="batch-123")
+    cursor = FakeCursor(fetches=[{"profile_id": "p1"}, row,
+                                 {"id": 3, "state": "submitting"}])
+    fake_cursor(monkeypatch, cursor)
+
+    result = db.claim_next(
+        "p1", "worker", from_states=("submit_approved",),
+        submission_batch_id="batch-123",
+    )
+
+    select_sql, select_args = next(
+        (sql, args) for sql, args in cursor.calls if "FOR UPDATE OF a SKIP LOCKED" in sql)
+    assert "a.submission_batch_id=%s" in select_sql
+    assert select_args[-1] == "batch-123"
+    assert result["submission_batch_id"] == "batch-123"
+
+
+def test_batch_scope_is_rejected_for_non_submission_claim(monkeypatch):
+    monkeypatch.setattr(db, "_cur", lambda *_: pytest.fail("opened database"))
+    with pytest.raises(ValueError, match="submit_approved"):
+        db.claim_next("p1", "worker", from_states=("queued",),
+                      submission_batch_id="batch-123")
+
+
 def test_busy_profile_returns_none_without_claiming(monkeypatch):
     cursor = FakeCursor(fetches=[None])
     fake_cursor(monkeypatch, cursor)
@@ -139,8 +181,9 @@ def test_recovery_never_loses_prior_human_approval(monkeypatch):
     fake_cursor(monkeypatch, cursor)
     assert db.recover_stale_leases() == 2
     sql = cursor.calls[0][0]
-    assert "WHEN state='preparing' THEN 'approved' ELSE 'queued'" in sql
-    assert "state IN ('claimed','preparing')" in sql
+    assert "WHEN state='preparing' THEN 'approved'" in sql
+    assert "WHEN state='submitting' THEN 'submission_failed'" in sql
+    assert "state IN ('claimed','preparing','submitting')" in sql
 
 
 def test_renew_requires_matching_live_profile_lease(monkeypatch):
@@ -148,7 +191,7 @@ def test_renew_requires_matching_live_profile_lease(monkeypatch):
     fake_cursor(monkeypatch, cursor)
     assert db.renew_lease(3, "p1", "worker", lease_seconds=120)
     assert "p.application_id=%s" in cursor.calls[0][0]
-    assert "a.state IN ('claimed','preparing')" in cursor.calls[0][0]
+    assert "a.state IN ('claimed','preparing','submitting')" in cursor.calls[0][0]
 
 
 def test_transition_rejects_changed_job_or_questions(monkeypatch):
@@ -196,6 +239,45 @@ def test_cannot_skip_human_review_to_submission(monkeypatch):
     fake_cursor(monkeypatch, cursor)
     with pytest.raises(db.ApplicationStateError):
         db.transition(3, "human_submitted", "worker")
+
+
+def test_auto_submitted_requires_positive_confirmation(monkeypatch):
+    cursor = FakeCursor(fetches=[eligible_row(state="submitting")])
+    fake_cursor(monkeypatch, cursor)
+    with pytest.raises(db.ApplicationStateError, match="mark_auto_submitted"):
+        db.transition(3, "auto_submitted", "worker", payload={"receipt": {
+            "confirmed": False, "clicked": True}})
+    with pytest.raises(ValueError, match="positive confirmation"):
+        db.mark_auto_submitted(3, "worker", receipt={"confirmed": False},
+                               expected_revalidation_hash="same")
+
+
+def test_generic_transition_cannot_bypass_batch_authorization(monkeypatch):
+    cursor = FakeCursor(fetches=[eligible_row(state="awaiting_approval")])
+    fake_cursor(monkeypatch, cursor)
+    with pytest.raises(db.ApplicationStateError, match="authorize_batch"):
+        db.transition(3, "submit_approved", "worker")
+
+
+def test_batch_authorization_is_count_bound_hash_bound_and_audited(monkeypatch):
+    row = eligible_row(state="awaiting_approval")
+    cursor = FakeCursor(rows=[row])
+    fake_cursor(monkeypatch, cursor)
+
+    result = db.authorize_batch("p1", [3], "alan", "SEND 1", {3: "same"})
+
+    assert result["count"] == 1
+    sql = " ".join(call[0] for call in cursor.calls)
+    assert "FOR UPDATE OF a" in sql
+    assert "state='submit_approved'" in sql
+    assert "authorize_auto_submit" in sql
+    assert "batch_authorization" in sql
+
+
+def test_batch_authorization_rejects_wrong_confirmation_before_database(monkeypatch):
+    monkeypatch.setattr(db, "_cur", lambda *_: pytest.fail("opened database"))
+    with pytest.raises(ValueError, match="SEND 2"):
+        db.authorize_batch("p1", [1, 2], "alan", "SEND 1", {1: "a", 2: "b"})
 
 
 def test_approve_reject_and_human_submission_are_audited(monkeypatch):

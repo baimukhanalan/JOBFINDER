@@ -1,8 +1,8 @@
-"""Human-controlled worker for the isolated company-remote application queue.
+"""Worker for the isolated company-remote application queue.
 
-The worker may prepare and pre-fill an approved application, but it has no code
-path that clicks Submit.  It does not import the legacy catalog, dashboard,
-copilot, bulk queue, synthetic-persona generator, or status store.
+The optional final action is available only for a separately authorized batch.
+This module does not import the legacy catalog, dashboard, copilot, bulk queue,
+synthetic-persona generator, or status store.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from backend.applier.runner import prefill_application
 from backend.profiles.store import Profile, get_profile, is_sample_profile
 from backend.tools import company_apply_db as apply_db
 from backend.tools.company_apply_policy import evaluate
+from backend.tools.company_submitter import submit_and_confirm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -183,6 +184,123 @@ async def fill_one(profile_id: str, worker_id: str, *, use_ai: bool = False,
                 "state": "failed", "error": str(exc)}
 
 
+async def submit_one(profile_id: str, worker_id: str, *, use_ai: bool = False,
+                     min_fit: float = 35, headless: bool = True,
+                     submission_batch_id: str | None = None,
+                     store: Any = apply_db,
+                     candidate_loader: Callable[[str], tuple[Profile, dict]] = load_candidate,
+                     prefill: Callable[..., Any] = prefill_application,
+                     final_action: Callable[..., Any] = submit_and_confirm,
+                     artifacts_root: Path | None = None) -> dict:
+    """Fill and perform one explicitly batch-authorized final action.
+
+    Positive live confirmation is required for ``auto_submitted``.  Once a click
+    occurs, an ambiguous result becomes terminal ``submission_failed`` so the
+    worker cannot accidentally duplicate an accepted application.
+    """
+    row = store.claim_next(
+        profile_id, worker_id, from_states=("submit_approved",),
+        claimed_state="submitting",
+        submission_batch_id=submission_batch_id,
+    )
+    if not row:
+        return {"processed": False, "reason": "no_submit_authorized_application"}
+    application_id = int(row["id"])
+    _, _, default_artifacts = _paths()
+    artifact_dir = (artifacts_root or default_artifacts) / profile_id / str(application_id)
+    try:
+        profile, facts = candidate_loader(profile_id)
+        decision = evaluate(_policy_job(row), profile, facts, min_fit=min_fit)
+        prior = row.get("policy_result") or {}
+        if not decision["allowed"]:
+            store.transition(
+                application_id, "blocked", worker_id,
+                reason="; ".join(decision["blocking_reasons"]),
+                expected_revalidation_hash=row["revalidation_hash"],
+                payload={"policy_result": decision},
+            )
+            return {"processed": True, "application_id": application_id, "state": "blocked"}
+        if not prior or prior.get("revalidation_hash") != decision["revalidation_hash"]:
+            store.transition(
+                application_id, "needs_input", worker_id,
+                reason="profile, facts, JD or questions changed after batch authorization",
+                expected_revalidation_hash=row["revalidation_hash"],
+                payload={"policy_result": decision},
+            )
+            return {"processed": True, "application_id": application_id,
+                    "state": "needs_input"}
+
+        job = {
+            "title": row.get("title") or "",
+            "company": row.get("company_name") or "",
+            "description": row.get("description") or "",
+            "apply_url": row.get("apply_url") or "",
+        }
+
+        async def _after_prefill(page, report):
+            completeness = report.get("completeness") or {}
+            if report.get("page_type") != "application_form" or \
+                    not completeness.get("ready_to_submit") or \
+                    report.get("unfilled") or report.get("review_items"):
+                return {"confirmed": False, "clicked": False,
+                        "reason": "live_form_not_complete"}
+            return await final_action(page, artifact_dir=artifact_dir)
+
+        with _runner_facts(facts):
+            report = await prefill(
+                job, profile, headless=headless, use_ai=use_ai, draft_answers=True,
+                use_variants=False, hold_open=False, resume_parser_only=False,
+                artifact_dir=artifact_dir, copy_to_downloads=False,
+                after_prefill=_after_prefill,
+            )
+        receipt = report.get("postfill_action") or {
+            "confirmed": False, "clicked": False, "reason": "final_action_not_run"}
+        common_payload = {
+            "artifact_dir": str(artifact_dir), "report": report,
+            "policy_result": decision, "fit_score": decision.get("fit_score"),
+        }
+        if receipt.get("confirmed") is True:
+            store.mark_auto_submitted(
+                application_id, worker_id, receipt=receipt,
+                expected_revalidation_hash=row["revalidation_hash"],
+            )
+            target = "auto_submitted"
+        elif receipt.get("clicked") is True:
+            target = "submission_failed"
+            store.transition(
+                application_id, target, worker_id,
+                reason=receipt.get("reason") or "ambiguous result after final click",
+                expected_revalidation_hash=row["revalidation_hash"],
+                payload={**common_payload, "last_error": receipt.get("reason") or
+                         "ambiguous result after final click", "receipt": receipt},
+            )
+        else:
+            target = "needs_input"
+            store.transition(
+                application_id, target, worker_id,
+                reason=receipt.get("reason") or "final action was not performed",
+                expected_revalidation_hash=row["revalidation_hash"],
+                payload={**common_payload, "last_error": receipt.get("reason") or
+                         "final action was not performed"},
+            )
+        store.record_attempt(
+            application_id, "auto_submit", target, worker_id=worker_id,
+            detail={"artifact_dir": str(artifact_dir), "receipt": receipt},
+        )
+        return {"processed": True, "application_id": application_id, "state": target,
+                "artifact_dir": str(artifact_dir), "receipt": receipt}
+    except Exception as exc:
+        store.transition(
+            application_id, "submission_failed", worker_id, reason=str(exc),
+            expected_revalidation_hash=row.get("revalidation_hash"),
+            payload={"last_error": str(exc)[:500], "artifact_dir": str(artifact_dir)},
+        )
+        store.record_attempt(application_id, "auto_submit", "submission_failed",
+                             worker_id=worker_id, detail={"error": str(exc)[:500]})
+        return {"processed": True, "application_id": application_id,
+                "state": "submission_failed", "error": str(exc)}
+
+
 def _public(row: dict) -> dict:
     return {key: row.get(key) for key in (
         "id", "profile_id", "state", "company_name", "title", "apply_url",
@@ -207,6 +325,13 @@ def build_parser() -> argparse.ArgumentParser:
     fill.add_argument("--limit", type=int, default=1)
     fill.add_argument("--min-fit", type=float, default=35)
     fill.add_argument("--ai", action="store_true")
+    submit = sub.add_parser("submit-authorized")
+    submit.add_argument("--profile", required=True)
+    submit.add_argument("--limit", type=int, default=1)
+    submit.add_argument("--min-fit", type=float, default=35)
+    submit.add_argument("--ai", action="store_true")
+    submit.add_argument("--headed", action="store_true")
+    submit.add_argument("--batch", help="limit work to this authorization batch id")
     review = sub.add_parser("list")
     review.add_argument("--profile")
     review.add_argument("--state", choices=apply_db.STATES)
@@ -244,6 +369,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "fill-approved":
             results = [asyncio.run(fill_one(
                 args.profile, worker, use_ai=args.ai, min_fit=args.min_fit))
+                for _ in range(max(1, args.limit))]
+            result = {"results": results}
+        elif args.command == "submit-authorized":
+            results = [asyncio.run(submit_one(
+                args.profile, worker, use_ai=args.ai, min_fit=args.min_fit,
+                headless=not args.headed, submission_batch_id=args.batch))
                 for _ in range(max(1, args.limit))]
             result = {"results": results}
         elif args.command == "list":

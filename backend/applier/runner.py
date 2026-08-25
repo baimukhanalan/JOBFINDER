@@ -7,10 +7,12 @@
       -> pick the ATS strategy and PRE-FILL every field
       -> screenshot, return a report
 
-It STOPS before submitting — there is no auto-submit path by design. A human reviews
-the screenshot, solves any CAPTCHA, completes assessments, and clicks Submit himself.
+By default it STOPS before submitting. The runner itself never owns a Submit action;
+an isolated, explicitly authorized caller may supply an ``after_prefill`` callback
+that acts on the live page before it closes.
 """
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -204,7 +206,8 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
                               hold_open: bool = False, skip_gate: bool = False,
                               resume_parser_only: bool = False,
                               artifact_dir: str | Path | None = None,
-                              copy_to_downloads: bool = True) -> dict:
+                              copy_to_downloads: bool = True,
+                              after_prefill=None) -> dict:
     apply_url = job.get("apply_url") or job.get("url")
     if not apply_url:
         raise ValueError("job has no apply_url")
@@ -382,6 +385,17 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
             shot = out_dir / "prefilled.png"
             await page.screenshot(path=str(shot), full_page=True)
             report["screenshot"] = str(shot)
+
+            # Independent workflows may inspect or act on the live, fully-filled page
+            # before it is closed.  The default remains inert, preserving the legacy
+            # pre-fill/review flow.  Keeping this as a callback (rather than a mode
+            # switch) also prevents the shared runner from owning external side effects.
+            if after_prefill is not None:
+                action = after_prefill(page, report)
+                if inspect.isawaitable(action):
+                    action = await action
+                if action is not None:
+                    report["postfill_action"] = action
 
             # Human-submit hold: keep the just-filled page open so a person can
             # review it and click Submit THEMSELVES. The engine still never clicks

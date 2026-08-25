@@ -33,8 +33,11 @@ class Store:
         self.row = row
         self.transitions = []
         self.attempts = []
+        self.auto_submitted = []
+        self.claims = []
 
     def claim_next(self, *args, **kwargs):
+        self.claims.append((args, kwargs))
         row, self.row = self.row, None
         return row
 
@@ -44,6 +47,10 @@ class Store:
 
     def record_attempt(self, *args, **kwargs):
         self.attempts.append((args, kwargs))
+
+    def mark_auto_submitted(self, app_id, actor, **kwargs):
+        self.auto_submitted.append((app_id, actor, kwargs))
+        return {"id": app_id, "state": "auto_submitted"}
 
 
 def loader(_profile_id):
@@ -110,6 +117,93 @@ def test_live_review_items_force_needs_input(tmp_path):
         "real_us", "worker", min_fit=0, store=store, candidate_loader=loader,
         prefill=prefill, artifacts_root=tmp_path))
     assert result["state"] == "needs_input"
+
+
+def _authorized_row():
+    row = _row(state="submitting")
+    row["policy_result"] = company_applier.evaluate(
+        company_applier._policy_job(row), _profile(), {"availability": "Immediate"},
+        min_fit=0,
+    )
+    return row
+
+
+def test_submit_one_requires_authorized_claim_and_positive_confirmation(tmp_path):
+    store = Store(_authorized_row())
+    calls = []
+
+    async def final_action(page, **kwargs):
+        calls.append((page, kwargs))
+        return {"confirmed": True, "clicked": True, "signal": "confirmation_text"}
+
+    async def prefill(*args, **kwargs):
+        report = {
+            "page_type": "application_form", "unfilled": [], "review_items": [],
+            "completeness": {"ready_to_submit": True},
+        }
+        report["postfill_action"] = await kwargs["after_prefill"]("live-page", report)
+        return report
+
+    result = asyncio.run(company_applier.submit_one(
+        "real_us", "worker", min_fit=0, store=store, candidate_loader=loader,
+        prefill=prefill, final_action=final_action, artifacts_root=tmp_path,
+        submission_batch_id="batch-123",
+    ))
+
+    assert result["state"] == "auto_submitted"
+    assert store.auto_submitted[0][2]["receipt"]["confirmed"] is True
+    assert calls[0][1]["artifact_dir"] == tmp_path / "real_us" / "5"
+    assert store.claims[0][1]["submission_batch_id"] == "batch-123"
+
+
+def test_submit_one_never_retries_ambiguous_result_after_click(tmp_path):
+    store = Store(_authorized_row())
+
+    async def final_action(*args, **kwargs):
+        return {"confirmed": False, "clicked": True,
+                "reason": "ambiguous_after_click"}
+
+    async def prefill(*args, **kwargs):
+        report = {
+            "page_type": "application_form", "unfilled": [], "review_items": [],
+            "completeness": {"ready_to_submit": True},
+        }
+        report["postfill_action"] = await kwargs["after_prefill"]("live-page", report)
+        return report
+
+    result = asyncio.run(company_applier.submit_one(
+        "real_us", "worker", min_fit=0, store=store, candidate_loader=loader,
+        prefill=prefill, final_action=final_action, artifacts_root=tmp_path,
+    ))
+
+    assert result["state"] == "submission_failed"
+    assert store.transitions[-1][1] == "submission_failed"
+    assert not store.auto_submitted
+
+
+def test_submit_one_refuses_incomplete_live_form_before_final_action(tmp_path):
+    store = Store(_authorized_row())
+    called = False
+
+    async def final_action(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    async def prefill(*args, **kwargs):
+        report = {
+            "page_type": "application_form", "unfilled": ["Phone"],
+            "review_items": [], "completeness": {"ready_to_submit": False},
+        }
+        report["postfill_action"] = await kwargs["after_prefill"]("live-page", report)
+        return report
+
+    result = asyncio.run(company_applier.submit_one(
+        "real_us", "worker", min_fit=0, store=store, candidate_loader=loader,
+        prefill=prefill, final_action=final_action, artifacts_root=tmp_path,
+    ))
+
+    assert result["state"] == "needs_input"
+    assert called is False
 
 
 def test_source_has_no_legacy_or_submission_imports():

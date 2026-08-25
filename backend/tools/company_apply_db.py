@@ -1,15 +1,15 @@
-"""Isolated PostgreSQL queue for human-controlled company applications.
+"""Isolated PostgreSQL queue for company-discovery applications.
 
-The queue reads eligible records from the independent company job tables.  It
-does not write to the legacy catalog and deliberately has no automatically
-reachable ``submitted`` state: only an identified human may record
-``human_submitted`` after reviewing the prepared application.
+Automatic final actions are reachable only through a durable, audited batch
+authorization.  This queue never writes to or claims work from the legacy job
+catalog.
 """
 from __future__ import annotations
 
 import hashlib
 import os
 import threading
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,22 +31,31 @@ _lock = threading.Lock()
 STATES = (
     "queued", "claimed", "awaiting_approval", "approved", "preparing",
     "ready_for_review", "needs_input", "rejected", "blocked", "failed",
-    "human_submitted",
+    "human_submitted", "submit_approved", "submitting", "auto_submitted",
+    "submission_failed",
 )
-CLAIMABLE_STATES = ("queued", "approved")
-TERMINAL_STATES = ("rejected", "blocked", "human_submitted")
+CLAIMABLE_STATES = ("queued", "approved", "submit_approved")
+TERMINAL_STATES = (
+    "rejected", "blocked", "human_submitted", "auto_submitted", "submission_failed",
+)
 TRANSITIONS = {
     "queued": {"claimed", "needs_input", "blocked"},
     "claimed": {"queued", "awaiting_approval", "needs_input", "failed", "blocked"},
-    "awaiting_approval": {"approved", "rejected", "blocked", "needs_input"},
+    "awaiting_approval": {
+        "approved", "submit_approved", "rejected", "blocked", "needs_input",
+    },
     "approved": {"preparing", "rejected", "blocked", "needs_input"},
     "preparing": {"approved", "ready_for_review", "needs_input", "failed", "blocked"},
     "ready_for_review": {"human_submitted", "needs_input", "blocked"},
     "needs_input": {"queued", "awaiting_approval", "approved", "preparing", "rejected", "blocked"},
     "failed": {"queued", "approved", "blocked"},
+    "submit_approved": {"submitting", "rejected", "blocked", "needs_input"},
+    "submitting": {"auto_submitted", "submission_failed", "needs_input", "blocked"},
+    "submission_failed": {"awaiting_approval", "blocked"},
     "rejected": set(),
     "blocked": {"queued"},
     "human_submitted": set(),
+    "auto_submitted": set(),
 }
 
 
@@ -137,6 +146,10 @@ def ensure_schema() -> None:
           updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
           human_submitted_at  TIMESTAMPTZ,
           human_submitted_by  TEXT,
+          auto_submitted_at   TIMESTAMPTZ,
+          submission_authorized_at TIMESTAMPTZ,
+          submission_authorized_by TEXT,
+          submission_batch_id TEXT,
           submission_receipt  JSONB,
           artifact_dir        TEXT,
           report              JSONB,
@@ -146,11 +159,20 @@ def ensure_schema() -> None:
           UNIQUE (job_id, profile_id),
           UNIQUE (profile_id, apply_url_hash)
         );""")
+        # Migrate the original state check in-place when this feature is added to
+        # an already initialized local database.
+        cur.execute("ALTER TABLE company_remote_applications DROP CONSTRAINT IF EXISTS "
+                    "company_remote_applications_state_check")
+        cur.execute("ALTER TABLE company_remote_applications ADD CONSTRAINT "
+                    "company_remote_applications_state_check CHECK (state IN (" +
+                    state_check + "))")
         cur.execute("CREATE INDEX IF NOT EXISTS cra_claim ON company_remote_applications "
                     "(profile_id,state,priority DESC,queued_at,id)")
         for column in (
             "artifact_dir TEXT", "report JSONB", "policy_result JSONB",
             "last_error TEXT", "fit_score NUMERIC",
+            "auto_submitted_at TIMESTAMPTZ", "submission_authorized_at TIMESTAMPTZ",
+            "submission_authorized_by TEXT", "submission_batch_id TEXT",
         ):
             cur.execute("ALTER TABLE company_remote_applications ADD COLUMN IF NOT EXISTS " + column)
         cur.execute("""
@@ -167,11 +189,26 @@ def ensure_schema() -> None:
         CREATE TABLE IF NOT EXISTS company_remote_application_reviews (
           id             BIGSERIAL PRIMARY KEY,
           application_id BIGINT NOT NULL REFERENCES company_remote_applications(id) ON DELETE CASCADE,
-          action         TEXT NOT NULL CHECK (action IN ('approve','reject','human_submitted')),
+          action         TEXT NOT NULL CHECK (action IN
+                         ('approve','reject','human_submitted','authorize_auto_submit','auto_submitted')),
           actor          TEXT NOT NULL,
           reason         TEXT,
           evidence       JSONB NOT NULL DEFAULT '{}'::jsonb,
           created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+        );""")
+        cur.execute("ALTER TABLE company_remote_application_reviews DROP CONSTRAINT IF EXISTS "
+                    "company_remote_application_reviews_action_check")
+        cur.execute("ALTER TABLE company_remote_application_reviews ADD CONSTRAINT "
+                    "company_remote_application_reviews_action_check CHECK (action IN "
+                    "('approve','reject','human_submitted','authorize_auto_submit','auto_submitted'))")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS company_remote_application_batches (
+          id             TEXT PRIMARY KEY,
+          profile_id     TEXT NOT NULL,
+          actor          TEXT NOT NULL,
+          confirmation   TEXT NOT NULL,
+          application_ids JSONB NOT NULL,
+          authorized_at  TIMESTAMPTZ NOT NULL DEFAULT now()
         );""")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS company_remote_application_profile_leases (
@@ -232,9 +269,12 @@ def recover_stale_leases() -> int:
     with _cur(False) as cur:
         cur.execute("""
           UPDATE company_remote_applications
-          SET state=CASE WHEN state='preparing' THEN 'approved' ELSE 'queued' END,
+          SET state=CASE
+                WHEN state='preparing' THEN 'approved'
+                WHEN state='submitting' THEN 'submission_failed'
+                ELSE 'queued' END,
               claimed_by=NULL,lease_expires_at=NULL,state_changed_at=now(),updated_at=now()
-          WHERE state IN ('claimed','preparing') AND lease_expires_at < now()""")
+          WHERE state IN ('claimed','preparing','submitting') AND lease_expires_at < now()""")
         recovered = cur.rowcount
         cur.execute("DELETE FROM company_remote_application_profile_leases "
                     "WHERE expires_at < now()")
@@ -244,19 +284,30 @@ def recover_stale_leases() -> int:
 def _normalize_from_states(values: Iterable[str]) -> tuple[str, ...]:
     states = tuple(dict.fromkeys(str(value).strip().casefold() for value in values))
     if not states or any(value not in CLAIMABLE_STATES for value in states):
-        raise ValueError("from_states may contain only queued or approved")
+        raise ValueError("from_states may contain only claimable states")
     return states
 
 
 def claim_next(profile_id: str, worker_id: str, *, lease_seconds: int = 900,
                from_states: tuple[str, ...] = ("queued",),
-               claimed_state: str | None = None) -> dict | None:
+               claimed_state: str | None = None,
+               submission_batch_id: str | None = None) -> dict | None:
     """Claim one application with row locking and an exclusive profile lease."""
     profile_id, worker_id = str(profile_id).strip(), str(worker_id).strip()
     if not profile_id or not worker_id or lease_seconds < 30:
         raise ValueError("profile_id, worker_id and lease_seconds>=30 are required")
     states = _normalize_from_states(from_states)
-    target = claimed_state or ("preparing" if states == ("approved",) else "claimed")
+    submission_batch_id = str(submission_batch_id or "").strip() or None
+    if submission_batch_id is not None and states != ("submit_approved",):
+        raise ValueError("submission_batch_id is valid only for submit_approved claims")
+    default_targets = {
+        ("queued",): "claimed",
+        ("approved",): "preparing",
+        ("submit_approved",): "submitting",
+    }
+    target = claimed_state or default_targets.get(states)
+    if target is None:
+        raise ApplicationStateError("claimable states with different targets cannot be mixed")
     if any(target not in TRANSITIONS[state] for state in states):
         raise ApplicationStateError(f"cannot claim {states!r} into {target}")
     with _cur() as cur:
@@ -272,6 +323,10 @@ def claim_next(profile_id: str, worker_id: str, *, lease_seconds: int = 900,
           RETURNING profile_id""", (profile_id, worker_id, int(lease_seconds)))
         if not cur.fetchone():
             return None
+        batch_clause = " AND a.submission_batch_id=%s" if submission_batch_id else ""
+        claim_args: list[Any] = [profile_id, list(states)]
+        if submission_batch_id:
+            claim_args.append(submission_batch_id)
         cur.execute(f"""
           SELECT a.*,j.title,j.description,j.description_html,j.requirements,j.benefits,
             j.location_raw,j.locations,j.salary_min,j.salary_max,j.currency,j.source,
@@ -291,8 +346,9 @@ def claim_next(profile_id: str, worker_id: str, *, lease_seconds: int = 900,
           WHERE a.profile_id=%s AND a.state=ANY(%s) AND j.status='active'
             AND j.remote_type='remote' AND j.questions_status='success'
             AND a.revalidation_hash={_HASH_SQL}
+            {batch_clause}
           ORDER BY a.priority DESC,a.queued_at,a.id
-          FOR UPDATE OF a SKIP LOCKED LIMIT 1""", (profile_id, list(states)))
+          FOR UPDATE OF a SKIP LOCKED LIMIT 1""", tuple(claim_args))
         row = cur.fetchone()
         if not row:
             cur.execute("DELETE FROM company_remote_application_profile_leases "
@@ -327,7 +383,7 @@ def renew_lease(application_id: int, profile_id: str, worker_id: str, *,
           FROM company_remote_applications a
           WHERE p.profile_id=%s AND p.application_id=%s AND p.worker_id=%s
             AND p.expires_at >= now() AND a.id=p.application_id
-            AND a.claimed_by=p.worker_id AND a.state IN ('claimed','preparing')""",
+            AND a.claimed_by=p.worker_id AND a.state IN ('claimed','preparing','submitting')""",
                     (int(lease_seconds), str(profile_id), int(application_id), str(worker_id)))
         renewed = cur.rowcount == 1
         if renewed:
@@ -422,6 +478,8 @@ def transition(application_id: int, to_state: str, actor: str, *, reason: str | 
         current = row["state"]
         if to_state not in TRANSITIONS[current]:
             raise ApplicationStateError(f"invalid transition: {current} -> {to_state}")
+        if to_state == "submit_approved":
+            raise ApplicationStateError("submit_approved requires authorize_batch")
         live_hash = row["current_revalidation_hash"]
         if (expected_revalidation_hash is not None and
                 expected_revalidation_hash != row["revalidation_hash"]):
@@ -431,11 +489,19 @@ def transition(application_id: int, to_state: str, actor: str, *, reason: str | 
         if row["job_status"] != "active" or row["remote_type"] != "remote" or \
                 row["questions_status"] != "success":
             raise StaleApplicationError("job is no longer eligible")
-        release = to_state not in {"claimed", "preparing"}
+        release = to_state not in {"claimed", "preparing", "submitting"}
         payload = payload or {}
         if _review_action is not None and _review_action not in {
-                "approve", "reject", "human_submitted"}:
+                "approve", "reject", "human_submitted", "authorize_auto_submit",
+                "auto_submitted"}:
             raise ValueError("invalid review action")
+        if to_state == "auto_submitted":
+            if _review_action != "auto_submitted":
+                raise ApplicationStateError("auto_submitted requires mark_auto_submitted")
+            receipt = payload.get("receipt")
+            if not isinstance(receipt, dict) or receipt.get("confirmed") is not True:
+                raise ApplicationStateError(
+                    "auto_submitted requires positive live confirmation evidence")
         fit_score = payload.get("fit_score")
         if fit_score is not None:
             fit_score = float(fit_score)
@@ -450,14 +516,16 @@ def transition(application_id: int, to_state: str, actor: str, *, reason: str | 
             fit_score=COALESCE(%s,fit_score),
             human_submitted_at=CASE WHEN %s THEN now() ELSE human_submitted_at END,
             human_submitted_by=CASE WHEN %s THEN %s ELSE human_submitted_by END,
-            submission_receipt=CASE WHEN %s THEN %s ELSE submission_receipt END
+            auto_submitted_at=CASE WHEN %s THEN now() ELSE auto_submitted_at END,
+            submission_receipt=CASE WHEN %s OR %s THEN %s ELSE submission_receipt END
           WHERE id=%s RETURNING *""",
                     (to_state, release, release, payload.get("artifact_dir"),
                      _db_json(payload["report"]) if "report" in payload else None,
                      _db_json(payload["policy_result"]) if "policy_result" in payload else None,
                      payload.get("last_error") or reason, fit_score,
                      to_state == "human_submitted", to_state == "human_submitted", actor,
-                     to_state == "human_submitted", _db_json(payload.get("receipt", {})),
+                     to_state == "auto_submitted", to_state == "human_submitted",
+                     to_state == "auto_submitted", _db_json(payload.get("receipt", {})),
                      int(application_id)))
         updated = cur.fetchone()
         cur.execute("""
@@ -513,6 +581,89 @@ def mark_human_submitted(application_id: int, actor: str, *, receipt: dict | Non
                       payload={"receipt": receipt or {}},
                       _review_action="human_submitted",
                       _review_evidence=receipt or {})
+
+
+def authorize_batch(profile_id: str, application_ids: Iterable[int], actor: str,
+                    confirmation: str, expected_hashes: dict[int, str]) -> dict:
+    """Atomically authorize one explicit set of applications for one final attempt.
+
+    The confirmation phrase is deliberately count-bound so a stale UI cannot turn
+    approval for a small preview into authorization for a larger batch.
+    """
+    profile_id, actor = str(profile_id).strip(), str(actor).strip()
+    ids = tuple(dict.fromkeys(int(value) for value in application_ids))
+    expected_hashes = {int(key): str(value) for key, value in expected_hashes.items()}
+    if not profile_id or not actor or not ids:
+        raise ValueError("profile_id, actor and application_ids are required")
+    required_confirmation = f"SEND {len(ids)}"
+    if str(confirmation).strip() != required_confirmation:
+        raise ValueError(f"confirmation must equal {required_confirmation!r}")
+    if set(expected_hashes) != set(ids) or any(not expected_hashes[value] for value in ids):
+        raise ValueError("an expected revalidation hash is required for every application")
+
+    batch_id = str(uuid.uuid4())
+    with _cur() as cur:
+        cur.execute(f"""
+          SELECT a.id,a.profile_id,a.state,a.revalidation_hash,j.status AS job_status,
+            j.remote_type,j.questions_status,{_HASH_SQL} AS current_revalidation_hash
+          FROM company_remote_applications a
+          JOIN company_remote_jobs j ON j.id=a.job_id
+          WHERE a.id=ANY(%s) FOR UPDATE OF a""", (list(ids),))
+        rows = [dict(row) for row in cur.fetchall()]
+        if len(rows) != len(ids):
+            raise ValueError("one or more applications do not exist")
+        for row in rows:
+            app_id = int(row["id"])
+            if row["profile_id"] != profile_id or row["state"] != "awaiting_approval":
+                raise ApplicationStateError(
+                    f"application {app_id} is not awaiting approval for this profile")
+            if row["revalidation_hash"] != expected_hashes[app_id] or \
+                    row["current_revalidation_hash"] != row["revalidation_hash"]:
+                raise StaleApplicationError(f"application {app_id} changed before approval")
+            if row["job_status"] != "active" or row["remote_type"] != "remote" or \
+                    row["questions_status"] != "success":
+                raise StaleApplicationError(f"application {app_id} is no longer eligible")
+
+        cur.execute("""
+          INSERT INTO company_remote_application_batches
+            (id,profile_id,actor,confirmation,application_ids)
+          VALUES (%s,%s,%s,%s,%s)""",
+                    (batch_id, profile_id, actor, required_confirmation,
+                     _db_json(list(ids))))
+        cur.execute("""
+          UPDATE company_remote_applications
+          SET state='submit_approved',state_changed_at=now(),updated_at=now(),
+              submission_authorized_at=now(),submission_authorized_by=%s,
+              submission_batch_id=%s,last_error=NULL
+          WHERE id=ANY(%s)""", (actor, batch_id, list(ids)))
+        for app_id in ids:
+            evidence = {"batch_id": batch_id, "confirmation": required_confirmation,
+                        "revalidation_hash": expected_hashes[app_id]}
+            cur.execute("""
+              INSERT INTO company_remote_application_reviews
+                (application_id,action,actor,evidence)
+              VALUES (%s,'authorize_auto_submit',%s,%s)""",
+                        (app_id, actor, _db_json(evidence)))
+            cur.execute("""
+              INSERT INTO company_remote_application_attempts
+                (application_id,phase,outcome,worker_id,detail)
+              VALUES (%s,'batch_authorization','submit_approved',%s,%s)""",
+                        (app_id, actor, _db_json(evidence)))
+    return {"batch_id": batch_id, "profile_id": profile_id,
+            "application_ids": list(ids), "count": len(ids)}
+
+
+def mark_auto_submitted(application_id: int, worker_id: str, *, receipt: dict,
+                        expected_revalidation_hash: str) -> dict:
+    """Persist a confirmed automatic result; ambiguous outcomes are rejected."""
+    if not isinstance(receipt, dict) or receipt.get("confirmed") is not True:
+        raise ValueError("positive confirmation receipt is required")
+    return transition(
+        application_id, "auto_submitted", worker_id,
+        expected_revalidation_hash=expected_revalidation_hash,
+        payload={"receipt": receipt}, _review_action="auto_submitted",
+        _review_evidence=receipt,
+    )
 
 
 def stats(profile_id: str | None = None) -> dict:

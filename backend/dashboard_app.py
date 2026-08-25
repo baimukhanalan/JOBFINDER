@@ -756,6 +756,216 @@ def health():
     return {"ok": True}
 
 
+# ---- Independent company discovery + mass application ----------------------
+# This runtime deliberately does not reuse _FILL_ALL, _FILL_JOBS, the catalog
+# co-pilot, synthetic personas, noVNC, or the legacy bulk log.
+_COMPANY_MASS_RUN: dict = {"state": "idle", "total": 0, "done": 0,
+                           "submitted": 0, "failed": 0, "needs_input": 0}
+_COMPANY_MASS_STOP = threading.Event()
+_COMPANY_SYNC_RUN: dict = {"state": "idle"}
+
+
+def _company_mass_public() -> dict:
+    return {key: _COMPANY_MASS_RUN.get(key) for key in (
+        "state", "total", "done", "submitted", "failed", "needs_input",
+        "current", "current_id", "error", "started_at", "finished_at")}
+
+
+def _company_mass_snapshot(profile: str = "") -> dict:
+    from backend.tools import (company_apply_db, company_discovery_db,
+                               company_jobs_db, company_mass_ui)
+    profiles = company_mass_ui.real_profiles()
+    profile_ids = {item["id"] for item in profiles}
+    selected = profile if profile in profile_ids else (profiles[0]["id"] if profiles else "")
+    try:
+        companies = company_discovery_db.counts()
+        jobs = company_jobs_db.counts()
+        applications = company_apply_db.stats(selected) if selected else {
+            "total": 0, "by_state": {}}
+        rows = company_apply_db.list_applications(
+            profile_id=selected, limit=75) if selected else []
+        available, error = True, ""
+    except Exception as exc:
+        companies, jobs = {"total": 0}, {"active": 0}
+        applications, rows = {"total": 0, "by_state": {}}, []
+        available, error = False, str(exc)[:240]
+    if not available:
+        message = "Локальная база недоступна. Проверьте PostgreSQL и подключение проекта."
+    elif not profiles:
+        message = ("Добавьте реальный профиль кандидата и файл подтверждённых фактов. "
+                   "Тестовый sample-профиль не используется для отправки.")
+    elif not jobs.get("active"):
+        message = "Компании загружены. Обновите базу, чтобы найти их REMOTE-вакансии и вопросы."
+    else:
+        message = ("Отправка начинается только после подтверждения выбранного пакета. "
+                   "Основной контур заявок продолжает работать отдельно.")
+    return {"available": available, "error": error, "message": message,
+            "profiles": profiles, "selected_profile": selected,
+            "companies": companies, "jobs": jobs,
+            "applications": applications, "rows": rows}
+
+
+@app.get("/mass-hiring", response_class=HTMLResponse)
+def company_mass_page(profile: str = ""):
+    from backend.tools import company_mass_ui
+    snapshot = _company_mass_snapshot(profile)
+    return HTMLResponse(company_mass_ui.render_page(
+        snapshot, _company_mass_public(),
+        selected_profile=snapshot.get("selected_profile") or ""))
+
+
+@app.get("/mass-hiring/status")
+def company_mass_status():
+    return JSONResponse({**_company_mass_public(), "sync": dict(_COMPANY_SYNC_RUN)})
+
+
+def _do_company_sync(limit: int) -> None:
+    """Run the isolated registry -> ATS -> remote jobs pipeline locally."""
+    import subprocess
+    import sys
+    from datetime import datetime, timezone
+
+    _COMPANY_SYNC_RUN.update({"state": "running", "phase": "companies",
+                              "started_at": datetime.now(timezone.utc).isoformat(),
+                              "error": None})
+    commands = [
+        [sys.executable, "-m", "backend.tools.company_discovery", "collect",
+         "--source", "usaspending", "--limit", str(limit), "--country", "US"],
+        [sys.executable, "-m", "backend.tools.company_jobs", "collect",
+         "--status", "novel", "--limit-companies", str(limit)],
+    ]
+    try:
+        for phase, command in zip(("companies", "remote_jobs"), commands):
+            _COMPANY_SYNC_RUN["phase"] = phase
+            result = subprocess.run(command, cwd=str(PROJECT_ROOT), text=True,
+                                    capture_output=True, timeout=60 * 45)
+            if result.returncode:
+                raise RuntimeError((result.stderr or result.stdout or
+                                    "local collector failed")[-800:])
+        _COMPANY_SYNC_RUN.update({"state": "done", "phase": "complete"})
+    except Exception as exc:
+        _COMPANY_SYNC_RUN.update({"state": "error", "error": str(exc)[:500]})
+
+
+@app.post("/mass-hiring/sync")
+def company_mass_sync(count: int = Form(25), profile: str = Form(""),
+                      min_fit: float = Form(35)):
+    del profile, min_fit
+    if _COMPANY_SYNC_RUN.get("state") == "running":
+        return JSONResponse({"started": False, "reason": "already_running",
+                             **_COMPANY_SYNC_RUN})
+    limit = max(1, min(int(count), 250))
+    _COMPANY_SYNC_RUN.clear()
+    _COMPANY_SYNC_RUN.update({"state": "starting", "limit": limit})
+    threading.Thread(target=_do_company_sync, args=(limit,), daemon=True).start()
+    return JSONResponse({"started": True, "limit": limit})
+
+
+@app.post("/mass-hiring/build")
+def company_mass_build(profile: str = Form(...), count: int = Form(25),
+                       min_fit: float = Form(35)):
+    from backend.tools import company_apply_db, company_applier
+    try:
+        company_applier.load_candidate(profile)  # fail closed before touching the queue
+        company_apply_db.ensure_schema()
+        limit = max(1, min(int(count), 250))
+        score = max(0.0, min(float(min_fit), 100.0))
+        enqueued = company_apply_db.enqueue_eligible(profile, limit=limit)
+        prepared = blocked = failed = 0
+        worker = f"local-ui:prepare:{os.getpid()}"
+        for _ in range(limit):
+            result = company_applier.prepare_one(
+                profile, worker, min_fit=score, store=company_apply_db)
+            if not result.get("processed"):
+                break
+            state = result.get("state")
+            prepared += state == "awaiting_approval"
+            blocked += state == "blocked"
+            failed += state == "failed"
+        return JSONResponse({"ok": True, "enqueued": enqueued, "prepared": prepared,
+                             "blocked": blocked, "failed": failed})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=400)
+
+
+def _do_company_mass_submit(profile: str, application_ids: list[int], min_fit: float,
+                            batch_id: str) -> None:
+    import asyncio
+    from datetime import datetime, timezone
+    from backend.tools import company_applier
+
+    _COMPANY_MASS_RUN["started_at"] = datetime.now(timezone.utc).isoformat()
+    worker = f"local-ui:submit:{os.getpid()}"
+    for index, application_id in enumerate(application_ids):
+        if _COMPANY_MASS_STOP.is_set():
+            _COMPANY_MASS_RUN["state"] = "stopped"
+            break
+        _COMPANY_MASS_RUN.update({"current_id": application_id,
+                                  "current": f"Заявка #{application_id}"})
+        try:
+            result = asyncio.run(company_applier.submit_one(
+                profile, worker, min_fit=min_fit, submission_batch_id=batch_id))
+            state = result.get("state")
+        except Exception as exc:
+            state = "submission_failed"
+            _COMPANY_MASS_RUN["error"] = str(exc)[:300]
+        _COMPANY_MASS_RUN["done"] = index + 1
+        if state == "auto_submitted":
+            _COMPANY_MASS_RUN["submitted"] += 1
+        elif state == "needs_input":
+            _COMPANY_MASS_RUN["needs_input"] += 1
+        else:
+            _COMPANY_MASS_RUN["failed"] += 1
+    else:
+        _COMPANY_MASS_RUN["state"] = "done"
+    _COMPANY_MASS_RUN["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/mass-hiring/start")
+def company_mass_start(profile: str = Form(...), count: int = Form(25),
+                       min_fit: float = Form(35), confirmation: str = Form("")):
+    from backend.tools import company_apply_db, company_applier
+    if _COMPANY_MASS_RUN.get("state") == "running":
+        return JSONResponse({"error": "Массовая подача уже выполняется"}, status_code=409)
+    try:
+        company_applier.load_candidate(profile)
+        limit = max(1, min(int(count), 250))
+        score = max(0.0, min(float(min_fit), 100.0))
+        pending = company_apply_db.list_applications(
+            profile_id=profile, state="awaiting_approval", limit=limit)
+        if not pending:
+            raise ValueError("Нет подготовленных заявок для запуска")
+        actor = f"local-ui:{profile}"
+        application_ids = [int(row["id"]) for row in pending]
+        expected_hashes = {
+            int(row["id"]): row["revalidation_hash"] for row in pending}
+        authorization = company_apply_db.authorize_batch(
+            profile, application_ids, actor, confirmation,
+            expected_hashes)
+        approved_ids = list(authorization["application_ids"])
+        _COMPANY_MASS_STOP.clear()
+        _COMPANY_MASS_RUN.clear()
+        _COMPANY_MASS_RUN.update({"state": "running", "total": len(approved_ids),
+                                  "done": 0, "submitted": 0, "failed": 0,
+                                  "needs_input": 0, "current": "Запуск…",
+                                  "current_id": None, "error": None})
+        threading.Thread(target=_do_company_mass_submit,
+                         args=(profile, approved_ids, score,
+                               authorization["batch_id"]), daemon=True).start()
+        return JSONResponse({"started": True, "total": len(approved_ids),
+                             "batch_id": authorization["batch_id"]})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:300]}, status_code=400)
+
+
+@app.post("/mass-hiring/stop")
+def company_mass_stop(profile: str = Form(""), count: int = Form(25),
+                      min_fit: float = Form(35)):
+    del profile, count, min_fit
+    _COMPANY_MASS_STOP.set()
+    return JSONResponse({"stopping": True, **_company_mass_public()})
+
+
 @app.get("/catalog", response_class=HTMLResponse)
 def catalog_page(company: str = "", q: str = "", region: str = "", company_name: str = ""):
     """Persisted remote-job catalog (Postgres) with descriptions + application-form

@@ -456,7 +456,20 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   A REQUIRED demographic that offers an explicit non-disclosure option is answered with it by
   `dropdowns.fill_demographics_decline` ('Prefer not to answer' / 'Decline to self-identify' / 'I do not
   want to answer') — NOT left blank — so the form submits without ever claiming a characteristic; one with
-  no decline option stays blank (human sets it). **`_DECLINE_RE` must match "do not **want** to answer"**,
+  no decline option stays blank (human sets it). **`fill_demographics_decline` handles radio / native
+  `<select>` / react-select / Workable combobox demographics but NOT checkbox-group ones** (an EEO
+  "select all that apply", e.g. 1Password's racial/ethnic survey, with its own 'Prefer not to say' box):
+  `dropdowns.fill_demographic_checkboxes_decline` (2026-08-25, additive, called right after in
+  `base.prefill`) ticks that decline checkbox. **`dropdowns.fill_required_consent` (same commit)** ticks a
+  REQUIRED legal/privacy consent checkbox ('I agree' to the recruiting-privacy notice, 'I understand …') —
+  you can't submit without it — via `_CONSENT_RE`, while `_CONSENT_SKIP_RE` leaves optional MARKETING
+  opt-ins ('contact you about job opportunities', newsletters, talent-community) UNticked. Both were
+  unfilled REQUIRED fields silently blocking 1Password/Ashby submits (verified live: the radio
+  demographics already declined, but the checkbox racial survey + 'I agree' stayed blank). NO
+  protected-characteristic is ever claimed — the demographic answer is always the decline option. Tests:
+  `test_dropdowns.py::test_consent_regex_matches_required_not_marketing`. So the user's ask to "pick a
+  gender for the required field" is moot: 1Password (and its kind) offer 'Prefer not to say', which we
+  select — no need to state a gender/orientation. **`_DECLINE_RE` must match "do not **want** to answer"**,
   not only "wish to": Greenhouse's Disability Status decline is "I do not want to answer", so a want-only
   phrasing was missed and a REQUIRED Disability field blocked the whole submit ("This field is required")
   while Gender/Hispanic/Veteran (which say "Decline to self-identify") declined fine — verified live on axon

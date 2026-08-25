@@ -922,6 +922,7 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
 
     from backend.tools import bulk_log, catalog_drafts, proxy_pool
     st: dict = {"state": "error"}
+    pid = ""
     try:
         pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender)
         # wait_submit=1 → the worker finishes the email-code + confirmation INLINE before
@@ -955,7 +956,7 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
     _bump(done=1, ok=1 if ok else 0, failed=0 if ok else 1,
           current=st.get("company") or (job or {}).get("company") or "")
     try:
-        bulk_log.record(run, jobid=jid,
+        bulk_log.record(run, jobid=jid, profile=pid,
                         company=st.get("company") or (job or {}).get("company", ""),
                         title=st.get("title") or (job or {}).get("job_title", ""),
                         state=st.get("state") or "", filled=st.get("filled"),
@@ -1327,6 +1328,53 @@ def _start_proxy_revalidator(interval: int = 600, first_delay: int = 120,
 
 
 _start_proxy_revalidator()
+
+
+# ---- «Незавершённые» ↔ mail reconciliation ---------------------------------
+# A bulk job clicks Submit and is parked in the ledger as "unconfirmed" because our live
+# page-watch didn't SEE the confirmation in time — but the ATS emails "received your
+# application" (or interview/rejection) minutes later. This loop reads that email and
+# clears the job from «Незавершённые» (+ marks status.json submitted/interview/rejected),
+# so the ledger reflects reality, not our detection latency. Runs under the dashboard's
+# `mail` group. See backend/tools/submit_reconcile.py.
+_SUBMIT_RECONCILE_STARTED = False
+
+
+def _start_submit_reconciler(interval: int = 150, first_delay: int = 60) -> None:
+    global _SUBMIT_RECONCILE_STARTED
+    if _SUBMIT_RECONCILE_STARTED:
+        return
+    _SUBMIT_RECONCILE_STARTED = True
+    _log = logging.getLogger(__name__)
+
+    def _loop():
+        from backend.tools import submit_reconcile
+        time.sleep(first_delay)
+        while True:
+            try:
+                r = submit_reconcile.reconcile_ledger()
+                if r.get("reconciled"):
+                    _log.info("submit reconcile: %s/%s ledger jobs confirmed via ATS email",
+                              r.get("reconciled"), r.get("checked"))
+            except Exception:
+                _log.warning("submit reconcile pass failed", exc_info=True)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True, name="submit-reconciler").start()
+
+
+_start_submit_reconciler()
+
+
+@app.post("/unfinished/reconcile")
+def unfinished_reconcile():
+    """Reconcile «Незавершённые» against ATS confirmation emails right now (the loop does
+    this every ~2.5 min automatically). Clears jobs proven submitted by an ATS email."""
+    from backend.tools import submit_reconcile
+    try:
+        return JSONResponse(submit_reconcile.reconcile_ledger())
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
 
 
 # ---- Application drafts review (job_catalog.draft) --------------------------

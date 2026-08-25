@@ -95,7 +95,7 @@ def start(total: int) -> dict:
 
 
 def record(run: dict, *, jobid, company="", title="", state="", filled=None,
-           unfilled=None, unfilled_list=None, submit=None, error=None) -> None:
+           unfilled=None, unfilled_list=None, submit=None, error=None, profile="") -> None:
     submit = submit or {}
     clicked = bool(submit.get("clicked"))
     reason = submit.get("reason") or ("error" if state == "error" else "")
@@ -103,7 +103,7 @@ def record(run: dict, *, jobid, company="", title="", state="", filled=None,
     run["jobs"].append({
         "ts": _now(), "jobid": jobid, "company": company, "title": title,
         "state": state, "filled": filled, "unfilled": unfilled,
-        "unfilled_list": (unfilled_list or [])[:8],
+        "unfilled_list": (unfilled_list or [])[:8], "profile": profile,
         "submit_clicked": clicked, "submit_reason": reason,
         "confirmed": confirmed, "blocked": blocked, "error": error})
     run["done"] = len(run["jobs"])

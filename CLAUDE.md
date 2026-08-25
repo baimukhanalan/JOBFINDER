@@ -411,7 +411,18 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a persistent ledger (`bulk_log.py` → gitignored `logs/unfinished.json`) of applications that didn't
   confirm — `record()` adds a not-confirmed job (captcha-blocked / errored / incomplete) and removes a
   confirmed one; `/unfinished` lists them with «Докрутить» (re-fill → finish by hand), «Открыть вакансию»,
-  «Выполнено» (`POST /unfinished/{jobid}/done` → `mark_done`). **Audit trail
+  «Выполнено» (`POST /unfinished/{jobid}/done` → `mark_done`).
+  **Ground-truth reconciler (`tools/submit_reconcile.py`, 2026-08-25) — critical:** our page-watch is
+  latency-bound, so a REALLY-submitted GH/Ashby job is often parked here as "unconfirmed" (the ATS emails
+  "received your application" 1–3 min AFTER we gave up — verified: a 3s miss). `submit_reconcile.reconcile_ledger()`
+  walks the ledger, finds each job's persona Maildir (via the `profile` now stored in each record, else the
+  newest `uploads/prefill/demo_*/<jid>/persona.json`), and if `mailcrm.classify` finds an ATS receipt/decision
+  email (`ack`/`interview`/`offer`/`rejection`) it advances `status_store` (submitted/interview/rejected) and
+  clears the job from «Незавершённые». Forward-only, read-only w.r.t. mail. Runs in a **dashboard background
+  thread** (`_start_submit_reconciler`, every ~150s, needs the `mail` group — the dashboard has it) + on demand
+  via `POST /unfinished/reconcile`. This is why «confirmed=False» must be read as "not DETECTED", not "not
+  submitted" — an audit found ~73 real ATS receipts vs ~1 immediately-recorded confirm. Ledger entries now
+  carry `profile` (`bulk_log.record(profile=)`). **Audit trail
   (`tools/bulk_log.py`, gitignored `logs/`):** `bulk_apply.log` (append-only, a line per job + a FINISHED
   summary) + `bulk_apply_last.json` (full last run, rewritten each job so it survives a restart). Served
   by `GET /catalog/fill_all_report` (JSON) + `GET /catalog/fill_all_log` (download); the Фильтры sheet

@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -214,7 +215,60 @@ def summary() -> dict:
         data = _load()
     ps = data.get("proxies") or []
     return {"count": len(ps), "cursor": int(data.get("cursor", 0)),
+            "last_check": data.get("last_check"),
             "ips": [{"server": p.get("server"), "ip": p.get("ip")} for p in ps]}
+
+
+def revalidate_batch(batch: int = 150, max_fails: int = 3,
+                     concurrency: int = 20) -> dict:
+    """Self-heal the pool: re-check the next `batch` proxies round-robin (its OWN
+    `recheck_cursor`) and drop the dead ones. A proxy that PASSES has its fail-streak
+    reset (and its egress IP refreshed); one that FAILS has the streak incremented and
+    is REMOVED only after `max_fails` CONSECUTIVE failures — residential proxies flap,
+    so a single timeout must never evict a good one. Stamps `last_check`. Network
+    validation runs OUTSIDE the lock. Returns {checked, removed, remaining}."""
+    with _LOCK:
+        data = _load()
+        pool = list(data.get("proxies") or [])
+        rc = int(data.get("recheck_cursor", 0))
+    n = len(pool)
+    if n == 0:
+        with _LOCK:
+            data = _load()
+            data["last_check"] = time.time()
+            _save(data)
+        return {"checked": 0, "removed": 0, "remaining": 0}
+    rc %= n
+    take = min(batch, n)
+    subset = [pool[(rc + k) % n] for k in range(take)]
+    results = asyncio.run(_validate_all(subset, concurrency=concurrency))
+    res_by_key = {(r.get("server"), r.get("username")): r for r in results}
+    removed = 0
+    with _LOCK:
+        data = _load()
+        new_pool = []
+        for p in (data.get("proxies") or []):
+            r = res_by_key.get((p.get("server"), p.get("username")))
+            if r is None:                       # not in this batch — untouched
+                new_pool.append(p)
+            elif r.get("ok"):
+                q = {**p, "fails": 0}
+                if r.get("ip"):
+                    q["ip"] = r["ip"]
+                new_pool.append(q)
+            else:
+                fails = int(p.get("fails", 0)) + 1
+                if fails >= max_fails:
+                    removed += 1                # evicted
+                else:
+                    new_pool.append({**p, "fails": fails})
+        data["proxies"] = new_pool
+        m = len(new_pool)
+        data["recheck_cursor"] = (rc + take) % m if m else 0
+        data["cursor"] = int(data.get("cursor", 0)) % m if m else 0
+        data["last_check"] = time.time()
+        _save(data)
+    return {"checked": len(subset), "removed": removed, "remaining": m}
 
 
 def clear() -> dict:

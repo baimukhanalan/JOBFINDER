@@ -279,15 +279,24 @@ def render_page(company: str = "", q: str = "", region: str = "",
         'onclick="bulkStop()">Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
     proxy_block = (
+        '<div class="px-status" id="pxStatus">'
+        '<span class="px-dot"></span>'
+        '<span class="px-summary" id="pxSummary">—</span>'
+        '<button class="px-toggle" id="pxToggle" onclick="pxToggleList()" hidden>показать список</button>'
+        '</div>'
+        '<div class="cat-proxy-list" id="pxList" hidden></div>'
+        '<details class="px-add">'
+        '<summary>Добавить прокси</summary>'
         '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
         'user:pass@host:port&#10;socks5://host:port&#10;(по одному в строке)"></textarea>'
         '<div class="cat-proxy-hint">http/https проверяются реальным запросом (виден egress-IP); '
-        'socks5 — только проверка доступности, и в браузере socks5 работает лишь без логина/пароля.</div>'
+        'socks5 — только доступность, в браузере socks5 работает лишь без логина/пароля. '
+        'Мёртвые удаляются автоматически.</div>'
         '<div class="cat-proxy-row">'
         '<button class="cat-proxy-go" onclick="pxUpload()">Загрузить и проверить</button>'
-        '<button class="cat-proxy-clr" onclick="pxClear()">Очистить</button>'
+        '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
-        '<div class="cat-proxy-list" id="pxList"></div>')
+        '</details>')
     settings = (
         '<div class="cat-settings" id="catSettings" hidden>'
         f'<div class="cs-sec"><div class="cs-label">Регион</div>{region_chips}</div>'
@@ -339,12 +348,11 @@ _CAT_CSS = """<style>
 .cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}
 .cat-filters-btn[aria-expanded=true] .cat-filters-tag{background:var(--panel)}
 /* Settings sheet — regions + mass-apply + proxy, collapsed by default. */
-.cat-settings{margin:2px 0 10px;padding:2px 14px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel)}
+.cat-settings{margin:6px 0 14px;padding:0;border:0;background:transparent;display:flex;flex-direction:column;gap:12px}
 .cat-settings[hidden]{display:none}
-.cs-sec{padding:13px 0;border-top:1px solid var(--line)}
-.cs-sec:first-child{border-top:0}
-.cs-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-mute);margin-bottom:10px}
-.cs-label b{font-family:var(--ff-mono);font-weight:500;color:var(--accent);margin-left:2px}
+.cs-sec{padding:16px 18px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);box-shadow:0 1px 3px rgba(15,23,42,.04)}
+.cs-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-mute);margin:0 0 13px;display:flex;align-items:center;gap:8px}
+.cs-label b{font-family:var(--ff-mono);font-weight:600;color:var(--accent);margin-left:auto;font-size:13px}
 .cat-regions{display:flex;flex-wrap:wrap;gap:8px}
 .cat-regions::-webkit-scrollbar{display:none}
 .cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}
@@ -417,7 +425,20 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-proxy-clr{background:var(--panel);color:var(--danger);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:40px}
 .cat-proxy-clr:hover{border-color:var(--danger)}
 .cat-proxy-msg{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
-.cat-proxy-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px}
+.px-status{display:flex;align-items:center;gap:10px;font-size:14px}
+.px-dot{width:9px;height:9px;border-radius:50%;background:#0b8043;box-shadow:0 0 0 3px rgba(11,128,67,.18);flex:0 0 auto}
+.px-status.px-empty .px-dot{background:var(--ink-mute);box-shadow:0 0 0 3px rgba(100,116,139,.15)}
+.px-summary{font-weight:600;color:var(--ink)}
+.px-toggle{margin-left:auto;background:transparent;border:1px solid var(--line-strong);border-radius:var(--r-full);padding:6px 13px;font-size:12px;font-weight:600;color:var(--ink-soft);cursor:pointer;transition:border-color .15s,color .15s}
+.px-toggle:hover{border-color:var(--accent);color:var(--accent)}
+.px-add{margin-top:14px;border-top:1px dashed var(--line);padding-top:12px}
+.px-add>summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--accent);list-style:none;user-select:none;display:inline-flex;align-items:center;gap:7px;padding:2px 0}
+.px-add>summary::-webkit-details-marker{display:none}
+.px-add>summary::before{content:'+';font-weight:700;font-size:15px;line-height:1;width:12px;text-align:center}
+.px-add[open]>summary::before{content:'\2212'}
+.px-add>summary:hover{text-decoration:underline}
+.cat-proxy-list{margin:12px 0 2px;display:flex;flex-wrap:wrap;gap:6px;max-height:210px;overflow:auto;padding:2px}
+.cat-proxy-list[hidden]{display:none}
 .px-ip{font-family:var(--ff-mono);font-size:11.5px;color:#0b8043;background:rgba(11,128,67,.1);border-radius:var(--r-sm);padding:3px 9px}
 /* Mobile: the Gmail top pill IS the search there, so hide this page's own wide input;
    keep the header to just title + Фильтры. */
@@ -553,15 +574,44 @@ async function bulkReport(){
 }
 // Proxy pool: upload a list, invalid ones dropped on validation, applications then
 // rotate through the survivors (a different egress IP per submit).
+function _pxAgo(ts){
+  if(!ts) return 'ещё не проверялись';
+  var s=Math.max(0,Math.floor(Date.now()/1000-ts));
+  if(s<60) return 'проверка только что';
+  var m=Math.floor(s/60); if(m<60) return 'проверка '+m+' мин назад';
+  var h=Math.floor(m/60); if(h<24) return 'проверка '+h+' ч назад';
+  return 'проверка '+Math.floor(h/24)+' дн назад';
+}
+function pxRenderList(ips){
+  var list=document.getElementById('pxList'); if(!list) return;
+  list.innerHTML=(ips||[]).map(function(x){
+    return '<span class="px-ip">'+((x.ip||x.server||'')+'').replace(/</g,'&lt;')+'</span>';}).join('');
+}
 async function pxRefresh(){
-  var c=document.getElementById('pxCount'), list=document.getElementById('pxList');
+  var c=document.getElementById('pxCount'), sum=document.getElementById('pxSummary'),
+      st=document.getElementById('pxStatus'), tog=document.getElementById('pxToggle'),
+      list=document.getElementById('pxList');
   try{
     var s=await (await fetch('/proxies')).json();
-    if(c) c.textContent=s.count||0;
-    if(list) list.innerHTML=(s.ips||[]).map(function(x){
-      return '<span class="px-ip">'+((x.ip||x.server||'')+'').replace(/</g,'&lt;')+'</span>';}).join('');
+    var n=s.count||0;
+    if(c) c.textContent=n;
+    if(sum) sum.textContent=n+(n===1?' живой · ':' живых · ')+_pxAgo(s.last_check);
+    if(st) st.classList.toggle('px-empty', n===0);
+    if(tog) tog.hidden=(n===0);
+    if(list && !list.hidden) pxRenderList(s.ips);
   }catch(e){}
 }
+window.pxToggleList=async function(){
+  var list=document.getElementById('pxList'), tog=document.getElementById('pxToggle');
+  if(!list) return;
+  if(list.hidden){
+    if(tog) tog.textContent='загрузка…';
+    try{ var s=await (await fetch('/proxies')).json(); pxRenderList(s.ips); }catch(e){ pxRenderList([]); }
+    list.hidden=false; if(tog) tog.textContent='скрыть список';
+  }else{
+    list.hidden=true; if(tog) tog.textContent='показать список';
+  }
+};
 window.pxUpload=async function(){
   var t=document.getElementById('pxText').value, msg=document.getElementById('pxMsg');
   if(!t.trim()){ if(msg) msg.textContent='Вставь список прокси'; return; }
@@ -572,7 +622,6 @@ window.pxUpload=async function(){
         body:'text='+encodeURIComponent(t)})).json();
     if(j.error){ if(msg) msg.textContent='Ошибка: '+j.error; return; }
     if(msg) msg.textContent='Оставлено '+j.kept+' · отброшено '+j.dropped+' · в пуле '+j.count;
-    var c=document.getElementById('pxCount'); if(c) c.textContent=j.count||0;
     pxRefresh();
   }catch(e){ if(msg) msg.textContent='Ошибка запроса'; }
 };
@@ -580,10 +629,11 @@ window.pxClear=async function(){
   if(!confirm('Очистить весь пул прокси?')) return;
   try{ await fetch('/proxies/clear',{method:'POST'}); }catch(e){}
   var msg=document.getElementById('pxMsg'); if(msg) msg.textContent='Пул очищен';
-  var c=document.getElementById('pxCount'); if(c) c.textContent='0';
-  var list=document.getElementById('pxList'); if(list) list.innerHTML='';
+  var list=document.getElementById('pxList'); if(list){ list.innerHTML=''; list.hidden=true; }
+  var tog=document.getElementById('pxToggle'); if(tog){ tog.hidden=true; tog.textContent='показать список'; }
+  pxRefresh();
 };
-pxRefresh();   // show the current pool size on load
+pxRefresh();   // show pool summary on load
 
 (function(){
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');

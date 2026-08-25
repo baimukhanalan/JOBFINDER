@@ -360,6 +360,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   (Playwright can't authenticate socks5); the fast preview `/goto` stays on the direct IP (throwaway —
   only the real fill+submit is proxied); a fresh context per job briefly flickers the noVNC window.
   Parse/rotation are unit-tested (`tests/test_proxy_pool.py`, no network).
+  **Self-healing + hidden list (2026-08-25):** the `/catalog` proxy panel no longer dumps every IP —
+  it shows a one-line summary («🟢 N живых · проверка X назад», `#pxSummary` from `/proxies`'
+  `count`+`last_check`); the full IP list is lazy behind a «показать список» toggle, and «Добавить
+  прокси» (paste/upload) is collapsed. A **daemon thread in `dashboard_app._start_proxy_revalidator`**
+  (started at import; needs `import logging` at module top — it crashes the app if missing) re-checks a
+  rolling batch (~150) every ~10 min via `proxy_pool.revalidate_batch(batch, max_fails=3)`: a proxy that
+  passes resets its `fails` streak (+refreshes egress IP), one that fails increments it and is DROPPED
+  only after **3 CONSECUTIVE** failures — residential proxies flap, so a single timeout must never evict
+  a good one (a separate `recheck_cursor` walks the pool; `last_check` is stamped). Manual pass:
+  `POST /proxies/recheck` (Form `batch`). The FIRST pass over a fresh pool always evicts 0 (every
+  `fails` goes 0→1). Tests: `tests/test_proxy_pool.py`.
 - **Bulk auto-apply: «Подать на все» (`/catalog`).** One SEQUENTIAL server-side queue (co-pilot has
   ONE shared browser). **As of 2026-08-25 it runs over ALL 4 ATS** (`_BULK_ATS = greenhouse, ashby,
   lever, workable`) — **`count` is OPTIONAL (2026-08-25): an empty box = EVERY available job (no cap,

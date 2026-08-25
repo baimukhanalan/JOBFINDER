@@ -8,6 +8,7 @@ basic-auth per the project's security rules).
     uvicorn backend.dashboard_app:app --host 127.0.0.1 --port 8089
 """
 import json
+import logging
 import os
 import re
 import threading
@@ -1029,6 +1030,50 @@ def proxies_list():
 def proxies_clear():
     from backend.tools import proxy_pool
     return JSONResponse(proxy_pool.clear())
+
+
+@app.post("/proxies/recheck")
+def proxies_recheck(batch: int = Form(150)):
+    """Manually run ONE self-heal pass (the background loop does this automatically)."""
+    from backend.tools import proxy_pool
+    try:
+        return JSONResponse(proxy_pool.revalidate_batch(batch=max(1, min(int(batch), 1000))))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=500)
+
+
+# ---- proxy pool self-healing loop ------------------------------------------
+# Re-validate a rolling batch every ~10 min and DROP proxies that fail 3 checks in a
+# row (residential proxies flap — a single timeout must not evict a good one). Runs in
+# a daemon thread so the pool stays green without the human ever managing the list.
+_PROXY_REVAL_STARTED = False
+
+
+def _start_proxy_revalidator(interval: int = 600, first_delay: int = 120,
+                             batch: int = 150) -> None:
+    global _PROXY_REVAL_STARTED
+    if _PROXY_REVAL_STARTED:
+        return
+    _PROXY_REVAL_STARTED = True
+    _log = logging.getLogger(__name__)
+
+    def _loop():
+        from backend.tools import proxy_pool
+        time.sleep(first_delay)
+        while True:
+            try:
+                r = proxy_pool.revalidate_batch(batch=batch)
+                if r.get("removed"):
+                    _log.info("proxy self-heal: checked=%s removed=%s remaining=%s",
+                              r.get("checked"), r.get("removed"), r.get("remaining"))
+            except Exception:
+                _log.warning("proxy self-heal pass failed", exc_info=True)
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, daemon=True, name="proxy-revalidator").start()
+
+
+_start_proxy_revalidator()
 
 
 # ---- Application drafts review (job_catalog.draft) --------------------------

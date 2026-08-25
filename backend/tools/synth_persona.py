@@ -56,7 +56,14 @@ _LOC_COUNTRY = [
     (re.compile(r"(?i)\b(kazakhstan|almaty|astana|nur[- ]?sultan)\b"), "Kazakhstan"),
 ]
 _REGION_COUNTRY = {"US": "United States", "CA": "Canada", "UK": "United Kingdom"}
-_DEFAULT_COUNTRY = "Kazakhstan"       # rest-of-world default (the agency's own market)
+# The catalog is remote US/CA roles on US ATS boards (Greenhouse/Ashby/Lever/Workable), so a
+# job the classifier couldn't place (location just "Remote", regions=[] / OTHER) is
+# overwhelmingly a US company — apply as a US persona (US-authorized), NOT a Kazakhstani. An
+# explicit non-US location is parsed above and still wins (Salmon's "Kazakhstan; Kyrgyzstan"
+# → Kazakhstan; a Netherlands role → Dutch); only the truly-unknown fallback lands here.
+# (Was "Kazakhstan" — a leftover agency default that made a US company like thinkacademyus
+# get a Kazakh persona claiming Kazakhstan citizenship on a US role. Fixed 2026-08-25.)
+_DEFAULT_COUNTRY = "United States"
 
 # Some employers hire EXCLUSIVELY talent RESIDENT in Latin America (GoFasti et al.) and
 # auto-reject anyone outside the region regardless of a perfect fill. When the location does
@@ -319,7 +326,8 @@ def _country_of(job: dict) -> str:
     """The country to synthesize a persona for. When the location names SEVERAL countries
     (e.g. Salmon's 'Kazakhstan; Kyrgyzstan'), the rule is: if Kazakhstan is one of them use
     Kazakhstan (the agency's own market); otherwise use the FIRST country as it appears in
-    the location text. Falls back to the region tag, then Kazakhstan."""
+    the location text. Falls back to the region tag, then United States (the US/CA-remote
+    catalog default — an untagged job on a US ATS board is almost always a US company)."""
     loc = job.get("location") or ""
     found = []  # (position_in_text, country)
     for rx, country in _LOC_COUNTRY:

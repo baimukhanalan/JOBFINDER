@@ -25,12 +25,16 @@ def test_country_of_multi_country():
     assert sp._country_of({"location": "United States; Canada"}) == "United States"
 
 
-def test_country_of_falls_back_to_region_then_kz():
+def test_country_of_falls_back_to_region_then_us():
     assert sp._country_of({"location": "Remote", "regions": ["US"]}) == "United States"
     assert sp._country_of({"location": "", "regions": ["CA"]}) == "Canada"
     assert sp._country_of({"location": "Remote", "regions": ["UK"]}) == "United Kingdom"
-    assert sp._country_of({"location": "Remote", "regions": ["OTHER"]}) == "Kazakhstan"
-    assert sp._country_of({"regions": []}) == "Kazakhstan"
+    # An untagged / OTHER "Remote" job on a US ATS board defaults to the US (the catalog is
+    # remote US/CA roles) — NOT Kazakhstan (that made thinkacademyus get a Kazakh persona).
+    assert sp._country_of({"location": "Remote", "regions": ["OTHER"]}) == "United States"
+    assert sp._country_of({"regions": []}) == "United States"
+    # An explicitly-named country still wins over the default.
+    assert sp._country_of({"location": "Almaty, Kazakhstan", "regions": []}) == "Kazakhstan"
 
 
 def _job(location, region=None):

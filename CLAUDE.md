@@ -123,6 +123,20 @@ Commands: `python -m backend.tools.company_jobs init`, then
 `python -m backend.tools.company_jobs collect --status novel`; use `--skip-questions` only for a
 deliberately incomplete operational smoke. See `docs/company-jobs-phase2.md`.
 
+### Isolated company application queue (no UI; human Submit only)
+
+`backend.tools.company_applier` consumes only eligible `company_remote_jobs`. Its PostgreSQL tables
+are `company_remote_applications`, `company_remote_application_attempts`,
+`company_remote_application_reviews` and `company_remote_application_profile_leases`; it never writes
+to `job_catalog`, the old bulk queue, copilot/status files, or synthetic personas. Artifacts go only
+under `uploads/company_remote_apply`. A policy pass requires a real profile, facts, reply route,
+region/work-authorization compatibility, complete questions and an honest fit score. It then stops at
+`awaiting_approval`. Only an explicit named-human `approve` command permits headless pre-fill; the
+reused `applier.runner.prefill_application` has no Submit action and writes the result as
+`ready_for_review` or `needs_input`. `human_submitted` can only be recorded by a later explicit human
+command. See `docs/company-auto-applier.md`. Never wire this path into `/catalog/fill_all` or
+`copilot /load`, both of which belong to the old solution and can auto-click Submit.
+
 ## Secrets & PII (all gitignored)
 - `backend/.env` — `CRM_PG_DSN` (live CRM Postgres), `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`,
   `LLM_URL/LLM_KEY/LLM_MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, and legacy Mailgun

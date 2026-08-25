@@ -109,6 +109,19 @@ def _slug(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")[:40] or "job"
 
 
+def _artifact_directory(profile_id: str, jid: str,
+                        artifact_dir: str | Path | None = None) -> Path:
+    """Return the directory for one pre-fill's private artifacts.
+
+    The legacy location remains the default.  Independent callers (for example a
+    separate company-discovery applier) may pass an exact directory so their reports,
+    screenshots, and tailored resumes never enter the main review queue.
+    """
+    if artifact_dir is not None:
+        return Path(artifact_dir).expanduser()
+    return OUT_ROOT / profile_id / jid
+
+
 def _save_to_downloads(pdf: Path, profile_id: str, jid: str) -> str | None:
     """Keep a copy of every generated résumé in the user's Downloads, so the human (or
     the Chrome extension flow) always has the tailored PDF on disk to attach by hand if a
@@ -189,7 +202,9 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
                               use_ai: bool = False,
                               draft_answers: bool = False, use_variants: bool = True,
                               hold_open: bool = False, skip_gate: bool = False,
-                              resume_parser_only: bool = False) -> dict:
+                              resume_parser_only: bool = False,
+                              artifact_dir: str | Path | None = None,
+                              copy_to_downloads: bool = True) -> dict:
     apply_url = job.get("apply_url") or job.get("url")
     if not apply_url:
         raise ValueError("job has no apply_url")
@@ -197,7 +212,7 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
     use_ai = use_ai or _AI_DEFAULT  # AI polish is on by default (TAILOR_AI=0 to disable)
 
     jid = _slug(f"{job.get('company','')}-{job.get('title','')}")
-    out_dir = OUT_ROOT / profile.id / jid
+    out_dir = _artifact_directory(profile.id, jid, artifact_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Reply address = the candidate's own plain @takhet.com address (no per-application
@@ -290,9 +305,10 @@ async def prefill_application(job: dict, profile: Profile, *, headless: bool = T
         # form complete but no résumé attached).
         form["resume_path"] = str(resume_pdf)
         report["resume_pdf"] = str(resume_pdf)
-        dl = _save_to_downloads(resume_pdf, profile.id, jid)
-        if dl:
-            report["resume_downloads"] = dl
+        if copy_to_downloads:
+            dl = _save_to_downloads(resume_pdf, profile.id, jid)
+            if dl:
+                report["resume_downloads"] = dl
 
         # 2) Open the apply page, reusing the profile's saved session if present
         ctx = await bm.new_context(storage_state=profile.storage_state_path(_tenant(apply_url)))

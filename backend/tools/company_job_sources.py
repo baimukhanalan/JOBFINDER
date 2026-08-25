@@ -15,7 +15,7 @@ import hashlib
 import re
 import time
 from html.parser import HTMLParser
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -25,6 +25,7 @@ SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", 
 USER_AGENT = "JobFinder-company-jobs/1.0 (+https://github.com/baimukhanalan/JOBFINDER)"
 REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
 MAX_RESPONSE_BYTES = 25 * 1024 * 1024
+MAX_PAGES = 500
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 _REMOTE_STRONG = re.compile(
@@ -51,6 +52,25 @@ _NOT_REMOTE = re.compile(
 
 class JobSourceError(RuntimeError):
     """A public ATS endpoint could not be read after bounded retries."""
+
+
+class JobFetchResult(list):
+    """List-compatible fetch result with an explicit closure-safety signal.
+
+    Existing callers can continue to iterate/compare it as a normal list.  New
+    collectors must check ``complete`` before treating absence as authoritative.
+    """
+
+    def __init__(self, jobs: Iterable[dict] = (), *, complete: bool = True,
+                 errors: Iterable[str] = ()) -> None:
+        super().__init__(jobs)
+        self.complete = bool(complete)
+        self.errors = [str(error) for error in errors if str(error).strip()]
+
+
+def _result(jobs: Iterable[dict], *, errors: Iterable[str] = ()) -> JobFetchResult:
+    errors = list(errors)
+    return JobFetchResult(jobs, complete=not errors, errors=errors)
 
 
 class _TextExtractor(HTMLParser):
@@ -561,11 +581,13 @@ def _request_json(client: httpx.Client, url: str, *, retries: int = 3,
     raise JobSourceError("ATS request failed after bounded retries") from last_error
 
 
-def _fetch_greenhouse(slug: str, company_id: Any, client: httpx.Client, retries: int) -> list[dict]:
+def _fetch_greenhouse(slug: str, company_id: Any, client: httpx.Client,
+                      retries: int) -> JobFetchResult:
     safe = quote(slug, safe="")
     board = _request_json(client, f"https://boards-api.greenhouse.io/v1/boards/{safe}/jobs?content=true",
                           retries=retries)
     details: dict[str, Mapping[str, Any]] = {}
+    errors: list[str] = []
     # Fetch questions only for listings that can plausibly pass the strict gate.
     for job in board.get("jobs") or []:
         loc = str((job.get("location") or {}).get("name") or "")
@@ -575,28 +597,34 @@ def _fetch_greenhouse(slug: str, company_id: Any, client: httpx.Client, retries:
                                  title=str(job.get("title") or ""), description=desc):
             continue
         jid = str(job.get("id") or "")
-        if jid:
-            try:
-                detail = _request_json(
-                    client,
-                    f"https://boards-api.greenhouse.io/v1/boards/{safe}/jobs/{quote(jid, safe='')}?questions=true",
-                    retries=retries,
-                )
-            except JobSourceError:
-                # A single deleted/restricted job must not discard the rest of a board.
-                continue
-            if isinstance(detail, Mapping):
-                details[jid] = detail
-    return parse_greenhouse_jobs(board, company_id, slug, details)
+        if not jid:
+            errors.append("remote job without id cannot be detailed")
+            continue
+        try:
+            detail = _request_json(
+                client,
+                f"https://boards-api.greenhouse.io/v1/boards/{safe}/jobs/{quote(jid, safe='')}?questions=true",
+                retries=retries,
+            )
+        except JobSourceError as exc:
+            # A single deleted/restricted job must not discard the rest of a board.
+            errors.append(f"job {jid} detail: {exc}")
+            continue
+        if isinstance(detail, Mapping):
+            details[jid] = detail
+        else:
+            errors.append(f"job {jid} detail: invalid response")
+    return _result(parse_greenhouse_jobs(board, company_id, slug, details), errors=errors)
 
 
 def _fetch_smartrecruiters(slug: str, company_id: Any, client: httpx.Client,
-                           retries: int) -> list[dict]:
+                           retries: int) -> JobFetchResult:
     safe = quote(slug, safe="")
     listings: list[Mapping[str, Any]] = []
     offset = 0
     limit = 100
-    while True:
+    seen_page_ids: set[tuple[str, ...]] = set()
+    for _page_number in range(MAX_PAGES):
         page = _request_json(
             client,
             f"https://api.smartrecruiters.com/v1/companies/{safe}/postings?limit={limit}&offset={offset}",
@@ -605,16 +633,29 @@ def _fetch_smartrecruiters(slug: str, company_id: Any, client: httpx.Client,
         content = page.get("content") or [] if isinstance(page, Mapping) else []
         if not isinstance(content, list):
             raise JobSourceError("SmartRecruiters returned an invalid postings page")
-        listings.extend(item for item in content if isinstance(item, Mapping))
+        page_rows = [item for item in content if isinstance(item, Mapping)]
+        page_ids = tuple(str(item.get("id") or item.get("uuid") or item.get("ref") or "")
+                         for item in page_rows)
+        if content and (not page_rows or page_ids in seen_page_ids):
+            raise JobSourceError("SmartRecruiters pagination made no progress")
+        seen_page_ids.add(page_ids)
+        listings.extend(page_rows)
         total = int(page.get("totalFound") or page.get("total") or len(listings))
         if not content or len(listings) >= total:
             break
-        offset += len(content)
+        next_offset = offset + len(content)
+        if next_offset <= offset:
+            raise JobSourceError("SmartRecruiters pagination made no progress")
+        offset = next_offset
+    else:
+        raise JobSourceError(f"SmartRecruiters pagination exceeded {MAX_PAGES} pages")
 
     details: list[Mapping[str, Any]] = []
+    errors: list[str] = []
     for listing in listings:
         job_id = str(listing.get("id") or listing.get("uuid") or "")
         if not job_id:
+            errors.append("listing without id cannot be detailed")
             continue
         try:
             detail = _request_json(
@@ -622,12 +663,15 @@ def _fetch_smartrecruiters(slug: str, company_id: Any, client: httpx.Client,
                 f"https://api.smartrecruiters.com/v1/companies/{safe}/postings/{quote(job_id, safe='')}",
                 retries=retries,
             )
-        except JobSourceError:
+        except JobSourceError as exc:
             # List rows do not contain the complete JD. Never persist one as complete.
+            errors.append(f"job {job_id} detail: {exc}")
             continue
         if isinstance(detail, Mapping):
             details.append({**listing, **detail})
-    return parse_smartrecruiters_jobs(details, company_id, slug)
+        else:
+            errors.append(f"job {job_id} detail: invalid response")
+    return _result(parse_smartrecruiters_jobs(details, company_id, slug), errors=errors)
 
 
 def _workday_context(slug: str, ats_url: str | None) -> tuple[str, str, str]:
@@ -656,12 +700,13 @@ def _workday_context(slug: str, ats_url: str | None) -> tuple[str, str, str]:
 
 
 def _fetch_workday(slug: str, company_id: Any, ats_url: str | None,
-                   client: httpx.Client, retries: int) -> list[dict]:
+                   client: httpx.Client, retries: int) -> JobFetchResult:
     cxs_base, public_base, _site = _workday_context(slug, ats_url)
     listings: list[Mapping[str, Any]] = []
     offset = 0
     limit = 20
-    while True:
+    seen_page_ids: set[tuple[str, ...]] = set()
+    for _page_number in range(MAX_PAGES):
         page = _request_json(
             client, f"{cxs_base}/jobs", retries=retries, method="POST",
             json_body={"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""},
@@ -669,21 +714,35 @@ def _fetch_workday(slug: str, company_id: Any, ats_url: str | None,
         content = page.get("jobPostings") or page.get("jobs") or [] if isinstance(page, Mapping) else []
         if not isinstance(content, list):
             raise JobSourceError("Workday returned an invalid jobs page")
-        listings.extend(item for item in content if isinstance(item, Mapping))
+        page_rows = [item for item in content if isinstance(item, Mapping)]
+        page_ids = tuple(str(item.get("externalPath") or item.get("id") or "")
+                         for item in page_rows)
+        if content and (not page_rows or page_ids in seen_page_ids):
+            raise JobSourceError("Workday pagination made no progress")
+        seen_page_ids.add(page_ids)
+        listings.extend(page_rows)
         total = int(page.get("total") or len(listings))
         if not content or len(listings) >= total:
             break
-        offset += len(content)
+        next_offset = offset + len(content)
+        if next_offset <= offset:
+            raise JobSourceError("Workday pagination made no progress")
+        offset = next_offset
+    else:
+        raise JobSourceError(f"Workday pagination exceeded {MAX_PAGES} pages")
 
     details: list[Mapping[str, Any]] = []
+    errors: list[str] = []
     for listing in listings:
         external_path = str(listing.get("externalPath") or "")
         if not external_path:
+            errors.append("listing without externalPath cannot be detailed")
             continue
         try:
             detail = _request_json(client, f"{cxs_base}/{external_path.lstrip('/')}", retries=retries)
-        except JobSourceError:
+        except JobSourceError as exc:
             # Workday list rows omit the full JD; retry it in the next scan instead.
+            errors.append(f"job {external_path} detail: {exc}")
             continue
         if isinstance(detail, Mapping):
             # The list's externalPath is sometimes omitted from jobPostingInfo.
@@ -693,13 +752,18 @@ def _fetch_workday(slug: str, company_id: Any, ats_url: str | None,
             else:
                 detail = {**listing, **detail, "externalPath": external_path}
             details.append(detail)
-    return parse_workday_jobs(details, company_id, slug, public_base_url=public_base)
+        else:
+            errors.append(f"job {external_path} detail: invalid response")
+    return _result(
+        parse_workday_jobs(details, company_id, slug, public_base_url=public_base),
+        errors=errors,
+    )
 
 
 def fetch_remote_jobs(ats: str, slug: str, company_id: Any = None, *,
                       client: httpx.Client | None = None, retries: int = 3,
-                      ats_url: str | None = None) -> list[dict]:
-    """Fetch one public ATS board and return only confidently remote jobs."""
+                      ats_url: str | None = None) -> JobFetchResult:
+    """Fetch remote jobs plus whether the board was complete enough for closures."""
     ats_key = (ats or "").strip().lower()
     slug = (slug or "").strip()
     if ats_key not in SUPPORTED_ATS:
@@ -715,15 +779,15 @@ def fetch_remote_jobs(ats: str, slug: str, company_id: Any = None, *,
             return _fetch_greenhouse(slug, company_id, client, retries)
         if ats_key == "lever":
             payload = _request_json(client, f"https://api.lever.co/v0/postings/{safe}?mode=json", retries=retries)
-            return parse_lever_jobs(payload, company_id, slug)
+            return _result(parse_lever_jobs(payload, company_id, slug))
         if ats_key == "ashby":
             payload = _request_json(client, f"https://api.ashbyhq.com/posting-api/job-board/{safe}?includeCompensation=true",
                                     retries=retries)
-            return parse_ashby_jobs(payload, company_id, slug)
+            return _result(parse_ashby_jobs(payload, company_id, slug))
         if ats_key == "workable":
             payload = _request_json(client, f"https://apply.workable.com/api/v1/widget/accounts/{safe}?details=true",
                                     retries=retries)
-            return parse_workable_jobs(payload, company_id, slug)
+            return _result(parse_workable_jobs(payload, company_id, slug))
         if ats_key == "smartrecruiters":
             return _fetch_smartrecruiters(slug, company_id, client, retries)
         return _fetch_workday(slug, company_id, ats_url, client, retries)
@@ -733,7 +797,7 @@ def fetch_remote_jobs(ats: str, slug: str, company_id: Any = None, *,
 
 
 __all__ = [
-    "SUPPORTED_ATS", "JobSourceError", "fetch_remote_jobs", "html_to_text",
+    "SUPPORTED_ATS", "JobSourceError", "JobFetchResult", "fetch_remote_jobs", "html_to_text",
     "normalize_greenhouse_question", "parse_greenhouse_jobs", "parse_lever_jobs",
     "parse_ashby_jobs", "parse_workable_jobs", "parse_smartrecruiters_jobs", "parse_workday_jobs",
 ]

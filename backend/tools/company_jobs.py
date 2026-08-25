@@ -18,7 +18,7 @@ from backend.tools.company_job_questions import (
     normalize_questions,
     scrape_questions,
 )
-from backend.tools.company_job_sources import fetch_remote_jobs
+from backend.tools.company_job_sources import SUPPORTED_ATS, fetch_remote_jobs
 
 
 def _storage_record(company_id: int, ats_slug: str, job: dict) -> dict:
@@ -79,11 +79,17 @@ def collect_company_jobs(
     jobs.  Question collection is authoritative only for a complete ATS API
     response or a complete rendered-form scrape.
     """
-    targets = store.list_company_targets(status=status, limit=limit_companies)
+    try:
+        targets = store.list_company_targets(
+            status=status, limit=limit_companies, supported_ats=SUPPORTED_ATS)
+    except TypeError:  # Backward-compatible custom/test stores.
+        targets = store.list_company_targets(status=status, limit=limit_companies)
     result = {
         "companies_selected": len(targets),
         "companies_succeeded": 0,
         "companies_failed": 0,
+        "companies_locked": 0,
+        "companies_incomplete": 0,
         "remote_jobs_seen": 0,
         "jobs_stored": 0,
         "snapshots_created": 0,
@@ -99,14 +105,30 @@ def collect_company_jobs(
     for target in targets:
         company_id = int(target["id"])
         ats = str(target["ats"]).strip().casefold()
-        ats_slug = str(target["ats_slug"]).strip()
-        scan_id = store.begin_scan(company_id, ats, ats_slug)
-        seen: list[str] = []
+        ats_slug = str(target["ats_slug"])
+        fetch_slug = ats_slug.strip()
+        begin = getattr(store, "begin_locked_scan", store.begin_scan)
         try:
-            jobs = fetcher(
-                ats, ats_slug, company_id=company_id,
+            scan_id = begin(company_id, ats, ats_slug)
+        except Exception as exc:
+            locked_error = getattr(store, "BoardScanLocked", jobs_db.BoardScanLocked)
+            if isinstance(exc, locked_error):
+                result["companies_locked"] += 1
+            else:
+                result["companies_failed"] += 1
+                result["errors"].append(
+                    f"{target.get('canonical_name') or company_id}: scan start: {exc}")
+            continue
+        seen: list[str] = []
+        pending_questions: list[tuple[int, dict, dict]] = []
+        try:
+            fetch_result = fetcher(
+                ats, fetch_slug, company_id=company_id,
                 ats_url=target.get("ats_url") or target.get("careers_url"),
             )
+            jobs = list(fetch_result)
+            source_complete = bool(getattr(fetch_result, "complete", True))
+            source_errors = list(getattr(fetch_result, "errors", []))
             result["remote_jobs_seen"] += len(jobs)
             for job in jobs:
                 row = _storage_record(company_id, ats_slug, job)
@@ -115,7 +137,28 @@ def collect_company_jobs(
                 result["jobs_stored"] += 1
                 result["snapshots_created"] += int(bool(saved["snapshot_created"]))
                 seen.append(str(row["source_job_id"]))
+                pending_questions.append((job_id, job, row))
 
+            scan_error = "; ".join(source_errors) or None
+            result["jobs_closed"] += store.finish_scan(
+                scan_id, seen, complete=source_complete, error=scan_error)
+            if source_complete:
+                result["companies_succeeded"] += 1
+            else:
+                result["companies_incomplete"] += 1
+                result["errors"].append(
+                    f"{target.get('canonical_name') or company_id}: {scan_error or 'incomplete ATS response'}")
+        except Exception as exc:
+            error = f"{target.get('canonical_name') or company_id}: {exc}"
+            store.finish_scan(scan_id, seen, complete=False, error=str(exc))
+            result["companies_failed"] += 1
+            result["errors"].append(error)
+            continue
+
+        # A board scan is fully finalized before slow, job-specific form work.
+        # No question failure can make an otherwise complete board scan fail.
+        for job_id, job, row in pending_questions:
+            try:
                 api_questions, api_complete = _api_questions(job)
                 if api_complete:
                     count = store.save_questions(job_id, api_questions, "success")
@@ -143,14 +186,14 @@ def collect_company_jobs(
                         error=_question_error(scraped),
                     )
                     result["questions_failed"] += 1
-
-            result["jobs_closed"] += store.finish_scan(scan_id, seen, complete=True)
-            result["companies_succeeded"] += 1
-        except Exception as exc:
-            error = f"{target.get('canonical_name') or company_id}: {exc}"
-            store.finish_scan(scan_id, seen, complete=False, error=str(exc))
-            result["companies_failed"] += 1
-            result["errors"].append(error)
+            except Exception as exc:
+                result["questions_failed"] += 1
+                result["errors"].append(
+                    f"{target.get('canonical_name') or company_id} job {job_id} questions: {exc}")
+                try:
+                    store.save_questions(job_id, None, "failed", error=str(exc))
+                except Exception:
+                    pass
 
     return result
 

@@ -31,6 +31,16 @@ except ModuleNotFoundError:  # pragma: no cover - depends on the runtime image
 _ENV = Path(__file__).resolve().parents[1] / ".env"
 _pool = None
 _lock = threading.Lock()
+_scan_sessions: dict[int, tuple[Any, int]] = {}
+_scan_sessions_lock = threading.Lock()
+
+SUPPORTED_COMPANY_JOB_ATS = (
+    "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "workday",
+)
+
+
+class BoardScanLocked(RuntimeError):
+    """Another worker already owns the same company ATS board."""
 
 JOB_STATUSES = ("active", "closed")
 QUESTION_STATUSES = ("not_attempted", "success", "failed")
@@ -473,7 +483,16 @@ def mark_missing_jobs_closed(*, company_id: int, source: str, source_board_id: s
         return 0
     seen = [str(value) for value in seen_source_job_ids]
     with _cur(False) as cur:
-        cur.execute(
+        return _mark_missing_jobs_closed_cur(
+            cur, company_id=company_id, source=source,
+            source_board_id=source_board_id, seen_source_job_ids=seen)
+
+
+def _mark_missing_jobs_closed_cur(cur: Any, *, company_id: int, source: str,
+                                  source_board_id: str,
+                                  seen_source_job_ids: list[str]) -> int:
+    """Close a board's missing jobs using the caller's current transaction."""
+    cur.execute(
             "WITH missing AS (SELECT * FROM company_remote_jobs WHERE company_id=%s "
             "AND source=%s AND source_board_id=%s AND status='active' "
             "AND NOT (source_job_id = ANY(%s)) FOR UPDATE), snapshots AS ("
@@ -493,27 +512,36 @@ def mark_missing_jobs_closed(*, company_id: int, source: str, source_board_id: s
             "UPDATE company_remote_jobs j SET status='closed',closed_at=now(),"
             "content_hash=md5(j.content_hash || ':closed'),updated_at=now() FROM missing m "
             "WHERE j.id=m.id",
-            (int(company_id), source.strip().casefold(), str(source_board_id), seen))
-        return cur.rowcount
+            (int(company_id), source.strip().casefold(), str(source_board_id),
+             [str(value) for value in seen_source_job_ids]))
+    return cur.rowcount
 
 
-def list_company_targets(status: str = "novel", limit: int = 100) -> list[dict]:
+def list_company_targets(status: str = "novel", limit: int = 100,
+                         supported_ats: tuple[str, ...] = SUPPORTED_COMPANY_JOB_ATS) -> list[dict]:
     """Return independently discovered companies that have a usable ATS identity."""
     if status not in {"novel", "known", "possible_duplicate", "promoted"}:
         raise ValueError(f"invalid company discovery status: {status}")
     with _cur() as cur:
         cur.execute(
-            "SELECT id,canonical_name,domain,careers_url,ats,ats_slug,ats_url "
-            "FROM company_discovery WHERE status=%s AND ats IS NOT NULL AND ats_slug IS NOT NULL "
-            "ORDER BY updated_at DESC,id DESC LIMIT %s", (status, int(limit)))
+            "SELECT c.id,c.canonical_name,c.domain,c.careers_url,c.ats,c.ats_slug,c.ats_url,"
+            "last_scan.last_scanned_at FROM company_discovery c LEFT JOIN LATERAL ("
+            "SELECT COALESCE(s.finished_at,s.started_at) AS last_scanned_at "
+            "FROM company_remote_job_scans s WHERE s.company_id=c.id "
+            "AND s.source=lower(c.ats) AND s.source_board_id=c.ats_slug "
+            "ORDER BY s.started_at DESC LIMIT 1) last_scan ON TRUE "
+            "WHERE c.status=%s AND lower(c.ats)=ANY(%s) "
+            "AND c.ats_slug IS NOT NULL AND c.ats_slug <> '' "
+            "ORDER BY last_scan.last_scanned_at ASC NULLS FIRST,c.id ASC LIMIT %s",
+            (status, list(supported_ats), int(limit)))
         return [dict(row) for row in cur.fetchall()]
 
 
 def begin_scan(company_id: int, ats: str, ats_slug: str) -> int:
     """Open an auditable board scan and return its database id."""
     source = str(ats).strip().casefold()
-    board = str(ats_slug).strip()
-    if not source or not board:
+    board = str(ats_slug)
+    if not source or not board.strip():
         raise ValueError("ats and ats_slug are required")
     with _cur() as cur:
         cur.execute(
@@ -521,6 +549,53 @@ def begin_scan(company_id: int, ats: str, ats_slug: str) -> int:
             "VALUES (%s,%s,%s) RETURNING id", (int(company_id), source, board))
         row = cur.fetchone()
         return row["id"] if isinstance(row, dict) else row[0]
+
+
+def begin_locked_scan(company_id: int, ats: str, ats_slug: str) -> int:
+    """Start a scan while retaining a non-blocking session advisory lock.
+
+    The dedicated pooled connection is deliberately held until ``finish_scan``;
+    PostgreSQL session locks would otherwise leak to an unrelated pool borrower.
+    """
+    source = str(ats).strip().casefold()
+    board = str(ats_slug)
+    if not source or not board.strip():
+        raise ValueError("ats and ats_slug are required")
+    pool = _get_pool()
+    connection = pool.getconn()
+    lock_key = "company_remote_board\x1f" + "\x1f".join(
+        (str(int(company_id)), source, board))
+    cursor = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    locked = False
+    try:
+        cursor.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked",
+                       (lock_key,))
+        row = cursor.fetchone()
+        locked = bool(row["locked"] if isinstance(row, dict) else row[0])
+        if not locked:
+            connection.rollback()
+            raise BoardScanLocked(f"board scan already running: {source}:{board}")
+        cursor.execute(
+            "INSERT INTO company_remote_job_scans (company_id,source,source_board_id) "
+            "VALUES (%s,%s,%s) RETURNING id", (int(company_id), source, board))
+        row = cursor.fetchone()
+        scan_id = int(row["id"] if isinstance(row, dict) else row[0])
+        connection.commit()
+        with _scan_sessions_lock:
+            _scan_sessions[scan_id] = (connection, lock_key)
+        return scan_id
+    except Exception:
+        connection.rollback()
+        if locked:
+            try:
+                cursor.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (lock_key,))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+        pool.putconn(connection)
+        raise
+    finally:
+        cursor.close()
 
 
 def save_questions(job_id: int, questions: list[dict] | None, scrape_state: str,
@@ -539,24 +614,54 @@ def save_questions(job_id: int, questions: list[dict] | None, scrape_state: str,
 def finish_scan(scan_id: int, seen_source_job_ids: list[str], complete: bool = True,
                 error: str | None = None) -> int:
     """Finish a scan and close missing jobs only for a successful complete result."""
+    with _scan_sessions_lock:
+        locked_session = _scan_sessions.pop(int(scan_id), None)
+    if locked_session:
+        connection, lock_key = locked_session
+        pool = _get_pool()
+        cur = connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            closed = _finish_scan_cur(
+                cur, scan_id, seen_source_job_ids, complete=complete, error=error)
+            connection.commit()
+            return closed
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            try:
+                cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (lock_key,))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+            cur.close()
+            pool.putconn(connection)
     with _cur() as cur:
-        cur.execute(
-            "SELECT company_id,source,source_board_id FROM company_remote_job_scans "
-            "WHERE id=%s FOR UPDATE", (int(scan_id),))
-        scan = cur.fetchone()
-        if not scan:
-            raise ValueError(f"unknown scan id: {scan_id}")
-        succeeded = bool(complete and not error)
-        cur.execute(
-            "UPDATE company_remote_job_scans SET finished_at=now(),scan_complete=%s,"
-            "scan_succeeded=%s,seen_job_count=%s,error=%s WHERE id=%s",
-            (bool(complete), succeeded, len(seen_source_job_ids),
-             normalize_text(error), int(scan_id)))
-    return mark_missing_jobs_closed(
-        company_id=scan["company_id"], source=scan["source"],
+        return _finish_scan_cur(
+            cur, scan_id, seen_source_job_ids, complete=complete, error=error)
+
+
+def _finish_scan_cur(cur: Any, scan_id: int, seen_source_job_ids: list[str], *,
+                     complete: bool, error: str | None) -> int:
+    """Finalize scan metadata and closures atomically on one transaction."""
+    cur.execute(
+        "SELECT company_id,source,source_board_id FROM company_remote_job_scans "
+        "WHERE id=%s FOR UPDATE", (int(scan_id),))
+    scan = cur.fetchone()
+    if not scan:
+        raise ValueError(f"unknown scan id: {scan_id}")
+    succeeded = bool(complete and not error)
+    cur.execute(
+        "UPDATE company_remote_job_scans SET finished_at=now(),scan_complete=%s,"
+        "scan_succeeded=%s,seen_job_count=%s,error=%s WHERE id=%s",
+        (bool(complete), succeeded, len(seen_source_job_ids),
+         normalize_text(error), int(scan_id)))
+    if not succeeded:
+        return 0
+    return _mark_missing_jobs_closed_cur(
+        cur, company_id=scan["company_id"], source=scan["source"],
         source_board_id=scan["source_board_id"],
-        seen_source_job_ids=seen_source_job_ids, scan_succeeded=succeeded,
-        scan_complete=bool(complete))
+        seen_source_job_ids=seen_source_job_ids)
 
 
 def counts() -> dict:

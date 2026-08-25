@@ -1,4 +1,5 @@
 from backend.tools import company_jobs
+from backend.tools.company_job_sources import JobFetchResult
 
 
 def _job(**overrides):
@@ -24,6 +25,7 @@ class Store:
     def __init__(self):
         self.question_calls = []
         self.finished = []
+        self.events = []
 
     def list_company_targets(self, status, limit):
         return [{"id": 7, "canonical_name": "Example", "ats": "lever",
@@ -37,10 +39,12 @@ class Store:
         return {"job_id": 31, "snapshot_created": True}
 
     def save_questions(self, job_id, questions, state, error=None):
+        self.events.append(("questions", job_id))
         self.question_calls.append((job_id, questions, state, error))
         return len(questions or []) if state == "success" else 0
 
     def finish_scan(self, scan_id, seen, complete=True, error=None):
+        self.events.append(("finish", scan_id))
         self.finished.append((scan_id, seen, complete, error))
         return 2 if complete else 0
 
@@ -137,3 +141,49 @@ def test_question_limit_records_not_attempted_without_erasing_data():
         collect_questions=False)
     assert result["questions_not_attempted"] == 1
     assert store.question_calls == [(31, None, "not_attempted", None)]
+
+
+def test_incomplete_source_result_never_closes_and_preserves_successful_rows():
+    store = Store()
+    result = company_jobs.collect_company_jobs(
+        store=store,
+        fetcher=lambda *a, **k: JobFetchResult(
+            [_job()], complete=False, errors=["job remote-2 detail: HTTP 503"]),
+        collect_questions=False,
+    )
+    assert result["jobs_stored"] == 1
+    assert result["companies_incomplete"] == 1
+    assert result["jobs_closed"] == 0
+    assert store.finished == [
+        (19, ["remote-1"], False, "job remote-2 detail: HTTP 503")]
+
+
+def test_board_finishes_before_question_scrape_and_question_error_is_per_job():
+    store = Store()
+
+    def scrape(*args, **kwargs):
+        assert store.events[0] == ("finish", 19)
+        raise RuntimeError("browser crashed")
+
+    result = company_jobs.collect_company_jobs(
+        store=store, fetcher=lambda *a, **k: [_job()], question_scraper=scrape)
+    assert result["companies_succeeded"] == 1
+    assert result["companies_failed"] == 0
+    assert result["questions_failed"] == 1
+    assert store.question_calls[-1][2:] == ("failed", "browser crashed")
+
+
+def test_raw_board_slug_is_preserved_for_identity_but_trimmed_for_request():
+    store = Store()
+    store.list_company_targets = lambda status, limit: [{
+        "id": 7, "canonical_name": "Example", "ats": "lever",
+        "ats_slug": "  CaseSensitiveBoard  ",
+    }]
+    fetched = []
+    company_jobs.collect_company_jobs(
+        store=store,
+        fetcher=lambda ats, slug, **kwargs: fetched.append(slug) or [_job()],
+        collect_questions=False,
+    )
+    assert fetched == ["CaseSensitiveBoard"]
+    assert store.row["source_board_id"] == "  CaseSensitiveBoard  "

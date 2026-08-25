@@ -216,8 +216,126 @@ def test_begin_and_finish_scan_scope_closure(monkeypatch):
     second = FakeCursor(fetches=[{
         "company_id": 7, "source": "greenhouse", "source_board_id": "acme"}])
     fake_cursor(monkeypatch, second)
-    closed = []
-    monkeypatch.setattr(db, "mark_missing_jobs_closed", lambda **kwargs: closed.append(kwargs) or 2)
-    assert db.finish_scan(91, ["1", "2"], complete=True) == 2
-    assert closed[0]["scan_succeeded"] is True
-    assert closed[0]["source_board_id"] == "acme"
+    assert db.finish_scan(91, ["1", "2"], complete=True) == 3
+    assert any("UPDATE company_remote_job_scans" in sql for sql, _ in second.calls)
+    closure = next((sql, args) for sql, args in second.calls
+                   if "WITH missing AS" in sql)
+    assert closure[1] == (7, "greenhouse", "acme", ["1", "2"])
+
+
+def test_finish_scan_failure_and_closure_share_one_transaction(monkeypatch):
+    cursor = FakeCursor(fetches=[{
+        "company_id": 7, "source": "greenhouse", "source_board_id": " raw ",
+    }])
+    fake_cursor(monkeypatch, cursor)
+    assert db.finish_scan(91, ["1"], complete=False, error="detail failed") == 0
+    assert not any("WITH missing AS" in sql for sql, _ in cursor.calls)
+    update = next(args for sql, args in cursor.calls
+                  if "UPDATE company_remote_job_scans" in sql)
+    assert update[:2] == (False, False)
+
+
+def test_target_selection_is_supported_and_oldest_scan_first(monkeypatch):
+    cursor = FakeCursor(fetches=[[{"id": 4, "ats_slug": " RawSlug "}]])
+    fake_cursor(monkeypatch, cursor)
+    rows = db.list_company_targets("novel", 10, supported_ats=("lever", "workday"))
+    assert rows[0]["ats_slug"] == " RawSlug "
+    sql, args = cursor.calls[0]
+    assert "lower(c.ats)=ANY(%s)" in sql
+    assert "last_scan.last_scanned_at ASC NULLS FIRST" in sql
+    assert args == ("novel", ["lever", "workday"], 10)
+
+
+def test_nonblocking_board_lock_is_held_until_atomic_finish(monkeypatch):
+    class Connection:
+        def __init__(self):
+            self.fetches = [
+                {"locked": True}, {"id": 501},
+                {"company_id": 7, "source": "lever", "source_board_id": " Raw "},
+            ]
+            self.calls = []
+            self.commits = 0
+
+        def cursor(self, cursor_factory=None):
+            connection = self
+
+            class Cursor(FakeCursor):
+                def execute(self, sql, args=None):
+                    connection.calls.append((sql, args))
+                    super().execute(sql, args)
+
+                def fetchone(self):
+                    return connection.fetches.pop(0)
+
+                def close(self):
+                    pass
+            return Cursor()
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            pass
+
+    class Pool:
+        def __init__(self):
+            self.connection = Connection()
+            self.returned = []
+
+        def getconn(self):
+            return self.connection
+
+        def putconn(self, connection):
+            self.returned.append(connection)
+
+    pool = Pool()
+    monkeypatch.setattr(db, "_get_pool", lambda: pool)
+    db._scan_sessions.clear()
+    assert db.begin_locked_scan(7, "Lever", " Raw ") == 501
+    assert pool.returned == []
+    assert db.finish_scan(501, ["j1"], complete=True) == 3
+    assert pool.returned == [pool.connection]
+    sql = " ".join(call[0] for call in pool.connection.calls)
+    assert "pg_try_advisory_lock" in sql
+    assert "WITH missing AS" in sql
+    assert "pg_advisory_unlock" in sql
+
+
+def test_busy_board_lock_returns_connection_without_starting_scan(monkeypatch):
+    class Cursor:
+        def execute(self, sql, args=None):
+            pass
+
+        def fetchone(self):
+            return {"locked": False}
+
+        def close(self):
+            pass
+
+    class Connection:
+        def cursor(self, cursor_factory=None):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    class Pool:
+        connection = Connection()
+
+        def __init__(self):
+            self.returned = False
+
+        def getconn(self):
+            return self.connection
+
+        def putconn(self, connection):
+            self.returned = True
+
+    pool = Pool()
+    monkeypatch.setattr(db, "_get_pool", lambda: pool)
+    with pytest.raises(db.BoardScanLocked):
+        db.begin_locked_scan(7, "lever", "acme")
+    assert pool.returned is True

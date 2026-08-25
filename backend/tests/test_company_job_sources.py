@@ -59,6 +59,24 @@ def test_greenhouse_fetches_full_jd_and_every_question_for_remote_only():
     assert not any("/jobs/102" in url for url in calls)
 
 
+def test_greenhouse_detail_failure_marks_result_incomplete_for_closure(monkeypatch):
+    monkeypatch.setattr(src.time, "sleep", lambda _: None)
+
+    def handler(request):
+        if "/jobs/101" in request.url.path:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"jobs": [{
+            "id": 101, "title": "Remote Support", "location": {"name": "Remote - US"},
+            "absolute_url": "https://boards.greenhouse.io/acme/jobs/101",
+            "content": "<p>Complete board JD</p>",
+        }]})
+
+    result = src.fetch_remote_jobs(
+        "greenhouse", "acme", 7, client=_client(handler), retries=1)
+    assert result.complete is False
+    assert result.errors and "job 101 detail" in result.errors[0]
+
+
 def test_greenhouse_excludes_hybrid_even_when_title_mentions_remote():
     payload = {"jobs": [{
         "id": 1, "title": "Remote-friendly Analyst", "location": {"name": "Hybrid - Boston"},
@@ -211,6 +229,23 @@ def test_workday_uses_exact_cxs_site_paginates_and_fetches_full_detail():
     assert job["questions_state"] == "not_available"
     assert job["raw_payload"]["unmodeled"] == {"preserved": True}
     assert len([url for method, url in calls if method == "POST" and url.endswith("/jobs")]) == 2
+
+
+def test_workday_repeated_page_is_rejected_instead_of_looping():
+    def handler(request):
+        if request.url.path.endswith("/jobs"):
+            return httpx.Response(200, json={
+                "total": 999,
+                "jobPostings": [{"title": "Support", "externalPath": "/job/R1"}],
+            })
+        return httpx.Response(200, json={"jobPostingInfo": {}})
+
+    with pytest.raises(src.JobSourceError, match="made no progress"):
+        src.fetch_remote_jobs(
+            "workday", "acme", 9,
+            ats_url="https://acme.wd5.myworkdayjobs.com/External",
+            client=_client(handler),
+        )
 
 
 def test_workday_requires_verified_career_url():

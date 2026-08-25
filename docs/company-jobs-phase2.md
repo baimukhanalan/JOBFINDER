@@ -57,3 +57,18 @@ single run; unattempted jobs remain explicitly marked and should be revisited la
 A successful complete board response is authoritative, even when it contains zero remote jobs, so
 previously active jobs missing from that board are closed. A connector/network failure records a
 failed scan and closes nothing. This prevents temporary provider outages from corrupting job history.
+
+Production collectors also treat per-job detail failures as an incomplete board response. Jobs whose
+full detail was read are still stored, but no absence-based closures occur until a later scan reads
+every required detail successfully. SmartRecruiters and Workday pagination has bounded page and
+no-progress guards, so a repeating upstream page fails safely instead of looping or producing a
+false-complete result.
+
+Targets are selected from the supported ATS set in oldest-scanned-first order. A non-blocking
+PostgreSQL advisory lock permits only one worker to scan a particular company/ATS/board identity at
+a time. The raw `ats_slug` remains the database identity; only a trimmed copy is used to construct an
+HTTP request.
+
+The job scan transaction is finalized before rendered application forms are opened. Scan metadata
+and any missing-job closures commit atomically. Form/question failures are then recorded per job and
+never downgrade a completed board scan or erase the last authoritative question set.

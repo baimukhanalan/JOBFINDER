@@ -749,19 +749,25 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 
 
 @app.post("/catalog/fill_all")
-def catalog_fill_all(gender: str = Form(""), count: int = Form(100)):
+def catalog_fill_all(gender: str = Form(""), count: int = Form(100),
+                     company: str = Form(""), region: str = Form("")):
     """Start ONE sequential bulk run over the first `count` greenhouse+ashby jobs in
-    the catalog (Lever/Workable skipped — live captcha). Fires the same per-job fill
-    (which auto-submits). `count` is clamped to 1..1000. Returns immediately; poll
-    /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
+    the catalog, optionally narrowed by `company` (a company_key) and `region`
+    (US/CA/UK/OTHER). `gender` ('male'/'female') sets the persona sex for every job in
+    the run. Lever/Workable skipped (live captcha). `count` clamped to 1..1000. Returns
+    immediately; poll /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
     from backend.tools import catalog_db
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
                              **_fill_all_public()})
     g = gender if gender in ("male", "female") else None
     n = max(1, min(int(count), 1000))
+    comp = (company or "").strip() or None
+    reg = (region or "").strip().upper()
+    reg = reg if reg in ("US", "CA", "UK", "OTHER") else None
     try:
-        jobs = catalog_db.list_jobs(remote_only=True, limit=100000)
+        jobs = catalog_db.list_jobs(remote_only=True, limit=100000,
+                                    company=comp, region=reg)
     except Exception as exc:
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
     job_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS][:n]

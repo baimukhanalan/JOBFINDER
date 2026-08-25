@@ -645,8 +645,7 @@ def unfinished_index():
             f'<span class="unf-res"></span></div>'
             "</article>")
     n = len(items)
-    n_rerun = sum(1 for it in items if it.get("state") == "error"
-                  and str(it.get("jobid")) not in _UNFIXABLE_JOBIDS)
+    n_rerun = len(_drain_partition(items)[0])   # error + fixable done (retry-capped)
     list_html = ("".join(cards) if cards else
                  '<div class="unf-empty">Пусто — все заявки завершены 🎉<br>'
                  '<span>Незавершённые появляются здесь после «Массовой подачи», '
@@ -776,40 +775,66 @@ def unfinished_done(jobid: int):
 _UNFIXABLE_JOBIDS = {"3462", "33445"}   # oscar / hioscar (per CLAUDE.md)
 
 
+_DRAIN_MAX_RETRIES = 3   # re-run a fixable unfinished job this many times, then drop it dead
+
+
+def _drain_partition(jobs) -> tuple[list[int], list[str]]:
+    """Split the ledger into (rerun_ids, drop_ids). We DRAIN = try to finish what we can:
+      - rerun: `error` + `done` (blocked-on-field / spam / clicked-no-confirm) with
+        retries < _DRAIN_MAX_RETRIES → re-attempt with the current fills. GH benefits from
+        the fill-gap fixes; a spam-flagged Ashby gets another probabilistic try.
+      - drop (dead): embed-404 (never fillable), already-submitted (churn), and anything
+        that exhausted its retries (persistently fails → stop re-spamming it).
+      - keep untouched: `needs_human` (Lever/Workable captcha → a human, not the bot)."""
+    from backend.tools import bulk_log
+    done = bulk_log.submitted_jobids()
+    rerun: list[int] = []
+    drop: list[str] = []
+    seen: set = set()
+    for job in jobs:
+        jid = str(job.get("jobid") or "")
+        if not jid or jid == "None" or jid in seen:
+            continue
+        seen.add(jid)
+        st = job.get("state")
+        if st == "needs_human":
+            continue                                  # human backlog — leave it
+        if jid in _UNFIXABLE_JOBIDS or jid in done:
+            drop.append(jid); continue                # 404 / already done → dead
+        if int(job.get("retries", 0)) >= _DRAIN_MAX_RETRIES:
+            drop.append(jid); continue                # exhausted — give up
+        if st in ("error", "done"):
+            try:
+                rerun.append(int(jid))
+            except ValueError:
+                pass
+    return rerun, drop
+
+
 @app.post("/unfinished/rerun")
 def unfinished_rerun(gender: str = Form("")):
-    """Re-run every RE-RUNNABLE unfinished application through the parallel engine. Targets
-    the `error` bucket (these failed at page LOAD on the now-dead proxy pool — fixed by the
-    Bright Data proxies), skipping captcha jobs (needs_human, human-only), already-submitted
-    jobs, and known-unfillable embeds. Greenhouse/Ashby fan out + auto-submit; any Lever/
-    Workable among them route back to «Незавершённые» for a human."""
+    """DRAIN «Незавершённые»: re-run every fixable job (error + blocked-on-field/spam/clicked,
+    retry-capped) to actually FINISH it, and drop only the truly-dead (embed-404, already-
+    submitted, or retries-exhausted). `needs_human` (captcha) is left for a human. GH/Ashby
+    fan out + auto-submit; a job that confirms leaves the ledger, one that fails again is
+    re-parked with retries+1 until the cap."""
     from backend.tools import bulk_log
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
                              **_fill_all_public()})
-    done = bulk_log.submitted_jobids()
-    ids: list[int] = []
-    seen: set = set()
-    for job in bulk_log.unfinished():
-        if job.get("state") != "error":
-            continue                      # needs_human = captcha; done = already parked ok
-        jid = str(job.get("jobid") or "")
-        if not jid or jid == "None" or jid in _UNFIXABLE_JOBIDS or jid in done or jid in seen:
-            continue
-        seen.add(jid)
-        try:
-            ids.append(int(jid))
-        except ValueError:
-            pass
-    if not ids:
-        return JSONResponse({"started": False, "reason": "nothing_to_rerun", "count": 0})
+    rerun, drop = _drain_partition(bulk_log.unfinished())
+    dropped = bulk_log.drop_many(drop) if drop else 0
+    if not rerun:
+        return JSONResponse({"started": False, "reason": "nothing_to_rerun",
+                             "count": 0, "dropped": dropped})
     g = gender if gender in ("male", "female") else None
     _FILL_ALL_STOP.clear()
     _FILL_ALL.clear()
-    _FILL_ALL.update({"state": "running", "total": len(ids), "done": 0, "ok": 0,
+    _FILL_ALL.update({"state": "running", "total": len(rerun), "done": 0, "ok": 0,
                       "failed": 0, "current": None, "current_id": None, "workers": "auto"})
-    threading.Thread(target=_do_fill_all_adaptive, args=(ids, g), daemon=True).start()
-    return JSONResponse({"started": True, "total": len(ids), "novnc": _NOVNC_URL})
+    threading.Thread(target=_do_fill_all_adaptive, args=(rerun, g), daemon=True).start()
+    return JSONResponse({"started": True, "total": len(rerun), "dropped": dropped,
+                         "novnc": _NOVNC_URL})
 
 
 @app.get("/health")

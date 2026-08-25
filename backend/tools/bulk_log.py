@@ -124,7 +124,12 @@ def _update_ledger(job: dict, run_id: str, confirmed) -> None:
     elif key in _load_done():
         led.pop(key, None)          # already done elsewhere — don't churn it
     else:
-        led[key] = {**job, "run_id": run_id}
+        # Track how many times this job has been re-parked (failed). The drain re-runs a
+        # fixable job up to a retry cap, then drops it as dead — so we finish what we can and
+        # stop re-spamming what we can't.
+        prev = led.get(key)
+        retries = (int((prev or {}).get("retries", 0)) + 1) if prev else 0
+        led[key] = {**job, "run_id": run_id, "retries": retries}
     _save_ledger(led)
 
 

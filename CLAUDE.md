@@ -502,9 +502,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   `mark_done`, or the reconciler) calls `bulk_log.mark_submitted(jobid)`; `_update_ledger` never re-parks a
   jobid already in that set, and **`/catalog/fill_all` excludes it from selection** so a done job is never
   re-applied. Seed it from `confirmed=True` log lines if rebuilding. **`POST /unfinished/rerun` +
-  «Докрутить всё (N)» button** re-runs the whole `error` bucket (jobs that failed at page LOAD on the dead
-  proxy — now fixed) through the adaptive parallel engine, skipping `needs_human` (captcha), already-
-  submitted, and `_UNFIXABLE_JOBIDS` (oscar/hioscar embed-404). **Audit trail
+  «Докрутить всё (N)» button = DRAIN (2026-08-25, `_drain_partition`):** it FINISHES what it can instead
+  of hiding failures — re-runs every fixable job (`error` + `done` blocked-on-field/spam/clicked-no-confirm,
+  retry-capped at `_DRAIN_MAX_RETRIES`=3) through the adaptive engine, and drops ONLY the truly-dead
+  (`_UNFIXABLE_JOBIDS` embed-404, already-submitted, or retries-exhausted). `needs_human` (Lever/Workable
+  captcha) is left for a human. Each ledger entry carries a `retries` count (`bulk_log._update_ledger`
+  increments it when a job is re-parked); a job that confirms leaves the ledger, one that keeps failing is
+  re-parked until it hits the cap and is dropped as dead — so we keep re-attempting fill-gap failures (which
+  the fill fixes may now clear) without infinitely re-spamming Ashby. `bulk_log.drop_many` removes a stale
+  entry WITHOUT marking it submitted (unlike `mark_done`), so a dropped job can still be re-hit by a future
+  run. **The loop's per-cycle procedure now: random batch → reconcile → drain → reconcile → repeat** (don't
+  just delete unfinished — drain them). **Audit trail
   (`tools/bulk_log.py`, gitignored `logs/`):** `bulk_apply.log` (append-only, a line per job + a FINISHED
   summary) + `bulk_apply_last.json` (full last run, rewritten each job so it survives a restart). Served
   by `GET /catalog/fill_all_report` (JSON) + `GET /catalog/fill_all_log` (download); the Фильтры sheet

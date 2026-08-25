@@ -277,6 +277,21 @@ def clear() -> dict:
     return {"count": 0}
 
 
+def replace_pool(proxies: list[dict]) -> dict:
+    """Atomically REPLACE the whole pool with a fresh set (daily refresh: delete the
+    old proxies, write the new ones). Resets both cursors and the fail streaks (a
+    fresh entry starts at fails=0 — `_clean` drops `fails`). Used by the Bright Data
+    daily provisioner so the pool is rebuilt from fresh egress sessions each day."""
+    with _LOCK:
+        data = _load()
+        data["proxies"] = [_clean(p) for p in proxies]
+        data["cursor"] = 0
+        data["recheck_cursor"] = 0
+        data["last_check"] = time.time()
+        _save(data)
+    return {"count": len(data["proxies"])}
+
+
 def next_proxy() -> dict | None:
     """Round-robin the pool (advances + persists the cursor). Returns
     {server, username, password} or None when the pool is empty."""
@@ -285,9 +300,16 @@ def next_proxy() -> dict | None:
         ps = data.get("proxies") or []
         if not ps:
             return None
-        i = int(data.get("cursor", 0)) % len(ps)
-        data["cursor"] = (i + 1) % len(ps)
+        # Prefer the healthiest tier: cycle only among the lowest-`fails` proxies so a
+        # mostly-dead pool doesn't keep handing out known-bad egresses (a dead proxy costs
+        # a page-load failure/timeout per job). Falls through to the full pool if the whole
+        # pool is uniformly degraded. The revalidator resets `fails` to 0 on a live check,
+        # so this tier converges to the actually-live proxies over time.
+        min_fails = min(int(p.get("fails", 0)) for p in ps)
+        pool = [p for p in ps if int(p.get("fails", 0)) <= min_fails] or ps
+        i = int(data.get("cursor", 0)) % len(pool)
+        data["cursor"] = (i + 1) % len(pool)
         _save(data)
-        p = ps[i]
+        p = pool[i]
     return {"server": p.get("server"), "username": p.get("username"),
             "password": p.get("password")}

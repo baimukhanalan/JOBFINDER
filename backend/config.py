@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     mailgun_smtp_port: int = 587
     mailgun_smtp_login: str = ""
     mailgun_smtp_password: str = ""
+    # Bright Data proxy provisioning — the apply engine's rotating egress IPs.
+    # A daily cron (tools/brightdata_proxies.py) regenerates the pool from fresh
+    # session-based proxies against ONE Bright Data zone/gateway.
+    brightdata_api_token: str = ""          # account API token (zone verify / mgmt)
+    brightdata_customer: str = ""           # e.g. hl_63d6fad4
+    brightdata_zone: str = ""               # e.g. alibaba_res (residential) / alibaba_dc (datacenter)
+    brightdata_zone_password: str = ""      # the zone's password
+    brightdata_gateway: str = "brd.superproxy.io:33335"
+    brightdata_country: str = "us"          # 2-letter target country (blank = any)
+    brightdata_pool_size: int = 200         # sessions generated per daily refresh
 
     class Config:
         env_file = str(ENV_FILE)

@@ -940,15 +940,20 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
         base = f"http://127.0.0.1:{port}"
         # wait_submit=1 → the worker finishes the email-code + confirmation INLINE before
         # returning, so this worker doesn't cancel that job's watch by taking the next one.
-        # Up to 3 attempts, each on a FRESH proxy: if the apply page fails to LOAD because the
-        # residential proxy is dead/slow (ERR_TIMED_OUT / ERR_TUNNEL_CONNECTION_FAILED), switch
-        # to a working proxy instead of failing the job.
+        # Up to 3 attempts: the first two rotate a FRESH proxy (if the apply page fails to LOAD
+        # because a residential proxy is dead/slow — ERR_TIMED_OUT / ERR_TUNNEL_CONNECTION_FAILED
+        # — switch egress); the THIRD/final attempt goes DIRECT (no proxy) so a fully-dead pool
+        # can't block the whole run. GH/Ashby submit fine from the datacenter IP (that's how the
+        # earliest verified submits worked), so a direct fill beats a failed job. With a healthy
+        # pool attempts 0/1 succeed and the direct fallback is never reached.
         for attempt in range(3):
             load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
-            try:
-                px = proxy_pool.next_proxy()
-            except Exception:
-                px = None
+            px = None
+            if attempt < 2:
+                try:
+                    px = proxy_pool.next_proxy()
+                except Exception:
+                    px = None
             if px and px.get("server"):
                 load["proxy_server"] = px["server"]
                 if px.get("username"):

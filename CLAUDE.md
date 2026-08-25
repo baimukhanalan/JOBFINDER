@@ -374,6 +374,34 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a good one (a separate `recheck_cursor` walks the pool; `last_check` is stamped). Manual pass:
   `POST /proxies/recheck` (Form `batch`). The FIRST pass over a fresh pool always evicts 0 (every
   `fails` goes 0→1). Tests: `tests/test_proxy_pool.py`.
+- **Proxy SOURCE = Bright Data, refreshed DAILY (`tools/brightdata_proxies.py`, 2026-08-25).** The
+  earlier pasted residential/mobile provider (`l6jkxlhnqy`) DIED — its account went to `407 Proxy
+  Authentication Required` on every request (expired/unfunded), so a 100-job bulk run collapsed to
+  12/100 filled, ~88 `net::ERR_TUNNEL_CONNECTION_FAILED`/`Timeout` at `Page.goto`. Replaced with a
+  Bright Data account (token/customer/zone in `backend/.env` `BRIGHTDATA_*`, gitignored — customer
+  `hl_63d6fad4`). BD rotating proxies use ONE gateway (`brd.superproxy.io:33335`) + a zone; the egress
+  IP is chosen per **session**, where the session id is a `-session-<random>` token in the proxy
+  **username** — so "N rotating proxies" = N usernames sharing the zone gateway/password, each with a
+  distinct session (no per-IP allocation for rotating zones). **Active zone = `alibaba_dc` (datacenter
+  shared, $0.60/GB — the absolute cheapest, chosen by owner for max volume on a low balance);**
+  `alibaba_res` (residential shared, $4/GB, better anti-bot) also exists — switch by editing
+  `BRIGHTDATA_ZONE` in `.env` (+ its `BRIGHTDATA_ZONE_PASSWORD`) and re-running the tool. **Balance is
+  small (~$5.37 as of 2026-08-25 → ~1800 datacenter apps / ~270 residential) — top up in the BD
+  dashboard.** `brightdata_proxies.refresh()` verifies the zone routes (one live probe; ABORTS without
+  wiping the pool if the balance/zone is dead, so a drained account leaves yesterday's pool intact),
+  mints `BRIGHTDATA_POOL_SIZE` (200) fresh sessions, validates a sample (proves rotation + records real
+  egress IPs), and `proxy_pool.replace_pool`s the pool (delete old + write new, cursors/fail-streaks
+  reset). CLI: `python -m backend.tools.brightdata_proxies --verify` / `--refresh [--count N]
+  [--validate K]`. **Daily cron `45 4` refreshes the pool** → `logs/brightdata.log`. Tests:
+  `tests/test_brightdata_proxies.py` (pure, no network).
+- **Bulk worker falls back to DIRECT when proxies are dead (`dashboard._fill_one_on_worker`, 2026-08-25).**
+  The per-job load has 3 attempts: the first two rotate a FRESH proxy (`next_proxy`, retried on a
+  `_PROXY_ERR_RE` load failure — dead/slow egress), the **THIRD/final attempt goes DIRECT (no proxy)**
+  so a fully-dead pool can't block the whole run (GH/Ashby submit fine from the datacenter server IP —
+  that's how the earliest verified submits worked). With a healthy pool attempts 0/1 succeed and the
+  direct fallback is never reached. Complements: `proxy_pool.next_proxy` now round-robins only the
+  **lowest-`fails` tier** of the pool (not blindly over dead entries), so attempts 0/1 don't waste
+  timeouts on known-bad egresses.
 - **Bulk auto-apply: «Подать на все» (`/catalog`) — PARALLEL (2026-08-25).** Was ONE sequential queue
   on the single noVNC co-pilot; a single 1Password/Ashby job could hang ~2h (the Ashby emailed-code
   wait), so 6128 jobs was days-to-months. **Now Greenhouse/Ashby fan out across `workers` HEADLESS

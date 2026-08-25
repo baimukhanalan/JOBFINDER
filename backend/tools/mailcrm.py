@@ -775,13 +775,19 @@ def stage_counts() -> dict[str, int]:
         return mail_db.stage_counts()
     except Exception:
         rows = _scan_messages(limit=1_000_000)
-        out = {"all": len(rows), "sent": 0, "ack": 0, "interview": 0,
-               "offer": 0, "rejection": 0}
+        # DISTINCT-CANDIDATE counts (match mail_db.stage_counts / the Candidates funnel).
+        buckets: dict[str, set] = {"sent": set(), "ack": set(), "interview": set(),
+                                   "offer": set(), "rejection": set()}
+        allbx: set = set()
         for row in rows:
+            mb = row.get("mailbox")
+            allbx.add(mb)
             if row.get("outbound"):
-                out["sent"] += 1
-            elif row.get("kind") in out:
-                out[row["kind"]] += 1
+                buckets["sent"].add(mb)
+            elif row.get("kind") in buckets:
+                buckets[row["kind"]].add(mb)
+        out = {k: len(v) for k, v in buckets.items()}
+        out["all"] = len(allbx)
         return out
 
 

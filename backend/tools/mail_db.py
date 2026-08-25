@@ -250,13 +250,18 @@ def counts() -> dict:
 
 
 def stage_counts() -> dict:
-    """Message totals for the inbox funnel. Outbound mail is a separate stage."""
+    """DISTINCT-CANDIDATE totals for the inbox funnel — the same metric as the Candidates
+    funnel (`kind_counts`), so the two screens show the SAME number per stage. Counting
+    messages (COUNT(*)) here made the inbox show a bigger number than Candidates for the
+    identical stage (a candidate with 3 interview mails counted as 3), which read as a
+    'conflict in the numbers'. Outbound is its own 'sent' stage."""
     with _cur(dict_rows=False) as cur:
-        cur.execute("SELECT kind, COUNT(*) FROM mail_index WHERE NOT outbound GROUP BY kind")
+        cur.execute("SELECT kind, COUNT(DISTINCT mailbox) FROM mail_index "
+                    "WHERE NOT outbound GROUP BY kind")
         out = {k: n for k, n in cur.fetchall()}
-        cur.execute("SELECT COUNT(*) FROM mail_index WHERE outbound=TRUE")
+        cur.execute("SELECT COUNT(DISTINCT mailbox) FROM mail_index WHERE outbound=TRUE")
         out["sent"] = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(*) FROM mail_index")
+        cur.execute("SELECT COUNT(DISTINCT mailbox) FROM mail_index")
         out["all"] = cur.fetchone()[0]
         return out
 

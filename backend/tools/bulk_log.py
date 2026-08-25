@@ -213,5 +213,22 @@ def mark_done(jobid) -> bool:
     return False
 
 
+def drop_many(jobids) -> int:
+    """Remove jobs from the ledger WITHOUT marking them submitted (unlike mark_done) — a
+    stale/dead-entry cleanup. A dropped job is NOT recorded done, so a future run may still
+    re-attempt it. Returns how many were present and removed."""
+    ids = {str(j) for j in (jobids or [])}
+    if not ids:
+        return 0
+    led = _load_ledger()
+    n = 0
+    for j in ids:
+        if led.pop(j, None) is not None:
+            n += 1
+    if n:
+        _save_ledger(led)
+    return n
+
+
 def log_path() -> Path:
     return _LOG

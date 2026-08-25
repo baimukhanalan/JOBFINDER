@@ -909,9 +909,13 @@ _PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill (~≤120s) + i
 # A dead/slow residential proxy makes the apply page fail to LOAD (fast Chromium net error,
 # not a slow fill) — retry the job on a FRESH proxy instead of failing it.
 _PROXY_ERR_RE = re.compile(
-    r"ERR_TIMED_OUT|ERR_TUNNEL_CONNECTION|ERR_PROXY_CONNECTION|ERR_SOCKS"
-    r"|ERR_CONNECTION_(?:RESET|CLOSED|REFUSED|TIMED_OUT|ABORTED|FAILED)|ERR_EMPTY_RESPONSE"
-    r"|ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED", re.I)
+    r"net::ERR_"                              # ANY Chromium net error through the proxy
+    r"|Timeout \d+ms exceeded"               # Playwright page.goto timeout = a SLOW proxy (the
+    #                                          common case: proxy connects but the page never
+    #                                          loads in 45s) — this was NOT matched before, so 55
+    #                                          slow-proxy jobs errored without a retry (batch 5).
+    r"|ERR_TUNNEL_CONNECTION|ERR_PROXY_CONNECTION|ERR_SOCKS|ERR_EMPTY_RESPONSE"
+    r"|ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED|ProxyError|ConnectTimeout", re.I)
 
 
 def _bump(*, done=0, ok=0, failed=0, current=None):

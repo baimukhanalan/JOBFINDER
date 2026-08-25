@@ -776,6 +776,9 @@ _UNFIXABLE_JOBIDS = {"3462", "33445"}   # oscar / hioscar (per CLAUDE.md)
 
 
 _DRAIN_MAX_RETRIES = 3   # re-run a fixable unfinished job this many times, then drop it dead
+_DRAIN_SPAM_MAX = 1      # an Ashby datacenter-IP spam-block can't succeed from the same IP —
+#                          drop after 1 retry instead of 3 so we don't keep re-spamming Ashby.
+_SPAM_BLOCK_RE = re.compile(r"couldn|spam|flagged", re.I)
 
 
 def _drain_partition(jobs) -> tuple[list[int], list[str]]:
@@ -801,7 +804,11 @@ def _drain_partition(jobs) -> tuple[list[int], list[str]]:
             continue                                  # human backlog — leave it
         if jid in _UNFIXABLE_JOBIDS or jid in done:
             drop.append(jid); continue                # 404 / already done → dead
-        if int(job.get("retries", 0)) >= _DRAIN_MAX_RETRIES:
+        retries = int(job.get("retries", 0))
+        if _SPAM_BLOCK_RE.search(str(job.get("blocked") or "")) and retries >= _DRAIN_SPAM_MAX:
+            drop.append(jid); continue                # Ashby datacenter-IP spam — re-running from
+            #                                           the same IP just re-spams; drop after 1 try
+        if retries >= _DRAIN_MAX_RETRIES:
             drop.append(jid); continue                # exhausted — give up
         if st in ("error", "done"):
             try:

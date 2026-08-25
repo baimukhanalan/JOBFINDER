@@ -16,3 +16,4 @@ playwright==1.49.0
 python-jobspy==1.1.82
 pytest==9.0.3
 pypdf==6.10.2
+psycopg2-binary==2.9.10

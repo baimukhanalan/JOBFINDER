@@ -86,6 +86,25 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
 - `uploads/prefill/<profile>/*/report.json` (+ a `status.json` overlay) — the apply review queue
   `/queue` reads these. All of `uploads/` is gitignored PII.
 
+### Independent company discovery (Phase 1; no UI yet)
+
+`backend.tools.company_discovery` builds a separate `company_discovery` table from company/entity
+registries, not from vacancies. It MUST NOT be wired into `applier.discovery.py`, `targets.json`,
+`discovered_slugs.json`, `boards.collect()` or `job_catalog` acquisition. Supported inputs are SEC
+EDGAR, USAspending and optional SAM.gov (`SAM_API_KEY`). SEC also supports the nightly
+`submissions.zip` via `--sec-bulk`, or a locally downloaded archive via `--sec-archive` when SEC
+blocks the server IP. `--enrich-web` starts only from a source-provided official domain, discovers a
+careers page and fingerprints Greenhouse/Lever/Ashby/Workable/Workday/SmartRecruiters/iCIMS/Oracle/
+SAP SuccessFactors. It never promotes a company into the vacancy catalog automatically.
+
+After import, `reconcile_records()` reads `job_catalog` only as an exclusion snapshot: exact domain
+or `(ATS, slug)` → `known`; name-only similarity → `possible_duplicate`; otherwise → `novel`.
+No dashboard route or navigation item exists for this phase. Commands:
+
+- dry smoke: `python -m backend.tools.company_discovery collect --source usaspending --limit 5 --dry-run`
+- initialize/store: `python -m backend.tools.company_discovery init`, then `collect --source ...`
+- inspect/export: `python -m backend.tools.company_discovery stats` / `export --status novel --output novel.jsonl`
+
 ## Secrets & PII (all gitignored)
 - `backend/.env` — `CRM_PG_DSN` (live CRM Postgres), `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`,
   `LLM_URL/LLM_KEY/LLM_MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, and legacy Mailgun

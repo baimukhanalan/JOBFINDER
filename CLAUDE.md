@@ -24,8 +24,10 @@
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 3 tabs** (Кандидаты
-`/mail/candidates`, Каталог `/catalog`, Заявки `/apply` — reduced from 6 on 2026-08-21). The general
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 4 tabs** (Инбокс `/mail`,
+Каталог `/catalog`, Заявки `/apply`, Незавершённые `/unfinished` — was reduced from 6 to 3 on 2026-08-21,
+then the «Незавершённые» tab was added 2026-08-25 for bulk-apply jobs that need a human to finish the
+captcha; `_NAV` in `mailcrm_ui.py`). The general
 Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
 the target of the Заявки cards → `/queue?profile=…`) and `/setup` (onboard a real candidate) still exist
 but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
@@ -359,10 +361,20 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   only the real fill+submit is proxied); a fresh context per job briefly flickers the noVNC window.
   Parse/rotation are unit-tested (`tests/test_proxy_pool.py`, no network).
 - **Bulk auto-apply: «Подать на все» (`/catalog`).** One SEQUENTIAL server-side queue (co-pilot has
-  ONE shared browser) over every **greenhouse+ashby** job — Lever/Workable are skipped (live captcha
-  would stall it). Reuses `_do_fill` per job (so it auto-submits AND rotates proxy IPs). Endpoints:
-  `POST /catalog/fill_all` (start), `GET /catalog/fill_all_status` (poll), `POST /catalog/fill_all_stop`
-  (halts after the current job). Live counters in `dashboard._FILL_ALL` (in-memory only). **Audit trail
+  ONE shared browser). **As of 2026-08-25 it runs over ALL 4 ATS** (`_BULK_ATS = greenhouse, ashby,
+  lever, workable`) — the first `count` jobs (default 100, clamped 1..6000), optionally narrowed by
+  `company` (a company_key) and `region` (US/CA/UK/OTHER); `gender` sets the persona sex for the run.
+  Greenhouse/Ashby auto-submit end-to-end; **Lever/Workable fill but their Submit is captcha-gated**, so
+  those DON'T stall the queue (each `_do_fill` is bounded by the co-pilot's 240s `/load` timeout, caught,
+  queue continues) — they land in the **«Незавершённые» ledger** for a human to finish the captcha in
+  noVNC. Reuses `_do_fill` per job (so it auto-submits where possible AND rotates proxy IPs). Endpoints:
+  `POST /catalog/fill_all` (start; Form `count/gender/company/region`), `GET /catalog/fill_all_status`
+  (poll), `POST /catalog/fill_all_stop` (halts after the current job). Live counters in
+  `dashboard._FILL_ALL` (in-memory only). **«Незавершённые» section (`/unfinished` + nav tab, 2026-08-25):**
+  a persistent ledger (`bulk_log.py` → gitignored `logs/unfinished.json`) of applications that didn't
+  confirm — `record()` adds a not-confirmed job (captcha-blocked / errored / incomplete) and removes a
+  confirmed one; `/unfinished` lists them with «Докрутить» (re-fill → finish by hand), «Открыть вакансию»,
+  «Выполнено» (`POST /unfinished/{jobid}/done` → `mark_done`). **Audit trail
   (`tools/bulk_log.py`, gitignored `logs/`):** `bulk_apply.log` (append-only, a line per job + a FINISHED
   summary) + `bulk_apply_last.json` (full last run, rewritten each job so it survives a restart). Served
   by `GET /catalog/fill_all_report` (JSON) + `GET /catalog/fill_all_log` (download); the Фильтры sheet

@@ -92,6 +92,29 @@ def start_workers(n: int, wait: float = 90.0) -> list[int]:
     return ready
 
 
+def add_worker(wait: float = 90.0) -> int | None:
+    """Spawn ONE more worker on the next free port (for the adaptive lane) without
+    disturbing the existing ones. Returns the port, or None if it didn't come up."""
+    used = set(_state["ports"])
+    port = _BASE_PORT
+    while port in used or _health_ok(port, timeout=0.4):
+        port += 1
+        if port > _BASE_PORT + 60:
+            return None
+    p = _spawn_worker(port)
+    if p is None:
+        return None
+    _state["procs"].append(p)
+    if _wait_healthy([port], timeout=wait):
+        _state["ports"].append(port)
+        return port
+    try:
+        os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+    except Exception:
+        pass
+    return None
+
+
 def stop_workers() -> None:
     """SIGTERM every worker's process group (kills uvicorn + its Chromium), then clear."""
     for p in _state.get("procs", []):

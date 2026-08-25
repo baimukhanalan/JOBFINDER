@@ -387,8 +387,14 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are
   bumped under `_FILL_ALL_LOCK` (thread-safe). Proxy rotation: the DASHBOARD picks `next_proxy()` per job
   and passes it to the worker's `/load` (one cursor). **`count` is OPTIONAL: empty = EVERY available job;
-  a number = first `count`, clamped 1..20000. `workers` defaults to 10, clamped 1..16** (server has 12
-  cores / ~28 GB free; headless Chromium ~1.5 GB each). Optionally narrowed by `company`/`region`;
+  a number = first `count`, clamped 1..20000. `workers` is ADAPTIVE by default (2026-08-25): empty/
+  "auto"/0 → `_do_fill_all_adaptive` seeds 4 workers and ramps +2 every ~12s WHILE there's headroom —
+  CPU < 70% (`_ADAPT_TARGET_CPU`), 1-min load < 1.2×cores, and ≥6 GB RAM free — up to `_ADAPT_MAX`=18
+  (grow-only; drains as the queue empties). A NUMBER pins a fixed count (`_do_fill_all_parallel`, clamped
+  1..18). NOTE the fills are I/O-bound (proxy/page/LLM waits) so CPU stays low — the real limiter is the
+  **load-average gate**, not CPU%: measured ~216 MB RAM per idle worker, and adaptive ramped to ~12 and
+  self-capped when load hit ~15-21 on the 12-core box (12/12 Ashby jobs submitted in ~4 min). Optionally
+  narrowed by `company`/`region`;
   `gender` sets persona sex. Endpoints: `POST /catalog/fill_all` (Form `count/gender/company/region/
   workers`), `GET /catalog/fill_all_status` (poll; adds `workers`), `POST /catalog/fill_all_stop` (sets
   `_FILL_ALL_STOP`; workers stop pulling + are torn down). The old sequential `_do_fill_all` +

@@ -275,8 +275,9 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<input type="number" id="bulkN" min="1" step="1" placeholder="Все" '
         'inputmode="numeric" title="Пусто = все доступные вакансии"></label>'
         '<label class="cat-bulk-n">Потоков'
-        '<input type="number" id="bulkW" min="1" max="16" step="1" value="10" '
-        'inputmode="numeric" title="Параллельных браузеров для GH/Ashby (1–16)"></label>'
+        '<input type="number" id="bulkW" min="1" max="18" step="1" placeholder="Авто" '
+        'inputmode="numeric" title="Пусто = авто (сервер сам держит нагрузку); либо число 1–18">'
+        '</label>'
         '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
         'onclick="bulkStop()">Стоп</button>'
@@ -528,20 +529,26 @@ window.bulkFillAll = async function(){
   if(!all){ if(n>20000) n=20000; if(nEl) nEl.value=n; }
   var countStr=all?'':String(n);
   var nLbl=all?'ВСЕ доступные вакансии':('до '+n+' вакансий');
-  var w=parseInt(wEl&&wEl.value,10); if(!(w>=1)) w=10; if(w>16) w=16; if(wEl) wEl.value=w;
+  var wraw=(wEl&&wEl.value||'').trim();
+  var wnum=parseInt(wraw,10);
+  var wAuto=!(wnum>=1);              // пусто / не число => авто (сервер сам решает)
+  if(!wAuto){ if(wnum>18) wnum=18; if(wEl) wEl.value=wnum; }
+  var wStr=wAuto?'':String(wnum);
+  var wLbl=wAuto?'авто':String(wnum);
   var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
   var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
   var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
   if(!confirm('Массовая подача: '+nLbl+'\\n'
-      +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+' · Потоков: '+w+'\\n\\n'
-      +'Greenhouse/Ashby заполняются и авто-отправляются в '+w+' параллельных браузеров. '
+      +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+' · Потоков: '+wLbl+'\\n\\n'
+      +'Greenhouse/Ashby заполняются и авто-отправляются параллельными браузерами'
+      +(wAuto?' (число подбирается автоматически под нагрузку сервера)':(' ('+wLbl+' потоков)'))+'. '
       +'Lever/Workable (капча) сразу уходят в «Незавершённые» на ручное дожатие. '
       +'Прервать — «Стоп».')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
   try{
     var body='count='+encodeURIComponent(countStr)+'&gender='+encodeURIComponent(gender)
         +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region)
-        +'&workers='+encodeURIComponent(w);
+        +'&workers='+encodeURIComponent(wStr);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }

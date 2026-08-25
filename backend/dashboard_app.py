@@ -1030,6 +1030,109 @@ def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,
         _FILL_ALL["state"] = state
 
 
+# ---- Adaptive parallel lane: let the box decide how many workers ------------
+_CORES = os.cpu_count() or 12
+_ADAPT_INITIAL = 4            # start here, then ramp
+_ADAPT_STEP = 2              # workers added per sample when there's headroom
+_ADAPT_SAMPLE = 12          # seconds between resource samples
+_ADAPT_TARGET_CPU = 70      # %; this I/O-bound work rarely reaches it — RAM/load bind first
+_ADAPT_MAX = 18             # hard ceiling regardless of headroom
+_ADAPT_RESERVE_MB = 6000    # never grow if free RAM would drop below this
+
+
+def _do_fill_all_adaptive(job_ids: list[int], gender: str | None = None) -> None:
+    """Like _do_fill_all_parallel but the worker count is AUTOMATIC: seed a few workers,
+    then every ~12s add more while there's headroom — CPU < 70%, 1-min load < ~1.2×cores,
+    and ≥6 GB RAM still free — up to a hard cap. The fill work is I/O-bound (proxy/page/LLM
+    waits), so CPU stays low and it ramps until RAM/load say stop. Grow-only (a worker is
+    never killed mid-job); shrinking happens naturally as the queue drains."""
+    import queue as _queue
+
+    import psutil
+
+    from backend.tools import bulk_log, bulk_pool, catalog_db
+    log = logging.getLogger(__name__)
+    para: list = []
+    captcha: list = []
+    for jid in job_ids:
+        try:
+            job = catalog_db.get_job(int(jid))
+        except Exception:
+            job = None
+        ats = (job or {}).get("ats") or ""
+        (para if ats in _PARA_ATS else captcha).append((jid, job))
+    run = bulk_log.start(len(job_ids))
+    with _FILL_ALL_LOCK:
+        _FILL_ALL["run_id"] = run["run_id"]
+    for jid, job in captcha:
+        try:
+            bulk_log.record(run, jobid=jid, company=(job or {}).get("company", ""),
+                            title=(job or {}).get("job_title", ""), state="needs_human",
+                            submit={"confirmed": False, "reason": "click_failed"})
+        except Exception:
+            pass
+        _bump(done=1, failed=1)
+    try:
+        if para and not _FILL_ALL_STOP.is_set():
+            q: _queue.Queue = _queue.Queue()
+            for item in para:
+                q.put(item)
+            workers: dict = {}   # port -> puller thread
+
+            def _puller(port):
+                while not _FILL_ALL_STOP.is_set():
+                    try:
+                        jid, job = q.get_nowait()
+                    except _queue.Empty:
+                        return
+                    _fill_one_on_worker(jid, gender, port, run, job)
+
+            def _add_one() -> bool:
+                port = bulk_pool.add_worker(wait=90)
+                if not port:
+                    return False
+                t = threading.Thread(target=_puller, args=(port,), daemon=True)
+                t.start()
+                workers[port] = t
+                with _FILL_ALL_LOCK:
+                    _FILL_ALL["workers"] = len(workers)
+                return True
+
+            psutil.cpu_percent(interval=None)   # prime the counter
+            for _ in range(min(_ADAPT_INITIAL, len(para))):
+                if _FILL_ALL_STOP.is_set() or not _add_one():
+                    break
+            # controller loop: grow while there's headroom and work left
+            while not _FILL_ALL_STOP.is_set():
+                if q.empty() and not any(t.is_alive() for t in workers.values()):
+                    break
+                time.sleep(_ADAPT_SAMPLE)
+                if _FILL_ALL_STOP.is_set() or q.empty():
+                    continue
+                cpu = psutil.cpu_percent(interval=None)
+                load1 = os.getloadavg()[0]
+                free_mb = psutil.virtual_memory().available // (1024 * 1024)
+                n = len(workers)
+                if (n < _ADAPT_MAX and cpu < _ADAPT_TARGET_CPU
+                        and load1 < _CORES * 1.2 and free_mb > _ADAPT_RESERVE_MB):
+                    for _ in range(_ADAPT_STEP):
+                        if len(workers) >= _ADAPT_MAX or not _add_one():
+                            break
+                log.info("adaptive bulk: workers=%s cpu=%.0f%% load=%.1f freeMB=%s queue=%s",
+                         len(workers), cpu, load1, free_mb, q.qsize())
+            for t in workers.values():
+                t.join(timeout=_PER_JOB_TIMEOUT + 30)
+    finally:
+        try:
+            bulk_pool.stop_workers()
+        except Exception:
+            pass
+    state = "stopped" if _FILL_ALL_STOP.is_set() else "done"
+    bulk_log.finish(run, state)
+    with _FILL_ALL_LOCK:
+        _FILL_ALL["state"] = state
+
+
 def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
     from backend.tools import bulk_log
     run = bulk_log.start(len(job_ids))
@@ -1096,18 +1199,27 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
     all_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS]
     job_ids = all_ids if n is None else all_ids[:n]
-    try:
-        nw = max(1, min(int((workers or "").strip() or 10), 16))
-    except ValueError:
-        nw = 10
+    wraw = (workers or "").strip().lower()
+    if wraw in ("", "auto", "0"):
+        adaptive, nw = True, None       # let the box decide (ramp to headroom)
+    else:
+        try:
+            nw, adaptive = max(1, min(int(wraw), _ADAPT_MAX)), False
+        except ValueError:
+            adaptive, nw = True, None
     _FILL_ALL_STOP.clear()
     _FILL_ALL.clear()
     _FILL_ALL.update({"state": "running", "total": len(job_ids), "done": 0,
                       "ok": 0, "failed": 0, "current": None, "current_id": None,
-                      "workers": nw})
-    threading.Thread(target=_do_fill_all_parallel, args=(job_ids, g, nw),
-                     daemon=True).start()
-    return JSONResponse({"started": True, "total": len(job_ids), "workers": nw,
+                      "workers": ("auto" if adaptive else nw)})
+    if adaptive:
+        threading.Thread(target=_do_fill_all_adaptive, args=(job_ids, g),
+                         daemon=True).start()
+    else:
+        threading.Thread(target=_do_fill_all_parallel, args=(job_ids, g, nw),
+                         daemon=True).start()
+    return JSONResponse({"started": True, "total": len(job_ids),
+                         "workers": ("auto" if adaptive else nw),
                          "requested": ("all" if n is None else n), "novnc": _NOVNC_URL})
 
 

@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 _LOGDIR = Path(__file__).resolve().parents[2] / "logs"
 _LOG = _LOGDIR / "bulk_apply.log"
 _REPORT = _LOGDIR / "bulk_apply_last.json"
+# Persistent ledger of applications that DID NOT complete (need a human to finish the
+# captcha/submit), keyed by jobid, accumulated across runs. record() adds a not-
+# confirmed job and removes a confirmed one; mark_done() clears one by hand. Survives
+# restarts + bulk_apply_last.json being overwritten by the next run.
+_LEDGER = _LOGDIR / "unfinished.json"
 
 
 def _now() -> str:
@@ -44,6 +49,38 @@ def _write_report(run: dict) -> None:
         tmp.replace(_REPORT)
     except Exception:
         logger.warning("bulk_apply_last.json write failed", exc_info=True)
+
+
+def _load_ledger() -> dict:
+    try:
+        d = json.loads(_LEDGER.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_ledger(d: dict) -> None:
+    try:
+        _LOGDIR.mkdir(parents=True, exist_ok=True)
+        tmp = _LEDGER.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_LEDGER)
+    except Exception:
+        logger.warning("unfinished.json write failed", exc_info=True)
+
+
+def _update_ledger(job: dict, run_id: str, confirmed) -> None:
+    """A confirmed submission clears the job from the ledger; anything else (error,
+    captcha-blocked, skipped, filled-but-unconfirmed) adds/refreshes it."""
+    key = str(job.get("jobid"))
+    if not key or key == "None":
+        return
+    led = _load_ledger()
+    if confirmed:
+        led.pop(key, None)
+    else:
+        led[key] = {**job, "run_id": run_id}
+    _save_ledger(led)
 
 
 def start(total: int) -> dict:
@@ -86,6 +123,7 @@ def record(run: dict, *, jobid, company="", title="", state="", filled=None,
         f'unfilled={unfilled} submit={"clicked" if clicked else (reason or "no")} '
         f'confirmed={confirmed} blocked={blocked}'
         + (f' error={error!r}' if error else ""))
+    _update_ledger(run["jobs"][-1], run["run_id"], confirmed)
     _write_report(run)   # keep fresh so a mid-run restart still shows progress
 
 
@@ -106,6 +144,25 @@ def last_report() -> dict | None:
         return json.loads(_REPORT.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def unfinished() -> list[dict]:
+    """Every application still awaiting a human finish, newest first."""
+    return sorted(_load_ledger().values(), key=lambda j: j.get("ts") or "",
+                  reverse=True)
+
+
+def unfinished_count() -> int:
+    return len(_load_ledger())
+
+
+def mark_done(jobid) -> bool:
+    """Clear one job from the ledger (a human finished it). True if it was present."""
+    led = _load_ledger()
+    if led.pop(str(jobid), None) is not None:
+        _save_ledger(led)
+        return True
+    return False
 
 
 def log_path() -> Path:

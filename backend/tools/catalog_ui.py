@@ -245,9 +245,36 @@ def render_page(company: str = "", q: str = "", region: str = "",
     # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
     # settings sheet, so the main view is just search + jobs.
     region_chips = _region_bar(region, q, company, by_region, remote_total)
+    # Mass-apply filters: persona sex (female/male), a specific company (value = its
+    # company_key; the active company page pre-selects), and region. list_jobs filters
+    # jobs by company/region; gender is passed through to the persona per job.
+    gender_opts = ('<option value="">Пол: любой</option>'
+                   '<option value="female">Женщины</option>'
+                   '<option value="male">Мужчины</option>')
+    comp_rows = []
+    for c in comps:
+        ck = c.get("company_key") or ""
+        if not ck:
+            continue
+        sel = " selected" if ck == company else ""
+        comp_rows.append(f'<option value="{esc(ck)}"{sel}>'
+                         f'{esc(c.get("company") or ck)} ({c.get("n", 0)})</option>')
+    comp_opts = '<option value="">Все компании</option>' + "".join(comp_rows)
+    # Region select mirrors the company one: only regions actually present in the
+    # catalog (count > 0), with their counts, ordered by _REGIONS.
+    region_opts = '<option value="">Регион: все</option>' + "".join(
+        f'<option value="{code}"{" selected" if code == region else ""}>'
+        f'{label} ({by_region.get(code, 0)})</option>'
+        for code, label in _REGIONS if by_region.get(code, 0) > 0)
     bulk_bar = (
         '<div class="cat-bulk" id="catbulk">'
-        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать на все</button>'
+        f'<select class="cat-bulk-sel" id="bulkGender" aria-label="Пол">{gender_opts}</select>'
+        f'<select class="cat-bulk-sel" id="bulkCompany" aria-label="Компания">{comp_opts}</select>'
+        f'<select class="cat-bulk-sel" id="bulkRegion" aria-label="Регион">{region_opts}</select>'
+        '<label class="cat-bulk-n">Кол-во'
+        '<input type="number" id="bulkN" min="1" max="6000" step="1" value="100" '
+        'inputmode="numeric"></label>'
+        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
         'onclick="bulkStop()">Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
@@ -370,6 +397,12 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-bulk-go:disabled{opacity:.5;cursor:default;box-shadow:none}
 .cat-bulk-stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--danger);color:#fff;border:none;border-radius:var(--r-full);padding:10px 16px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
 .cat-bulk-prog{flex:1 1 100%;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:0}
+.cat-bulk-n{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink-soft)}
+.cat-bulk-n input{width:76px;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:14px;font-weight:700;background:var(--panel);color:var(--ink);min-height:42px;text-align:center}
+.cat-bulk-n input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
+.cat-bulk-sel{min-height:42px;max-width:230px;padding:9px 12px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:13px;font-weight:600;background:var(--panel);color:var(--ink);cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.cat-bulk-sel:hover{border-color:var(--accent)}
+.cat-bulk-sel:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
 .cat-bulk-report{margin-top:10px;font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .cat-bulk-report:empty{display:none}
 .cat-bulk-report .r-sub{color:var(--ink-mute)}
@@ -438,17 +471,28 @@ window.fillJob = async function(btn){
 // We only START/STOP/POLL here — the fill+submit logic is untouched. It runs long; the
 // batch survives leaving this page (server-side thread), poll resumes on reload.
 window.bulkFillAll = async function(){
-  var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg');
+  var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg'),
+      nEl=document.getElementById('bulkN'), gEl=document.getElementById('bulkGender'),
+      cEl=document.getElementById('bulkCompany'), rEl=document.getElementById('bulkRegion');
   if(go.disabled) return;
-  if(!confirm('Подать на ВСЕ вакансии (greenhouse + ashby) по очереди, с автоматической '
-      +'отправкой?\\n\\nЭто реальные заявки в реальные ATS одна за другой — займёт очень '
-      +'долго. Lever/Workable пропускаются (капча). Прервать — кнопкой «Стоп» '
-      +'(остановится после текущей).')) return;
+  var n=parseInt(nEl&&nEl.value,10); if(!(n>=1)) n=100; if(n>6000) n=6000;
+  if(nEl) nEl.value=n;
+  var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
+  var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
+  var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
+  if(!confirm('Массовая подача: до '+n+' вакансий (все ATS)\\n'
+      +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+'\\n\\n'
+      +'Реальные заявки в реальные ATS с авто-отправкой, одна за другой. Lever/Workable '
+      +'заполнятся, но их Submit нужно завершить вручную (капча) — в разделе '
+      +'«Незавершённые». Прервать — «Стоп» (после текущей).')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
   try{
+    var body='count='+encodeURIComponent(n)+'&gender='+encodeURIComponent(gender)
+        +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:''})).json();
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }
+    else if(prog && j.total!==undefined){ prog.textContent='Найдено '+j.total+' — запуск…'; }
   }catch(e){ go.disabled=false; if(prog) prog.textContent='Ошибка запуска'; return; }
   bulkPoll();
 };

@@ -222,3 +222,17 @@ def test_latam_residence_regex_variants():
               "Do you currently reside in Latin America?",
               "Are you located in LatAm?"):
         assert cd._LATAM_RESIDENCE_Q_RE.search(q), q
+
+
+def test_underrepresented_group_is_demographic():
+    """'underrepresented group' / 'marginalized community' self-ID must gate as demographic
+    (a synthetic persona never claims it) — was left unfilled → blocked gympass."""
+    from backend.tools.catalog_drafts import _DEMOGRAPHIC_LABEL_RE
+    from backend.applier.dropdowns import _DEMOGRAPHIC
+    for lab in ("Do you self-identify as belonging to an underrepresented group?",
+                "Are you part of an under-represented community?",
+                "Do you belong to a marginalized group?"):
+        assert _DEMOGRAPHIC_LABEL_RE.search(lab), lab
+        assert _DEMOGRAPHIC.search(lab.lower()), lab
+    # must NOT over-match a normal seniority/role question
+    assert not _DEMOGRAPHIC_LABEL_RE.search("How many people did you represent as a manager?")

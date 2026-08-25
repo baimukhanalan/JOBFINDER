@@ -120,6 +120,7 @@ MAX_RS_OPTIONS = 50  # cap options read per dropdown (huge country lists etc.)
 _DEMOGRAPHIC = re.compile(
     r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|"
     r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|"
+    r"under-?represented|marginali[sz]ed (?:group|communit)|"
     r"your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
 
 

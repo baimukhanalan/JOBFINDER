@@ -72,6 +72,7 @@ _HUMAN_FILE_RE = re.compile(
 _DEMOGRAPHIC_LABEL_RE = re.compile(
     r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|"
     r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|self.?identif"
+    r"|under-?represented|marginali[sz]ed (?:group|communit)"
     r"|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
 # Option strings that signal a diversity self-ID group. Require >=2 so a lone
 # 'Prefer not to answer' on a legitimate screener does not trip the gate.

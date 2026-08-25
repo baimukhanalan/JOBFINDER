@@ -1589,7 +1589,7 @@ def _start_mail_poller():
 @app.get("/mail", response_class=HTMLResponse)
 def mail_page(q: str = "", mailbox: str = "", stage: str = ""):
     from backend.tools import mail_health, mailcrm, mailcrm_ui
-    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection") else ""
+    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection", "other") else ""
     rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50, stage=stage)
     counts = mailcrm.counts()
     scounts = mailcrm.stage_counts()
@@ -1613,7 +1613,7 @@ def mail_page(q: str = "", mailbox: str = "", stage: str = ""):
 def mail_more(ts: int = 0, id: str = "", q: str = "", mailbox: str = "",
               stage: str = ""):
     from backend.tools import mailcrm, mailcrm_ui
-    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection") else ""
+    stage = stage if stage in ("sent", "ack", "interview", "offer", "rejection", "other") else ""
     rows = mailcrm.list_messages(mailbox=mailbox or None, q=q, limit=50,
                                  before_ts=ts or None, before_id=id or None, stage=stage)
     return HTMLResponse(mailcrm_ui.render_rows(rows))

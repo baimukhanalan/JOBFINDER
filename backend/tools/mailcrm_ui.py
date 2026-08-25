@@ -591,7 +591,8 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     inbox_badge = f' <b>{unread}</b>' if unread else ''
     sc = stage_counts or {}
     _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
-               ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ")]
+               ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ"),
+               ("other", "📁 Прочее")]
     def _href(key: str) -> str:
         params = {}
         if key:

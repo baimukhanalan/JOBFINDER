@@ -6,7 +6,7 @@ our own Postfix submission (127.0.0.1:587, SASL as the candidate mailbox). No
 Mailgun, no API. Modeled on the amaskills CRM. Must run where the Maildir is
 readable — the JOBFINDER dashboard runs under `sg mail` for exactly this.
 
-Message id = sha1 of the absolute file path (stable dedup key used in URLs).
+Message id = sha1 of the Maildir uniq filename (stable across new->cur + flag changes).
 Opening a message marks it read (Maildir new/ -> cur/:2,S), like every webmail.
 """
 from __future__ import annotations
@@ -244,7 +244,13 @@ def _by_email() -> dict[str, dict]:
 
 # ---- Maildir reading -------------------------------------------------------
 def _pid(path: str) -> str:
-    return hashlib.sha1(path.encode()).hexdigest()
+    """STABLE message id: hash the Maildir file's UNIQUE name (`<time>.<uniq>.<host>`),
+    independent of the new/ vs cur/ directory AND the ':2,<flags>' suffix. Maildir uniq
+    names are globally unique, so this stays constant when a message is read (new→cur) or
+    re-flagged — a full-path hash changed on every move, so an inbox link built while a
+    message was unread 404'd ('Письмо не найдено') the moment it moved to cur/."""
+    base = os.path.basename(path).split(":2,")[0]
+    return hashlib.sha1(base.encode()).hexdigest()
 
 
 def _display_name(addr: str) -> str:

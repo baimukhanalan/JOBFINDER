@@ -260,10 +260,12 @@ def render_page(company: str = "", q: str = "", region: str = "",
         comp_rows.append(f'<option value="{esc(ck)}"{sel}>'
                          f'{esc(c.get("company") or ck)} ({c.get("n", 0)})</option>')
     comp_opts = '<option value="">Все компании</option>' + "".join(comp_rows)
-    region_opts = "".join(
-        f'<option value="{k}"{" selected" if k == region else ""}>{name}</option>'
-        for k, name in (("", "Регион: все"), ("US", "США"), ("CA", "Канада"),
-                        ("UK", "UK"), ("OTHER", "Другие")))
+    # Region select mirrors the company one: only regions actually present in the
+    # catalog (count > 0), with their counts, ordered by _REGIONS.
+    region_opts = '<option value="">Регион: все</option>' + "".join(
+        f'<option value="{code}"{" selected" if code == region else ""}>'
+        f'{label} ({by_region.get(code, 0)})</option>'
+        for code, label in _REGIONS if by_region.get(code, 0) > 0)
     bulk_bar = (
         '<div class="cat-bulk" id="catbulk">'
         f'<select class="cat-bulk-sel" id="bulkGender" aria-label="Пол">{gender_opts}</select>'

@@ -624,7 +624,11 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
             # Watch for the resulting confirmation (also auto-fills an emailed security-code
             # step if the ATS shows one). Skip in dry_run — nothing was submitted.
             _email = (form.get("email") or "").strip()
-            if not is_dry:
+            # If the ATS already REJECTED the submit at validation (blocked — a required field
+            # our fill missed), there is no confirmation coming: don't waste the worker on a
+            # WAIT_SUBMIT_MAX watch (that's what turned blocked jobs into ReadTimeout `error`
+            # rows). Return immediately; the job lands in «Незавершённые» for the human.
+            if not is_dry and not submit_result.get("blocked"):
                 if is_wait and submit_result.get("clicked"):
                     # Parallel worker: FINISH the email-code + confirmation step INLINE, so
                     # this worker doesn't grab the next job (whose /load would _cancel_watch)

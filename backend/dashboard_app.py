@@ -902,8 +902,10 @@ def _fill_all_public() -> dict:
 # ---- Parallel bulk lane (headless worker pool) -----------------------------
 _FILL_ALL_LOCK = threading.Lock()
 _PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
-_PER_JOB_TIMEOUT = 360                 # hard cap per /load (fill + inline email-code wait up
-#                                        to WAIT_SUBMIT_MAX=300s; worker awaits confirmation)
+_PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill (~≤120s) + inline confirm
+#                                        wait (WAIT_SUBMIT_MAX=300s) + margin, so a genuinely
+#                                        pending confirmation doesn't ReadTimeout into `error`
+#                                        (blocked jobs now return fast — copilot skips the watch)
 
 
 def _bump(*, done=0, ok=0, failed=0, current=None):

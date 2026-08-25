@@ -95,3 +95,19 @@ def test_decline_re_matches_do_not_want_to_answer():
     # and "Latin American" is not treated as a demographic by dropdowns either
     assert not _DEMOGRAPHIC.search("are you based in a latin american country?")
     assert _DEMOGRAPHIC.search("are you latinx?")
+
+
+def test_consent_regex_matches_required_not_marketing():
+    """fill_required_consent must tick a REQUIRED legal/privacy consent but NEVER a marketing opt-in."""
+    from backend.applier.dropdowns import _CONSENT_RE, _CONSENT_SKIP_RE
+    # required legal/privacy consent → matched, not skipped
+    for good in ("I agree", "I have read the privacy policy", "I understand",
+                 "I consent to the processing of my personal data",
+                 "I accept the terms and conditions"):
+        assert _CONSENT_RE.search(good.lower()), good
+        assert not _CONSENT_SKIP_RE.search(good.lower()), good
+    # optional marketing opt-ins → must be skipped even if they say "agree"
+    for mkt in ("Do you agree to allow 1Password to contact you about job opportunities",
+                "subscribe to our newsletter for updates about future roles",
+                "add me to your talent community"):
+        assert _CONSENT_SKIP_RE.search(mkt.lower()), mkt

@@ -18,9 +18,11 @@ from backend.applier.dropdowns import (
     apply_button_choice,
     apply_react_select_choice,
     fill_comboboxes_known,
+    fill_demographic_checkboxes_decline,
     fill_demographics_decline,
     fill_react_selects,
     fill_react_selects_known,
+    fill_required_consent,
     fill_role_radio_known,
     harvest_button_groups,
     harvest_react_selects,
@@ -280,6 +282,22 @@ class ApplyStrategy(ABC):
             success += dd["filled"]
         except Exception as exc:
             logger.debug("fill_demographics_decline raised unexpectedly: %s", exc)
+
+        # Checkbox-group EEO demographics (e.g. 1Password racial/ethnic 'select all') — tick
+        # the 'Prefer not to say' checkbox, which the radio/select passes above miss.
+        try:
+            dcx = await fill_demographic_checkboxes_decline(page)
+            success += dcx["filled"]
+        except Exception as exc:
+            logger.debug("fill_demographic_checkboxes_decline raised unexpectedly: %s", exc)
+
+        # Required legal/privacy consent checkbox ('I agree' to the recruiting privacy notice) —
+        # you can't submit without it; skips optional marketing opt-ins.
+        try:
+            dcs = await fill_required_consent(page)
+            success += dcs["filled"]
+        except Exception as exc:
+            logger.debug("fill_required_consent raised unexpectedly: %s", exc)
 
         unknown = analysis.get("unknown_questions", [])
         # `success` here = rule-based fills that actually took + react-select eligibility

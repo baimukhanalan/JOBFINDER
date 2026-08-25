@@ -367,6 +367,84 @@ async def fill_demographics_decline(page) -> dict:
     return {"filled": len(filled), "handled": filled}
 
 
+async def fill_demographic_checkboxes_decline(page) -> dict:
+    """Some EEO surveys render a demographic as a CHECKBOX group ('select all that apply' — e.g.
+    1Password's racial/ethnic background) with its own 'Prefer not to say' checkbox. The radio/
+    select/combobox passes above miss those, so a REQUIRED checkbox demographic stays blank and
+    the ATS blocks the submit. Tick the decline checkbox — never a real characteristic. Additive;
+    runs after fill_demographics_decline (see strategies/base.prefill)."""
+    filled: list[str] = []
+    try:
+        boxes = await page.query_selector_all("input[type=checkbox]")
+    except Exception:
+        boxes = []
+    for cb in boxes:
+        try:
+            if await cb.is_checked():
+                continue
+            own = await cb.evaluate(_LABEL_JS)
+            if not (own and _DECLINE_RE.search(own)):
+                continue
+            grp = await cb.evaluate(
+                "el=>{const g=el.closest('fieldset,[role=group],[class*=question],[class*=field],li');"
+                " return g?g.innerText.slice(0,200):'';}")
+            if not _DEMOGRAPHIC.search((grp or "").lower()):
+                continue
+            try:
+                await cb.check(timeout=2500)
+            except Exception:
+                await cb.evaluate("el=>{const w=el.closest('label,[role=checkbox]'); (w||el).click();}")
+            filled.append((grp or "")[:40])
+        except Exception:
+            continue
+    if filled:
+        logger.info("demographic checkboxes declined (%d): %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
+# A REQUIRED legal consent you must tick to apply (recruiting privacy notice, data processing,
+# terms). NOT an optional MARKETING opt-in — those (_CONSENT_SKIP_RE) we leave untouched.
+_CONSENT_RE = re.compile(
+    r"(?i)\bi (?:agree|consent|accept|acknowledge|have read|understand)\b"
+    r"|agree to the|consent to (?:the|my|processing)|accept the (?:terms|privacy)"
+    r"|privacy (?:policy|notice|statement)|data (?:processing|protection)"
+    r"|terms (?:and|&) conditions|processing of my (?:personal )?data|\bgdpr\b")
+_CONSENT_SKIP_RE = re.compile(
+    r"(?i)contact you|job opportunit|marketing|newsletter|subscribe|updates about|promotional"
+    r"|future (?:roles|openings|opportunities)|keep me (?:informed|posted)|stay in touch"
+    r"|add me to|talent (?:community|network|pool)|hear about (?:new|other)")
+
+
+async def fill_required_consent(page) -> dict:
+    """Tick a REQUIRED legal/privacy consent checkbox — you can't submit without agreeing to the
+    recruiting privacy notice / data processing (e.g. 1Password's bottom 'I agree'). Skips
+    optional MARKETING opt-ins ('contact you about job opportunities', newsletters) and anything
+    demographic. Additive."""
+    filled: list[str] = []
+    try:
+        boxes = await page.query_selector_all("input[type=checkbox]")
+    except Exception:
+        boxes = []
+    for cb in boxes:
+        try:
+            if await cb.is_checked():
+                continue
+            lab = (await cb.evaluate(_LABEL_JS) or "")
+            low = lab.lower()
+            if not _CONSENT_RE.search(low) or _CONSENT_SKIP_RE.search(low) or _DEMOGRAPHIC.search(low):
+                continue
+            try:
+                await cb.check(timeout=2500)
+            except Exception:
+                await cb.evaluate("el=>{const w=el.closest('label,[role=checkbox]'); (w||el).click();}")
+            filled.append(lab[:50])
+        except Exception:
+            continue
+    if filled:
+        logger.info("required consent ticked (%d): %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
 async def apply_react_select_choice(page, container_index: int,
                                     option_text: str, allow_first: bool = False) -> bool:
     """Pick `option_text` in the react-select at `container_index` (harvest order):

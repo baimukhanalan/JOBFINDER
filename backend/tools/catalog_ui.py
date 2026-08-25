@@ -272,8 +272,8 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<select class="cat-bulk-sel" id="bulkCompany" aria-label="Компания">{comp_opts}</select>'
         f'<select class="cat-bulk-sel" id="bulkRegion" aria-label="Регион">{region_opts}</select>'
         '<label class="cat-bulk-n">Кол-во'
-        '<input type="number" id="bulkN" min="1" max="6000" step="1" value="100" '
-        'inputmode="numeric"></label>'
+        '<input type="number" id="bulkN" min="1" step="1" placeholder="Все" '
+        'inputmode="numeric" title="Пусто = все доступные вакансии"></label>'
         '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
         'onclick="bulkStop()">Стоп</button>'
@@ -475,19 +475,23 @@ window.bulkFillAll = async function(){
       nEl=document.getElementById('bulkN'), gEl=document.getElementById('bulkGender'),
       cEl=document.getElementById('bulkCompany'), rEl=document.getElementById('bulkRegion');
   if(go.disabled) return;
-  var n=parseInt(nEl&&nEl.value,10); if(!(n>=1)) n=100; if(n>6000) n=6000;
-  if(nEl) nEl.value=n;
+  var raw=(nEl&&nEl.value||'').trim();
+  var n=parseInt(raw,10);
+  var all=!(n>=1);                 // пусто / не число / <=0 => все доступные
+  if(!all){ if(n>20000) n=20000; if(nEl) nEl.value=n; }
+  var countStr=all?'':String(n);
+  var nLbl=all?'ВСЕ доступные вакансии':('до '+n+' вакансий');
   var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
   var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
   var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
-  if(!confirm('Массовая подача: до '+n+' вакансий (все ATS)\\n'
+  if(!confirm('Массовая подача: '+nLbl+' (все ATS)\\n'
       +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+'\\n\\n'
       +'Реальные заявки в реальные ATS с авто-отправкой, одна за другой. Lever/Workable '
       +'заполнятся, но их Submit нужно завершить вручную (капча) — в разделе '
       +'«Незавершённые». Прервать — «Стоп» (после текущей).')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
   try{
-    var body='count='+encodeURIComponent(n)+'&gender='+encodeURIComponent(gender)
+    var body='count='+encodeURIComponent(countStr)+'&gender='+encodeURIComponent(gender)
         +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();

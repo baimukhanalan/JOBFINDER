@@ -362,7 +362,8 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   Parse/rotation are unit-tested (`tests/test_proxy_pool.py`, no network).
 - **Bulk auto-apply: «Подать на все» (`/catalog`).** One SEQUENTIAL server-side queue (co-pilot has
   ONE shared browser). **As of 2026-08-25 it runs over ALL 4 ATS** (`_BULK_ATS = greenhouse, ashby,
-  lever, workable`) — the first `count` jobs (default 100, clamped 1..6000), optionally narrowed by
+  lever, workable`) — **`count` is OPTIONAL (2026-08-25): an empty box = EVERY available job (no cap,
+  ~6.1k now); a number = the first `count`, clamped 1..20000.** Optionally narrowed by
   `company` (a company_key) and `region` (US/CA/UK/OTHER); `gender` sets the persona sex for the run.
   Greenhouse/Ashby auto-submit end-to-end; **Lever/Workable fill but their Submit is captcha-gated**, so
   those DON'T stall the queue (each `_do_fill` is bounded by the co-pilot's 240s `/load` timeout, caught,

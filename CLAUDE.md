@@ -410,16 +410,23 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   direct fallback is never reached. Complements: `proxy_pool.next_proxy` now round-robins only the
   **lowest-`fails` tier** of the pool (not blindly over dead entries), so attempts 0/1 don't waste
   timeouts on known-bad egresses.
-- **GH/Ashby go DIRECT — do NOT proxy them (`_fill_one_on_worker`, 2026-08-25) — critical, counterintuitive.**
-  Root-caused from a bulk run where ~⅓ of GH/Ashby submits silently failed: the `after_submit.png`
-  showed Ashby's anti-spam banner **"We couldn't submit your application. Flagged as possible spam. Turn
-  off your VPN or proxy."** — **Ashby scores the BD DATACENTER proxy IPs as spam and rejects the submit**,
-  while the SAME job from the DIRECT datacenter server IP submits fine (that's how the earliest verified
-  GH/Ashby end-to-end submits worked, and how the email-code step passes). So the parallel lane (which is
-  **GH/Ashby only** — `_PARA_ATS`) now skips proxy assignment entirely and goes direct; a proxy is used
-  only for a hypothetical non-`_PARA_ATS` job. The proxies still matter for page-LOAD resilience / the
-  direct-dead-pool fallback, but must NOT wrap a GH/Ashby SUBMIT. Do NOT re-enable proxying the parallel
-  lane. (Residential proxies would not be flagged, but the owner chose the cheap datacenter zone.)
+- **Ashby anti-spam flags the DATACENTER IP itself — direct is NOT immune (`_fill_one_on_worker`, 2026-08-25).**
+  Ashby's submit returns **"We couldn't submit your application. Flagged as possible spam. Turn off your
+  VPN or proxy."** on a risk-scored share of submits. FIRST believed proxy-specific (go direct), but
+  VERIFIED WRONG by a screenshot: a **DIRECT submit (no proxy, our Contabo datacenter IP 173.249.18.153)
+  to upguard/Ashby got the SAME banner** with a perfectly-filled form. So Ashby flags datacenter IPs
+  **regardless of proxy** — both the BD datacenter proxy AND the direct server IP. (The earlier log
+  "proxy=⅓ spam vs direct=low" was an artifact: the old `_SUBMIT_BLOCK_RE` didn't catch "couldn't
+  submit", so proxied spam banners were logged `blocked=None`, undetected.) The parallel lane still goes
+  **DIRECT** (`_PARA_ATS` skips proxy) — direct is no worse than the datacenter proxy and free, and
+  Greenhouse's failures are fill gaps (missing-required-field / consent), NOT spam, so GH is fine direct.
+  **The ONLY fix for the Ashby spam flag is RESIDENTIAL IPs** (zone `alibaba_res`, $4/GB) — a datacenter
+  IP, proxied or not, gets flagged. **Owner's decision 2026-08-25: keep datacenter/direct (free) and
+  accept that a risk-scored share of Ashby submits spam-fail → «Незавершённые».** NOTE those spam-flagged
+  Ashby jobs can't be finished from noVNC either (same datacenter IP) — they'd need a residential
+  connection; «Докрутить» on the co-pilot won't clear a spam flag. To switch Ashby to residential later,
+  route `_PARA_ATS`==ashby through the `alibaba_res` zone. Do NOT re-add the earlier claim that "direct
+  submits fine" — it doesn't, for Ashby.
 - **`_SUBMIT_BLOCK_RE` must catch the real ATS rejection wordings (`copilot.py`, 2026-08-25).** It matched
   captcha / "is required" / "please enter" but MISSED "flagged as possible spam", "we couldn't submit",
   "missing entry", "needs corrections", "N items for a required section", "please accept the terms" — so a

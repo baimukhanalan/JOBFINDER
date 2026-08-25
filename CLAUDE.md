@@ -564,7 +564,7 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     NOT auto-provision — run `python -m backend.tools.provision_mailboxes --only <id>` for a real candidate.
     It also **registers the persona in `backend/data/demo_personas.json`** (gitignored) via
     `mailcrm.register_demo_persona`, and `mailcrm.candidates()` merges those in (flagged `is_demo`) so the
-    persona's inbox actually SHOWS in the CRM `/mail` — the mail delivers to the Maildir regardless, but
+    persona's inbox actually SHOWS in the CRM `/mail` — the mail delivers to the Maildir regardless. **register_demo_persona is now THREAD-SAFE (lock + atomic tmp-replace, 2026-08-25):** the parallel bulk lane runs N dashboard threads that each register a persona concurrently; the old bare read-modify-write RACED and clobbered `demo_personas.json`, silently dropping earlier personas — incl. real leads (gulmira's Salmon HR-interview thread) — from the registry so their mail stopped surfacing (files stay on disk, just unindexed). **NEVER `TRUNCATE mail_index` to rebuild:** `mail_indexer.run_once()` only re-indexes CURRENT `candidates()`, so any mailbox whose registration was lost loses its rows permanently — recover by re-registering every `/var/mail/vhosts/takhet.com/*` maildir that has mail, then re-index., but
     `mailcrm.build_index_row` returns None (skips) for any address that isn't a candidate, so without the
     registration a recruiter reply to the résumé email lands in the box but never surfaces in the UI. New
     demo personas need the **mail-indexer** to see them: `mail_indexer.build_index_row` re-checks

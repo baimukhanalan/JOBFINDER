@@ -184,22 +184,34 @@ def _maildir(local: str, domain: str) -> str:
 DEMO_FILE = ROOT / "backend" / "data" / "demo_personas.json"  # synthetic demo personas (email -> {id,name})
 
 
+_DEMO_LOCK = threading.Lock()
+
+
 def register_demo_persona(email: str, name: str, pid: str = "") -> None:
     """Add a synthetic demo persona (synth_persona) to the candidate registry so its mailbox
-    is scanned + shown in the CRM inbox — demo personas aren't in profiles.json. Idempotent."""
+    is scanned + shown in the CRM inbox — demo personas aren't in profiles.json. Idempotent.
+
+    THREAD-SAFE (locked + atomic write): the parallel bulk lane runs N dashboard threads that
+    each call this concurrently; the old bare read-modify-write raced and CLOBBERED entries —
+    real leads (gulmira's Salmon HR-interview thread) silently vanished from the registry, so
+    their mail stopped surfacing. The lock + tmp-replace keep every registration."""
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         return
-    reg = _load(DEMO_FILE, {})
-    if not isinstance(reg, dict):
-        reg = {}
-    if reg.get(email) == {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}:
-        return
-    reg[email] = {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}
-    try:
-        DEMO_FILE.write_text(json.dumps(reg, ensure_ascii=False, indent=2))
-    except Exception:
-        pass
+    entry = {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}
+    with _DEMO_LOCK:
+        reg = _load(DEMO_FILE, {})
+        if not isinstance(reg, dict):
+            reg = {}
+        if reg.get(email) == entry:
+            return
+        reg[email] = entry
+        try:
+            tmp = DEMO_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, DEMO_FILE)
+        except Exception:
+            pass
 
 
 def _demo_candidates() -> list[dict]:

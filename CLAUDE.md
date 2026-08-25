@@ -105,6 +105,24 @@ No dashboard route or navigation item exists for this phase. Commands:
 - initialize/store: `python -m backend.tools.company_discovery init`, then `collect --source ...`
 - inspect/export: `python -m backend.tools.company_discovery stats` / `export --status novel --output novel.jsonl`
 
+### Independent remote-job collection (Phase 2; no UI yet)
+
+`backend.tools.company_jobs` reads only ATS identities from `company_discovery` and stores confirmed
+remote jobs in the isolated `company_remote_*` tables. It MUST NOT write to `job_catalog` or reuse
+`targets.json` / `discovered_slugs.json`. Supported public connectors are Greenhouse, Lever, Ashby,
+Workable, SmartRecruiters and Workday (the latter requires its exact public `ats_url`). Each row
+preserves the full plain/HTML JD, structured fields, apply/job links, raw source
+payload and provenance. Meaningful edits, closures and reopenings produce append-only snapshots;
+missing jobs close only after a successful complete board scan.
+
+Application questions come from the ATS API where it is authoritative (including Greenhouse's
+`?questions=true` groups), otherwise from a read-only rendered-form pass. `partial`/CAPTCHA/multi-step
+results are failures and never replace a previously complete question set. The collector never fills
+or submits forms; their partially captured evidence remains in `company_remote_job_question_attempts`.
+Commands: `python -m backend.tools.company_jobs init`, then
+`python -m backend.tools.company_jobs collect --status novel`; use `--skip-questions` only for a
+deliberately incomplete operational smoke. See `docs/company-jobs-phase2.md`.
+
 ## Secrets & PII (all gitignored)
 - `backend/.env` — `CRM_PG_DSN` (live CRM Postgres), `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`,
   `LLM_URL/LLM_KEY/LLM_MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, and legacy Mailgun

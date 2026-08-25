@@ -248,6 +248,7 @@ button.primary:hover{background:var(--accent-deep);}
 .mbxrow .apps-chip:hover{background:#d7e6fd;}
 /* Candidate applications page */
 .capp-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 16px;}
+.capp-hbtns{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto;}
 .capp-back{font-size:13px;color:var(--ink-soft);}
 .capp-name{font-size:20px;font-weight:700;color:var(--ink);}
 .capp-em{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink-mute);}
@@ -796,19 +797,23 @@ def render_candidate_rows(cands: list[dict]) -> str:
     """One <a.mbxrow> per candidate — shared by the full page and the
     /mail/candidates/more infinite-scroll fragment."""
     from backend.tools import candidate_apps
+    resume_ids = candidate_apps.resume_profile_ids()   # cheap (cached): roster base résumés
     out = []
     for c in cands:
         n = c.get("unread", 0)
         badge = f'<span class="cnt">{n}</span>' if n else ""
-        # applications chip → the candidate's applications page (résumé downloads + where
-        # they applied). It lives inside the row <a>, so it stops the click from also
-        # opening the inbox. Guard a missing id (a minimal candidate dict has no "id"): no
-        # id → no apps page → no chip.
+        # résumé/applications chip → the candidate's applications page (résumé downloads +
+        # where they applied). It lives inside the row <a>, so it stops the click from also
+        # opening the inbox. Shows «📄 N» when the bot has applied N times, or a bare «📄»
+        # for a roster candidate that has a base résumé but no application yet — so EVERY
+        # candidate with a résumé shows one. Guard a missing id (minimal candidate dict).
         cid = c.get("id")
         na = candidate_apps.app_count(cid) if cid else 0
-        apps = (f'<span class="apps-chip" title="Заявки — куда подавались + резюме" '
+        show_chip = bool(cid) and (na or cid in resume_ids)
+        chip_label = f"📄 {na}" if na else "📄"
+        apps = (f'<span class="apps-chip" title="Резюме + куда подавались" '
                 f'onclick="event.preventDefault();event.stopPropagation();'
-                f"location.href='/candidates/{escape(cid)}'\">📄 {na}</span>") if na else ""
+                f"location.href='/candidates/{escape(cid)}'\">{chip_label}</span>") if show_chip else ""
         out.append(
             f'<a class="mbxrow" href="/mail?mailbox={escape(c["email"])}">'
             f'<span class="avatar" style="background:{_avatar_color(c["name"])};width:30px;height:30px;font-size:13px">{escape(_initial(c["name"]))}</span>'
@@ -870,22 +875,29 @@ def render_candidates(cands: list[dict], counts: dict | None = None,
     return _page("candidates", body, modal)
 
 
-def render_candidate_apps(cand: dict, apps: list[dict]) -> str:
+def render_candidate_apps(cand: dict, apps: list[dict],
+                          has_base_resume: bool = False) -> str:
     """A candidate's applications: where the bot applied + the résumé PDF it used
-    (downloadable). `apps` from candidate_apps.applications_for()."""
+    (downloadable). `apps` from candidate_apps.applications_for(). `has_base_resume` adds a
+    download of the candidate's BASE résumé (rendered from their profile) so a candidate with
+    no application yet still has a downloadable CV."""
     from datetime import datetime
     name = escape(cand.get("name") or cand.get("id") or "")
     email = escape(cand.get("email") or "")
     cid = escape(cand.get("id") or "")
     inbox = (f'<a class="hbtn" href="/mail?mailbox={email}">Ящик кандидата</a>'
              if email else "")
+    base_btn = (f'<a class="hbtn" href="/candidates/{cid}/resume.pdf" target="_blank" '
+                f'rel="noopener">📄 Резюме</a>' if has_base_resume else "")
     head = (
         '<div class="page-head"><div class="ph-left"><div class="seg-nav">'
         '<a href="/mail/candidates">← Кандидаты</a></div></div></div>'
         f'<div class="capp-head"><div><div class="capp-name">{name}</div>'
-        f'<div class="capp-em">{email}</div></div>{inbox}</div>')
+        f'<div class="capp-em">{email}</div></div><div class="capp-hbtns">{base_btn}{inbox}</div></div>')
     if not apps:
-        return _page("candidates", head + '<div class="empty">Заявок пока нет</div>')
+        empty = ('<div class="empty">Заявок пока нет — резюме доступно по кнопке выше.</div>'
+                 if has_base_resume else '<div class="empty">Заявок пока нет</div>')
+        return _page("candidates", head + empty)
 
     cards = []
     for a in apps:

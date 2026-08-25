@@ -1724,7 +1724,21 @@ def candidate_applications(cid: str):
     cand = next((c for c in mailcrm.candidates() if c["id"] == cid),
                 {"id": cid, "name": cid, "email": ""})
     apps = candidate_apps.applications_for(cid)
-    return HTMLResponse(mailcrm_ui.render_candidate_apps(cand, apps))
+    has_base = candidate_apps.base_resume(cid) is not None
+    return HTMLResponse(mailcrm_ui.render_candidate_apps(cand, apps, has_base_resume=has_base))
+
+
+@app.get("/candidates/{cid}/resume.pdf")
+def candidate_base_resume(cid: str):
+    """The candidate's BASE résumé (rendered from their profile) — served even when the bot
+    hasn't applied anywhere yet, so every candidate with résumé data has a downloadable CV."""
+    from backend.tools import candidate_apps, drafts_ui
+    r = candidate_apps.base_resume(_safe_id(cid))
+    pdf = drafts_ui.render_resume_pdf(r) if r else None
+    if not pdf:
+        return Response("no résumé", status_code=404)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="resume_{_safe_id(cid)}.pdf"'})
 
 
 @app.get("/mail/message", response_class=HTMLResponse)

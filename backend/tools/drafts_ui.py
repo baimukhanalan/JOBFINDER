@@ -190,7 +190,15 @@ def resume_pdf(job_id: int) -> bytes | None:
     job = catalog_db.get_job(job_id)
     if not job or not job.get("draft"):
         return None
-    resume = (job["draft"] or {}).get("resume") or {}
+    return render_resume_pdf((job["draft"] or {}).get("resume") or {})
+
+
+def render_resume_pdf(resume: dict) -> bytes | None:
+    """Render a résumé dict (personal_info/summary/experience/skills/education) to a PDF.
+    Shared by the per-job draft résumé and a candidate's BASE résumé (from their profile)."""
+    resume = resume or {}
+    if not (resume.get("personal_info") or resume.get("experience") or resume.get("education")):
+        return None
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import LETTER
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet

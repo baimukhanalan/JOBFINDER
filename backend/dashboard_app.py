@@ -896,7 +896,138 @@ def _fill_all_public() -> dict:
     """A poll-friendly view of the bulk run (drops the big per-job results list)."""
     s = _FILL_ALL
     return {k: s.get(k) for k in ("state", "total", "done", "ok", "failed",
-                                  "current", "current_id", "run_id")}
+                                  "current", "current_id", "run_id", "workers")}
+
+
+# ---- Parallel bulk lane (headless worker pool) -----------------------------
+_FILL_ALL_LOCK = threading.Lock()
+_PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
+_PER_JOB_TIMEOUT = 200                 # hard cap per job so one hang can't eat the run
+
+
+def _bump(*, done=0, ok=0, failed=0, current=None):
+    with _FILL_ALL_LOCK:
+        _FILL_ALL["done"] = _FILL_ALL.get("done", 0) + done
+        _FILL_ALL["ok"] = _FILL_ALL.get("ok", 0) + ok
+        _FILL_ALL["failed"] = _FILL_ALL.get("failed", 0) + failed
+        if current is not None:
+            _FILL_ALL["current"] = current
+
+
+def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
+    """Generate the persona/draft (LLM), pick a proxy, run fill+auto-submit on the headless
+    worker at `port`. Records the outcome to bulk_log (unconfirmed → «Незавершённые»)."""
+    import httpx
+
+    from backend.tools import bulk_log, catalog_drafts, proxy_pool
+    st: dict = {"state": "error"}
+    try:
+        pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender)
+        load = {"jobid": jjid, "profile": pid}
+        try:
+            px = proxy_pool.next_proxy()
+        except Exception:
+            px = None
+        if px and px.get("server"):
+            load["proxy_server"] = px["server"]
+            if px.get("username"):
+                load["proxy_username"] = px["username"]
+                load["proxy_password"] = px.get("password") or ""
+        base = f"http://127.0.0.1:{port}"
+        try:
+            httpx.post(f"{base}/release", data={"profile": pid}, timeout=10)
+        except Exception:
+            pass
+        r = httpx.post(f"{base}/load", data=load, timeout=_PER_JOB_TIMEOUT)
+        res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+        if r.status_code == 200:
+            st = {"state": "done", "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+                  "unfilled_list": res.get("unfilled_list"), "submit": res.get("submit_result"),
+                  "company": res.get("company"), "title": res.get("title")}
+        else:
+            st = {"state": "error", "error": res.get("error", "worker load failed")}
+    except Exception as exc:
+        st = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
+    ok = st.get("state") == "done"
+    _bump(done=1, ok=1 if ok else 0, failed=0 if ok else 1,
+          current=st.get("company") or (job or {}).get("company") or "")
+    try:
+        bulk_log.record(run, jobid=jid,
+                        company=st.get("company") or (job or {}).get("company", ""),
+                        title=st.get("title") or (job or {}).get("job_title", ""),
+                        state=st.get("state") or "", filled=st.get("filled"),
+                        unfilled=st.get("unfilled"), unfilled_list=st.get("unfilled_list"),
+                        submit=st.get("submit"), error=st.get("error"))
+    except Exception:
+        logging.getLogger(__name__).warning("bulk_log.record failed", exc_info=True)
+
+
+def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,
+                          n_workers: int = 10) -> None:
+    """Parallel bulk: greenhouse/ashby fan out across N headless workers (auto-submit);
+    lever/workable + anything else go STRAIGHT to the «Незавершённые» ledger for a human to
+    finish the captcha. One hung job can't stall the run (per-job timeout + independent
+    workers). Workers are torn down when the run ends."""
+    import queue as _queue
+
+    from backend.tools import bulk_log, bulk_pool, catalog_db
+    log = logging.getLogger(__name__)
+    para: list = []
+    captcha: list = []
+    for jid in job_ids:
+        try:
+            job = catalog_db.get_job(int(jid))
+        except Exception:
+            job = None
+        ats = (job or {}).get("ats") or ""
+        (para if ats in _PARA_ATS else captcha).append((jid, job))
+    run = bulk_log.start(len(job_ids))
+    with _FILL_ALL_LOCK:
+        _FILL_ALL["run_id"] = run["run_id"]
+    # captcha / non-auto-submit ATS → ledger immediately (a human finishes them in noVNC)
+    for jid, job in captcha:
+        try:
+            bulk_log.record(run, jobid=jid, company=(job or {}).get("company", ""),
+                            title=(job or {}).get("job_title", ""), state="needs_human",
+                            submit={"confirmed": False, "reason": "click_failed"})
+        except Exception:
+            pass
+        _bump(done=1, failed=1)
+    try:
+        if para and not _FILL_ALL_STOP.is_set():
+            ports = bulk_pool.start_workers(min(n_workers, len(para)))
+            if not ports:
+                log.warning("parallel bulk: no workers came up")
+            else:
+                with _FILL_ALL_LOCK:
+                    _FILL_ALL["workers"] = len(ports)
+                q: _queue.Queue = _queue.Queue()
+                for item in para:
+                    q.put(item)
+
+                def _worker(port):
+                    while not _FILL_ALL_STOP.is_set():
+                        try:
+                            jid, job = q.get_nowait()
+                        except _queue.Empty:
+                            return
+                        _fill_one_on_worker(jid, gender, port, run, job)
+
+                threads = [threading.Thread(target=_worker, args=(p,), daemon=True)
+                           for p in ports]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+    finally:
+        try:
+            bulk_pool.stop_workers()
+        except Exception:
+            pass
+    state = "stopped" if _FILL_ALL_STOP.is_set() else "done"
+    bulk_log.finish(run, state)
+    with _FILL_ALL_LOCK:
+        _FILL_ALL["state"] = state
 
 
 def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
@@ -933,15 +1064,16 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 
 @app.post("/catalog/fill_all")
 def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
-                     company: str = Form(""), region: str = Form("")):
-    """Start ONE sequential bulk run over the catalog across ALL ATS (greenhouse, ashby,
-    lever, workable), optionally narrowed by `company` (a company_key) and `region`
-    (US/CA/UK/OTHER). `gender` ('male'/'female') sets the persona sex for every job in
-    the run. Lever/Workable fill but their Submit is captcha-gated — those land in the
-    «unfinished» section for a human to finish. **`count` is OPTIONAL: empty/blank (or
-    non-positive/garbage) → EVERY available job (no cap); a number → the first `count`,
-    clamped 1..20000.** Returns immediately; poll /catalog/fill_all_status, abort via
-    /catalog/fill_all_stop."""
+                     company: str = Form(""), region: str = Form(""),
+                     workers: str = Form("")):
+    """Start a PARALLEL bulk run over the catalog. Greenhouse/Ashby fan out across
+    `workers` headless browser workers and auto-submit end-to-end; Lever/Workable (and any
+    other ATS) go STRAIGHT to the «Незавершённые» ledger for a human to finish the captcha
+    in noVNC. Optionally narrowed by `company` (a company_key) and `region` (US/CA/UK/OTHER);
+    `gender` ('male'/'female') sets persona sex for the run. **`count` is OPTIONAL:
+    empty/blank/garbage → EVERY available job; a number → the first `count`, clamped
+    1..20000.** `workers` defaults to 10, clamped 1..16. Returns immediately; poll
+    /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
     from backend.tools import catalog_db
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
@@ -964,12 +1096,18 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
     all_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS]
     job_ids = all_ids if n is None else all_ids[:n]
+    try:
+        nw = max(1, min(int((workers or "").strip() or 10), 16))
+    except ValueError:
+        nw = 10
     _FILL_ALL_STOP.clear()
     _FILL_ALL.clear()
     _FILL_ALL.update({"state": "running", "total": len(job_ids), "done": 0,
-                      "ok": 0, "failed": 0, "current": None, "current_id": None})
-    threading.Thread(target=_do_fill_all, args=(job_ids, g), daemon=True).start()
-    return JSONResponse({"started": True, "total": len(job_ids),
+                      "ok": 0, "failed": 0, "current": None, "current_id": None,
+                      "workers": nw})
+    threading.Thread(target=_do_fill_all_parallel, args=(job_ids, g, nw),
+                     daemon=True).start()
+    return JSONResponse({"started": True, "total": len(job_ids), "workers": nw,
                          "requested": ("all" if n is None else n), "novnc": _NOVNC_URL})
 
 

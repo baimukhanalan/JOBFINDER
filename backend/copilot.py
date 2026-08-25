@@ -39,6 +39,10 @@ from backend.services.tailor.variants import variant_for
 logger = logging.getLogger(__name__)
 
 os.environ.setdefault("DISPLAY", ":98")
+# COPILOT_HEADLESS=1 launches Chromium headless (no noVNC watch) — used by the parallel
+# bulk worker pool (backend/tools/bulk_pool.py) which runs N of these on their own ports.
+# The default (unset) keeps the headful DISPLAY=:98 browser the human watches in noVNC.
+HEADLESS = os.environ.get("COPILOT_HEADLESS") == "1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 
@@ -133,8 +137,11 @@ async def _ensure_browser():
         # A plain launch still honors a per-CONTEXT proxy (verified: a context created with
         # proxy=… routes through it, one without goes DIRECT), so _use_proxy_context's
         # rotation keeps working while the empty-pool/direct case has real internet.
+        _launch_args = ["--no-sandbox", "--disable-dev-shm-usage"]
+        if not HEADLESS:
+            _launch_args.insert(0, "--start-maximized")
         _S["browser"] = await _S["pw"].chromium.launch(
-            headless=False, args=["--start-maximized", "--no-sandbox", "--disable-dev-shm-usage"],
+            headless=HEADLESS, args=_launch_args,
             env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
         ctx = await _S["browser"].new_context(no_viewport=True)
         _S["ctx"], _S["proxy_server"] = ctx, ""

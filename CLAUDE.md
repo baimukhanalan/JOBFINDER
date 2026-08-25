@@ -374,18 +374,26 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a good one (a separate `recheck_cursor` walks the pool; `last_check` is stamped). Manual pass:
   `POST /proxies/recheck` (Form `batch`). The FIRST pass over a fresh pool always evicts 0 (every
   `fails` goes 0→1). Tests: `tests/test_proxy_pool.py`.
-- **Bulk auto-apply: «Подать на все» (`/catalog`).** One SEQUENTIAL server-side queue (co-pilot has
-  ONE shared browser). **As of 2026-08-25 it runs over ALL 4 ATS** (`_BULK_ATS = greenhouse, ashby,
-  lever, workable`) — **`count` is OPTIONAL (2026-08-25): an empty box = EVERY available job (no cap,
-  ~6.1k now); a number = the first `count`, clamped 1..20000.** Optionally narrowed by
-  `company` (a company_key) and `region` (US/CA/UK/OTHER); `gender` sets the persona sex for the run.
-  Greenhouse/Ashby auto-submit end-to-end; **Lever/Workable fill but their Submit is captcha-gated**, so
-  those DON'T stall the queue (each `_do_fill` is bounded by the co-pilot's 240s `/load` timeout, caught,
-  queue continues) — they land in the **«Незавершённые» ledger** for a human to finish the captcha in
-  noVNC. Reuses `_do_fill` per job (so it auto-submits where possible AND rotates proxy IPs). Endpoints:
-  `POST /catalog/fill_all` (start; Form `count/gender/company/region`), `GET /catalog/fill_all_status`
-  (poll), `POST /catalog/fill_all_stop` (halts after the current job). Live counters in
-  `dashboard._FILL_ALL` (in-memory only). **«Незавершённые» section (`/unfinished` + nav tab, 2026-08-25):**
+- **Bulk auto-apply: «Подать на все» (`/catalog`) — PARALLEL (2026-08-25).** Was ONE sequential queue
+  on the single noVNC co-pilot; a single 1Password/Ashby job could hang ~2h (the Ashby emailed-code
+  wait), so 6128 jobs was days-to-months. **Now Greenhouse/Ashby fan out across `workers` HEADLESS
+  browser workers** (`_do_fill_all_parallel` → `bulk_pool.start_workers(n)` spawns N `backend.copilot`
+  processes with **`COPILOT_HEADLESS=1`** on ports **8110+** — each its own browser, no Xvfb; they
+  inherit the dashboard's `mail` group so the Ashby emailed-code step still works; torn down when the run
+  ends). One thread per worker pulls from a shared queue; a **hard `_PER_JOB_TIMEOUT`=200s** per `/load`
+  means one hung job can't stall the run. **Lever/Workable (and any non-`_PARA_ATS` = greenhouse/ashby)
+  go STRAIGHT to the «Незавершённые» ledger** (recorded `needs_human`, never auto-filled in bulk — a
+  human finishes the captcha via «Докрутить»). Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
+  submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are
+  bumped under `_FILL_ALL_LOCK` (thread-safe). Proxy rotation: the DASHBOARD picks `next_proxy()` per job
+  and passes it to the worker's `/load` (one cursor). **`count` is OPTIONAL: empty = EVERY available job;
+  a number = first `count`, clamped 1..20000. `workers` defaults to 10, clamped 1..16** (server has 12
+  cores / ~28 GB free; headless Chromium ~1.5 GB each). Optionally narrowed by `company`/`region`;
+  `gender` sets persona sex. Endpoints: `POST /catalog/fill_all` (Form `count/gender/company/region/
+  workers`), `GET /catalog/fill_all_status` (poll; adds `workers`), `POST /catalog/fill_all_stop` (sets
+  `_FILL_ALL_STOP`; workers stop pulling + are torn down). The old sequential `_do_fill_all` +
+  single-job `_do_fill` (via co-pilot 8102) still exist for the one-click `/catalog/{id}/fill`. Live
+  counters in `dashboard._FILL_ALL` (in-memory only). **«Незавершённые» section (`/unfinished` + nav tab, 2026-08-25):**
   a persistent ledger (`bulk_log.py` → gitignored `logs/unfinished.json`) of applications that didn't
   confirm — `record()` adds a not-confirmed job (captcha-blocked / errored / incomplete) and removes a
   confirmed one; `/unfinished` lists them with «Докрутить» (re-fill → finish by hand), «Открыть вакансию»,

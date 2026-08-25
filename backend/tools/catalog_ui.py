@@ -274,6 +274,9 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<label class="cat-bulk-n">Кол-во'
         '<input type="number" id="bulkN" min="1" step="1" placeholder="Все" '
         'inputmode="numeric" title="Пусто = все доступные вакансии"></label>'
+        '<label class="cat-bulk-n">Потоков'
+        '<input type="number" id="bulkW" min="1" max="16" step="1" value="10" '
+        'inputmode="numeric" title="Параллельных браузеров для GH/Ashby (1–16)"></label>'
         '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
         'onclick="bulkStop()">Стоп</button>'
@@ -516,7 +519,8 @@ window.fillJob = async function(btn){
 window.bulkFillAll = async function(){
   var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg'),
       nEl=document.getElementById('bulkN'), gEl=document.getElementById('bulkGender'),
-      cEl=document.getElementById('bulkCompany'), rEl=document.getElementById('bulkRegion');
+      cEl=document.getElementById('bulkCompany'), rEl=document.getElementById('bulkRegion'),
+      wEl=document.getElementById('bulkW');
   if(go.disabled) return;
   var raw=(nEl&&nEl.value||'').trim();
   var n=parseInt(raw,10);
@@ -524,18 +528,20 @@ window.bulkFillAll = async function(){
   if(!all){ if(n>20000) n=20000; if(nEl) nEl.value=n; }
   var countStr=all?'':String(n);
   var nLbl=all?'ВСЕ доступные вакансии':('до '+n+' вакансий');
+  var w=parseInt(wEl&&wEl.value,10); if(!(w>=1)) w=10; if(w>16) w=16; if(wEl) wEl.value=w;
   var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
   var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
   var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
-  if(!confirm('Массовая подача: '+nLbl+' (все ATS)\\n'
-      +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+'\\n\\n'
-      +'Реальные заявки в реальные ATS с авто-отправкой, одна за другой. Lever/Workable '
-      +'заполнятся, но их Submit нужно завершить вручную (капча) — в разделе '
-      +'«Незавершённые». Прервать — «Стоп» (после текущей).')) return;
+  if(!confirm('Массовая подача: '+nLbl+'\\n'
+      +'Пол: '+gLbl+' · Компания: '+cLbl+(region?(' · Регион: '+region):'')+' · Потоков: '+w+'\\n\\n'
+      +'Greenhouse/Ashby заполняются и авто-отправляются в '+w+' параллельных браузеров. '
+      +'Lever/Workable (капча) сразу уходят в «Незавершённые» на ручное дожатие. '
+      +'Прервать — «Стоп».')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
   try{
     var body='count='+encodeURIComponent(countStr)+'&gender='+encodeURIComponent(gender)
-        +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region);
+        +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region)
+        +'&workers='+encodeURIComponent(w);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }

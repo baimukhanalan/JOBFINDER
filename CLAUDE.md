@@ -59,7 +59,13 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   review app. `/` redirects to `/mail/candidates`. No in-app auth (nginx basic-auth sits in front).
 - `jobfinder-mail-indexer` → `python -m backend.tools.mail_indexer` — an **inotify watcher** over
   `/var/mail/vhosts/takhet.com/*` (~1000 dirs) that upserts into Postgres `jobfinder_crm.mail_index`.
-  **This is what feeds `/mail`** (logs `watching N dirs …` on start).
+  **This is what feeds `/mail`** (logs `watching N dirs …` on start). **It imports `mailcrm.build_index_row`,
+  so ANY change to `mailcrm.py`'s parsing (body/attachment/kind classification) needs `pm2 restart
+  jobfinder-mail-indexer` TOO — not just the dashboard** — else new mail is indexed with the OLD logic
+  (2026-08-25: the cid-inline-logo `has_att` fix showed a fake paperclip on new "Security code" emails
+  because only the dashboard was restarted; DB-stored fields like `has_att`/`snippet`/`kind` on already-
+  indexed rows also need a recompute/reindex since the list view reads them, while the thread OPEN view
+  re-parses from disk and reflects a mailcrm.py fix immediately).
 - `jobfinder-alan-copilot` → `uvicorn backend.copilot:app` on **127.0.0.1:8102** with `DISPLAY=:98` —
   the headful Chromium the bot pre-fills; a **separate app** from the dashboard (own routes
   `/ /load /release /mark_submitted /state`).

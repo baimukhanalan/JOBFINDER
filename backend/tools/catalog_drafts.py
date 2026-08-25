@@ -854,6 +854,17 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
     if city:
         for lbl in ("Location (City)", "Location", "City", "Current location", "City/Town"):
             drafted.setdefault(lbl, city)
+    # Country was NOT drafted (only city variants were), so a bare 'Country' / 'Country of
+    # residence' / 'What region do you reside in?' select stayed blank and blocked the submit
+    # (Remote/mercury/gemini/nebius). Supply the persona's country under the common labels.
+    country = (d.get("country") or "").strip() or (
+        ploc.rsplit(",", 1)[-1].strip() if "," in ploc else "")
+    if country:
+        for lbl in ("Country", "Country/Region", "Country of residence", "Country of Residence",
+                    "Please choose the country in which you are located.",
+                    "In which country are you located?", "Which country do you reside in?",
+                    "What region do you reside in?", "Country (current location)"):
+            drafted.setdefault(lbl, country)
 
     # The co-pilot needs the real APPLY-form URL, not the raw posting (see apply_url_for_job).
     apply_url = apply_url_for_job(job)

@@ -166,9 +166,12 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   input that **live-filters as you type** (250ms debounce → `GET /catalog/more?q=&region=&offset=`
   replaces `#catlist`; Enter is intercepted, no reload) — on mobile the shared Gmail top pill
   (`.gm-search input`) IS that search (the page's own `.cat-q` is hidden ≤760px), on desktop `#catq`
-  is. Everything secondary — region chips, «Подать на все», the proxy pool upload — lives in ONE
-  collapsed **«Фильтры»** sheet (`#catSettings`, toggled by `toggleFilters()`); the button shows the
-  active region as a tag. Cards: the TITLE is the link to the posting (no separate «Открыть»), a
+  is. Everything secondary — region chips, «Подать на все», the proxy pool — lives in a **«Фильтры»
+  MODAL dialog** (`#catSettings`, `.cat-modal`, toggled by `toggleFilters()` — backdrop/✕/Esc close it,
+  body scroll locks while open; a centered dialog on desktop, a bottom-sheet ≤760px; **was an inline
+  collapsed sheet before 2026-08-25**); the button shows the active region as a tag. Double-tap zoom is
+  disabled app-wide via `touch-action:manipulation` on `html,body` in `mailcrm_ui._CSS` (pinch-zoom +
+  scroll still work). Cards: the TITLE is the link to the posting (no separate «Открыть»), a
   compact text **М/Ж** sex toggle (`pickSex()` sets `.cat-sex-b.on`; `fillJob` reads it) + one primary
   «Заполнить»; Описание/Вопросы are scroll-capped `<details>`; **no decorative emoji** anywhere. Live
   search + pagination share `curQ`/`region` state in the one scroll IIFE — don't reintroduce a second

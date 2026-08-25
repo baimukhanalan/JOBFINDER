@@ -906,6 +906,12 @@ _PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill (~≤120s) + i
 #                                        wait (WAIT_SUBMIT_MAX=300s) + margin, so a genuinely
 #                                        pending confirmation doesn't ReadTimeout into `error`
 #                                        (blocked jobs now return fast — copilot skips the watch)
+# A dead/slow residential proxy makes the apply page fail to LOAD (fast Chromium net error,
+# not a slow fill) — retry the job on a FRESH proxy instead of failing it.
+_PROXY_ERR_RE = re.compile(
+    r"ERR_TIMED_OUT|ERR_TUNNEL_CONNECTION|ERR_PROXY_CONNECTION|ERR_SOCKS"
+    r"|ERR_CONNECTION_(?:RESET|CLOSED|REFUSED|TIMED_OUT|ABORTED|FAILED)|ERR_EMPTY_RESPONSE"
+    r"|ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED", re.I)
 
 
 def _bump(*, done=0, ok=0, failed=0, current=None):
@@ -927,31 +933,47 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
     pid = ""
     try:
         pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender)
+        base = f"http://127.0.0.1:{port}"
         # wait_submit=1 → the worker finishes the email-code + confirmation INLINE before
         # returning, so this worker doesn't cancel that job's watch by taking the next one.
-        load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
-        try:
-            px = proxy_pool.next_proxy()
-        except Exception:
-            px = None
-        if px and px.get("server"):
-            load["proxy_server"] = px["server"]
-            if px.get("username"):
-                load["proxy_username"] = px["username"]
-                load["proxy_password"] = px.get("password") or ""
-        base = f"http://127.0.0.1:{port}"
-        try:
-            httpx.post(f"{base}/release", data={"profile": pid}, timeout=10)
-        except Exception:
-            pass
-        r = httpx.post(f"{base}/load", data=load, timeout=_PER_JOB_TIMEOUT)
-        res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
-        if r.status_code == 200:
-            st = {"state": "done", "filled": res.get("filled"), "unfilled": res.get("unfilled"),
-                  "unfilled_list": res.get("unfilled_list"), "submit": res.get("submit_result"),
-                  "company": res.get("company"), "title": res.get("title")}
-        else:
-            st = {"state": "error", "error": res.get("error", "worker load failed")}
+        # Up to 3 attempts, each on a FRESH proxy: if the apply page fails to LOAD because the
+        # residential proxy is dead/slow (ERR_TIMED_OUT / ERR_TUNNEL_CONNECTION_FAILED), switch
+        # to a working proxy instead of failing the job.
+        for attempt in range(3):
+            load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
+            try:
+                px = proxy_pool.next_proxy()
+            except Exception:
+                px = None
+            if px and px.get("server"):
+                load["proxy_server"] = px["server"]
+                if px.get("username"):
+                    load["proxy_username"] = px["username"]
+                    load["proxy_password"] = px.get("password") or ""
+            try:
+                httpx.post(f"{base}/release", data={"profile": pid}, timeout=10)
+            except Exception:
+                pass
+            try:
+                r = httpx.post(f"{base}/load", data=load, timeout=_PER_JOB_TIMEOUT)
+                res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+                code = r.status_code
+            except Exception as exc:
+                res, code = {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+            if code == 200:
+                st = {"state": "done", "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+                      "unfilled_list": res.get("unfilled_list"), "submit": res.get("submit_result"),
+                      "company": res.get("company"), "title": res.get("title")}
+                break
+            st = {"state": "error", "error": res.get("error", "worker load failed"),
+                  "proxy_retries": attempt}
+            # retry ONLY a proxy/connection load failure (fast) on a different egress; a
+            # slow fill / ReadTimeout / a real ATS error is not retried.
+            if attempt < 2 and _PROXY_ERR_RE.search(st["error"] or ""):
+                logging.getLogger(__name__).info(
+                    "job %s proxy load failed (%s) — retrying on a fresh proxy", jid, px and px.get("server"))
+                continue
+            break
     except Exception as exc:
         st = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
     ok = st.get("state") == "done"

@@ -1174,7 +1174,7 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 @app.post("/catalog/fill_all")
 def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
                      company: str = Form(""), region: str = Form(""),
-                     workers: str = Form("")):
+                     workers: str = Form(""), randomize: str = Form("")):
     """Start a PARALLEL bulk run over the catalog. Greenhouse/Ashby fan out across
     `workers` headless browser workers and auto-submit end-to-end; Lever/Workable (and any
     other ATS) go STRAIGHT to the «Незавершённые» ledger for a human to finish the captcha
@@ -1204,6 +1204,9 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     except Exception as exc:
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
     all_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS]
+    if str(randomize).strip().lower() in ("1", "true", "yes", "on"):
+        import random as _rnd
+        _rnd.shuffle(all_ids)          # sample DIVERSE jobs across companies, not the first N
     job_ids = all_ids if n is None else all_ids[:n]
     wraw = (workers or "").strip().lower()
     if wraw in ("", "auto", "0"):

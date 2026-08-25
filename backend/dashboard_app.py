@@ -645,6 +645,8 @@ def unfinished_index():
             f'<span class="unf-res"></span></div>'
             "</article>")
     n = len(items)
+    n_rerun = sum(1 for it in items if it.get("state") == "error"
+                  and str(it.get("jobid")) not in _UNFIXABLE_JOBIDS)
     list_html = ("".join(cards) if cards else
                  '<div class="unf-empty">Пусто — все заявки завершены 🎉<br>'
                  '<span>Незавершённые появляются здесь после «Массовой подачи», '
@@ -657,6 +659,11 @@ def unfinished_index():
            ".unf-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:19px;"
            "font-weight:700;color:var(--ink);margin:0 0 16px;animation:unf-in .4s ease both}"
            ".unf-head b{color:var(--accent)}"
+           ".unf-rerun{margin-left:14px;background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);"
+           "padding:7px 15px;font-size:12.5px;font-weight:700;cursor:pointer;min-height:34px;"
+           "box-shadow:0 1px 2px rgba(11,128,67,.3);transition:background .16s,transform .12s}"
+           ".unf-rerun:hover{background:#0a7038}.unf-rerun:active{transform:translateY(1px) scale(.985)}"
+           ".unf-rerun:disabled{opacity:.7;cursor:default}"
            ".unf-head .unf-links{font-size:13px;font-weight:600;margin-left:auto;display:flex;gap:14px}"
            ".unf-head a{color:var(--accent);text-decoration:none;transition:opacity .15s}"
            ".unf-head a:hover{text-decoration:underline;opacity:.8}"
@@ -735,9 +742,22 @@ def unfinished_index():
           "if(l&&!l.querySelector('.unf-card'))"
           "l.innerHTML='<div class=unf-empty>Пусто — все заявки завершены 🎉</div>';};"
           "card.addEventListener('transitionend',fin,{once:true});setTimeout(fin,480);}"
-          "catch(e){btn.disabled=false;}}"
+          "async function unfRerunAll(btn){"
+          "if(!confirm('Перезапустить все заявки, упавшие на загрузке (ошибка сети/прокси)? "
+          "Они пойдут через рабочие прокси в параллельном режиме.'))return;"
+          "btn.disabled=true;var o=btn.textContent;btn.textContent='Запускаю…';"
+          "try{var j=await (await fetch('/unfinished/rerun',{method:'POST',"
+          "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'gender='})).json();"
+          "if(j.started){btn.textContent='Пошло: '+j.total+' — открываю noVNC…';"
+          "window.location.href=j.novnc||'/vnc/vnc_lite.html?path=vnc/websockify&scale=true';}"
+          "else{btn.textContent=(j.reason==='already_running'?'Уже идёт прогон':"
+          "(j.reason==='nothing_to_rerun'?'Нечего перезапускать':'Ошибка'));"
+          "setTimeout(function(){btn.disabled=false;btn.textContent=o;},2500);}}"
+          "catch(e){btn.disabled=false;btn.textContent=o;}}"
           "</script>")
-    head = (f'<div class="unf-head">Незавершённые заявки — <b>{n}</b>'
+    rerun_btn = (f'<button class="unf-rerun" onclick="unfRerunAll(this)">'
+                 f'↻ Докрутить всё ({n_rerun})</button>') if n_rerun else ""
+    head = (f'<div class="unf-head">Незавершённые заявки — <b>{n}</b>{rerun_btn}'
             '<span class="unf-links"><a href="/catalog/fill_all_log" download>скачать лог</a>'
             '<a href="/catalog">← каталог</a></span></div>')
     body = css + head + f'<div class="unf-list">{list_html}</div>' + js
@@ -750,6 +770,46 @@ def unfinished_done(jobid: int):
     from backend.tools import bulk_log
     ok = bulk_log.mark_done(jobid)
     return JSONResponse({"ok": ok, "count": bulk_log.unfinished_count()})
+
+
+# jobids that will never auto-fill even with working proxies (embed 404, no working form).
+_UNFIXABLE_JOBIDS = {"3462", "33445"}   # oscar / hioscar (per CLAUDE.md)
+
+
+@app.post("/unfinished/rerun")
+def unfinished_rerun(gender: str = Form("")):
+    """Re-run every RE-RUNNABLE unfinished application through the parallel engine. Targets
+    the `error` bucket (these failed at page LOAD on the now-dead proxy pool — fixed by the
+    Bright Data proxies), skipping captcha jobs (needs_human, human-only), already-submitted
+    jobs, and known-unfillable embeds. Greenhouse/Ashby fan out + auto-submit; any Lever/
+    Workable among them route back to «Незавершённые» for a human."""
+    from backend.tools import bulk_log
+    if _FILL_ALL.get("state") == "running":
+        return JSONResponse({"started": False, "reason": "already_running",
+                             **_fill_all_public()})
+    done = bulk_log.submitted_jobids()
+    ids: list[int] = []
+    seen: set = set()
+    for job in bulk_log.unfinished():
+        if job.get("state") != "error":
+            continue                      # needs_human = captcha; done = already parked ok
+        jid = str(job.get("jobid") or "")
+        if not jid or jid == "None" or jid in _UNFIXABLE_JOBIDS or jid in done or jid in seen:
+            continue
+        seen.add(jid)
+        try:
+            ids.append(int(jid))
+        except ValueError:
+            pass
+    if not ids:
+        return JSONResponse({"started": False, "reason": "nothing_to_rerun", "count": 0})
+    g = gender if gender in ("male", "female") else None
+    _FILL_ALL_STOP.clear()
+    _FILL_ALL.clear()
+    _FILL_ALL.update({"state": "running", "total": len(ids), "done": 0, "ok": 0,
+                      "failed": 0, "current": None, "current_id": None, "workers": "auto"})
+    threading.Thread(target=_do_fill_all_adaptive, args=(ids, g), daemon=True).start()
+    return JSONResponse({"started": True, "total": len(ids), "novnc": _NOVNC_URL})
 
 
 @app.get("/health")
@@ -1214,7 +1274,7 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     empty/blank/garbage → EVERY available job; a number → the first `count`, clamped
     1..20000.** `workers` defaults to 10, clamped 1..16. Returns immediately; poll
     /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
-    from backend.tools import catalog_db
+    from backend.tools import bulk_log, catalog_db
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
                              **_fill_all_public()})
@@ -1235,6 +1295,15 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     except Exception as exc:
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
     all_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS]
+    # Never re-apply a job already confirmed submitted (by ANY persona/run) — "done" used to
+    # live only per-persona, so a re-run under a fresh mail-less persona looked new and the
+    # same job got applied many times (job 20219 → 10×). Skip the known-done set.
+    try:
+        done_ids = bulk_log.submitted_jobids()
+        if done_ids:
+            all_ids = [i for i in all_ids if str(i) not in done_ids]
+    except Exception:
+        pass
     if str(randomize).strip().lower() in ("1", "true", "yes", "on"):
         import random as _rnd
         _rnd.shuffle(all_ids)          # sample DIVERSE jobs across companies, not the first N

@@ -842,6 +842,15 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
             drafted.setdefault("Start date month", "January")
         if re.search(r"(?i)present|current", dates):
             drafted.setdefault("Current role", "Yes")
+            # Safety net: if the 'Current role' checkbox tick fails to WAIVE the End date
+            # (it stays required+blank → submit blocked), supply today as the end so the form
+            # can submit. Harmlessly ignored when the waiver works (setdefault, never override).
+            import datetime as _dt
+            _t = _dt.date.today()
+            _MON = ["January", "February", "March", "April", "May", "June", "July",
+                    "August", "September", "October", "November", "December"]
+            drafted.setdefault("End date year", str(_t.year))
+            drafted.setdefault("End date month", _MON[_t.month - 1])
         elif len(years) >= 2:
             drafted.setdefault("End date year", years[-1])
             drafted.setdefault("End date month", "December")

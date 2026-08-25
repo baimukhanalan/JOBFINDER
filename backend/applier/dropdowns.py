@@ -501,6 +501,13 @@ async def apply_react_select_choice(page, container_index: int,
                         opts = await _type_and_poll(first[:k])
                         if opts:
                             break
+            # Last resort: a FIXED taxonomy ('Degree'='MSc Bioinformatics', 'Discipline'=
+            # 'Regulatory Affairs') filters to ZERO on the résumé value and every prefix, so
+            # nothing above surfaced options and the degree-level match below can't run. Clear
+            # the filter to reveal the FULL list. Only fires when opts is already empty (the
+            # fill was about to fail) → cannot regress a working react-select.
+            if not opts:
+                opts = await _type_and_poll("")
         want = option_text.strip().lower()
         otexts = [(await o.inner_text()).strip() for o in opts]
         opt = None

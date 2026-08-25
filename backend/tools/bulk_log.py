@@ -26,6 +26,11 @@ _REPORT = _LOGDIR / "bulk_apply_last.json"
 # confirmed job and removes a confirmed one; mark_done() clears one by hand. Survives
 # restarts + bulk_apply_last.json being overwritten by the next run.
 _LEDGER = _LOGDIR / "unfinished.json"
+# Persistent set of jobids that have been CONFIRMED submitted (by any persona, any run) or
+# marked done by a human. Used to (a) never re-park a done job in the ledger and (b) skip
+# re-applying it in bulk — a job was being applied 10× because "done" lived only per-persona
+# in status_store / the ledger, so a re-run under a fresh (mail-less) persona looked new.
+_DONE = _LOGDIR / "submitted_jobids.json"
 
 
 def _now() -> str:
@@ -69,15 +74,55 @@ def _save_ledger(d: dict) -> None:
         logger.warning("unfinished.json write failed", exc_info=True)
 
 
+def _load_done() -> set:
+    try:
+        d = json.loads(_DONE.read_text(encoding="utf-8"))
+        return {str(x) for x in d} if isinstance(d, list) else set()
+    except Exception:
+        return set()
+
+
+def _save_done(s: set) -> None:
+    try:
+        _LOGDIR.mkdir(parents=True, exist_ok=True)
+        tmp = _DONE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(sorted(s), ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_DONE)
+    except Exception:
+        logger.warning("submitted_jobids.json write failed", exc_info=True)
+
+
+def mark_submitted(jobid) -> None:
+    """Record a jobid as completed (confirmed submitted or human-finished) so it's never
+    re-parked in the ledger or re-applied, regardless of which persona did it."""
+    key = str(jobid)
+    if not key or key == "None":
+        return
+    s = _load_done()
+    if key not in s:
+        s.add(key)
+        _save_done(s)
+
+
+def submitted_jobids() -> set:
+    """Jobids already confirmed/finished — excluded from bulk re-application."""
+    return _load_done()
+
+
 def _update_ledger(job: dict, run_id: str, confirmed) -> None:
-    """A confirmed submission clears the job from the ledger; anything else (error,
-    captcha-blocked, skipped, filled-but-unconfirmed) adds/refreshes it."""
+    """A confirmed submission clears the job from the ledger AND records it done; anything
+    else (error, captcha-blocked, skipped, filled-but-unconfirmed) adds/refreshes it —
+    UNLESS the job is already known-submitted (by another persona/run), in which case it is
+    never re-parked."""
     key = str(job.get("jobid"))
     if not key or key == "None":
         return
     led = _load_ledger()
     if confirmed:
+        mark_submitted(key)
         led.pop(key, None)
+    elif key in _load_done():
+        led.pop(key, None)          # already done elsewhere — don't churn it
     else:
         led[key] = {**job, "run_id": run_id}
     _save_ledger(led)
@@ -157,9 +202,12 @@ def unfinished_count() -> int:
 
 
 def mark_done(jobid) -> bool:
-    """Clear one job from the ledger (a human finished it). True if it was present."""
+    """Clear one job from the ledger (a human finished it, or the reconciler found its
+    receipt) and record it done so it's never re-applied. True if it was in the ledger."""
+    key = str(jobid)
+    mark_submitted(key)
     led = _load_ledger()
-    if led.pop(str(jobid), None) is not None:
+    if led.pop(key, None) is not None:
         _save_ledger(led)
         return True
     return False

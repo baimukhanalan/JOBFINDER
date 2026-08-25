@@ -45,19 +45,34 @@ def _advance(kind: str) -> str | None:
     return None
 
 
-def _persona_for_job(jid: str) -> tuple[str | None, str | None]:
-    """(profile_id, email) for a job, from its NEWEST prefill persona.json."""
+def _personas_for_job(jid: str) -> list[tuple[str, str]]:
+    """ALL (profile_id, email) variants for a job, newest first. A job re-applied across
+    bulk runs gets a FRESH persona each time (each with its own @takhet.com mailbox); the
+    ATS receipt may sit in an EARLIER persona's mailbox, not the newest. Checking only the
+    newest (which is mail-less on a re-run) is why a genuinely-submitted job stayed parked
+    in the ledger. Dedup on (profile, addr)."""
+    out: list[tuple[str, str]] = []
+    seen: set = set()
     metas = sorted(_PREFILL.glob(f"demo_*/{jid}/persona.json"),
                    key=lambda p: p.stat().st_mtime, reverse=True)
     for pj in metas:
         try:
             p = json.loads(pj.read_text(encoding="utf-8"))
             addr = ((p.get("profile") or {}).get("email") or "").strip()
-            if addr:
-                return pj.parent.parent.name, addr   # demo_xxx, first.last@takhet.com
+            prof = pj.parent.parent.name
+            key = (prof, addr)
+            if addr and key not in seen:
+                seen.add(key)
+                out.append((prof, addr))   # (demo_xxx, first.last@takhet.com)
         except Exception:
             continue
-    return None, None
+    return out
+
+
+def _persona_for_job(jid: str) -> tuple[str | None, str | None]:
+    """(profile_id, email) for a job's NEWEST persona.json (back-compat single-variant)."""
+    variants = _personas_for_job(jid)
+    return variants[0] if variants else (None, None)
 
 
 def _plain_body(msg) -> str:
@@ -75,8 +90,39 @@ def _plain_body(msg) -> str:
         return ""
 
 
+def _db_evidence(addr: str) -> tuple[str, str] | None:
+    """Best (kind, subject) receipt for a mailbox from the Postgres mail_index. Preferred
+    over the disk scan: it's already classified, faster, immune to a retention prune racing
+    reconcile, and needs no `mail`-group disk access. Returns None on any error → caller
+    falls back to the disk scan."""
+    if not addr:
+        return None
+    try:
+        from backend.tools import mail_db
+        with mail_db._cur() as cur:
+            cur.execute(
+                "SELECT kind, subject FROM mail_index "
+                "WHERE lower(mailbox)=%s AND NOT outbound AND kind = ANY(%s)",
+                (addr.lower(), list(_RECEIVED_KINDS)))
+            rows = cur.fetchall()
+    except Exception:
+        return None
+    best, best_rank = None, 0
+    for r in rows:
+        kind = r["kind"] if isinstance(r, dict) else r[0]
+        subj = (r["subject"] if isinstance(r, dict) else r[1]) or ""
+        if _KIND_RANK.get(kind, 0) > best_rank:
+            best, best_rank = (kind, subj), _KIND_RANK[kind]
+    return best
+
+
+def _evidence(addr: str) -> tuple[str, str] | None:
+    """ATS-receipt evidence for a mailbox: Postgres mail_index first, disk scan fallback."""
+    return _db_evidence(addr) or _mailbox_evidence(addr)
+
+
 def _mailbox_evidence(addr: str) -> tuple[str, str] | None:
-    """Best (kind, subject) proving the ATS received the application, or None."""
+    """Best (kind, subject) proving the ATS received the application, or None (disk scan)."""
     local = (addr or "").split("@")[0]
     if not local:
         return None
@@ -110,17 +156,19 @@ def reconcile_ledger() -> dict:
         jid = str(job.get("jobid") or "")
         if not jid or jid == "None":
             continue
-        profile = job.get("profile")
-        addr = None
-        if profile:
-            _, addr = _persona_for_job(jid)
-        else:
-            profile, addr = _persona_for_job(jid)
-        if not (profile and addr):
+        # Check EVERY persona that ever applied to this job (not just the newest) — the
+        # receipt may be in an earlier persona's mailbox after a re-run. First variant with
+        # an ATS receipt wins.
+        variants = _personas_for_job(jid)
+        hit = None
+        for prof, a in variants:
+            ev = _evidence(a)
+            if ev:
+                hit = (prof, a, ev)
+                break
+        if not hit:
             continue
-        ev = _mailbox_evidence(addr)
-        if not ev:
-            continue
+        profile, addr, ev = hit
         kind, subj = ev
         new = _advance(kind)
         if not new:

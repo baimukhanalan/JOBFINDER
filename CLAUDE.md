@@ -311,7 +311,15 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   year' field. `_known_answer_exact` also collapses a doubled label ('Title Title' → 'Title') so a
   Greenhouse label duplicated across sibling nodes still matches its single-word drafted key. `_SCRAPE_V`
   bumped so cached drafts regenerate. (School/Discipline are slow remote-search react-select typeaheads —
-  optional, best-effort.)
+  optional, best-effort.) **Degree/Discipline react-select fill (2026-08-25):** a FIXED taxonomy
+  ('Degree'='MSc Bioinformatics') filters to ZERO on the résumé value AND every prefix, so
+  `apply_react_select_choice` surfaced no options and the degree-LEVEL match (`_degree_level`/`_OPT_LEVEL`)
+  never ran → blank. Fix: when opts is STILL empty after the prefix retries, `_type_and_poll("")` clears the
+  filter to reveal the FULL list (only fires when the fill was about to fail → can't regress a working
+  react-select). **End-date waiver safety net (`materialize_prefill`):** a 'Present' role sets `Current
+  role=Yes`; if that checkbox tick fails to WAIVE the End date it stays required+blank → submit blocked, so
+  End date year/month now also `setdefault` to today (ignored when the waiver works). Tests still green:
+  `test_dropdowns.py`/`test_catalog_drafts.py`.
 - **Known-answer replay is EXACT-match-first (`analyzer._best_known_answer`).** `analyze_page`'s known-
   answers loop used to bind the FIRST fuzzy `_known_answer_matches` hit (word-overlap ≥ max(2, sig//2)),
   so two Yes/No screeners sharing only generic words — "authorized to work…for our company?" (Yes) and
@@ -450,7 +458,22 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   thread** (`_start_submit_reconciler`, every ~150s, needs the `mail` group — the dashboard has it) + on demand
   via `POST /unfinished/reconcile`. This is why «confirmed=False» must be read as "not DETECTED", not "not
   submitted" — an audit found ~73 real ATS receipts vs ~1 immediately-recorded confirm. Ledger entries now
-  carry `profile` (`bulk_log.record(profile=)`). **Audit trail
+  carry `profile` (`bulk_log.record(profile=)`).
+  **Reconcile checks ALL persona variants + Postgres, not just the newest (2026-08-25).** A job re-applied
+  across bulk runs gets a FRESH mail-less persona each time, and `_persona_for_job` used to return only the
+  NEWEST `persona.json` — so a job genuinely submitted+acked under an EARLIER persona stayed parked forever
+  (reconcile=0 on 436 while 7 held real "Thank you for applying" acks). Fixed: `_personas_for_job` returns
+  EVERY (profile,email) for the jobid and `reconcile_ledger` takes the first with evidence; `_db_evidence`
+  reads the classified `mail_index` (Postgres) first (faster, retention-race-proof, no `mail`-group disk
+  need), disk scan as fallback (`_evidence`). **Anti-churn `submitted_jobids` set (`bulk_log`, gitignored
+  `logs/submitted_jobids.json`):** "done" used to live only per-persona (status_store) / in the ledger, so a
+  re-run under a new persona looked NEW — job 20219 was applied **10×**. Now a confirmed submit (or
+  `mark_done`, or the reconciler) calls `bulk_log.mark_submitted(jobid)`; `_update_ledger` never re-parks a
+  jobid already in that set, and **`/catalog/fill_all` excludes it from selection** so a done job is never
+  re-applied. Seed it from `confirmed=True` log lines if rebuilding. **`POST /unfinished/rerun` +
+  «Докрутить всё (N)» button** re-runs the whole `error` bucket (jobs that failed at page LOAD on the dead
+  proxy — now fixed) through the adaptive parallel engine, skipping `needs_human` (captcha), already-
+  submitted, and `_UNFIXABLE_JOBIDS` (oscar/hioscar embed-404). **Audit trail
   (`tools/bulk_log.py`, gitignored `logs/`):** `bulk_apply.log` (append-only, a line per job + a FINISHED
   summary) + `bulk_apply_last.json` (full last run, rewritten each job so it survives a restart). Served
   by `GET /catalog/fill_all_report` (JSON) + `GET /catalog/fill_all_log` (download); the Фильтры sheet

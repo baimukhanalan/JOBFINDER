@@ -298,13 +298,18 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
         '</details>')
     settings = (
-        '<div class="cat-settings" id="catSettings" hidden>'
+        '<div class="cat-modal" id="catSettings" hidden>'
+        '<div class="cat-modal-backdrop" onclick="toggleFilters()"></div>'
+        '<div class="cat-modal-panel" role="dialog" aria-modal="true" aria-label="Фильтры">'
+        '<div class="cat-modal-head"><span class="cat-modal-title">Фильтры</span>'
+        '<button class="cat-modal-x" onclick="toggleFilters()" aria-label="Закрыть">&#10005;</button></div>'
+        '<div class="cat-modal-body">'
         f'<div class="cs-sec"><div class="cs-label">Регион</div>{region_chips}</div>'
         f'<div class="cs-sec"><div class="cs-label">Массовая подача</div>{bulk_bar}'
         '<div class="cat-bulk-report" id="bulkReport"></div></div>'
         '<div class="cs-sec"><div class="cs-label">Прокси <b id="pxCount">0</b></div>'
         f'<div class="cat-proxy-body">{proxy_block}</div></div>'
-        '</div>')
+        '</div></div></div>')
 
     list_html = cards or '<div class="empty">Вакансий не найдено</div>'
     body = (
@@ -347,12 +352,24 @@ _CAT_CSS = """<style>
 .cat-filters-btn[aria-expanded=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}
 .cat-filters-btn[aria-expanded=true] .cat-filters-tag{background:var(--panel)}
-/* Settings sheet — regions + mass-apply + proxy, collapsed by default. */
-.cat-settings{margin:6px 0 14px;padding:0;border:0;background:transparent;display:flex;flex-direction:column;gap:12px}
-.cat-settings[hidden]{display:none}
-.cs-sec{padding:16px 18px;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);box-shadow:0 1px 3px rgba(15,23,42,.04)}
+/* Filters — a MODAL dialog (regions + mass-apply + proxy). */
+.cat-modal{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.cat-modal[hidden]{display:none}
+.cat-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.55);animation:cm-fade .18s ease}
+.cat-modal-panel{position:relative;display:flex;flex-direction:column;width:min(640px,100%);max-height:88vh;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 64px rgba(15,23,42,.30);overflow:hidden;animation:cm-pop .22s cubic-bezier(.22,.61,.36,1)}
+.cat-modal-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--line)}
+.cat-modal-title{font-size:16px;font-weight:700;color:var(--ink)}
+.cat-modal-x{width:34px;height:34px;border:none;background:var(--bg-app);border-radius:50%;font-size:13px;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
+.cat-modal-x:hover{background:var(--line);color:var(--ink)}
+.cat-modal-body{overflow:auto;padding:4px 20px 20px}
+.cs-sec{padding:16px 0;border-bottom:1px solid var(--line)}
+.cs-sec:last-child{border-bottom:0;padding-bottom:2px}
 .cs-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-mute);margin:0 0 13px;display:flex;align-items:center;gap:8px}
 .cs-label b{font-family:var(--ff-mono);font-weight:600;color:var(--accent);margin-left:auto;font-size:13px}
+@keyframes cm-fade{from{opacity:0}to{opacity:1}}
+@keyframes cm-pop{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes cm-sheet{from{transform:translateY(100%)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.cat-modal-backdrop,.cat-modal-panel{animation:none}}
 .cat-regions{display:flex;flex-wrap:wrap;gap:8px}
 .cat-regions::-webkit-scrollbar{display:none}
 .cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}
@@ -451,6 +468,11 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
   .cat-bulk-go{flex:1 1 auto}
   .cat-proxy-body{max-width:none}
   .cat-reg{min-height:40px}
+  /* Filters modal becomes a bottom-sheet on phones. */
+  .cat-modal{padding:0;align-items:flex-end}
+  .cat-modal-panel{width:100%;max-height:92vh;border-radius:18px 18px 0 0;border-bottom:0;animation:cm-sheet .26s cubic-bezier(.22,.61,.36,1)}
+  .cat-modal-head{padding:14px 18px}
+  .cat-modal-body{padding:2px 18px 22px}
 }
 </style>"""
 
@@ -553,10 +575,14 @@ window.toggleFilters=function(){
   var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
   if(!s) return;
   var willOpen=s.hasAttribute('hidden');
-  if(willOpen){ s.removeAttribute('hidden'); pxRefresh(); bulkPoll(); bulkReport(); }
-  else{ s.setAttribute('hidden',''); }
+  if(willOpen){ s.removeAttribute('hidden'); document.body.style.overflow='hidden'; pxRefresh(); bulkPoll(); bulkReport(); }
+  else{ s.setAttribute('hidden',''); document.body.style.overflow=''; }
   if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){ var s=document.getElementById('catSettings');
+    if(s && !s.hasAttribute('hidden')) window.toggleFilters(); }
+});
 // Last bulk-run report (survives restart — read from logs/bulk_apply_last.json).
 async function bulkReport(){
   var el=document.getElementById('bulkReport'); if(!el) return;

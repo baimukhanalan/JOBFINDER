@@ -107,7 +107,7 @@ def fulldate(ts: int) -> str:
 # ---------------------------------------------------------------- CSS (ported)
 _CSS = """
 :root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#1a73e8;--accent-deep:#1762c4;--accent-soft:#e8f0fe;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;}
-*{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;}
+*{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
 .layout{display:flex;min-height:100vh;}

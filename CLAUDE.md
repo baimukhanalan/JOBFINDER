@@ -379,9 +379,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   wait), so 6128 jobs was days-to-months. **Now Greenhouse/Ashby fan out across `workers` HEADLESS
   browser workers** (`_do_fill_all_parallel` → `bulk_pool.start_workers(n)` spawns N `backend.copilot`
   processes with **`COPILOT_HEADLESS=1`** on ports **8110+** — each its own browser, no Xvfb; they
-  inherit the dashboard's `mail` group so the Ashby emailed-code step still works; torn down when the run
-  ends). One thread per worker pulls from a shared queue; a **hard `_PER_JOB_TIMEOUT`=200s** per `/load`
-  means one hung job can't stall the run. **Lever/Workable (and any non-`_PARA_ATS` = greenhouse/ashby)
+  inherit the dashboard's `mail` group so the emailed-code step still works; torn down when the run
+  ends). One thread per worker pulls from a shared queue; a **hard `_PER_JOB_TIMEOUT`=360s** per `/load`
+  means one hung job can't stall the run. **The emailed-security-code confirmation (GH/Ashby) is awaited
+  INLINE by the worker (`/load?wait_submit=1` → `copilot._watch_submit` up to `WAIT_SUBMIT_MAX`=300s,
+  which fills the code from the persona's Maildir and returns `confirmed`), NOT backgrounded** — the
+  original background `_S["watch"]` is fine for the single co-pilot but in parallel the next job's `/load`
+  would `_cancel_watch()` and kill it, so Ashby/GH would click Submit but never confirm (root-caused
+  2026-08-25). The confirmation email takes MINUTES, so the worker is held that long (adaptive scaling
+  adds workers to compensate); a job that doesn't confirm within 5 min falls to «Незавершённые», where
+  «Докрутить» finishes it on the single co-pilot's full 10-min watch. `_watch_submit` now returns True on
+  submit-detected so the inline path can set `submit_result["confirmed"]`. **Lever/Workable (and any non-`_PARA_ATS` = greenhouse/ashby)
   go STRAIGHT to the «Незавершённые» ledger** (recorded `needs_human`, never auto-filled in bulk — a
   human finishes the captcha via «Докрутить»). Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
   submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are

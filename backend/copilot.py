@@ -60,6 +60,13 @@ _URL_RE = re.compile(r"confirm|thank", re.I)
 
 WATCH_INTERVAL = 2.0        # seconds between confirmation polls
 WATCH_MAX = 10 * 60         # give up after 10 minutes
+# Parallel workers await the confirmation/email-code step INLINE (so a worker finishes one
+# job fully before the next /load cancels its watch). The ATS confirmation is an EMAILED
+# code that takes MINUTES to arrive, so this must be generous (the single co-pilot uses the
+# full 10-min WATCH_MAX); we cap it at 5 min so throughput still moves (adaptive scaling adds
+# workers to compensate for the longer per-job hold) and a genuinely stuck job falls to
+# «Незавершённые», where «Докрутить» finishes it on the single co-pilot's 10-min watch.
+WAIT_SUBMIT_MAX = 300
 
 app = FastAPI(title="JobFinder co-pilot")
 _S: dict = {"pw": None, "browser": None, "page": None, "ctx": None,
@@ -256,7 +263,7 @@ async def _watch_submit(page, profile: str, jid: str,
             if looks_submitted(text, page.url):
                 status_store.mark(profile, jid, "submitted")
                 logger.info("submit detected for %s/%s — marked submitted", profile, jid)
-                return
+                return True
             if (applicant_email and not code_done
                     and re.search(r"(?i)verification code|security code|enter the .{0,20}code", text)):
                 state = await page.evaluate(
@@ -515,10 +522,11 @@ async def goto(url: str = Form(...)):
 @app.post("/load")
 async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: str = Form(""),
                proxy_server: str = Form(""), proxy_username: str = Form(""),
-               proxy_password: str = Form("")):
+               proxy_password: str = Form(""), wait_submit: str = Form("")):
     profile = _safe_id(profile) or "michael"
     jobid = _safe_id(jobid)
     is_dry = str(dry_run).strip().lower() in ("1", "true", "yes", "on")
+    is_wait = str(wait_submit).strip().lower() in ("1", "true", "yes", "on")
     # A demo persona (synth_persona, id demo_*) is ephemeral — never a human mid-review.
     # Every demo click is a NEW persona, so the per-owner busy gate would leave the previous
     # demo's page stuck ("shows my old requests"). Preempt a demo owner so the new load wins.
@@ -613,12 +621,27 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
             # records the confirmation page into status.json.
             submit_result = await _click_submit_after_fill(
                 page, result, expected_url=url, profile=profile, shot_dir=d, dry_run=is_dry)
-            # Watch (read-only) for the resulting confirmation so the queue auto-advances
-            # (also auto-fills an emailed security-code step if the ATS shows one). Skip it
-            # in dry_run — nothing was submitted, so there is no confirmation to wait for.
+            # Watch for the resulting confirmation (also auto-fills an emailed security-code
+            # step if the ATS shows one). Skip in dry_run — nothing was submitted.
+            _email = (form.get("email") or "").strip()
             if not is_dry:
-                _S["watch"] = asyncio.create_task(_watch_submit(
-                    page, profile, jobid, (form.get("email") or "").strip(), time.time()))
+                if is_wait and submit_result.get("clicked"):
+                    # Parallel worker: FINISH the email-code + confirmation step INLINE, so
+                    # this worker doesn't grab the next job (whose /load would _cancel_watch)
+                    # before Ashby's code step completes. Bounded by WAIT_SUBMIT_MAX; if it
+                    # doesn't confirm in time the job falls to «Незавершённые».
+                    try:
+                        ok = await asyncio.wait_for(
+                            _watch_submit(page, profile, jobid, _email, time.time()),
+                            timeout=WAIT_SUBMIT_MAX)
+                        submit_result["confirmed"] = bool(ok)
+                    except asyncio.TimeoutError:
+                        submit_result.setdefault("confirmed", False)
+                    except Exception:
+                        submit_result.setdefault("confirmed", False)
+                else:
+                    _S["watch"] = asyncio.create_task(_watch_submit(
+                        page, profile, jobid, _email, time.time()))
             return JSONResponse({"loaded": jobid, "company": company, "title": title,
                                  "submitted_click": submit_result.get("clicked"),
                                  "submit_result": submit_result,

@@ -902,7 +902,8 @@ def _fill_all_public() -> dict:
 # ---- Parallel bulk lane (headless worker pool) -----------------------------
 _FILL_ALL_LOCK = threading.Lock()
 _PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
-_PER_JOB_TIMEOUT = 200                 # hard cap per job so one hang can't eat the run
+_PER_JOB_TIMEOUT = 360                 # hard cap per /load (fill + inline email-code wait up
+#                                        to WAIT_SUBMIT_MAX=300s; worker awaits confirmation)
 
 
 def _bump(*, done=0, ok=0, failed=0, current=None):
@@ -923,7 +924,9 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
     st: dict = {"state": "error"}
     try:
         pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender)
-        load = {"jobid": jjid, "profile": pid}
+        # wait_submit=1 → the worker finishes the email-code + confirmation INLINE before
+        # returning, so this worker doesn't cancel that job's watch by taking the next one.
+        load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
         try:
             px = proxy_pool.next_proxy()
         except Exception:

@@ -569,6 +569,139 @@ def apply_index():
     return HTMLResponse(mailcrm_ui._page("apply", body))
 
 
+_UNF_REASONS = {
+    "incomplete": "Не заполнены обязательные поля",
+    "needs_review": "Требует ручной проверки (флаги [review])",
+    "page_drift": "Страница ушла на другую вакансию",
+    "preempted": "Перехвачено другим прогоном",
+    "click_failed": "Submit не нажался (капча / кнопка)",
+    "clicked": "Отправлено, но подтверждения не было",
+    "": "Не подтверждено",
+}
+
+
+def _unf_reason(it: dict) -> str:
+    if it.get("error"):
+        return "Ошибка: " + str(it["error"])[:160]
+    if it.get("blocked"):
+        return "Submit заблокирован (капча / anti-bot)"
+    r = it.get("submit_reason") or ""
+    if r in _UNF_REASONS and not (r in ("clicked", "") and it.get("unfilled")):
+        return _UNF_REASONS[r]
+    if it.get("unfilled"):
+        return f"Не заполнено полей: {it['unfilled']}"
+    return _UNF_REASONS.get(r, "Не подтверждено")
+
+
+@app.get("/unfinished", response_class=HTMLResponse)
+def unfinished_index():
+    """Applications from bulk runs that still need a human to finish — the Submit was
+    captcha-blocked, the co-pilot errored, or required fields were left blank. Each can
+    be re-run (auto-fill again → finish the captcha/Submit by hand in noVNC), opened at
+    the source, or marked done. Backed by the persistent bulk_log ledger."""
+    from html import escape as esc
+
+    from backend.tools import bulk_log, catalog_db, catalog_drafts, mailcrm_ui
+    items = bulk_log.unfinished()
+    cards = []
+    for it in items:
+        jid = it.get("jobid")
+        ats = ""
+        aurl = ""
+        try:
+            job = catalog_db.get_job(int(jid))
+            if job:
+                ats = job.get("ats") or ""
+                aurl = catalog_drafts.apply_url_for_job(job) or job.get("url") or ""
+        except Exception:
+            pass
+        reason = esc(_unf_reason(it))
+        cap = ats in ("lever", "workable")
+        rcls = "unf-reason cap" if (cap or it.get("blocked")) else "unf-reason"
+        meta_bits = [esc((it.get("ts") or "")[:19].replace("T", " "))]
+        if it.get("run_id"):
+            meta_bits.append("run " + esc(str(it["run_id"])))
+        ufl = it.get("unfilled_list") or []
+        if ufl:
+            meta_bits.append("поля: " + esc(", ".join(str(x) for x in ufl[:5])))
+        open_link = (f'<a class="unf-open" href="{esc(aurl)}" target="_blank" '
+                     f'rel="noopener">Открыть вакансию ↗</a>') if aurl else ""
+        ats_badge = f'<span class="unf-ats">{esc(ats)}</span>' if ats else ""
+        cards.append(
+            f'<article class="unf-card" data-id="{esc(str(jid))}">'
+            f'<div class="unf-toprow"><span class="unf-co">{esc(it.get("company") or "")}</span>'
+            f'{ats_badge}</div>'
+            f'<div class="unf-title">{esc(it.get("title") or "(без названия)")}</div>'
+            f'<div class="{rcls}">{reason}</div>'
+            f'<div class="unf-meta">{" · ".join(meta_bits)}</div>'
+            f'<div class="unf-actions">'
+            f'<button class="unf-go" data-id="{esc(str(jid))}" onclick="unfFinish(this)">Докрутить</button>'
+            f'{open_link}'
+            f'<button class="unf-done" data-id="{esc(str(jid))}" onclick="unfDone(this)">Выполнено</button>'
+            f'<span class="unf-res"></span></div>'
+            "</article>")
+    n = len(items)
+    list_html = ("".join(cards) if cards else
+                 '<div class="unf-empty">Пусто — все заявки завершены 🎉<br>'
+                 '<span>Незавершённые появляются здесь после «Массовой подачи», '
+                 'когда Submit упирается в капчу или поле осталось пустым.</span></div>')
+    css = ("<style>"
+           ".unf-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:19px;"
+           "font-weight:700;color:var(--ink);margin:0 0 14px}.unf-head b{color:var(--accent)}"
+           ".unf-head .unf-links{font-size:13px;font-weight:600;margin-left:auto;display:flex;gap:14px}"
+           ".unf-head a{color:var(--accent);text-decoration:none}.unf-head a:hover{text-decoration:underline}"
+           ".unf-list{display:flex;flex-direction:column;gap:10px}"
+           ".unf-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm);padding:14px 16px}"
+           ".unf-toprow{display:flex;align-items:center;gap:10px;margin-bottom:2px}"
+           ".unf-co{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-mute)}"
+           ".unf-ats{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);border:1px solid var(--line);"
+           "border-radius:6px;padding:1px 7px}"
+           ".unf-title{font-size:15.5px;font-weight:700;color:var(--ink);line-height:1.3}"
+           ".unf-reason{margin-top:5px;font-size:13px;font-weight:600;color:var(--ink-soft)}"
+           ".unf-reason.cap{color:var(--danger)}"
+           ".unf-meta{margin-top:4px;font-size:11.5px;color:var(--ink-mute);font-family:var(--ff-mono)}"
+           ".unf-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}"
+           ".unf-go{background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);padding:9px 18px;"
+           "font-size:13px;font-weight:700;cursor:pointer;min-height:40px}.unf-go:hover{background:#0a7038}"
+           ".unf-go:disabled{opacity:.5;cursor:default}"
+           ".unf-open{font-size:13px;font-weight:600;color:var(--accent);text-decoration:none}"
+           ".unf-open:hover{text-decoration:underline}"
+           ".unf-done{background:transparent;color:var(--ink-soft);border:1px solid var(--line-strong);"
+           "border-radius:var(--r-full);padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;min-height:40px}"
+           ".unf-done:hover{border-color:var(--danger);color:var(--danger)}"
+           ".unf-res{font-size:12.5px;color:var(--ink-mute)}"
+           ".unf-empty{color:var(--ink-mute);text-align:center;padding:48px 20px;font-size:15px;font-weight:600}"
+           ".unf-empty span{display:block;margin-top:8px;font-size:13px;font-weight:400;line-height:1.5}"
+           "</style>")
+    js = ("<script>"
+          "async function unfFinish(btn){var id=btn.dataset.id,"
+          "res=btn.parentElement.querySelector('.unf-res');"
+          "var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';"
+          "btn.disabled=true;btn.textContent='⏳…';if(res)res.textContent='';"
+          "try{var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',"
+          "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'gender='})).json();"
+          "window.location.href=j.novnc||NOVNC;}"
+          "catch(e){btn.disabled=false;btn.textContent='Докрутить';"
+          "if(res)res.innerHTML=' <a href=\"'+NOVNC+'\" target=\"_blank\" rel=\"noopener\">Открыть noVNC ↗</a>';}}"
+          "async function unfDone(btn){var id=btn.dataset.id,card=btn.closest('.unf-card');"
+          "btn.disabled=true;try{var j=await (await fetch('/unfinished/'+id+'/done',{method:'POST'})).json();"
+          "if(j.ok&&card){card.remove();}else{btn.disabled=false;}}catch(e){btn.disabled=false;}}"
+          "</script>")
+    head = (f'<div class="unf-head">Незавершённые заявки — <b>{n}</b>'
+            '<span class="unf-links"><a href="/catalog/fill_all_log" download>скачать лог</a>'
+            '<a href="/catalog">← каталог</a></span></div>')
+    body = css + head + f'<div class="unf-list">{list_html}</div>' + js
+    return HTMLResponse(mailcrm_ui._page("unfinished", body))
+
+
+@app.post("/unfinished/{jobid}/done")
+def unfinished_done(jobid: int):
+    """Clear one application from the unfinished ledger (a human finished it)."""
+    from backend.tools import bulk_log
+    ok = bulk_log.mark_done(jobid)
+    return JSONResponse({"ok": ok, "count": bulk_log.unfinished_count()})
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -706,7 +839,7 @@ def catalog_fill_status(job_id: int):
 # queue — the batch runs only greenhouse+ashby, which auto-submit end-to-end.
 _FILL_ALL: dict = {"state": "idle"}
 _FILL_ALL_STOP = threading.Event()
-_BULK_ATS = ("greenhouse", "ashby")
+_BULK_ATS = ("greenhouse", "ashby", "lever", "workable")
 
 
 def _fill_all_public() -> dict:
@@ -751,17 +884,19 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 @app.post("/catalog/fill_all")
 def catalog_fill_all(gender: str = Form(""), count: int = Form(100),
                      company: str = Form(""), region: str = Form("")):
-    """Start ONE sequential bulk run over the first `count` greenhouse+ashby jobs in
-    the catalog, optionally narrowed by `company` (a company_key) and `region`
-    (US/CA/UK/OTHER). `gender` ('male'/'female') sets the persona sex for every job in
-    the run. Lever/Workable skipped (live captcha). `count` clamped to 1..1000. Returns
-    immediately; poll /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
+    """Start ONE sequential bulk run over the first `count` jobs in the catalog across
+    ALL ATS (greenhouse, ashby, lever, workable), optionally narrowed by `company` (a
+    company_key) and `region` (US/CA/UK/OTHER). `gender` ('male'/'female') sets the
+    persona sex for every job in the run. Lever/Workable fill but their Submit is
+    captcha-gated — those land in the «unfinished» section for a human to finish.
+    `count` clamped to 1..6000. Returns immediately; poll /catalog/fill_all_status,
+    abort via /catalog/fill_all_stop."""
     from backend.tools import catalog_db
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
                              **_fill_all_public()})
     g = gender if gender in ("male", "female") else None
-    n = max(1, min(int(count), 1000))
+    n = max(1, min(int(count), 6000))
     comp = (company or "").strip() or None
     reg = (region or "").strip().upper()
     reg = reg if reg in ("US", "CA", "UK", "OTHER") else None

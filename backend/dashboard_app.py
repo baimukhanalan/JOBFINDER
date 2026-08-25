@@ -1009,7 +1009,13 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
         for attempt in range(3):
             load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
             px = None
-            if attempt < 2:
+            # GH/Ashby submit fine DIRECT from the datacenter IP (email-code step, no captcha)
+            # and Ashby's anti-spam FLAGS known proxy/BD-datacenter IPs — the submit comes back
+            # "flagged as possible spam — turn off your VPN or proxy" and is rejected outright
+            # (root-caused 2026-08-25: proxying the parallel lane silently broke ~⅓ of GH/Ashby
+            # submits). The parallel lane is GH/Ashby ONLY, so it goes DIRECT. A proxy is used
+            # only for a hypothetical non-_PARA_ATS job, and only on the first attempts.
+            if (job or {}).get("ats") not in _PARA_ATS and attempt < 2:
                 try:
                     px = proxy_pool.next_proxy()
                 except Exception:

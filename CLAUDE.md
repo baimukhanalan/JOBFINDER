@@ -410,6 +410,24 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   direct fallback is never reached. Complements: `proxy_pool.next_proxy` now round-robins only the
   **lowest-`fails` tier** of the pool (not blindly over dead entries), so attempts 0/1 don't waste
   timeouts on known-bad egresses.
+- **GH/Ashby go DIRECT — do NOT proxy them (`_fill_one_on_worker`, 2026-08-25) — critical, counterintuitive.**
+  Root-caused from a bulk run where ~⅓ of GH/Ashby submits silently failed: the `after_submit.png`
+  showed Ashby's anti-spam banner **"We couldn't submit your application. Flagged as possible spam. Turn
+  off your VPN or proxy."** — **Ashby scores the BD DATACENTER proxy IPs as spam and rejects the submit**,
+  while the SAME job from the DIRECT datacenter server IP submits fine (that's how the earliest verified
+  GH/Ashby end-to-end submits worked, and how the email-code step passes). So the parallel lane (which is
+  **GH/Ashby only** — `_PARA_ATS`) now skips proxy assignment entirely and goes direct; a proxy is used
+  only for a hypothetical non-`_PARA_ATS` job. The proxies still matter for page-LOAD resilience / the
+  direct-dead-pool fallback, but must NOT wrap a GH/Ashby SUBMIT. Do NOT re-enable proxying the parallel
+  lane. (Residential proxies would not be flagged, but the owner chose the cheap datacenter zone.)
+- **`_SUBMIT_BLOCK_RE` must catch the real ATS rejection wordings (`copilot.py`, 2026-08-25).** It matched
+  captcha / "is required" / "please enter" but MISSED "flagged as possible spam", "we couldn't submit",
+  "missing entry", "needs corrections", "N items for a required section", "please accept the terms" — so a
+  REJECTED submit was mislabeled `blocked=None` ("awaiting confirmation") and the inline watch burned the
+  full `WAIT_SUBMIT_MAX`=300s waiting for a receipt that could never arrive (the ATS never emailed because
+  the submit failed). Widened to catch them → the job is correctly recorded `blocked` and the watch is
+  skipped (reclaims worker throughput). A rejected GH/Ashby submit means a genuine fill gap (hidden
+  required field / required-consent checkbox / a fill-then-validate race), NOT a captcha.
 - **Bulk auto-apply: «Подать на все» (`/catalog`) — PARALLEL (2026-08-25).** Was ONE sequential queue
   on the single noVNC co-pilot; a single 1Password/Ashby job could hang ~2h (the Ashby emailed-code
   wait), so 6128 jobs was days-to-months. **Now Greenhouse/Ashby fan out across `workers` HEADLESS

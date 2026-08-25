@@ -341,7 +341,12 @@ def _same_apply_page(actual: str, expected: str) -> bool:
 _SUBMIT_BLOCK_RE = re.compile(
     r"(verify (you|that you).{0,20}human|are you (a )?robot|recaptcha|hcaptcha|captcha|"
     r"press (and hold|&)|we're updating your forms|please try again|something went wrong|"
-    r"this field is required|please (fill|complete|correct|enter)|is required)", re.I)
+    r"this field is required|please (fill|complete|correct|enter)|is required|"
+    # Real ATS rejection wordings observed on GH/Ashby (these were MISSED, so a rejected
+    # submit was mislabeled "awaiting confirmation" and burned the full 300s watch):
+    r"flagged as possible spam|turn off your (vpn|proxy)|couldn.?t submit(?: your)?|"
+    r"missing entry|needs? correction|items? for (?:a )?required section|"
+    r"please accept|accept the terms)", re.I)
 
 
 async def _submit_evidence(page, shot_dir) -> dict:

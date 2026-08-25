@@ -247,7 +247,10 @@ def render_page(company: str = "", q: str = "", region: str = "",
     region_chips = _region_bar(region, q, company, by_region, remote_total)
     bulk_bar = (
         '<div class="cat-bulk" id="catbulk">'
-        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать на все</button>'
+        '<label class="cat-bulk-n">Кол-во'
+        '<input type="number" id="bulkN" min="1" max="1000" step="1" value="100" '
+        'inputmode="numeric"></label>'
+        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
         '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
         'onclick="bulkStop()">Стоп</button>'
         '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
@@ -370,6 +373,9 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-bulk-go:disabled{opacity:.5;cursor:default;box-shadow:none}
 .cat-bulk-stop{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--danger);color:#fff;border:none;border-radius:var(--r-full);padding:10px 16px;font-size:13.5px;font-weight:700;cursor:pointer;min-height:42px}
 .cat-bulk-prog{flex:1 1 100%;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:0}
+.cat-bulk-n{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;color:var(--ink-soft)}
+.cat-bulk-n input{width:76px;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:14px;font-weight:700;background:var(--panel);color:var(--ink);min-height:42px;text-align:center}
+.cat-bulk-n input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
 .cat-bulk-report{margin-top:10px;font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .cat-bulk-report:empty{display:none}
 .cat-bulk-report .r-sub{color:var(--ink-mute)}
@@ -438,16 +444,19 @@ window.fillJob = async function(btn){
 // We only START/STOP/POLL here — the fill+submit logic is untouched. It runs long; the
 // batch survives leaving this page (server-side thread), poll resumes on reload.
 window.bulkFillAll = async function(){
-  var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg');
+  var go=document.getElementById('bulkGo'), prog=document.getElementById('bulkProg'),
+      nEl=document.getElementById('bulkN');
   if(go.disabled) return;
-  if(!confirm('Подать на ВСЕ вакансии (greenhouse + ashby) по очереди, с автоматической '
-      +'отправкой?\\n\\nЭто реальные заявки в реальные ATS одна за другой — займёт очень '
-      +'долго. Lever/Workable пропускаются (капча). Прервать — кнопкой «Стоп» '
-      +'(остановится после текущей).')) return;
+  var n=parseInt(nEl&&nEl.value,10); if(!(n>=1)) n=100; if(n>1000) n=1000;
+  if(nEl) nEl.value=n;
+  if(!confirm('Подать на '+n+' вакансий (greenhouse + ashby) по очереди, с автоматической '
+      +'отправкой?\\n\\nЭто реальные заявки в реальные ATS одна за другой. Lever/Workable '
+      +'пропускаются (капча). Прервать — кнопкой «Стоп» (остановится после текущей).')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
   try{
+    var body='count='+encodeURIComponent(n);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:''})).json();
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }
   }catch(e){ go.disabled=false; if(prog) prog.textContent='Ошибка запуска'; return; }
   bulkPoll();

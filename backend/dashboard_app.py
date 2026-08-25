@@ -749,27 +749,29 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 
 
 @app.post("/catalog/fill_all")
-def catalog_fill_all(gender: str = Form("")):
-    """Start ONE sequential bulk run over every greenhouse+ashby job in the catalog
-    (Lever/Workable skipped — live captcha). Fires the same per-job fill (which
-    auto-submits). Returns immediately; poll /catalog/fill_all_status, abort via
-    /catalog/fill_all_stop."""
+def catalog_fill_all(gender: str = Form(""), count: int = Form(100)):
+    """Start ONE sequential bulk run over the first `count` greenhouse+ashby jobs in
+    the catalog (Lever/Workable skipped — live captcha). Fires the same per-job fill
+    (which auto-submits). `count` is clamped to 1..1000. Returns immediately; poll
+    /catalog/fill_all_status, abort via /catalog/fill_all_stop."""
     from backend.tools import catalog_db
     if _FILL_ALL.get("state") == "running":
         return JSONResponse({"started": False, "reason": "already_running",
                              **_fill_all_public()})
     g = gender if gender in ("male", "female") else None
+    n = max(1, min(int(count), 1000))
     try:
         jobs = catalog_db.list_jobs(remote_only=True, limit=100000)
     except Exception as exc:
         return JSONResponse({"started": False, "error": str(exc)[:200]}, status_code=502)
-    job_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS]
+    job_ids = [j["id"] for j in jobs if j.get("ats") in _BULK_ATS][:n]
     _FILL_ALL_STOP.clear()
     _FILL_ALL.clear()
     _FILL_ALL.update({"state": "running", "total": len(job_ids), "done": 0,
                       "ok": 0, "failed": 0, "current": None, "current_id": None})
     threading.Thread(target=_do_fill_all, args=(job_ids, g), daemon=True).start()
-    return JSONResponse({"started": True, "total": len(job_ids), "novnc": _NOVNC_URL})
+    return JSONResponse({"started": True, "total": len(job_ids), "requested": n,
+                         "novnc": _NOVNC_URL})
 
 
 @app.get("/catalog/fill_all_status")

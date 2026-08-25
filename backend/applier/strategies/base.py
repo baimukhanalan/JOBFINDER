@@ -588,13 +588,28 @@ class ApplyStrategy(ABC):
             if i in answered_idx:
                 continue
             sel = q.get("selector")
-            if sel and q.get("type") not in ("radio_group", "checkbox_group"):
+            qtype = q.get("type")
+            if sel and qtype not in ("radio_group", "checkbox_group"):
                 try:
                     if await page.locator(sel).first.evaluate(
                         "el => { const t=(el.tagName||'').toLowerCase();"
                         " if(t==='select') return el.selectedIndex>0 && !!el.value;"
                         " return !!(el.value && String(el.value).trim()); }",
                             timeout=1500):
+                        continue
+                except Exception:
+                    pass
+            elif sel and qtype in ("radio_group", "checkbox_group"):
+                # A radio/checkbox group answered by a SIDE pass (e.g. a demographic the decline
+                # passes ticked 'Prefer not to say') is not caught by the value re-read above, so
+                # it was FALSELY reported unfilled — the submit gate then refused to click a form
+                # that IS complete ("incomplete: Which option best describes your gender identity").
+                # Re-read: any option checked in the group ⇒ answered.
+                try:
+                    if await page.locator(sel).first.evaluate(
+                        "el => { const g = el.closest('fieldset,[role=radiogroup],[role=group],"
+                        "[class*=question],[class*=field]') || el;"
+                        " return !!g.querySelector('input:checked'); }", timeout=1500):
                         continue
                 except Exception:
                     pass

@@ -204,6 +204,13 @@ _NOISE = re.compile(
 
 _REQ_MARK = str.maketrans({"✱": " ", "＊": " ", "*": " "})
 
+# A visible required marker in the RAW label text — an asterisk glyph (*/✱/＊) or an explicit
+# "(required)" — checked BEFORE _clean_text strips the glyphs, so a field the DOM doesn't mark
+# required=/aria-required= but shows a human a red "*" still surfaces as required (avoids a
+# false "complete" submit). Only these unambiguous markers, never a bare "required"/"mandatory"
+# word (would false-fire on "List required certifications").
+_REQ_LABEL_MARK = re.compile(r"[*✱＊]|\(\s*required\s*\)", re.I)
+
 
 def _clean_text(text: str) -> str:
     """Human question text only: strip internal ids/placeholders, collapse repeats."""
@@ -688,6 +695,14 @@ async def extract_form_fields(page: Page) -> list[dict]:
                     except Exception:
                         pass
 
+                # A field the DOM doesn't flag required=/aria-required= but whose visible label
+                # carries a "*"/"✱"/"(required)" marker IS required — surface it so a blank one
+                # isn't a false "complete". Checked on the RAW label/nearby/aria/option text
+                # before _clean_text strips the glyphs. Additive: only WIDENS `required`.
+                if not required and _REQ_LABEL_MARK.search(
+                        " ".join(filter(None, [label, nearby, aria_label, option_label, title]))):
+                    required = True
+
                 fields.append({
                     "selector": selector,
                     "tag": tag,
@@ -726,6 +741,23 @@ async def find_submit_button(page: Page) -> str | None:
         'button:has-text("Submit Resume")',
         'input[type="submit"]',
         'button[type="submit"]',
+        # ATSs that render the submit control as a styled <a>/<div role=button>, not <button>.
+        '[role="button"]:has-text("Submit Application")',
+        '[role="button"]:has-text("Send Application")',
+        '[role="button"]:has-text("Submit Resume")',
+        '[role="button"]:has-text("Apply Now")',
+        '[role="button"]:has-text("Submit")',
+        'a:has-text("Submit Application")',
+        'a:has-text("Send Application")',
+        'a:has-text("Submit Resume")',
+        'a:has-text("Submit")',
+        # Russian-language submit controls.
+        'button:has-text("Отправить")',
+        'button:has-text("Подать")',
+        '[role="button"]:has-text("Отправить")',
+        '[role="button"]:has-text("Подать")',
+        'a:has-text("Отправить")',
+        'a:has-text("Подать")',
         'button:has-text("Continue")',
         'button:has-text("Next")',
     ]

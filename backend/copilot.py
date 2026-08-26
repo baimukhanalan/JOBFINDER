@@ -426,6 +426,17 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
         return {"clicked": False, "reason": "page_drift", "actual": cur_url, "expected": expected_url}
     try:
         from backend.applier import analyzer, filler
+        # A dead/expired posting (GH embed 404 "can't find that page", Ashby "Job not found",
+        # a board redirect to the company listing) renders NO form: 0 fields → unfilled=[]
+        # vacuously "complete", so we land here with no button. That is NOT a missing-button
+        # bug — the posting is GONE. Report it distinctly ("no_form") so the worker marks the
+        # catalog row dead and the ledger drops it, instead of re-running «Докрутить» forever
+        # or mislabeling a churned posting as a detection failure.
+        pt = result.get("page_type") if isinstance(result, dict) else None
+        no_form = not (result.get("filled") or 0) and not (result.get("unfilled") or [])
+        if pt in ("expired", "login_required", "captcha") or no_form:
+            logger.info("auto-submit skipped: no fillable form (page_type=%s)", pt)
+            return {"clicked": False, "reason": "no_form", "page_type": pt}
         sel = (result.get("submit_selector") if isinstance(result, dict) else None) \
             or await analyzer.find_submit_button(page)
         if not sel:

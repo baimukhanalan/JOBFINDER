@@ -791,7 +791,9 @@ async def detect_page_type(page: Page) -> str:
         return "captcha"
 
     if any(kw in text for kw in ["page not found", "no longer available", "job has been filled",
-                                  "position has been closed", "position is no longer", "expired"]):
+                                  "position has been closed", "position is no longer", "expired",
+                                  "find that page", "job not found", "the job you requested"]) \
+            or "error=true" in url:   # GH bounces a removed job id to /<co>?error=true
         return "expired"
 
     # Check visible inputs using Playwright (pierces Shadow DOM)

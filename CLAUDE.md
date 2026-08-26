@@ -145,6 +145,24 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 `/queue` still defaults to `profile="michael"`.
 
 ## Gotchas
+- **`no_button` on a "fully-filled" GH/Ashby job = a DEAD posting, not a detection bug (2026-08-26).**
+  ~11% of bulk GH/Ashby applies failed with `submit_reason=no_button` on forms that looked complete
+  (`unfilled=[]`). Live-DOM investigation proved these are postings **GONE at the ATS by bulk-run time**
+  (GH embed 404 "Sorry, but we can't find that page."; Ashby "Job not found"; a board URL that
+  302s to `/<co>?error=true` company listing) while the nightly collector still has the row `dead=FALSE`.
+  A 404 has **0 extractable fields**, so `unfilled=[]` is VACUOUSLY "complete" and `find_submit_button`
+  correctly returns None — it's a canary, not the culprit. **Do NOT loosen `find_submit_button`** (searching
+  frames / matching bare "Apply" would click the WRONG job on a listing-redirect page; verified no iframe is
+  ever involved, and detection works on every LIVE GH/Ashby form). Fix is 4-part: (A) `copilot._click_submit_after_fill`
+  returns a distinct `reason="no_form"` when `page_type∈{expired,login_required,captcha}` OR the page has no
+  form (`filled` falsy AND `unfilled` empty) — before the find-button step; (B) `analyzer.detect_page_type`
+  now catches the real wordings (`find that page`, `job not found`, `the job you requested`) + the
+  `error=true` URL → classifies dead GH/Ashby pages as `expired`; (C) `dashboard._fill_one_on_worker`
+  calls `catalog_db.mark_dead([(ats,company_key,external_id)], …)` on a `no_form` outcome (the real cure —
+  the row leaves `list_jobs`/`fill_all` selection permanently) and `bulk_log.drop_many([jid])` (no human can
+  finish a dead posting); (D) `_drain_partition` DROPs a `submit_reason==no_form` ledger entry instead of
+  re-running it 3×. Verified: `find_submit_button` returns a real selector on every live form (railway/double/
+  cresta/webflow/a live samsara embed); only the churned tokens 404. Tests: `test_analyzer_rules.py` (46) green.
 - **CRM Postgres pool must be big enough for the parallel bulk lane (`mail_db.py`, 2026-08-26).**
   `mail_db._get_pool()` was `ThreadedConnectionPool(1, 8)` — only 8 connections. Once «Подать на все»
   fans out ~12 dashboard worker threads alongside the 3 background daemons (proxy revalidator, submit

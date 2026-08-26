@@ -802,6 +802,8 @@ def _drain_partition(jobs) -> tuple[list[int], list[str]]:
         st = job.get("state")
         if st == "needs_human":
             continue                                  # human backlog — leave it
+        if job.get("submit_reason") == "no_form":
+            drop.append(jid); continue                # posting gone at source → dead, don't rerun
         if jid in _UNFIXABLE_JOBIDS or jid in done:
             drop.append(jid); continue                # 404 / already done → dead
         retries = int(job.get("retries", 0))
@@ -1096,6 +1098,20 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
                         submit=st.get("submit"), error=st.get("error"))
     except Exception:
         logging.getLogger(__name__).warning("bulk_log.record failed", exc_info=True)
+    # A "no_form" outcome = the posting is GONE at the ATS (404 / "job not found" / listing
+    # redirect) even though the nightly collector still has it live. Mark the catalog row dead
+    # so it leaves the selection pool (never re-loaded / re-drained) and unpark it — no human
+    # can finish a dead posting. This is the real cure for the ~11% "no_button/no_form" churn.
+    if (st.get("submit") or {}).get("reason") == "no_form":
+        j = job or {}
+        try:
+            from backend.tools import catalog_db
+            if j.get("ats") and j.get("company_key") and j.get("external_id"):
+                catalog_db.mark_dead([(j["ats"], j["company_key"], j["external_id"])],
+                                     "posting gone (404 / not found at source)")
+            bulk_log.drop_many([jid])
+        except Exception:
+            logging.getLogger(__name__).warning("mark_dead/drop failed for job %s", jid, exc_info=True)
 
 
 def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,

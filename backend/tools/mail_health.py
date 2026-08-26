@@ -91,12 +91,13 @@ def notify(key: str, text: str, cooldown: int = COOLDOWN) -> bool:
     return fired
 
 
-def record_fallback(where: str) -> None:
+def record_fallback(where: str, cause: str = "") -> None:
     """Called from the CRM's DB-first read paths when they drop to a live scan."""
+    tail = f"\nCause: <code>{cause}</code>" if cause else ""
     notify("index_fallback",
            f"⚠️ <b>Mail index unavailable</b> — CRM fell back to a live disk scan "
            f"(<code>{where}</code>). Check Postgres <code>jobfinder_crm</code> and the "
-           f"<code>jobfinder-mail-indexer</code> pm2 process.")
+           f"<code>jobfinder-mail-indexer</code> pm2 process.{tail}")
 
 
 def _clear(recovery_text: str) -> None:

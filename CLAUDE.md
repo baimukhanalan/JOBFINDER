@@ -145,6 +145,21 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 `/queue` still defaults to `profile="michael"`.
 
 ## Gotchas
+- **CRM Postgres pool must be big enough for the parallel bulk lane (`mail_db.py`, 2026-08-26).**
+  `mail_db._get_pool()` was `ThreadedConnectionPool(1, 8)` — only 8 connections. Once «Подать на все»
+  fans out ~12 dashboard worker threads alongside the 3 background daemons (proxy revalidator, submit
+  reconciler, drain loop) AND the operator browsing `/mail`, `getconn()` raised
+  `PoolError("connection pool exhausted")` on nearly every read; `mailcrm.list_messages`/`counts`'
+  blanket `except` then dropped to the SLOW live-Maildir disk scan (`_scan_messages`), firing the
+  `mail_health` «Mail index unavailable — fell back to a live disk scan» alert repeatedly and making the
+  whole dashboard drag (root-caused live: reproduced deterministically — 25 concurrent threads → PoolError
+  at maxconn 8; 40 threads pass at 32). Fix: maxconn raised to **32** (`CRM_PG_POOL_MAX` env override;
+  Postgres `max_connections=100`, only ~16 in use, ample headroom) and `conn()` now uses `_getconn()`
+  which **wait-and-retries up to 5 s** on a momentary spike instead of instantly collapsing to the disk
+  scan. minconn stays **1** so each importing PROCESS (indexer, retention cron, every copilot worker)
+  holds just one idle connection at rest — only the dashboard bursts toward maxconn. The read-path
+  fallbacks now log + Telegram the actual exception (`type: msg`) so a future incident is diagnosable
+  (pool-exhausted vs Postgres-down). Do NOT lower maxconn back to 8.
 - **Run from the repo ROOT** — imports are absolute `backend.*`. Correct: `uvicorn
   backend.dashboard_app:app` / `python -m backend.tools.mail_indexer` / `python -m backend.apply_cli …`
   from `/home/projects/JOBFINDER`. `cd backend && uvicorn dashboard_app:app` is BROKEN.

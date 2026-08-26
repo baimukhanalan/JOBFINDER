@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -50,21 +51,49 @@ def _dsn() -> str:
 _pool = None
 _pool_lock = threading.Lock()
 
+# maxconn was 8 — too small once the parallel bulk lane runs a dozen dashboard
+# worker threads alongside the 3 background daemons (proxy revalidator, submit
+# reconciler, drain loop) AND the operator browsing /mail. Under that concurrency
+# getconn() raised PoolError("connection pool exhausted") on every read, the CRM's
+# blanket except dropped to the slow live-Maildir disk scan, and the whole dashboard
+# dragged (root-caused 2026-08-26). Postgres max_connections=100 and only ~16 are in
+# use, so there is ample headroom. minconn stays 1 so each importing PROCESS (indexer,
+# retention cron, each copilot worker) holds just one idle connection at rest; only the
+# dashboard actually bursts toward maxconn. Override with CRM_PG_POOL_MAX if needed.
+_POOL_MAX = max(4, int(os.environ.get("CRM_PG_POOL_MAX", "32")))
+_GETCONN_WAIT = 5.0   # seconds to wait-and-retry for a free slot before giving up
+
 
 def _get_pool():
     global _pool
     if _pool is None:
         with _pool_lock:
             if _pool is None:
-                _pool = psycopg2.pool.ThreadedConnectionPool(1, 8, dsn=_dsn())
+                _pool = psycopg2.pool.ThreadedConnectionPool(1, _POOL_MAX, dsn=_dsn())
     return _pool
+
+
+def _getconn(pool):
+    """getconn() with a bounded wait: a momentary spike over the pool ceiling should
+    cost a few ms of latency, not a hard failure that collapses the read to a disk scan.
+    Retries for up to _GETCONN_WAIT before propagating PoolError."""
+    deadline = time.monotonic() + _GETCONN_WAIT
+    delay = 0.02
+    while True:
+        try:
+            return pool.getconn()
+        except psycopg2.pool.PoolError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 1.6, 0.25)
 
 
 @contextmanager
 def conn():
     """A pooled connection (returned to the pool on exit). Commits on success."""
     pool = _get_pool()
-    c = pool.getconn()
+    c = _getconn(pool)
     try:
         yield c
         c.commit()

@@ -393,12 +393,19 @@ def _snippet(msg) -> str:
     return _message_text(msg)[:280]
 
 
-def _health_fallback(where: str) -> None:
+def _health_fallback(where: str, exc: Exception | None = None) -> None:
     """Signal (throttled Telegram) that a DB-first read dropped to a live scan, so a
-    dead index/indexer can't hide behind the fallback. Best-effort."""
+    dead index/indexer can't hide behind the fallback. Best-effort. `exc` is recorded
+    in the alert so the cause (pool exhausted vs Postgres down) is diagnosable."""
+    if exc is not None:
+        try:
+            print(f"[mailcrm] index fallback at {where}: "
+                  f"{type(exc).__name__}: {str(exc)[:200]}", flush=True)
+        except Exception:
+            pass
     try:
         from backend.tools import mail_health
-        mail_health.record_fallback(where)
+        mail_health.record_fallback(where, str(exc)[:120] if exc is not None else "")
     except Exception:
         pass
 
@@ -440,8 +447,8 @@ def list_messages(mailbox: str | None = None, q: str = "",
         return mail_db.list_messages(mailbox=mailbox, q=(q or None), limit=limit,
                                      before_ts=before_ts, before_id=before_id,
                                      stage=stage or None)
-    except Exception:
-        _health_fallback("list_messages")
+    except Exception as e:
+        _health_fallback("list_messages", e)
         return _scan_messages(mailbox, q, limit, before_ts, before_id, stage)
 
 
@@ -809,8 +816,8 @@ def counts() -> dict[str, int]:
     """Nav badge counts — from the index; falls back to a live Maildir scan."""
     try:
         return mail_db.counts()
-    except Exception:
-        _health_fallback("counts")
+    except Exception as e:
+        _health_fallback("counts", e)
         return _scan_counts()
 
 

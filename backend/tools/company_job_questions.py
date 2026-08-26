@@ -217,6 +217,7 @@ _EXTRACT_JS = r"""() => {
  };
  const selectorFor=el=>el.id?`#${CSS.escape(el.id)}`:(el.name?`${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`:el.tagName.toLowerCase());
  const evidenceFor=el=>({source:'rendered_form',tag:el.tagName.toLowerCase(),input_type:el.type||'',id:el.id||'',name:el.name||'',role:el.getAttribute('role')||'',aria_labelledby:el.getAttribute('aria-labelledby')||'',selector:selectorFor(el),html:(el.outerHTML||'').slice(0,1000)});
+ const validationFor=el=>{const out={};for(const name of ['min','max','minlength','maxlength','pattern','step','accept']){const value=el.getAttribute(name);if(value!==null&&value!=='')out[name]=value;}if(el.type==='email'||el.type==='url'||el.type==='number'||el.type==='date')out.format=el.type;return out;};
  const optionLabel=el=>{const w=el.closest('label');if(w){const t=textOnly(w);if(t)return t;}if(el.id){const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`);if(l)return textOnly(l);}return clean(el.getAttribute('aria-label')||el.value);};
  const controls=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]),select,textarea,[role=combobox],[role=textbox],[contenteditable=true]')].filter(el=>visible(el)||el.type==='file'||((el.type==='radio'||el.type==='checkbox')&&visible(containerFor(el))));
  const out=[], consumed=new Set();
@@ -226,12 +227,12 @@ _EXTRACT_JS = r"""() => {
    if(!groups.has(key))groups.set(key,{el,label:labelFor(el),options:[],required:false,type:el.type==='checkbox'?'multi_select':'choice',members:[]});
    const g=groups.get(key);const o=optionLabel(el);if(o&&!g.options.includes(o))g.options.push(o);g.required=g.required||el.required||el.getAttribute('aria-required')==='true';g.members.push(el);
  });
- groups.forEach(g=>{g.members.forEach(el=>consumed.add(el));out.push({label:g.label,type:g.type,required:g.required,options:g.options,section:sectionFor(g.el),raw_evidence:{...evidenceFor(g.el),group_size:g.members.length}});});
+ groups.forEach(g=>{g.members.forEach(el=>consumed.add(el));out.push({label:g.label,type:g.type,required:g.required,options:g.options,section:sectionFor(g.el),validation:validationFor(g.el),raw_evidence:{...evidenceFor(g.el),group_size:g.members.length}});});
  controls.filter(el=>!consumed.has(el)).forEach(el=>{
    const tag=el.tagName.toLowerCase();const role=el.getAttribute('role');
    const type=tag==='select'||role==='combobox'?'select':tag==='textarea'||el.isContentEditable?'textarea':(el.type||'text');
    const options=tag==='select'?[...el.options].map(o=>clean(o.textContent)).filter(Boolean):[];
-   out.push({label:labelFor(el),type,required:!!(el.required||el.getAttribute('aria-required')==='true'),options,section:sectionFor(el),raw_evidence:evidenceFor(el)});
+   out.push({label:labelFor(el),type,required:!!(el.required||el.getAttribute('aria-required')==='true'),options,section:sectionFor(el),validation:validationFor(el),raw_evidence:evidenceFor(el)});
  });
  // Ashby and custom forms sometimes implement choices as buttons only.
  document.querySelectorAll('.ashby-application-form-field-entry,[class*="fieldEntry"],[data-automation-id*="question" i],[class*="form-field" i],[role=radiogroup]').forEach(c=>{
@@ -241,6 +242,7 @@ _EXTRACT_JS = r"""() => {
  const unlabeled=out.filter(q=>!clean(q.label)).length;
  const actionable=[...document.querySelectorAll('button,input[type=button],input[type=submit]')].filter(visible);
  const nextCount=actionable.filter(el=>/^(next|continue|save and continue)$/i.test(clean(el.innerText||el.value))).length;
+ const finalCount=actionable.filter(el=>/^(submit|submit application|apply|finish|send application|complete application)$/i.test(clean(el.innerText||el.value))).length;
  const bodyText=(document.body.innerText||'').slice(0,10000);
  const challenge=!!document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],[class*="captcha" i]')||/captcha|verify you are human|access denied/i.test(document.title+' '+bodyText.slice(0,2000));
  const providerMultistep=/step\s+\d+\s+(?:of|\/)+\s*\d+/i.test(bodyText)||!!document.querySelector('[aria-current=step],[role=progressbar],[data-automation-id*="progress" i]');
@@ -248,14 +250,61 @@ _EXTRACT_JS = r"""() => {
  const accountGate=passwordVisible||!!document.querySelector('[data-automation-id*="createAccount" i],[class*="create-account" i]')||/(?:sign|log)\s+in\s+(?:to|and)\s+(?:apply|continue)|create\s+(?:an?\s+)?account\s+(?:to|and)\s+(?:apply|continue)/i.test(bodyText);
  const consentControl=controls.some(el=>el.type==='checkbox'&&(/consent|privacy|terms|data processing|agree/i.test(labelFor(el))));
  const consentGate=consentControl||/(?:must|required to)\s+(?:agree|consent|accept)|consent\s+(?:is\s+)?required/i.test(bodyText);
- return {questions:out, evidence:{url:location.href,title:document.title,form_count:document.forms.length,visible_control_count:controls.length,unlabeled_control_count:unlabeled,submit_control_count:document.querySelectorAll('button[type=submit],input[type=submit]').length,next_control_count:nextCount,challenge_detected:challenge,provider_multistep:providerMultistep,account_gate_detected:accountGate,consent_gate_detected:consentGate}};
+ const reviewBoundary=/(?:review|check)\s+(?:your\s+)?application/i.test(bodyText)||!!document.querySelector('[data-automation-id*="review" i],[aria-current=step][data-automation-id*="review" i]');
+ return {questions:out, evidence:{url:location.href,title:document.title,form_count:document.forms.length,visible_control_count:controls.length,unlabeled_control_count:unlabeled,submit_control_count:document.querySelectorAll('button[type=submit],input[type=submit]').length,next_control_count:nextCount,final_action_control_count:finalCount,review_boundary_detected:reviewBoundary,challenge_detected:challenge,provider_multistep:providerMultistep,account_gate_detected:accountGate,consent_gate_detected:consentGate}};
+}"""
+
+
+# The only mutating DOM action available to this collector is a bounded click on
+# an unambiguously labelled navigation control. A capture-phase guard blocks real
+# HTML form submission, including requestSubmit()/submit(), and final-action labels
+# are an explicit stop boundary. No value is read, synthesized, or entered.
+_SAFE_NEXT_JS = r"""() => {
+ const clean=s=>(s||'').replace(/\s+/g,' ').trim();
+ const visible=el=>!!(el.offsetWidth||el.offsetHeight||el.getClientRects().length);
+ const label=el=>clean(el.innerText||el.value||el.getAttribute('aria-label'));
+ const finalRe=/^(submit|submit application|apply|finish|send application|complete application)$/i;
+ const nextRe=/^(next|continue|save and continue)$/i;
+ if(!window.__questionCollectorSubmitGuard){
+   window.__questionCollectorSubmitGuard={blocked:0};
+   document.addEventListener('submit',event=>{window.__questionCollectorSubmitGuard.blocked++;event.preventDefault();event.stopImmediatePropagation();},true);
+   const nativeSubmit=HTMLFormElement.prototype.submit;
+   const nativeRequestSubmit=HTMLFormElement.prototype.requestSubmit;
+   HTMLFormElement.prototype.submit=function(){window.__questionCollectorSubmitGuard.blocked++;};
+   if(nativeRequestSubmit)HTMLFormElement.prototype.requestSubmit=function(){window.__questionCollectorSubmitGuard.blocked++;};
+   window.__questionCollectorSubmitGuard.restore=()=>{HTMLFormElement.prototype.submit=nativeSubmit;if(nativeRequestSubmit)HTMLFormElement.prototype.requestSubmit=nativeRequestSubmit;};
+ }
+ const controls=[...document.querySelectorAll('button,input[type=button],input[type=submit],[role=button]')].filter(visible);
+ if(controls.some(el=>finalRe.test(label(el))))return {status:'boundary',reason:'final_action_control'};
+ if(/(?:review|check)\s+(?:your\s+)?application/i.test((document.body.innerText||'').slice(0,10000)))return {status:'boundary',reason:'review_step'};
+ const candidates=controls.filter(el=>nextRe.test(label(el)));
+ if(!candidates.length)return {status:'not_found'};
+ const enabled=candidates.filter(el=>!el.disabled&&el.getAttribute('aria-disabled')!=='true');
+ if(!enabled.length)return {status:'blocked',reason:'navigation_control_disabled'};
+ const preferred=enabled.find(el=>/bottom-navigation-next-button|navigation-next/i.test(el.getAttribute('data-automation-id')||''))||enabled[0];
+ const actionLabel=label(preferred);
+ preferred.click();
+ return {status:'clicked',label:actionLabel,submit_guard_blocks:window.__questionCollectorSubmitGuard.blocked||0};
 }"""
 
 
 def _snapshot_signature(snapshot: Mapping[str, Any]) -> str:
     questions = normalize_questions(snapshot.get("questions") or [])
+    evidence = dict(snapshot.get("evidence") or {})
     return hashlib.sha256(json.dumps(
-        [(q["fingerprint"], q["required"], q["options"]) for q in questions],
+        {
+            "questions": [(q["fingerprint"], q["required"], q["options"])
+                          for q in questions],
+            # A wizard may repeat a field on its review step. Boundary/gate state
+            # distinguishes that legitimate transition from a stuck Next button.
+            "navigation": [
+                int(evidence.get("next_control_count") or 0),
+                int(evidence.get("final_action_control_count") or 0),
+                bool(evidence.get("review_boundary_detected")),
+                bool(evidence.get("account_gate_detected")),
+                bool(evidence.get("consent_gate_detected")),
+            ],
+        },
         ensure_ascii=False, separators=(",", ":"),
     ).encode()).hexdigest()
 
@@ -272,11 +321,11 @@ def _merge_frame_snapshots(snapshots: Sequence[tuple[int, str, Mapping[str, Any]
     }
     count_fields = (
         "form_count", "visible_control_count", "unlabeled_control_count",
-        "submit_control_count", "next_control_count",
+        "submit_control_count", "next_control_count", "final_action_control_count",
     )
     bool_fields = (
         "challenge_detected", "provider_multistep", "account_gate_detected",
-        "consent_gate_detected",
+        "consent_gate_detected", "review_boundary_detected",
     )
     for frame_index, frame_url, snapshot in snapshots:
         frame_evidence = dict(snapshot.get("evidence") or {})
@@ -347,13 +396,120 @@ def _poll_hydration(page: Any, *, cap_s: float = 12.0, interval_s: float = 0.5,
         sleep(interval_s)
 
 
+def _safe_next(page: Any, snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Click one enabled Next/Continue control, never a final action."""
+    page_frames = getattr(page, "frames", None)
+    frames = list(page_frames) if isinstance(page_frames, Sequence) else [page]
+    question_frame_indexes = sorted({
+        raw.get("raw_evidence", {}).get("frame_index")
+        for raw in snapshot.get("questions") or [] if isinstance(raw, Mapping)
+        and isinstance(raw.get("raw_evidence"), Mapping)
+        and isinstance(raw.get("raw_evidence", {}).get("frame_index"), int)
+    })
+    if question_frame_indexes:
+        frames = [frames[index] for index in question_frame_indexes
+                  if 0 <= index < len(frames)]
+    blocked: dict[str, Any] | None = None
+    for frame in frames[:20] or [page]:
+        try:
+            result = frame.evaluate(_SAFE_NEXT_JS)
+        except Exception:
+            continue
+        if not isinstance(result, Mapping):
+            continue
+        status = clean_text(result.get("status"))
+        if status in {"clicked", "boundary"}:
+            return dict(result)
+        if status == "blocked":
+            blocked = dict(result)
+    return blocked or {"status": "not_found"}
+
+
+def _tag_step(snapshot: Mapping[str, Any], step: int) -> dict[str, Any]:
+    tagged = {"questions": [], "evidence": dict(snapshot.get("evidence") or {})}
+    for raw in snapshot.get("questions") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        question = dict(raw)
+        raw_evidence = dict(question.get("raw_evidence") or {})
+        raw_evidence["application_step"] = step
+        question["raw_evidence"] = raw_evidence
+        tagged["questions"].append(question)
+    return tagged
+
+
+def _traverse_application_steps(page: Any, initial: Mapping[str, Any], *,
+                                cap_s: float, interval_s: float,
+                                sleep: Callable[[float], None] | None,
+                                clock: Callable[[], float],
+                                max_steps: int = 12) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Collect reachable wizard steps without entering data or crossing final action."""
+    snapshots = [_tag_step(initial, 0)]
+    signatures = {_snapshot_signature(initial)}
+    clicks = 0
+    reads = 0
+    status = "not_started"
+    stop_reason = ""
+    for step in range(1, max(1, max_steps) + 1):
+        current_evidence = snapshots[-1]["evidence"]
+        if current_evidence.get("challenge_detected"):
+            status, stop_reason = "blocked", "anti_bot_challenge_detected"
+            break
+        if current_evidence.get("account_gate_detected"):
+            status, stop_reason = "blocked", "account_gate_not_traversed"
+            break
+        if current_evidence.get("consent_gate_detected"):
+            status, stop_reason = "blocked", "consent_gate_not_accepted"
+            break
+        if current_evidence.get("review_boundary_detected") or int(
+                current_evidence.get("final_action_control_count") or 0):
+            status, stop_reason = "boundary_reached", "review_or_submit_boundary"
+            break
+        action = _safe_next(page, snapshots[-1])
+        action_status = clean_text(action.get("status"))
+        if action_status == "boundary":
+            status, stop_reason = "boundary_reached", clean_text(action.get("reason"))
+            break
+        if action_status == "blocked":
+            status, stop_reason = "blocked", clean_text(action.get("reason"))
+            break
+        if action_status != "clicked":
+            status, stop_reason = "blocked", "navigation_control_not_found"
+            break
+        clicks += 1
+        try:
+            next_snapshot, _stable, step_reads = _poll_hydration(
+                page, cap_s=min(cap_s, 6.0), interval_s=interval_s,
+                sleep=sleep, clock=clock)
+        except Exception as exc:
+            status, stop_reason = "blocked", f"step_extraction_failed:{type(exc).__name__}"
+            break
+        reads += step_reads
+        signature = _snapshot_signature(next_snapshot)
+        if signature in signatures:
+            status, stop_reason = "blocked", "navigation_made_no_progress"
+            break
+        signatures.add(signature)
+        snapshots.append(_tag_step(next_snapshot, step))
+    else:
+        status, stop_reason = "blocked", "step_limit_reached"
+    return snapshots, {
+        "status": status,
+        "stop_reason": stop_reason,
+        "navigation_controls_clicked": clicks,
+        "additional_hydration_reads": reads,
+        "steps_captured": len(snapshots),
+        "max_steps": max_steps,
+    }
+
+
 def _result(ats: str, source_url: str, form_url: str, state: ScrapeState,
             questions: list[dict[str, Any]], reasons: list[str],
             evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     scrape_evidence = dict(evidence or {})
-    # Machine-auditable safety invariant: this collector has no fill or submit path.
+    # Machine-auditable safety invariant: no field-fill or final-submit path exists.
     scrape_evidence["form_submission_attempted"] = False
-    scrape_evidence["action_controls_clicked"] = 0
+    scrape_evidence.setdefault("action_controls_clicked", 0)
     result = {
         "ats": clean_text(ats).lower() or "generic",
         "source_url": source_url,
@@ -437,11 +593,14 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
         return _result(ats, url, "", "failed", [], [f"invalid_url:{type(exc).__name__}"])
     navigation_error = ""
     try:
-        page.goto(form_url, wait_until="networkidle", timeout=15_000)
+        # ATS pages commonly keep analytics/streaming requests open forever.
+        # DOM readiness plus the bounded hydration poll below is both faster and
+        # more reliable than waiting for Playwright's network-idle heuristic.
+        page.goto(form_url, wait_until="domcontentloaded", timeout=12_000)
     except Exception as exc:
         navigation_error = type(exc).__name__
         try:
-            page.goto(form_url, wait_until="domcontentloaded", timeout=15_000)
+            page.goto(form_url, wait_until="commit", timeout=5_000)
         except Exception as fallback_exc:
             return _result(ats, url, form_url, "failed", [], [
                 f"navigation_failed:{navigation_error}",
@@ -453,16 +612,35 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     except Exception as exc:
         return _result(ats, url, form_url, "failed", [],
                        [f"extraction_failed:{type(exc).__name__}"])
-    raw_questions = list(snapshot.get("questions") or [])
+    traversal: dict[str, Any] | None = None
+    step_snapshots = [_tag_step(snapshot, 0)]
+    initial_evidence = dict(snapshot.get("evidence") or {})
+    if int(initial_evidence.get("next_control_count") or 0) or initial_evidence.get(
+            "provider_multistep"):
+        step_snapshots, traversal = _traverse_application_steps(
+            page, snapshot, cap_s=cap_s, interval_s=interval_s,
+            sleep=sleep, clock=clock)
+    raw_questions = [question for step_snapshot in step_snapshots
+                     for question in step_snapshot.get("questions") or []]
     unresolved_combos = _harvest_combobox_options(page, raw_questions)
     questions = normalize_questions(raw_questions)
-    evidence = dict(snapshot.get("evidence") or {})
+    evidence = dict(initial_evidence)
+    if len(step_snapshots) > 1:
+        final_evidence = dict(step_snapshots[-1].get("evidence") or {})
+        evidence.update(final_evidence)
+        for flag in ("challenge_detected", "provider_multistep", "account_gate_detected",
+                     "consent_gate_detected", "review_boundary_detected"):
+            evidence[flag] = any(bool(step.get("evidence", {}).get(flag))
+                                 for step in step_snapshots)
     evidence.update({"hydration_stable": stable, "hydration_reads": reads})
+    if traversal is not None:
+        evidence["step_traversal"] = traversal
+        evidence["action_controls_clicked"] = traversal["navigation_controls_clicked"]
     if clean_text(ats).lower() == "workday":
         evidence["direct_apply_url_used"] = True
     reasons: list[str] = []
     if navigation_error:
-        reasons.append(f"networkidle_failed:{navigation_error}")
+        reasons.append(f"domcontentloaded_failed:{navigation_error}")
     if not questions:
         reasons.append("no_labelled_questions_detected")
     if not stable:
@@ -472,9 +650,17 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     if unresolved_combos:
         reasons.append("combobox_options_unavailable")
         evidence["comboboxes_without_options"] = unresolved_combos
-    if int(evidence.get("next_control_count") or 0) or evidence.get("provider_multistep"):
-        # We intentionally do not populate required fields to unlock later steps.
-        reasons.append("multi_step_form_not_traversed")
+    if traversal is not None and traversal.get("status") != "boundary_reached":
+        stop_reason = clean_text(traversal.get("stop_reason"))
+        if stop_reason == "navigation_control_disabled":
+            reasons.append("multi_step_navigation_blocked_without_input")
+        elif stop_reason == "navigation_made_no_progress":
+            reasons.append("multi_step_navigation_no_progress")
+        elif stop_reason == "navigation_control_not_found":
+            reasons.append("multi_step_navigation_unavailable")
+        elif stop_reason not in {"account_gate_not_traversed", "consent_gate_not_accepted",
+                                "anti_bot_challenge_detected"}:
+            reasons.append(f"multi_step_traversal_stopped:{stop_reason or 'unknown'}")
     if evidence.get("account_gate_detected"):
         reasons.append("account_gate_not_traversed")
     if evidence.get("consent_gate_detected"):
@@ -484,23 +670,32 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     if evidence.get("challenge_detected"):
         reasons.append("anti_bot_challenge_detected")
     gate_reasons = [reason for reason in reasons if reason in {
-        "multi_step_form_not_traversed", "account_gate_not_traversed",
+        "multi_step_navigation_blocked_without_input", "multi_step_navigation_no_progress",
+        "multi_step_navigation_unavailable", "account_gate_not_traversed",
         "consent_gate_not_accepted", "embedded_frame_unreadable",
         "anti_bot_challenge_detected",
-    }]
+    } or reason.startswith("multi_step_traversal_stopped:")]
     if gate_reasons:
         evidence["coverage_scope"] = "visible_steps_only"
         evidence["gate_reasons"] = gate_reasons
+    elif traversal is not None and traversal.get("status") == "boundary_reached":
+        evidence["coverage_scope"] = "all_reachable_steps_to_review_boundary"
     visible = int(evidence.get("visible_control_count") or 0)
     if visible > len(questions) and not evidence.get("unlabeled_control_count"):
         # Groups legitimately collapse several controls into one question, so this is
         # audit evidence only; do not mark a radio-heavy form partial for that reason.
         evidence["controls_grouped_or_deduplicated"] = visible - len(questions)
-    state: ScrapeState = "complete" if questions and stable and not any(
-        r in reasons for r in ("unlabelled_controls_present", "hydration_not_stable",
-                               "combobox_options_unavailable", "multi_step_form_not_traversed",
-                               "account_gate_not_traversed", "consent_gate_not_accepted",
-                               "embedded_frame_unreadable", "anti_bot_challenge_detected")) \
+    partial_reasons = {
+        "unlabelled_controls_present", "hydration_not_stable",
+        "combobox_options_unavailable", "multi_step_navigation_blocked_without_input",
+        "multi_step_navigation_no_progress", "multi_step_navigation_unavailable",
+        "account_gate_not_traversed", "consent_gate_not_accepted",
+        "embedded_frame_unreadable", "anti_bot_challenge_detected",
+    }
+    has_partial_reason = any(
+        reason in partial_reasons or reason.startswith("multi_step_traversal_stopped:")
+        for reason in reasons)
+    state: ScrapeState = "complete" if questions and stable and not has_partial_reason \
         else "partial"
     return _result(ats, url, form_url, state, questions, reasons, evidence)
 

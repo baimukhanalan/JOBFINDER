@@ -221,6 +221,31 @@ def test_successfactors_rmk_uses_branded_search_and_job_paths(monkeypatch):
     assert "sortColumn=referencedate" in calls[0]
 
 
+def test_successfactors_pagination_cannot_escape_the_board_path(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if request.url.path == "/search/":
+            return httpx.Response(200, text='''
+              <a href="/job/Remote-Support-US/101/">Remote Support</a>
+              <a href="/unrelated?startrow=999">Unrelated pagination-like link</a>
+            ''', headers={"content-type": "text/html"})
+        return httpx.Response(200, text='''
+          <h1>Remote Support</h1><div>Location:</div><div>Remote - United States</div>
+          <p>This is a fully remote role.</p>
+        ''', headers={"content-type": "text/html"})
+
+    result = src.fetch_remote_jobs(
+        "successfactors", "acme", 13,
+        ats_url="https://careers.acme.test/index", client=_client(handler))
+    assert result.complete is True
+    assert len(result) == 1
+    assert not any("/unrelated" in url for url in calls)
+
+
 def test_icims_pending_pagination_at_cap_is_incomplete(monkeypatch):
     monkeypatch.setattr(
         "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
@@ -238,7 +263,7 @@ def test_icims_pending_pagination_at_cap_is_incomplete(monkeypatch):
 def test_successfactors_detail_truncation_is_incomplete(monkeypatch):
     monkeypatch.setattr(
         "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(src, "MAX_PAGES", 1)
+    monkeypatch.setattr(src, "MAX_PUBLIC_JOB_DETAILS", 1)
 
     def handler(request):
         if request.url.path == "/search/":

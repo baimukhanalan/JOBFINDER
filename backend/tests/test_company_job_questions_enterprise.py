@@ -86,7 +86,7 @@ def test_icims_questions_are_collected_from_embedded_application_frame():
 
 
 @pytest.mark.parametrize(("ats", "flag", "reason"), [
-    ("workday", "provider_multistep", "multi_step_form_not_traversed"),
+    ("workday", "provider_multistep", "multi_step_navigation_unavailable"),
     ("successfactors", "account_gate_detected", "account_gate_not_traversed"),
     ("oracle", "consent_gate_detected", "consent_gate_not_accepted"),
 ])

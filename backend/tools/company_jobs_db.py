@@ -544,24 +544,32 @@ def _mark_missing_jobs_closed_cur(cur: Any, *, company_id: int, source: str,
 
 def list_company_targets(status: str = "novel", limit: int = 100,
                          supported_ats: tuple[str, ...] = SUPPORTED_COMPANY_JOB_ATS) -> list[dict]:
-    """Return independently discovered companies that have a usable ATS identity."""
+    """Return independently discovered boards that are ready for job discovery.
+
+    Job scans are evidence used to decide whether an employer can be promoted to
+    monitoring.  Requiring ``qualified``/``monitoring`` here creates a circular
+    dependency and leaves otherwise verified ATS boards unscanned.  The stricter
+    identity and monitoring gates remain on promotion and application queues.
+    """
     if status not in {"novel", "known", "possible_duplicate", "promoted"}:
         raise ValueError(f"invalid company discovery status: {status}")
     with _cur() as cur:
         cur.execute(
-            "SELECT c.id,c.canonical_name,c.domain,c.careers_url,c.ats,c.ats_slug,c.ats_url,"
-            "last_scan.last_scanned_at FROM company_discovery c LEFT JOIN LATERAL ("
+            "WITH boards AS (SELECT c.id,c.canonical_name,c.domain,c.careers_url,"
+            "c.ats,c.ats_slug,c.ats_url,last_scan.last_scanned_at,"
+            "ROW_NUMBER() OVER (PARTITION BY lower(c.ats),c.ats_slug ORDER BY "
+            "(m.identity_status='verified') DESC,m.is_monitoring_representative DESC,c.id) AS rn "
+            "FROM company_discovery c LEFT JOIN LATERAL ("
             "SELECT COALESCE(s.finished_at,s.started_at) AS last_scanned_at "
             "FROM company_remote_job_scans s WHERE s.company_id=c.id "
             "AND s.source=lower(c.ats) AND s.source_board_id=c.ats_slug "
             "ORDER BY s.started_at DESC LIMIT 1) last_scan ON TRUE "
             "JOIN company_employer_master m ON m.company_id=c.id "
             "WHERE c.status=%s AND m.in_target_population AND m.domain_verified "
-            "AND m.identity_status='verified' "
-            "AND m.is_monitoring_representative "
-            "AND m.monitoring_status IN ('qualified','monitoring') AND lower(c.ats)=ANY(%s) "
-            "AND c.ats_slug IS NOT NULL AND c.ats_slug <> '' "
-            "ORDER BY last_scan.last_scanned_at ASC NULLS FIRST,c.id ASC LIMIT %s",
+            "AND lower(c.ats)=ANY(%s) AND c.ats_slug IS NOT NULL AND c.ats_slug <> '') "
+            "SELECT id,canonical_name,domain,careers_url,ats,ats_slug,ats_url,last_scanned_at "
+            "FROM boards WHERE rn=1 "
+            "ORDER BY last_scanned_at ASC NULLS FIRST,id ASC LIMIT %s",
             (status, list(supported_ats), int(limit)))
         return [dict(row) for row in cur.fetchall()]
 
@@ -573,9 +581,6 @@ def get_company_target(company_id: int,
           SELECT c.id,c.canonical_name,c.domain,c.careers_url,c.ats,c.ats_slug,c.ats_url
           FROM company_discovery c JOIN company_employer_master m ON m.company_id=c.id
           WHERE c.id=%s AND m.in_target_population AND m.domain_verified
-            AND m.identity_status='verified'
-            AND m.is_monitoring_representative
-            AND m.monitoring_status IN ('qualified','monitoring')
             AND lower(c.ats)=ANY(%s)
         """, (int(company_id), list(supported_ats)))
         row = cur.fetchone()
@@ -665,7 +670,6 @@ def list_pending_question_jobs(*, limit: int = 100,
           FROM company_remote_jobs j JOIN company_discovery c ON c.id=j.company_id
           JOIN company_employer_master m ON m.company_id=j.company_id
           WHERE m.in_target_population AND j.status='active' AND j.questions_status=ANY(%s)
-            AND m.monitoring_status IN ('qualified','monitoring')
           ORDER BY j.first_seen_at,j.id LIMIT %s
         """, (statuses, max(1, int(limit))))
         return [dict(row) for row in cur.fetchall()]

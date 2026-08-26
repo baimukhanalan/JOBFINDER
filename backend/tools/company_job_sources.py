@@ -16,6 +16,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
@@ -33,7 +34,9 @@ USER_AGENT = "JobFinder-company-jobs/1.0 (+https://github.com/baimukhanalan/JOBF
 REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
 MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 MAX_PAGES = 500
-MAX_PUBLIC_BOARD_PAGES = 50
+MAX_PUBLIC_BOARD_PAGES = 500
+MAX_PUBLIC_JOB_DETAILS = 5_000
+PUBLIC_DETAIL_WORKERS = 4
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 _REMOTE_STRONG = re.compile(
@@ -880,6 +883,10 @@ def _fetch_public_html_board(ats: str, slug: str, company_id: Any,
     if not ats_url:
         raise ValueError(f"{ats} requires a verified public ats_url or careers_url")
     first_url = _public_board_url(ats, ats_url)
+    first_parsed = urlparse(first_url)
+    board_host = (first_parsed.hostname or "").casefold()
+    board_path = first_parsed.path.rstrip("/").casefold() or "/"
+    base_board_query = parse_qs(first_parsed.query, keep_blank_values=True)
     pending = [first_url]
     seen_pages: set[str] = set()
     detail_urls: list[str] = []
@@ -910,29 +917,59 @@ def _fetch_public_html_board(ats: str, slug: str, company_id: Any,
                 continue
             parsed = urlparse(url)
             query = parse_qs(parsed.query)
-            is_page = (ats == "icims" and "pr" in query) or (
-                ats == "successfactors" and "startrow" in query)
-            if is_page and url not in seen_pages and url not in pending:
-                pending.append(url)
+            same_board = ((parsed.hostname or "").casefold() == board_host
+                          and (parsed.path.rstrip("/").casefold() or "/") == board_path)
+            is_page = same_board and ((ats == "icims" and "pr" in query) or (
+                ats == "successfactors" and "startrow" in query))
+            if is_page:
+                cursor_key = "pr" if ats == "icims" else "startrow"
+                cursor_value = str((query.get(cursor_key) or [""])[0]).strip()
+                if cursor_value.isdigit():
+                    canonical_query = {
+                        key: list(values) for key, values in base_board_query.items()
+                        if key != cursor_key
+                    }
+                    canonical_query[cursor_key] = [cursor_value]
+                    page_url = urlunparse(first_parsed._replace(
+                        query=urlencode(canonical_query, doseq=True), fragment=""))
+                    if page_url not in seen_pages and page_url not in pending:
+                        pending.append(page_url)
     if pending:
         errors.append(
             f"{ats} pagination exceeded {MAX_PUBLIC_BOARD_PAGES} public board pages")
     jobs = []
     unique_detail_urls = list(dict.fromkeys(detail_urls))
-    if len(unique_detail_urls) > MAX_PAGES:
+    if len(unique_detail_urls) > MAX_PUBLIC_JOB_DETAILS:
         errors.append(
-            f"{ats} job details exceeded bounded limit of {MAX_PAGES}")
-    for url in unique_detail_urls[:MAX_PAGES]:
+            f"{ats} job details exceeded bounded limit of {MAX_PUBLIC_JOB_DETAILS}")
+    def fetch_detail(url: str) -> tuple[dict[str, Any] | None, str | None]:
         detail = _get(client, url)
         if detail is None:
-            errors.append(f"job detail unavailable: {url}")
-            continue
+            return None, f"job detail unavailable: {url}"
         job = parse_public_job_detail(
             detail.text, company_id, slug, ats=ats, page_url=str(detail.url))
         if job:
-            jobs.append(job)
-        elif not _public_job_detail_recognized(detail.text):
-            errors.append(f"unparseable job detail: {url}")
+            return job, None
+        if not _public_job_detail_recognized(detail.text):
+            return None, f"unparseable job detail: {url}"
+        return None, None
+
+    bounded_urls = unique_detail_urls[:MAX_PUBLIC_JOB_DETAILS]
+    if isinstance(client, httpx.Client) and len(bounded_urls) > 20:
+        with ThreadPoolExecutor(max_workers=PUBLIC_DETAIL_WORKERS) as executor:
+            detail_results = executor.map(fetch_detail, bounded_urls)
+            for job, error in detail_results:
+                if job:
+                    jobs.append(job)
+                if error:
+                    errors.append(error)
+    else:
+        for url in bounded_urls:
+            job, error = fetch_detail(url)
+            if job:
+                jobs.append(job)
+            if error:
+                errors.append(error)
     if not detail_urls and not zero_confirmed:
         errors.append("no public job-detail links or authoritative zero result detected")
     unique = {(job["source_job_id"], job["job_url"]): job for job in jobs}

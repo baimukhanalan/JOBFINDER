@@ -161,8 +161,102 @@ def test_multistep_and_challenge_are_explicit_partial_states():
         FakePage([snap, snap]), "generic", "https://acme.test/apply",
         cap_s=1, interval_s=0)
     assert result["scrape_state"] == "partial"
-    assert set(result["reasons"]) >= {
-        "multi_step_form_not_traversed", "anti_bot_challenge_detected"}
+    assert "anti_bot_challenge_detected" in result["reasons"]
+    assert result["scrape_evidence"]["action_controls_clicked"] == 0
+
+
+class WizardPage:
+    """Script-aware browser fixture: navigation never depends on entered values."""
+    def __init__(self, snapshots, actions=None):
+        self.snapshots = snapshots
+        self.actions = list(actions or [])
+        self.step = 0
+        self.frames = [self]
+        self.goto_calls = []
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append((url, kwargs))
+
+    def evaluate(self, script):
+        if script == qx._SAFE_NEXT_JS:
+            action = self.actions.pop(0) if self.actions else {"status": "not_found"}
+            if action.get("status") == "clicked":
+                self.step = min(self.step + 1, len(self.snapshots) - 1)
+            return action
+        return self.snapshots[self.step]
+
+    def wait_for_timeout(self, _milliseconds):
+        return None
+
+
+def test_workday_traverses_safe_next_steps_and_stops_before_final_action():
+    identity = _snapshot(
+        {"label": "Email", "type": "email", "required": False},
+        next_controls=1,
+    )
+    identity["evidence"]["provider_multistep"] = True
+    screening = _snapshot(
+        {"label": "Are you authorized to work?", "type": "choice", "required": True,
+         "options": ["Yes", "No"]},
+    )
+    screening["evidence"].update({
+        "provider_multistep": True,
+        "final_action_control_count": 1,
+        "review_boundary_detected": True,
+    })
+    page = WizardPage([identity, screening], actions=[{"status": "clicked", "label": "Next"}])
+
+    result = qx.scrape_questions_with_page(
+        page, "workday", "https://acme.test/job/42", cap_s=1, interval_s=0)
+
+    assert result["state"] == "complete"
+    assert [question["label"] for question in result["questions"]] == [
+        "Email", "Are you authorized to work?",
+    ]
+    assert result["scrape_evidence"]["action_controls_clicked"] == 1
+    assert result["scrape_evidence"]["form_submission_attempted"] is False
+    assert result["scrape_evidence"]["coverage_scope"] == (
+        "all_reachable_steps_to_review_boundary")
+    assert result["scrape_evidence"]["step_traversal"]["stop_reason"] == (
+        "review_or_submit_boundary")
+    assert [question["raw_evidence"]["application_step"]
+            for question in result["questions"]] == [0, 1]
+
+
+def test_workday_required_fields_block_navigation_without_synthetic_input():
+    identity = _snapshot(
+        {"label": "Email", "type": "email", "required": True}, next_controls=1)
+    identity["evidence"]["provider_multistep"] = True
+    page = WizardPage([identity], actions=[{
+        "status": "blocked", "reason": "navigation_control_disabled"}])
+
+    result = qx.scrape_questions_with_page(
+        page, "workday", "https://acme.test/job/42", cap_s=1, interval_s=0)
+
+    assert result["state"] == "partial"
+    assert "multi_step_navigation_blocked_without_input" in result["reasons"]
+    assert result["scrape_evidence"]["action_controls_clicked"] == 0
+    assert result["scrape_evidence"]["step_traversal"]["steps_captured"] == 1
+
+
+def test_navigation_script_has_submit_boundary_and_no_input_path():
+    script = qx._SAFE_NEXT_JS
+    assert "preventDefault" in script
+    assert "requestSubmit" in script
+    assert "submit application" in script
+    assert ".fill(" not in script
+    assert ".press(" not in script
+    assert ".value=" not in script
+
+
+def test_validation_constraints_survive_normalization():
+    question = qx.normalize_question({
+        "label": "Years of experience", "type": "number", "required": True,
+        "validation": {"min": "0", "max": "50", "step": "1", "format": "number"},
+    })
+    assert question is not None
+    assert question["validation"] == {
+        "min": "0", "max": "50", "step": "1", "format": "number"}
 
 
 def test_navigation_and_extraction_errors_are_explicit_failed_states():
@@ -188,15 +282,15 @@ def test_public_scrape_questions_uses_injected_page():
     assert result["error"] is None
 
 
-def test_networkidle_fallback_can_still_return_complete_with_audit_reason():
+def test_domcontentloaded_fallback_can_still_return_complete_with_audit_reason():
     question = {"label": "Are you available?", "type": "choice", "options": ["Yes", "No"]}
     snap = _snapshot(question)
     page = FakePage([snap, snap], goto_errors=[RuntimeError("network never idle"), None])
     result = qx.scrape_questions_with_page(
         page, "ashby", "https://jobs.ashbyhq.com/acme/42", cap_s=1, interval_s=0)
     assert result["scrape_state"] == "complete"
-    assert result["reasons"] == ["networkidle_failed:RuntimeError"]
-    assert [call[1]["wait_until"] for call in page.goto_calls] == ["networkidle", "domcontentloaded"]
+    assert result["reasons"] == ["domcontentloaded_failed:RuntimeError"]
+    assert [call[1]["wait_until"] for call in page.goto_calls] == ["domcontentloaded", "commit"]
 
 
 def test_combobox_option_harvest_has_a_total_time_budget():

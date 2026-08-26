@@ -10,6 +10,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from backend.tools import company_jobs_db as jobs_db
@@ -214,6 +215,50 @@ def collect_company_jobs(
     return result
 
 
+def collect_company_jobs_parallel(*, status: str = "novel", limit_companies: int = 100,
+                                  workers: int = 4, store: Any = jobs_db) -> dict:
+    """Collect board data concurrently without rendered-form browser work.
+
+    Targets are snapshotted once and partitioned by company id.  Advisory board
+    locks remain the final protection against a concurrent scheduler run.
+    Questions are deliberately handled by the separate browser phase.
+    """
+    if workers < 2:
+        return collect_company_jobs(
+            status=status, limit_companies=limit_companies,
+            collect_questions=False, store=store)
+    targets = store.list_company_targets(
+        status=status, limit=limit_companies, supported_ats=SUPPORTED_ATS)
+    totals = {
+        "companies_selected": len(targets), "companies_succeeded": 0,
+        "companies_failed": 0, "companies_locked": 0, "companies_incomplete": 0,
+        "remote_jobs_seen": 0, "jobs_stored": 0, "snapshots_created": 0,
+        "questions_complete": 0, "questions_stored": 0, "questions_failed": 0,
+        "questions_not_attempted": 0, "jobs_closed": 0, "errors": [],
+    }
+    additive = tuple(key for key in totals if key not in {"companies_selected", "errors"})
+
+    def run(target: dict) -> dict:
+        return collect_company_jobs(
+            company_id=int(target["id"]), collect_questions=False, store=store)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(run, target): target for target in targets}
+        for future in as_completed(futures):
+            target = futures[future]
+            try:
+                item = future.result()
+            except Exception as exc:  # Defensive: one board must not abort the cohort.
+                totals["companies_failed"] += 1
+                totals["errors"].append(
+                    f"{target.get('canonical_name') or target.get('id')}: {exc}")
+                continue
+            for key in additive:
+                totals[key] += int(item.get(key) or 0)
+            totals["errors"].extend(item.get("errors") or [])
+    return totals
+
+
 def collect_pending_questions(*, limit: int = 100, headless: bool = True,
                               retry_failed: bool = False,
                               store: Any = jobs_db,
@@ -246,6 +291,45 @@ def collect_pending_questions(*, limit: int = 100, headless: bool = True,
     return result
 
 
+def collect_pending_questions_parallel(*, limit: int = 100, workers: int = 4,
+                                       headless: bool = True,
+                                       retry_failed: bool = False,
+                                       store: Any = jobs_db,
+                                       question_scraper: Callable[..., dict] = scrape_questions
+                                       ) -> dict:
+    """Read independent application forms concurrently without submitting them."""
+    rows = store.list_pending_question_jobs(limit=limit, retry_failed=retry_failed)
+    result = {"selected": len(rows), "complete": 0, "failed": 0,
+              "questions_stored": 0, "errors": []}
+
+    def run(row: dict) -> tuple[str, int, str | None]:
+        url = row.get("apply_url") or row.get("job_url") or ""
+        try:
+            scraped = question_scraper(
+                str(row.get("source") or ""), url, headless=headless)
+            if scraped.get("state") == "complete":
+                count = store.save_questions(
+                    int(row["id"]), scraped.get("questions") or [], "success")
+                return "complete", count, None
+            error = _question_error(scraped)
+            store.save_questions(int(row["id"]), scraped.get("questions") or [],
+                                 "failed", error=error)
+            return "failed", 0, f"{row.get('canonical_name')}: {error}"
+        except Exception as exc:
+            store.save_questions(int(row["id"]), None, "failed", error=str(exc))
+            return "failed", 0, f"{row.get('canonical_name')}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(run, row) for row in rows]
+        for future in as_completed(futures):
+            state, count, error = future.result()
+            result[state] += 1
+            result["questions_stored"] += count
+            if error:
+                result["errors"].append(error)
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Collect complete remote jobs from independently discovered companies")
@@ -264,10 +348,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum rendered forms per run; 0 means all")
     collect.add_argument("--headed", action="store_true",
                          help="show browser while reading application questions")
+    collect.add_argument(
+        "--workers", type=int, default=1,
+        help="parallel board workers; values above 1 require --skip-questions")
     questions = sub.add_parser("questions", help="retry pending rendered application forms")
     questions.add_argument("--limit", type=int, default=100)
     questions.add_argument("--headed", action="store_true")
     questions.add_argument("--retry-failed", action="store_true")
+    questions.add_argument("--workers", type=int, default=1)
     sub.add_parser("stats", help="show isolated remote-job counts")
     return parser
 
@@ -285,21 +373,38 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--limit-companies must be at least 1")
             if args.question_limit < 0:
                 raise ValueError("--question-limit cannot be negative")
+            if args.workers < 1 or args.workers > 8:
+                raise ValueError("--workers must be between 1 and 8")
+            if args.workers > 1 and not args.skip_questions:
+                raise ValueError("parallel collection requires --skip-questions")
             jobs_db.ensure_schema()
-            output = collect_company_jobs(
-                status=args.status,
-                limit_companies=args.limit_companies,
-                company_id=args.company_id,
-                collect_questions=not args.skip_questions,
-                question_limit=args.question_limit,
-                headless=not args.headed,
-            )
+            if args.workers > 1 and args.company_id is None:
+                output = collect_company_jobs_parallel(
+                    status=args.status, limit_companies=args.limit_companies,
+                    workers=args.workers)
+            else:
+                output = collect_company_jobs(
+                    status=args.status,
+                    limit_companies=args.limit_companies,
+                    company_id=args.company_id,
+                    collect_questions=not args.skip_questions,
+                    question_limit=args.question_limit,
+                    headless=not args.headed,
+                )
         else:
             if args.limit < 1:
                 raise ValueError("--limit must be at least 1")
+            if args.workers < 1 or args.workers > 8:
+                raise ValueError("--workers must be between 1 and 8")
             jobs_db.ensure_schema()
-            output = collect_pending_questions(limit=args.limit, headless=not args.headed,
-                                               retry_failed=args.retry_failed)
+            if args.workers > 1:
+                output = collect_pending_questions_parallel(
+                    limit=args.limit, workers=args.workers, headless=not args.headed,
+                    retry_failed=args.retry_failed)
+            else:
+                output = collect_pending_questions(
+                    limit=args.limit, headless=not args.headed,
+                    retry_failed=args.retry_failed)
         print(json.dumps({"ok": True, **output}, ensure_ascii=False, default=str))
         return 0
     except Exception as exc:

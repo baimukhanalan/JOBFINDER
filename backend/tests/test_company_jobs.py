@@ -220,3 +220,28 @@ def test_targeted_cycle_uses_one_qualified_company():
         collect_questions=False)
     assert result["companies_selected"] == 1
     assert result["companies_succeeded"] == 1
+
+
+def test_parallel_collection_snapshots_targets_and_aggregates(monkeypatch):
+    class ParallelStore:
+        def list_company_targets(self, status, limit, supported_ats):
+            assert status == "novel"
+            assert limit == 10
+            return [{"id": 7, "canonical_name": "A"},
+                    {"id": 8, "canonical_name": "B"}]
+
+    def one(*, company_id, collect_questions, store):
+        assert collect_questions is False
+        return {
+            "companies_selected": 1, "companies_succeeded": 1,
+            "remote_jobs_seen": company_id - 6, "jobs_stored": company_id - 6,
+            "questions_not_attempted": company_id - 6, "errors": [],
+        }
+
+    monkeypatch.setattr(company_jobs, "collect_company_jobs", one)
+    result = company_jobs.collect_company_jobs_parallel(
+        status="novel", limit_companies=10, workers=2, store=ParallelStore())
+    assert result["companies_selected"] == 2
+    assert result["companies_succeeded"] == 2
+    assert result["remote_jobs_seen"] == 3
+    assert result["jobs_stored"] == 3

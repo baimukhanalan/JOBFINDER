@@ -518,7 +518,7 @@ def companies(category: str | None = None, limit: int = 100) -> list[dict]:
         FROM mass_hiring_jobs WHERE {w}
         GROUP BY company, company_key
         ORDER BY active_jobs DESC, posted_7d DESC
-        LIMIT %s""", args + [week, limit])
+        LIMIT %s""", [week] + args + [limit])
         out = []
         for r in cur.fetchall():
             d = dict(r)
@@ -551,8 +551,17 @@ def stats() -> dict:
         cur.execute("SELECT category, count(*) FILTER (WHERE active) n FROM mass_hiring_jobs "
                     "GROUP BY category ORDER BY n DESC")
         by_cat = {row["category"]: row["n"] for row in cur.fetchall()}
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT max(last_seen) FROM mass_hiring_jobs")
+        last = cur.fetchone()[0] or 0
     return {"total": r["n"], "active": r["act"], "companies": r["cos"],
-            "by_source": by_src, "by_category": by_cat}
+            "by_source": by_src, "by_category": by_cat, "last_collected": int(last)}
+
+
+CATEGORY_LABELS = {
+    "customer_support": "Customer Support", "sales": "Sales", "data_entry": "Data Entry",
+    "virtual_assistant": "Virtual Assistant", "operations": "Operations", "recruiting": "Recruiting",
+}
 
 
 if __name__ == "__main__":

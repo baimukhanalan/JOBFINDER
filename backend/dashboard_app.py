@@ -887,6 +887,45 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
         return HTMLResponse("", status_code=200)
 
 
+@app.get("/mass-hiring", response_class=HTMLResponse)
+def mass_hiring_page(category: str = ""):
+    """«Mass Hiring» tab — REMOTE-only, mass-hiring US jobs the human applies to by hand.
+    Reads the SEPARATE mass_hiring_jobs table; fully decoupled from the auto-apply /catalog
+    engine (no auto-submit here — every job links out to its own apply page)."""
+    from backend.tools import mass_hiring_ui
+    try:
+        return HTMLResponse(mass_hiring_ui.render_page(category=category or None))
+    except Exception as exc:
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Mass Hiring недоступен: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+_MH_COLLECTING = {"running": False}
+
+
+@app.post("/mass-hiring/collect")
+def mass_hiring_collect():
+    """Refresh the board from every source in a background thread (~30s); the page shows the
+    fresh data on the next load. Guarded so overlapping clicks don't stack collectors."""
+    import threading
+
+    from backend.tools import mass_hiring
+
+    def _run():
+        try:
+            mass_hiring.collect()
+        except Exception:
+            logging.getLogger(__name__).warning("mass_hiring collect failed", exc_info=True)
+        finally:
+            _MH_COLLECTING["running"] = False
+
+    if not _MH_COLLECTING["running"]:
+        _MH_COLLECTING["running"] = True
+        threading.Thread(target=_run, daemon=True).start()
+    return RedirectResponse("/mass-hiring", status_code=303)
+
+
 # Autoconnecting noVNC client URL. The bare /vnc/ doesn't autoconnect and noVNC's
 # default ws path (`websockify`) resolves to /websockify -> the dashboard, not the VNC
 # proxy. vnc_lite.html + path=vnc/websockify routes the ws through the /vnc/ nginx

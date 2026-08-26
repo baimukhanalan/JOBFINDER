@@ -423,11 +423,13 @@ _IC_CATALOG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 _IC_APPLY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>'
 _IC_INBOX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>'
 _IC_UNFINISHED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>'
+_IC_MASS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>'
 _NAV = [
     ("/mail", "inbox", "Инбокс", _IC_INBOX),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
     ("/apply", "apply", "Заявки", _IC_APPLY),
     ("/unfinished", "unfinished", "Незавершённые", _IC_UNFINISHED),
+    ("/mass-hiring", "masshiring", "Mass Hiring", _IC_MASS),
 ]
 # Per-screen context for the Gmail-style mobile search pill: active -> (route,
 # placeholder). Screens absent here (e.g. Заявки) show a title instead of a field.

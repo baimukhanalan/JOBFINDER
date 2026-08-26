@@ -211,7 +211,7 @@ def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None
         args += [q, f"%{q}%", f"%{q}%"]
     if stage == "sent":
         where.append("outbound=TRUE")
-    elif stage in ("ack", "interview", "offer", "rejection", "other"):
+    elif stage in ("ack", "interview", "offer", "rejection", "other", "action_needed"):
         where.append("kind=%s AND outbound=FALSE")
         args.append(stage)
     if before_ts is not None and before_id is not None:

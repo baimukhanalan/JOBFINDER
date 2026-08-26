@@ -42,7 +42,7 @@ MAX_BODY = 200_000
 # saved phrase has transparent "text contains phrase" semantics.
 CLASSIFIER_VERSION = "2026-08-24-editable-keywords-v1"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
-KEYWORD_KINDS = ("offer", "rejection", "interview", "ack")
+KEYWORD_KINDS = ("offer", "rejection", "interview", "action_needed", "ack")
 DEFAULT_KEYWORDS = {
     # NOTE: matching is plain SUBSTRING (casefold) over subject+body, priority
     # offer>rejection>interview>ack. Phrases must be recruiter-specific enough that
@@ -88,6 +88,18 @@ DEFAULT_KEYWORDS = {
         "к сожалению, мы приняли решение", "к сожалению, вынуждены отказать",
         "приняли решение отказать", "вынуждены вам отказать", "вам отказано",
         "не готовы продолжить", "вы не подошли",
+    ],
+    # action_needed = the submit landed but the ATS needs the CANDIDATE to do something to
+    # complete/advance it (sign an NDA, verify identity, e-sign) — looks like an ack but the
+    # application is gated. Priority ABOVE ack so an "application received + verify identity"
+    # email surfaces as action-needed, not a passive ack. Phrases kept specific so a plain
+    # ack never matches (NO bare "nda" — matches age**nda**/Ama**nda**; NO "please sign" alone).
+    "action_needed": [
+        "action required", "identity verification", "verify your identity",
+        "complete your submission", "verification link", "confirm your email to complete",
+        "non-disclosure agreement", "nda request", "sign and return", "e-signature",
+        "background check consent", "please complete the following",
+        "требуется действие", "подтвердите вашу личность", "подтвердите личность",
     ],
     "ack": [
         "application received", "application has been received",

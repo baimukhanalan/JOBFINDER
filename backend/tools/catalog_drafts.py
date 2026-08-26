@@ -875,6 +875,17 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
                     "What region do you reside in?", "Country (current location)"):
             drafted.setdefault(lbl, country)
 
+    # Required Cover Letter field (many GH/Ashby forms block the submit on it). The engine
+    # already generated the body (d["cover_letter"]); wire it in as a known answer so
+    # fill_cover_letter_known can click "Enter manually" and type it. SYNTHETIC personas only
+    # (demo_*) — a real applicant's cover letter must be human-written/reviewed, never
+    # auto-fabricated prose, so leave it blank for them (the human finishes it).
+    cover = str(d.get("cover_letter") or "").strip()
+    if cover and profile_id.startswith("demo_"):
+        for lbl in ("Cover Letter", "Cover letter", "Cover Letter (optional)",
+                    "Motivation Letter", "Letter of interest"):
+            drafted.setdefault(lbl, cover)
+
     # The co-pilot needs the real APPLY-form URL, not the raw posting (see apply_url_for_job).
     apply_url = apply_url_for_job(job)
 

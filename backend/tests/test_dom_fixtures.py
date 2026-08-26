@@ -820,3 +820,111 @@ def test_workable_salary_label_surfaces_not_raw_id():
         "Workable: salary field not surfaced as unknown"
     assert "CA_21645" not in salary_unknown["question_text"], \
         f"Workable: CA_21645 id leaked into salary question_text: {salary_unknown['question_text']!r}"
+
+
+# ===========================================================================
+# C O V E R   L E T T E R   (fill_cover_letter_known)
+# ===========================================================================
+
+async def _with_inline_page(html: str, coro_factory):
+    """Like _with_fixture_page but from an inline HTML string (no fixture file)."""
+    pw = await async_playwright().start()
+    try:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(html, wait_until="domcontentloaded")
+            return await coro_factory(page)
+        finally:
+            await browser.close()
+    finally:
+        await pw.stop()
+
+
+# Greenhouse-style Cover Letter file-upload widget: the textarea does NOT exist until the
+# "Enter manually" button is clicked (React renders it on click — mirrored here with inline JS).
+_GH_COVER_WIDGET = """
+<form>
+  <div role="group" aria-labelledby="upload-label-cover_letter" class="file-upload">
+    <div id="upload-label-cover_letter" class="label">Cover Letter<span class="required">*</span></div>
+    <div class="button-container">
+      <button type="button" class="btn">Attach</button>
+      <input id="cover_letter" class="visually-hidden" type="file">
+      <button type="button" data-testid="cover_letter-text"
+              onclick="var t=document.createElement('textarea');t.id='cover_letter_text';
+                       this.closest('[role=group]').appendChild(t);">Enter manually</button>
+    </div>
+  </div>
+</form>
+"""
+
+_PLAIN_COVER_TEXTAREA = """
+<form>
+  <label for="cl">Cover Letter *</label>
+  <textarea id="cl" name="cover_letter"></textarea>
+</form>
+"""
+
+# A non-cover-letter textarea must NEVER be touched by the helper.
+_OTHER_TEXTAREA = """
+<form>
+  <label for="q">Why do you want to relocate?</label>
+  <textarea id="q" name="relocate"></textarea>
+</form>
+"""
+
+
+def test_cover_letter_enter_manually_reveal_and_fill():
+    """GH file-upload Cover Letter: helper clicks 'Enter manually', waits for the revealed
+    textarea, and types the letter."""
+    from backend.applier.dropdowns import fill_cover_letter_known
+
+    async def coro(page):
+        res = await fill_cover_letter_known(page, {"Cover Letter": "Dear team, I am excited."})
+        val = await page.eval_on_selector("#cover_letter_text", "el=>el.value") \
+            if await page.query_selector("#cover_letter_text") else ""
+        return res, val
+
+    res, val = asyncio.run(_with_inline_page(_GH_COVER_WIDGET, coro))
+    assert res["filled"] == 1, f"cover letter not filled: {res}"
+    assert res["handled"] == ["Cover Letter"]
+    assert val == "Dear team, I am excited.", f"textarea value wrong: {val!r}"
+
+
+def test_cover_letter_plain_textarea_filled():
+    """A plain <textarea> labelled Cover Letter is filled directly (no Enter-manually click)."""
+    from backend.applier.dropdowns import fill_cover_letter_known
+
+    async def coro(page):
+        res = await fill_cover_letter_known(page, {"Cover Letter": "Hello world letter."})
+        val = await page.eval_on_selector("#cl", "el=>el.value")
+        return res, val
+
+    res, val = asyncio.run(_with_inline_page(_PLAIN_COVER_TEXTAREA, coro))
+    assert res["filled"] == 1, f"plain cover textarea not filled: {res}"
+    assert val == "Hello world letter."
+
+
+def test_cover_letter_does_not_touch_other_textarea():
+    """The helper must not fill a non-cover-letter textarea."""
+    from backend.applier.dropdowns import fill_cover_letter_known
+
+    async def coro(page):
+        res = await fill_cover_letter_known(page, {"Cover Letter": "should not appear"})
+        val = await page.eval_on_selector("#q", "el=>el.value")
+        return res, val
+
+    res, val = asyncio.run(_with_inline_page(_OTHER_TEXTAREA, coro))
+    assert res["filled"] == 0, f"helper wrongly acted: {res}"
+    assert val == "", f"unrelated textarea was filled: {val!r}"
+
+
+def test_cover_letter_no_known_answer_is_noop():
+    """No Cover Letter key in known -> helper no-ops (real personas get no auto letter)."""
+    from backend.applier.dropdowns import fill_cover_letter_known
+
+    async def coro(page):
+        return await fill_cover_letter_known(page, {"First Name": "Jane"})
+
+    res = asyncio.run(_with_inline_page(_GH_COVER_WIDGET, coro))
+    assert res == {"filled": 0, "handled": []}, res

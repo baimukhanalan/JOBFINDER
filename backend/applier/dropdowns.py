@@ -886,6 +886,88 @@ async def fill_comboboxes_known(page, known: dict) -> dict:
     return {"filled": len(filled), "handled": filled}
 
 
+_COVER_KEY_RE = re.compile(r"(?i)cover\s*letter|motivation letter|letter of interest")
+
+
+async def fill_cover_letter_known(page, known: dict) -> dict:
+    """Fill a REQUIRED 'Cover Letter' field from a known answer. Two DOM shapes:
+      1. a plain <textarea> already in the DOM (Ashby / some GH) -> fill directly;
+      2. a Greenhouse file-upload widget (Attach / Dropbox / Enter manually) whose textarea
+         is rendered by React ONLY after the 'Enter manually' toggle is clicked — so a bare
+         known-answer replay hits the hidden file input and fails, still blocking the submit.
+    This helper clicks 'Enter manually', waits for the textarea, then types the letter.
+    Gated upstream to SYNTHETIC personas: materialize_prefill only injects a Cover Letter
+    known answer for demo_* (a real applicant's letter must be human-written, never
+    auto-fabricated prose). Additive; returns {'filled', 'handled'}."""
+    if not known:
+        return {"filled": 0, "handled": []}
+    text = ""
+    for k, v in known.items():
+        if v and str(v).strip() and _COVER_KEY_RE.search(str(k)):
+            text = str(v).strip()
+            break
+    if not text:
+        return {"filled": 0, "handled": []}
+    text = text[:5000]
+
+    # 1) a directly-fillable textarea already present
+    try:
+        tas = await page.query_selector_all("textarea")
+    except Exception:
+        tas = []
+    for ta in tas:
+        try:
+            if not await ta.is_visible():
+                continue
+            v0 = await ta.evaluate("el=>el.value")
+            if v0 and v0.strip():
+                continue
+            lab = (await ta.evaluate(_LABEL_JS) or "")
+            if not _COVER_KEY_RE.search(lab):
+                continue
+            await ta.fill(text)
+            logger.info("cover letter filled (textarea)")
+            return {"filled": 1, "handled": ["Cover Letter"]}
+        except Exception:
+            continue
+
+    # 2) file-upload widget: find the group labelled 'Cover Letter', click 'Enter manually',
+    #    then fill the revealed textarea.
+    try:
+        groups = await page.query_selector_all("[role=group], .file-upload, [class*='upload']")
+    except Exception:
+        groups = []
+    for g in groups:
+        try:
+            gl = (await g.evaluate(
+                "el=>{const id=el.getAttribute('aria-labelledby');"
+                " if(id){const n=document.getElementById(id); if(n) return n.textContent||'';}"
+                " return el.getAttribute('aria-label')||el.textContent||'';}") or "")
+            if not _COVER_KEY_RE.search(gl):
+                continue
+            target = None
+            for b in (await g.query_selector_all("button, [role=button]")):
+                t = ((await b.inner_text()) or "").strip().lower()
+                tid = (await b.get_attribute("data-testid")) or ""
+                if "enter manually" in t or "manual" in t or tid.endswith("-text"):
+                    target = b
+                    break
+            if not target:
+                continue
+            await target.click()
+            await page.wait_for_timeout(450)
+            ta = await g.query_selector("textarea")
+            if not ta:
+                ta = await page.query_selector("textarea[id$='_text']")
+            if ta:
+                await ta.fill(text)
+                logger.info("cover letter filled (enter-manually textarea)")
+                return {"filled": 1, "handled": ["Cover Letter"]}
+        except Exception:
+            continue
+    return {"filled": 0, "handled": []}
+
+
 async def list_unanswered_react_selects(page) -> list[str]:
     """Cleaned labels of react-selects still showing the placeholder. The analyzer
     skips their inner typeahead inputs, so without this scan the report and the

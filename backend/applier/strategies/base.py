@@ -18,6 +18,7 @@ from backend.applier.dropdowns import (
     apply_button_choice,
     apply_react_select_choice,
     fill_comboboxes_known,
+    fill_cover_letter_known,
     fill_demographic_checkboxes_decline,
     fill_demographics_decline,
     fill_react_selects,
@@ -298,6 +299,16 @@ class ApplyStrategy(ABC):
             success += dcs["filled"]
         except Exception as exc:
             logger.debug("fill_required_consent raised unexpectedly: %s", exc)
+
+        # Required 'Cover Letter' field (many GH/Ashby forms block the submit on it): click
+        # "Enter manually" and type the generated letter. Synthetic personas only — the known
+        # dict only carries a Cover Letter answer for demo_* (see materialize_prefill).
+        dcl = {"filled": 0, "handled": []}
+        try:
+            dcl = await fill_cover_letter_known(page, known_clean)
+            success += dcl["filled"]
+        except Exception as exc:
+            logger.debug("fill_cover_letter_known raised unexpectedly: %s", exc)
 
         unknown = analysis.get("unknown_questions", [])
         # `success` here = rule-based fills that actually took + react-select eligibility
@@ -628,6 +639,13 @@ class ApplyStrategy(ABC):
                     unfilled.append(t)
         except Exception:
             pass
+        # The Cover Letter was filled via the revealed textarea — a DIFFERENT DOM node than the
+        # hidden file input the recheck above reads (its .value stays empty) and it also sits in
+        # failed_required — so without this it phantom-blocks a form that IS complete.
+        if dcl.get("handled"):
+            _cl = ("cover letter", "motivation letter", "letter of interest")
+            unfilled = [t for t in unfilled
+                        if not any(c in (t or "").lower() for c in _cl)]
         sources["human"] = len(unfilled)
 
         # Wait for the résumé upload to finish before returning. Ashby (and others) upload the

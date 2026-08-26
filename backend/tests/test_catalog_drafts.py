@@ -236,3 +236,47 @@ def test_underrepresented_group_is_demographic():
         assert _DEMOGRAPHIC.search(lab.lower()), lab
     # must NOT over-match a normal seniority/role question
     assert not _DEMOGRAPHIC_LABEL_RE.search("How many people did you represent as a manager?")
+
+
+# ---- materialize_prefill: Cover Letter wired for synthetic personas only --------
+def _materialize_with_draft(monkeypatch, tmp_path, profile_id: str, cover: str):
+    """Call materialize_prefill with a stubbed DB job carrying a cover_letter draft."""
+    import json
+    from backend.tools import catalog_drafts as cdx
+    from backend.tools import drafts_ui, catalog_db
+    job = {
+        "id": 999001, "title": "Product Designer", "company": "tailscale",
+        "company_key": "tailscale", "ats": "greenhouse",
+        "url": "https://job-boards.greenhouse.io/tailscale/jobs/44702",
+        "external_id": "44702",
+        "draft": {
+            "candidate": {"id": profile_id, "name": "X", "country": "United States",
+                          "work_authorization": "citizen", "email": "x@takhet.com"},
+            "answers": [], "cover_letter": cover,
+            "resume": {"education": [], "experience": [], "personal_info": {}},
+        },
+    }
+    monkeypatch.setattr(catalog_db, "get_job", lambda _id: job)
+    monkeypatch.setattr(drafts_ui, "resume_pdf", lambda _id: b"%PDF-1.4 stub")
+    monkeypatch.setattr(cdx, "PREFILL_ROOT", tmp_path)
+    pid, jid = cdx.materialize_prefill(999001)
+    report = json.loads((tmp_path / pid / jid / "report.json").read_text())
+    return report["drafted_answers"]
+
+
+def test_cover_letter_wired_for_synthetic_persona(monkeypatch, tmp_path):
+    drafted = _materialize_with_draft(monkeypatch, tmp_path,
+                                      "demo_jane_doe1234", "Dear team, I am a great fit.")
+    assert drafted.get("Cover Letter") == "Dear team, I am a great fit.", drafted
+
+
+def test_cover_letter_NOT_wired_for_real_persona(monkeypatch, tmp_path):
+    # A real onboarded candidate (id not demo_*) must never get an auto-fabricated letter.
+    drafted = _materialize_with_draft(monkeypatch, tmp_path,
+                                      "michael", "Dear team, I am a great fit.")
+    assert "Cover Letter" not in drafted, drafted
+
+
+def test_cover_letter_absent_when_body_empty(monkeypatch, tmp_path):
+    drafted = _materialize_with_draft(monkeypatch, tmp_path, "demo_jane_doe1234", "")
+    assert "Cover Letter" not in drafted, drafted

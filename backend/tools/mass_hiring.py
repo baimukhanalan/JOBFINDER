@@ -124,10 +124,14 @@ def ensure_schema() -> None:
 # and is DROPPED (that's how "only mass-hiring jobs" is enforced).
 _CATEGORIES = [
     ("customer_support", re.compile(
-        r"customer (support|service|success|experience|care|advoc)|"
+        r"customer (support|service|success|experience|care|advoc|solution|relation|operation)|"
         r"support (specialist|agent|rep|advoc|associate|analyst|engineer)|"
         r"technical support|help ?desk|(call|contact) cent(er|re)|\bcsr\b|"
-        r"client (support|success|service)|member (support|service)|player support|"
+        r"client (support|success|service)|member (support|service|care|advoc)|player support|"
+        r"patient (access|service|care|support|advoc|coordinator)|"
+        r"claims (processor|specialist|associate|rep|examiner|agent|adjuster)|"
+        r"enrollment (specialist|rep|coordinator|advisor)|intake (specialist|coordinator|rep)|"
+        r"(healthcare|insurance|benefits|billing|financial services) (representative|agent|associate|advisor)|"
         r"trust (and|&) safety|content (review|moderat)|community (support|moderat)", re.I)),
     ("sales", re.compile(
         r"\bsdr\b|\bbdr\b|sales (development|dev) rep|business development rep|"
@@ -341,8 +345,133 @@ def fetch_amazon_remote() -> list[dict]:
     return rows
 
 
+# --- BPO connectors (the real remote-US mass-hiring source; endpoints reverse-engineered
+#     from each careers SPA's network calls, then verified headless-free with httpx) ---
+_REMOTE_RE = re.compile(r"remote|work[- ]?at[- ]?home|work[- ]?from[- ]?home|\bwah\b|virtual|"
+                        r"telecommut|home[- ]?based", re.I)
+
+
+def _is_remote(*texts) -> bool:
+    return any(_REMOTE_RE.search(t or "") for t in texts)
+
+
+def fetch_conduent() -> list[dict]:
+    """Conduent — Phenom People. POST /widgets, paginate `from` until empty. Remote US CS is the
+    genuine target here (healthcare / Medicaid call-center 'Remote US' roles)."""
+    rows, frm, size = [], 0, 50
+    ref = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    while frm < 800:
+        body = {"lang": "en_us", "deviceType": "desktop", "country": "us",
+                "pageName": "search-results", "ddoKey": "refineSearch", "sortBy": "",
+                "subsearch": "", "from": frm, "irs": False, "jobs": True, "counts": False,
+                "all_fields": ["category", "country", "state", "city", "type", "remote"],
+                "size": size, "clearAll": False, "jdsource": "facets", "isSliderEnable": False,
+                "pageId": "page20-ds", "siteType": "external", "keywords": "customer service",
+                "global": True, "selected_fields": {}, "locationData": {}}
+        try:
+            r = httpx.post("https://careers.conduent.com/widgets", json=body, timeout=30,
+                           headers={**_UA, "Content-Type": "application/json",
+                                    "Accept": "application/json", "User-Agent": ref,
+                                    "Referer": "https://careers.conduent.com/us/en/search-results"})
+            js = (r.json().get("refineSearch") or {}).get("data", {}).get("jobs") or []
+        except Exception as e:
+            print(f"[conduent from={frm}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not js:
+            break
+        for j in js:
+            loc = j.get("cityStateCountry") or j.get("location") or ""
+            country = j.get("country") or ""
+            if not _is_remote(loc, j.get("title")):
+                continue                                  # remote-only rule
+            if "united states" not in (loc + country).lower() and "us" not in country.lower():
+                continue
+            row = _mk_row("conduent", j.get("jobId") or j.get("jobSeqNo"), "Conduent",
+                          j.get("title"), loc, f"https://careers.conduent.com/us/en/job/{j.get('jobId')}",
+                          employment_type=j.get("type"), posted_at=_iso_epoch(j.get("postedDate")))
+            if row:
+                rows.append(row)
+        frm += size
+    return rows
+
+
+def fetch_alorica() -> list[dict]:
+    """Alorica — Oracle Recruiting Cloud (ORC). Plain GET, paginate offset. Work-at-home CSR."""
+    rows, offset, limit = [], 0, 50
+    host = "fa-euxw-saasfaprod1.fa.ocs.oraclecloud.com"
+    total = None
+    while offset < 600:
+        url = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+               "?onlyData=true&expand=requisitionList.secondaryLocations,flexFieldsFacet.values"
+               f"&finder=findReqs;siteNumber=CX_1,limit={limit},offset={offset},"
+               "sortBy=POSTING_DATES_DESC,keyword=%22customer%22")
+        try:
+            r = httpx.get(url, timeout=30, headers={**_UA, "Accept": "application/json"})
+            it = (r.json().get("items") or [{}])[0]
+            reqs = it.get("requisitionList") or []
+            total = it.get("TotalJobsCount", total)
+        except Exception as e:
+            print(f"[alorica offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not reqs:
+            break
+        for j in reqs:
+            loc = j.get("PrimaryLocation") or ""
+            if (j.get("PrimaryLocationCountry") or "").upper() != "US":
+                continue
+            # remote if the title/location says so, OR it's a bare-country (national) posting
+            if not (_is_remote(j.get("Title"), loc) or loc.strip().lower() in ("united states", "us")):
+                continue
+            row = _mk_row("alorica", j.get("Id"), "Alorica", j.get("Title"), loc or "United States",
+                          f"https://{host}/hcmUI/CandidateExperience/en/sites/CX_1/job/{j.get('Id')}",
+                          posted_at=_iso_epoch(j.get("PostedDate")))
+            if row:
+                rows.append(row)
+        offset += limit
+        if total is not None and offset >= total:
+            break
+    return rows
+
+
+def fetch_concentrix() -> list[dict]:
+    """Concentrix — Workday CxS. POST jobs, paginate offset. Mostly offshore; we keep only
+    the 'USA Work-at-Home' slice (bounded pagination — the US-remote fraction is small)."""
+    rows, offset, limit = [], 0, 20
+    while offset < 400:
+        try:
+            r = httpx.post("https://cnx.wd1.myworkdayjobs.com/wday/cxs/cnx/external_global/jobs",
+                           json={"appliedFacets": {}, "limit": limit, "offset": offset,
+                                 "searchText": "customer service work at home"},
+                           timeout=30, headers={**_UA, "Content-Type": "application/json",
+                                                "Accept": "application/json",
+                                                "Referer": "https://cnx.wd1.myworkdayjobs.com/external_global"})
+            d = r.json()
+            js = d.get("jobPostings") or []
+        except Exception as e:
+            print(f"[concentrix offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not js:
+            break
+        for j in js:
+            loc = j.get("locationsText") or ""
+            if "usa" not in loc.lower() or not _is_remote(loc):
+                continue
+            ep = j.get("externalPath") or ""
+            jid = ep.rstrip("/").split("_")[-1] or ep.rstrip("/").split("/")[-1]
+            row = _mk_row("concentrix", jid or ep, "Concentrix", j.get("title"), loc,
+                          "https://cnx.wd1.myworkdayjobs.com/en-US/external_global" + ep)
+            if row:
+                rows.append(row)
+        offset += limit
+        if offset >= int(d.get("total") or 0):
+            break
+    return rows
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
-            "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote}
+            "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
+            "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

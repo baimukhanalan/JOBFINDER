@@ -1041,7 +1041,11 @@ def _fill_all_public() -> dict:
 # ---- Parallel bulk lane (headless worker pool) -----------------------------
 _FILL_ALL_LOCK = threading.Lock()
 _PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
-_PER_JOB_TIMEOUT = 300                 # hard cap per /load: fill (~≤120s) + inline confirm
+_PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill + inline confirm watch. Raised
+#   300→480 on 2026-08-26: big Greenhouse forms (samsara/natera/wikimedia, 20+ LLM-answered
+#   questions) fill+click in ~180-300s and the inline WAIT_SUBMIT_MAX=120s confirm watch pushed
+#   /load past 300s, so the dashboard ReadTimeout'd WHILE the worker actually submitted → false
+#   `error`. 480 = fill(≤300) + watch(120) + buffer, so a real slow fill records its true outcome.
 #                                        wait (WAIT_SUBMIT_MAX=120s) + margin, so a genuinely
 #                                        pending confirmation doesn't ReadTimeout into `error`
 #                                        (blocked jobs return fast — copilot skips the watch).

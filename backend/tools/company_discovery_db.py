@@ -360,10 +360,33 @@ def upsert_records(rows: list[dict]) -> int:
     identity_cols = {"source", "source_external_id", "status", "match_reason",
                      "matched_catalog_company_key"}
     updates = [col for col in _UPSERT_COLS if col not in identity_cols]
+    # Acquisition refreshes are intentionally lower-authority than domain and
+    # careers enrichment.  Source adapters commonly emit empty strings, empty
+    # provenance, or default confidences, none of which may erase a previously
+    # verified identity/board.  Explicit quarantine/reset functions use direct
+    # UPDATE statements and therefore remain able to clear these fields.
+    enriched_text_cols = {
+        "domain", "careers_url", "ats", "ats_slug", "ats_url",
+    }
+    confidence_cols = {
+        "discovery_confidence", "domain_confidence", "careers_confidence",
+    }
+
+    def assignment(col: str) -> str:
+        if col in enriched_text_cols:
+            return (f"{col}=COALESCE(NULLIF(BTRIM(company_discovery.{col}),''),"
+                    f"NULLIF(BTRIM(EXCLUDED.{col}),''))")
+        if col in confidence_cols:
+            return (f"{col}=CASE WHEN company_discovery.{col}>0 "
+                    f"THEN company_discovery.{col} ELSE EXCLUDED.{col} END")
+        if col == "provenance":
+            return ("provenance=COALESCE(company_discovery.provenance,'{}'::jsonb) || "
+                    "COALESCE(EXCLUDED.provenance,'{}'::jsonb)")
+        return f"{col}=COALESCE(EXCLUDED.{col}, company_discovery.{col})"
+
     sql = ("INSERT INTO company_discovery (" + ",".join(_UPSERT_COLS) + ") VALUES "
            + placeholders + " ON CONFLICT (source, source_external_id) DO UPDATE SET "
-           + ",".join(f"{col}=COALESCE(EXCLUDED.{col}, company_discovery.{col})"
-                      for col in updates)
+           + ",".join(assignment(col) for col in updates)
            + ",last_seen=now(),updated_at=now()")
     with _cur(False) as cur:
         cur.executemany(sql, values)

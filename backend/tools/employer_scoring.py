@@ -105,6 +105,7 @@ def score_employers(*, limit: int = 2000) -> dict:
             WHERE s.company_id=m.company_id AND s.scan_complete AND s.scan_succeeded
           ) s ON TRUE
           WHERE m.in_target_population AND m.identity_status='verified'
+            AND m.hiring_cohort_status='verified_hiring'
             AND m.is_monitoring_representative
           ORDER BY m.company_id LIMIT %s
         """, (max(1, int(limit)),))
@@ -129,6 +130,7 @@ def score_employers(*, limit: int = 2000) -> dict:
                       WHEN monitoring_status='monitoring' THEN 'qualified'
                       ELSE monitoring_status END,
                     updated_at=now() WHERE company_id=%s AND in_target_population
+                      AND hiring_cohort_status='verified_hiring'
                 """, (scores["remote_score"], scores["entry_level_score"],
                       scores["mass_hiring_score"], scores["application_ease_score"],
                       scores["hiring_activity_score"], scores["score_confidence"],
@@ -166,6 +168,7 @@ def score_employers(*, limit: int = 2000) -> dict:
                 m.in_target_population AND
                 j.status='active' AND j.remote_type='remote' AND j.questions_status='success'
                 AND m.monitoring_status='monitoring' AND m.identity_status='verified'
+                AND m.hiring_cohort_status='verified_hiring'
                 AND m.is_monitoring_representative AND m.score_confidence>=0.7
                 AND m.remote_score>=40 AND m.mass_hiring_score>=50
                 AND m.hiring_activity_score>=45
@@ -184,6 +187,7 @@ def score_employers(*, limit: int = 2000) -> dict:
               WHERE m.in_target_population AND j.status='active' AND j.remote_type='remote'
                 AND j.questions_status='success' AND m.monitoring_status='monitoring'
                 AND m.identity_status='verified' AND m.is_monitoring_representative
+                AND m.hiring_cohort_status='verified_hiring'
                 AND m.score_confidence>=0.7 AND m.remote_score>=40
                 AND m.mass_hiring_score>=50 AND m.hiring_activity_score>=45
                 AND COALESCE((m.qualification_evidence->>'employee_count_conflict')::boolean,FALSE)=FALSE

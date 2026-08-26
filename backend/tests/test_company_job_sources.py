@@ -367,6 +367,48 @@ def test_oracle_parser_keeps_remote_detail_and_secondary_locations():
     assert job["locations"] == ["Remote, United States", "Remote, Canada"]
 
 
+def test_oracle_parser_combines_available_jd_fields_and_keeps_qualifications_separate():
+    details = [{
+        "Id": "78", "Title": "Remote Claims Specialist",
+        "WorkplaceType": "Remote", "PrimaryLocation": "United States",
+        "ShortDescriptionStr": "<p>Help customers resolve claims.</p>",
+        "ExternalDescriptionStr": "<p>Help customers resolve claims.</p>",
+        "ExternalResponsibilitiesStr": "<p>Review and document each claim.</p>",
+        "ExternalQualificationsStr": "<ul><li>Two years of claims experience</li></ul>",
+        "CorporateDescriptionStr": "<p>We serve customers nationwide.</p>",
+    }]
+
+    job = src.parse_oracle_jobs(
+        details, 4, "acme", public_base_url=
+        "https://acme.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1")[0]
+
+    assert job["description"].count("Help customers resolve claims.") == 1
+    assert "Review and document each claim." in job["description"]
+    assert "We serve customers nationwide." in job["description"]
+    assert "Two years of claims experience" not in job["description"]
+    assert job["requirements"] == "Two years of claims experience"
+
+
+def test_oracle_parser_uses_short_description_and_does_not_invent_empty_text():
+    short_only = [{
+        "Id": "79", "Title": "Service Agent", "WorkplaceType": "Remote",
+        "ShortDescriptionStr": "<p>Support customers from home.</p>",
+    }]
+    empty = [{
+        "Id": "80", "Title": "Remote Service Agent", "WorkplaceType": "Remote",
+    }]
+
+    short_job = src.parse_oracle_jobs(
+        short_only, 4, "acme", public_base_url="https://example.test/jobs")[0]
+    empty_job = src.parse_oracle_jobs(
+        empty, 4, "acme", public_base_url="https://example.test/jobs")[0]
+
+    assert short_job["description"] == "Support customers from home."
+    assert empty_job["description"] == ""
+    assert empty_job["description_html"] == ""
+    assert empty_job["requirements"] == ""
+
+
 def test_workday_context_skips_lowercase_locale_before_site():
     cxs, public, site = src._workday_context(
         "ghr", "https://ghr.wd1.myworkdayjobs.com/en-us/lateral-us/login")

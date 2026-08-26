@@ -3,28 +3,45 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import unicodedata
 
 from backend.tools import company_discovery_db as company_db
 from backend.tools import employer_master_db as master_db
 from backend.tools.employer_population_quality import classify_employer_record
 from backend.tools.employer_segmentation import refresh_segments
-from backend.tools.employer_sources import fetch_employer_reservoir
+from backend.tools.employer_sources import (
+    fetch_activity_employer_reservoir, fetch_employer_reservoir,
+)
 
 
 _SOURCE_PRIORITY = {
     "mandatory_employer": 4,
+    "hiring_signal_employer": 4,
+    "dol_oflc_lca": 4,
     "everify_large_employer": 3,
     "wikidata_employer": 3,
     "usaspending": 2,
     "gleif_lei": 1,
 }
+
+
+def _exact_legal_name_key(value: object) -> str:
+    """Normalize typography only; retain every legal-name token and suffix."""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(char for char in text if not unicodedata.combining(char)).casefold()
+    return " ".join(re.findall(r"[a-z0-9]+", text.replace("&", " and ")))
+
+
 def _selection_score(row: dict) -> int:
     metadata = row.get("metadata") or {}
     source = str(row.get("source") or "")
     score = _SOURCE_PRIORITY.get(source, 0) * 1_000_000
     if source == "everify_large_employer":
         score += min(int(metadata.get("hiring_sites") or 0), 100_000)
+    elif source == "dol_oflc_lca":
+        score += min(int(metadata.get("certified_worker_positions") or 0), 100_000)
     elif source == "wikidata_employer":
         score += min(int(metadata.get("employee_count") or 0) // 10, 100_000)
     elif source == "usaspending":
@@ -49,6 +66,11 @@ def _selected_row(row: dict, *, name: str, quality: dict,
                   mandatory_row: bool) -> dict:
     selected = dict(row)
     metadata = dict(selected.get("metadata") or {})
+    hiring_signal = bool(
+        metadata.get("hiring_signal_present")
+        and metadata.get("hiring_references")
+        and metadata.get("employer_evidence") in {
+            "official_careers_or_ats_reference", "certified_lca_worker_positions"})
     metadata["master_selection"] = {
         "status": "candidate_selected",
         "selected": True,
@@ -56,7 +78,7 @@ def _selected_row(row: dict, *, name: str, quality: dict,
         "requires_employer_verification": (
             metadata.get("employer_evidence_level") != "proven"),
         "dedup_key": f"name:{name}",
-        "hiring_gate_passed": False,
+        "hiring_gate_passed": hiring_signal,
         "population_quality_lane": quality["proposed_lane"],
         "population_quality_evidence": quality["evidence"],
         "mandatory_quarantine_override": bool(
@@ -81,18 +103,17 @@ def select_employers(reservoir: list[dict], *, limit: int = 10000,
     candidates = sorted(reservoir, key=_candidate_sort_key)
     selected_pool: list[dict] = []
     seen_source_ids: set[tuple[str, str]] = set()
-    seen_names: set[str] = set()
-    seen_domains: set[str] = set()
+    seen_legal_names: dict[str, str] = {}
     deduplicated = risk_excluded = invalid = mandatory_quarantine_overrides = 0
+    duplicate_source_ids = duplicate_legal_names = cross_source_duplicates = 0
+    cross_source_duplicate_pairs: dict[str, int] = {}
     hard_quarantine_rules: dict[str, int] = {}
     for raw in candidates:
         row = dict(raw)
         metadata = dict(row.get("metadata") or {})
         source = str(row.get("source") or "")
         external_id = str(row.get("source_external_id") or "")
-        name = company_db.normalize_company_name(
-            row.get("trade_name") or row.get("legal_name"))
-        domain = company_db.normalize_domain(row.get("domain"))
+        name = _exact_legal_name_key(row.get("legal_name"))
         mandatory_row = source == "mandatory_employer"
         if (not source or not external_id or not name
                 or (not mandatory_row
@@ -122,14 +143,22 @@ def select_employers(reservoir: list[dict], *, limit: int = 10000,
         mandatory_quarantine_overrides += int(
             mandatory_row and quality["proposed_lane"] == "quarantine")
         identity = (source, external_id)
-        if (identity in seen_source_ids or name in seen_names
-                or (domain and domain in seen_domains)):
+        if identity in seen_source_ids:
             deduplicated += 1
+            duplicate_source_ids += 1
+            continue
+        owner_source = seen_legal_names.get(name)
+        if owner_source is not None:
+            deduplicated += 1
+            duplicate_legal_names += 1
+            if owner_source != source:
+                cross_source_duplicates += 1
+                pair = f"{owner_source}<-{source}"
+                cross_source_duplicate_pairs[pair] = \
+                    cross_source_duplicate_pairs.get(pair, 0) + 1
             continue
         seen_source_ids.add(identity)
-        seen_names.add(name)
-        if domain:
-            seen_domains.add(domain)
+        seen_legal_names[name] = source
         selected_pool.append(_selected_row(
             row, name=name, quality=quality, mandatory_row=mandatory_row))
 
@@ -153,10 +182,17 @@ def select_employers(reservoir: list[dict], *, limit: int = 10000,
         evidence_level = str((row.get("metadata") or {}).get(
             "employer_evidence_level") or "candidate")
         evidence_counts[evidence_level] = evidence_counts.get(evidence_level, 0) + 1
+    hiring_gate_accepted = sum(bool(
+        (row.get("metadata") or {}).get("master_selection", {}).get(
+            "hiring_gate_passed")) for row in selected)
     diagnostics = {
         "reservoir_candidates": len(reservoir),
         "eligible_unique": len(selected_pool),
         "deduplicated": deduplicated,
+        "duplicate_source_ids": duplicate_source_ids,
+        "duplicate_exact_legal_names": duplicate_legal_names,
+        "cross_source_exact_legal_name_duplicates": cross_source_duplicates,
+        "cross_source_duplicate_pairs": dict(sorted(cross_source_duplicate_pairs.items())),
         "risk_excluded": risk_excluded,
         "hard_quarantine_excluded": risk_excluded,
         "hard_quarantine_rules": dict(sorted(hard_quarantine_rules.items())),
@@ -164,7 +200,7 @@ def select_employers(reservoir: list[dict], *, limit: int = 10000,
         "invalid": invalid,
         "verification_required": verification_required,
         "employer_evidence": evidence_counts,
-        "hiring_gate_accepted": 0,
+        "hiring_gate_accepted": hiring_gate_accepted,
         "by_source": by_source,
         "by_segment": by_segment,
     }
@@ -375,14 +411,20 @@ def reconcile_stored_population(*, limit: int = 10_000,
 
 
 def collect(*, limit: int = 10000, source_limit: int = 15000,
-            min_employees: int = 500) -> dict:
+            min_employees: int = 500, activity_only: bool = False) -> dict:
     company_db.ensure_schema()
     master_db.ensure_schema()
-    reservoir = fetch_employer_reservoir(
-        reservoir_min=source_limit, gleif_limit=source_limit,
-        everify_limit=min(3000, source_limit),
-        wikidata_limit=min(5000, source_limit),
-        usaspending_limit=min(2000, source_limit), min_employees=min_employees)
+    if activity_only:
+        reservoir = fetch_activity_employer_reservoir(
+            reservoir_min=source_limit,
+            hiring_signal_limit=min(1000, source_limit),
+            dol_lca_limit=source_limit)
+    else:
+        reservoir = fetch_employer_reservoir(
+            reservoir_min=source_limit, gleif_limit=source_limit,
+            everify_limit=min(3000, source_limit),
+            wikidata_limit=min(5000, source_limit),
+            usaspending_limit=min(2000, source_limit), min_employees=min_employees)
     selected, diagnostics = select_employers(
         reservoir, limit=limit, reservoir_min=source_limit)
     company_db.upsert_records(selected)
@@ -392,7 +434,7 @@ def collect(*, limit: int = 10000, source_limit: int = 15000,
             master_db.sync_source(source, rows)
     master_db.set_target_population(selected, expected=limit)
     segments = refresh_segments()
-    return {"selected": len(selected), **diagnostics,
+    return {"selected": len(selected), "activity_only": activity_only, **diagnostics,
             "segments": segments, **master_db.counts()}
 
 
@@ -405,6 +447,9 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser.add_argument("--source-limit", type=int, default=15000,
                                 help="minimum source-backed reservoir size")
     collect_parser.add_argument("--min-employees", type=int, default=500)
+    collect_parser.add_argument(
+        "--activity-only", action="store_true",
+        help="use only mandatory, local official hiring references and DOL LCA activity")
     reconcile = sub.add_parser("reconcile-stored")
     reconcile.add_argument("--limit", type=int, default=10000)
     reconcile.add_argument("--reservoir-min", type=int, default=15000)
@@ -456,7 +501,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.limit < 15 or args.source_limit < args.limit or args.min_employees < 1:
                 raise ValueError("invalid employer collection bounds")
             result = collect(limit=args.limit, source_limit=args.source_limit,
-                             min_employees=args.min_employees)
+                             min_employees=args.min_employees,
+                             activity_only=args.activity_only)
         elif args.command == "reconcile-stored":
             if args.limit < 15 or args.reservoir_min < args.limit:
                 raise ValueError("invalid stored reconcile bounds")

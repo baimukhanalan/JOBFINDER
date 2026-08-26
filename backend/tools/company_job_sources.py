@@ -564,12 +564,37 @@ def parse_workday_jobs(payload: Any, company_id: Any, slug: str, *,
     return out
 
 
+def _oracle_job_description(raw: Mapping[str, Any]) -> tuple[str, str]:
+    """Combine only Oracle's populated JD fields, suppressing repeated content."""
+    parts: list[tuple[str, str]] = []
+    for field in (
+        "ExternalDescriptionStr", "ShortDescriptionStr",
+        "ExternalResponsibilitiesStr", "CorporateDescriptionStr",
+    ):
+        markup = str(raw.get(field) or "").strip()
+        plain = html_to_text(markup)
+        normalized = re.sub(r"\s+", " ", plain).strip().casefold()
+        if not normalized:
+            continue
+        # Oracle payloads commonly repeat the short description or the complete
+        # responsibilities block inside ExternalDescriptionStr.
+        if any(normalized == existing or (len(normalized) >= 40 and normalized in existing)
+               for _, existing in parts):
+            continue
+        if len(normalized) >= 40:
+            parts = [(value, existing) for value, existing in parts
+                     if not (len(existing) >= 40 and existing in normalized)]
+        parts.append((markup, normalized))
+    description_html = "\n".join(value for value, _ in parts)
+    return description_html, html_to_text(description_html)
+
+
 def parse_oracle_jobs(details: list[Mapping[str, Any]], company_id: Any, slug: str,
                       *, public_base_url: str) -> list[dict]:
     out = []
     for raw in details:
         listing = raw.get("_listing") if isinstance(raw.get("_listing"), Mapping) else {}
-        description_html = str(raw.get("ExternalDescriptionStr") or "")
+        description_html, description_plain = _oracle_job_description(raw)
         location = str(raw.get("PrimaryLocation") or listing.get("PrimaryLocation") or "")
         secondary = listing.get("secondaryLocations") or []
         secondary_names = [str(item.get("Name") or "") for item in secondary
@@ -579,7 +604,7 @@ def parse_oracle_jobs(details: list[Mapping[str, Any]], company_id: Any, slug: s
             explicit_remote="remote" in workplace.casefold(), workplace=workplace,
             location=", ".join([location] + secondary_names),
             title=str(raw.get("Title") or listing.get("Title") or ""),
-            description=html_to_text(description_html),
+            description=description_plain,
         ):
             continue
         job_id = raw.get("Id") or listing.get("Id")
@@ -591,12 +616,15 @@ def parse_oracle_jobs(details: list[Mapping[str, Any]], company_id: Any, slug: s
                            or listing.get("JobFamily") or ""),
             location=location,
             employment_type=str(raw.get("JobSchedule") or raw.get("RequisitionType") or ""),
-            description_html=description_html, description_plain=html_to_text(description_html),
+            description_html=description_html, description_plain=description_plain,
             apply_url=job_url, job_url=job_url,
             posted_at=raw.get("ExternalPostedStartDate") or listing.get("PostedDate"),
             updated_at=listing.get("PostingEndDate"), compensation=raw.get("Compensation"),
             questions=[], questions_state="not_available", raw_payload=dict(raw),
         )
+        qualifications = html_to_text(str(raw.get("ExternalQualificationsStr") or ""))
+        if qualifications:
+            row["requirements"] = qualifications
         row["locations"] = [item for item in dict.fromkeys([location] + secondary_names) if item]
         out.append(row)
     return out

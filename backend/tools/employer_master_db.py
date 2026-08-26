@@ -11,6 +11,9 @@ except ModuleNotFoundError:  # pragma: no cover
 
 IDENTITY_STATES = ("candidate", "verified", "quarantined", "rejected")
 MONITORING_STATES = ("candidate", "qualified", "monitoring", "rejected")
+HIRING_COHORT_STATES = (
+    "reservoir_candidate", "evidence_incomplete", "verified_hiring", "quarantined",
+)
 
 
 def ensure_schema() -> None:
@@ -45,6 +48,12 @@ def ensure_schema() -> None:
           monitoring_status         TEXT NOT NULL DEFAULT 'candidate'
                                     CHECK (monitoring_status IN
                                       ('candidate','qualified','monitoring','rejected')),
+          hiring_cohort_status      TEXT NOT NULL DEFAULT 'reservoir_candidate'
+                                    CHECK (hiring_cohort_status IN
+                                      ('reservoir_candidate','evidence_incomplete',
+                                       'verified_hiring','quarantined')),
+          hiring_cohort_evidence    JSONB NOT NULL DEFAULT '{}'::jsonb,
+          hiring_cohort_checked_at  TIMESTAMPTZ,
           qualification_evidence    JSONB NOT NULL DEFAULT '{}'::jsonb,
           canonical_company_id      BIGINT REFERENCES company_discovery(id),
           is_monitoring_representative BOOLEAN NOT NULL DEFAULT FALSE,
@@ -81,7 +90,11 @@ def ensure_schema() -> None:
         cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS identity_enrichment_provenance JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS identity_enrichment_gaps JSONB NOT NULL DEFAULT '{}'::jsonb")
         cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS identity_enriched_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS hiring_cohort_status TEXT NOT NULL DEFAULT 'reservoir_candidate' CHECK (hiring_cohort_status IN ('reservoir_candidate','evidence_incomplete','verified_hiring','quarantined'))")
+        cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS hiring_cohort_evidence JSONB NOT NULL DEFAULT '{}'::jsonb")
+        cur.execute("ALTER TABLE company_employer_master ADD COLUMN IF NOT EXISTS hiring_cohort_checked_at TIMESTAMPTZ")
         cur.execute("CREATE INDEX IF NOT EXISTS cem_target_population ON company_employer_master(in_target_population) WHERE in_target_population")
+        cur.execute("CREATE INDEX IF NOT EXISTS cem_hiring_cohort ON company_employer_master(hiring_cohort_status) WHERE in_target_population")
 
 
 def sync_source(source: str, records: list[dict]) -> int:
@@ -491,21 +504,18 @@ def consolidate_verified_domains() -> int:
 
 
 def refresh_identity_qualification() -> dict[str, int]:
-    """Promote complete identities to pre-monitoring crawl qualification only."""
+    """Verify identity only; hiring qualification requires observed job activity."""
     with company_db._cur(False) as cur:
         cur.execute("""
           UPDATE company_employer_master SET identity_status='candidate',
-            monitoring_status=CASE WHEN monitoring_status='qualified'
-              THEN 'candidate' ELSE monitoring_status END,
+            monitoring_status=CASE WHEN monitoring_status='qualified' THEN 'candidate'
+              ELSE monitoring_status END,
             qualification_evidence=qualification_evidence-'identity_gate',updated_at=now()
           WHERE in_target_population AND identity_status='verified'
             AND monitoring_status<>'monitoring'
         """)
         cur.execute("""
           UPDATE company_employer_master AS m SET identity_status='verified',
-            monitoring_status=CASE WHEN m.is_monitoring_representative
-              AND m.monitoring_status='candidate' THEN 'qualified'
-              ELSE m.monitoring_status END,
             qualification_evidence=m.qualification_evidence || jsonb_build_object(
               'identity_gate',jsonb_build_object('complete',true,'evaluated_at',now())),
             updated_at=now()
@@ -533,12 +543,14 @@ def refresh_identity_qualification() -> dict[str, int]:
         cur.execute("""
           SELECT COUNT(*) FILTER (WHERE identity_status='verified'),
             COUNT(*) FILTER (WHERE monitoring_status='qualified'),
+            COUNT(*) FILTER (WHERE hiring_cohort_status='verified_hiring'),
             COUNT(*) FILTER (WHERE is_monitoring_representative)
           FROM company_employer_master WHERE in_target_population
         """)
-        identity_verified, qualified, representatives = cur.fetchone()
+        identity_verified, qualified, hiring_verified, representatives = cur.fetchone()
     return {"promoted": promoted, "identity_verified": identity_verified,
-            "qualified": qualified, "representatives": representatives}
+            "qualified": qualified, "hiring_verified": hiring_verified,
+            "representatives": representatives}
 
 
 def record_search_attempts(rows: list[tuple[int, dict]]) -> int:
@@ -684,11 +696,12 @@ def counts() -> dict[str, int]:
                  COUNT(*) FILTER (WHERE NULLIF(headquarters,'') IS NOT NULL),
                  COUNT(*) FILTER (WHERE domain_verified),
                  COUNT(*) FILTER (WHERE identity_status='verified'),
+                 COUNT(*) FILTER (WHERE hiring_cohort_status='verified_hiring'),
                  COUNT(*) FILTER (WHERE monitoring_status='monitoring')
           FROM company_employer_master WHERE in_target_population
         """)
         total, mandatory, employees, industries, headquarters, domain_verified, \
-            identity_verified, monitoring = \
+            identity_verified, hiring_verified, monitoring = \
             cur.fetchone()
         cur.execute("SELECT COUNT(*) FROM company_employer_master")
         physical_total = cur.fetchone()[0]
@@ -696,4 +709,5 @@ def counts() -> dict[str, int]:
             "mandatory": mandatory, "employee_count": employees,
             "industry": industries, "headquarters": headquarters,
             "domain_verified": domain_verified, "identity_verified": identity_verified,
+            "hiring_verified": hiring_verified,
             "monitoring": monitoring}

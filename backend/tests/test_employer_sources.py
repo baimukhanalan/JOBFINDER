@@ -1,10 +1,45 @@
 import httpx
+import json
 
 from backend.tools.employer_sources import (
     MANDATORY_EMPLOYERS, fetch_employer_reservoir,
-    fetch_gleif_employer_candidates, mandatory_employer_records,
-    mark_employer_candidate, parse_employer_bindings, parse_everify_employer_page,
+    fetch_activity_employer_reservoir, fetch_gleif_employer_candidates,
+    mandatory_employer_records,
+    load_hiring_signal_employers, mark_employer_candidate, parse_employer_bindings,
+    parse_everify_employer_page,
 )
+
+
+def test_hiring_signal_manifest_requires_active_https_careers_or_ats_reference(tmp_path):
+    path = tmp_path / "hiring.json"
+    path.write_text(json.dumps([
+        {"employer": "Acme Support (remote team)", "hiring_remote_cs_now": "yes",
+         "apply_url": "Info: https://acme.example/careers and https://acme.wd1.myworkdayjobs.com/External"},
+        {"employer": "Paused Co", "hiring_remote_cs_now": "no",
+         "apply_url": "https://apply.workable.com/paused"},
+        {"employer": "No Signal", "hiring_remote_cs_now": "yes",
+         "apply_url": "https://example.test/about"},
+        {"employer": "Unsafe", "hiring_remote_cs_now": "yes",
+         "apply_url": "http://unsafe.example/jobs"},
+    ]), encoding="utf-8")
+    rows = load_hiring_signal_employers(path=path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["trade_name"] == "Acme Support"
+    assert row["ats"] == "workday"
+    assert row["ats_url"].startswith("https://acme.wd1.myworkdayjobs.com/")
+    assert row["metadata"]["hiring_signal_present"] is True
+    assert row["metadata"]["legal_identity_unverified"] is True
+    assert row["metadata"]["employer_evidence"] == "official_careers_or_ats_reference"
+    assert len(row["metadata"]["hiring_references"]) == 2
+
+
+def test_repository_hiring_manifest_excludes_non_hiring_entries():
+    rows = load_hiring_signal_employers()
+    assert rows
+    assert "Boldr" not in {row["trade_name"] for row in rows}
+    assert all(row["careers_url"].startswith("https://") for row in rows)
+    assert all(row["metadata"]["source_manifest_field"] == "apply_url" for row in rows)
 
 
 def test_mandatory_seed_contains_original_mass_hiring_list():
@@ -102,6 +137,10 @@ def test_reservoir_combines_real_source_records_without_enrichment(monkeypatch):
 
     monkeypatch.setattr(sources, "mandatory_employer_records",
                         lambda: rows("mandatory_employer", 15))
+    monkeypatch.setattr(sources, "load_hiring_signal_employers",
+                        lambda **_: rows("hiring_signal_employer", 5))
+    monkeypatch.setattr(sources, "fetch_dol_lca_employers",
+                        lambda **_: rows("dol_oflc_lca", 5))
     monkeypatch.setattr(sources, "fetch_large_everify_employers",
                         lambda **_: rows("everify_large_employer", 20))
     monkeypatch.setattr(sources, "fetch_wikidata_employers",
@@ -111,11 +150,38 @@ def test_reservoir_combines_real_source_records_without_enrichment(monkeypatch):
     monkeypatch.setattr(sources, "fetch_gleif_employer_candidates",
                         lambda **_: rows("gleif_lei", 30))
     reservoir = fetch_employer_reservoir(
-        reservoir_min=100, everify_limit=20, wikidata_limit=25,
+        reservoir_min=110, hiring_signal_limit=5, dol_lca_limit=5,
+        everify_limit=20, wikidata_limit=25,
         usaspending_limit=10, gleif_limit=30)
-    assert len(reservoir) == 100
+    assert len(reservoir) == 110
     assert all(row["metadata"]["employer_candidate"] for row in reservoir)
-    assert not any(row.get("careers_url") for row in reservoir)
+    assert sum(row["source"] == "hiring_signal_employer" for row in reservoir) == 5
+    assert sum(row["source"] == "dol_oflc_lca" for row in reservoir) == 5
+
+
+def test_activity_reservoir_excludes_candidate_and_legal_only_sources(monkeypatch):
+    from backend.tools import employer_sources as sources
+
+    def rows(source, count):
+        return [mark_employer_candidate({
+            "source": source, "source_external_id": f"{source}-{i}",
+            "legal_name": f"Employer {source} {i}",
+            "trade_name": f"Employer {source} {i}", "country": "US", "metadata": {},
+        }) for i in range(count)]
+
+    monkeypatch.setattr(sources, "mandatory_employer_records",
+                        lambda: rows("mandatory_employer", 15))
+    monkeypatch.setattr(sources, "load_hiring_signal_employers",
+                        lambda **_: rows("hiring_signal_employer", 5))
+    monkeypatch.setattr(sources, "fetch_dol_lca_employers",
+                        lambda **_: rows("dol_oflc_lca", 30))
+    reservoir = fetch_activity_employer_reservoir(
+        reservoir_min=50, hiring_signal_limit=5, dol_lca_limit=30)
+    assert len(reservoir) == 50
+    assert {row["source"] for row in reservoir} == {
+        "mandatory_employer", "hiring_signal_employer", "dol_oflc_lca"}
+    assert not {"gleif_lei", "usaspending", "wikidata_employer"} & {
+        row["source"] for row in reservoir}
 
 
 def test_gleif_reservoir_partitions_by_us_jurisdiction():

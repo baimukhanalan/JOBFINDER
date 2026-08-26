@@ -154,6 +154,44 @@ def test_upsert_uses_source_identity_boundary(monkeypatch):
     assert len(values) == 1
 
 
+def test_second_acquisition_upsert_cannot_erase_verified_enrichment(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_cur(dict_rows=True):
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    identity = {"source": "gleif_lei", "source_external_id": "LEI-1",
+                "legal_name": "Acme Inc."}
+    db.upsert_records([{**identity,
+                        "domain": "acme.example",
+                        "careers_url": "https://acme.example/careers",
+                        "ats": "workday", "ats_slug": "acme",
+                        "ats_url": "https://acme.wd1.myworkdayjobs.com/acme",
+                        "domain_confidence": 0.98, "careers_confidence": 0.95,
+                        "provenance": {"web_enrichment": {"verified": True}}}])
+    db.upsert_records([{**identity,
+                        "domain": "", "careers_url": "", "ats": "",
+                        "ats_slug": "", "ats_url": "",
+                        "domain_confidence": 0.0, "careers_confidence": None,
+                        "provenance": {}}])
+
+    sql, values = cursor.calls[1]
+    assert "domain=COALESCE(NULLIF(BTRIM(company_discovery.domain),'')" in sql
+    assert "careers_url=COALESCE(NULLIF(BTRIM(company_discovery.careers_url),'')" in sql
+    assert "ats_url=COALESCE(NULLIF(BTRIM(company_discovery.ats_url),'')" in sql
+    assert ("domain_confidence=CASE WHEN company_discovery.domain_confidence>0 "
+            "THEN company_discovery.domain_confidence") in sql
+    assert ("provenance=COALESCE(company_discovery.provenance,'{}'::jsonb) || "
+            "COALESCE(EXCLUDED.provenance,'{}'::jsonb)") in sql
+    second = dict(zip(db._UPSERT_COLS, values[0]))
+    assert second["domain"] is None
+    assert second["ats"] is None
+    assert second["ats_slug"] is None
+    assert second["domain_confidence"] == 0.0
+
+
 def test_empty_upsert_does_not_open_database(monkeypatch):
     monkeypatch.setattr(db, "_cur", lambda *_: pytest.fail("database was opened"))
     assert db.upsert_records([]) == 0

@@ -6,12 +6,14 @@ has an authoritative legal-entity identifier.
 """
 from __future__ import annotations
 
-import time
 import hashlib
+import json
 import re
+import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from html.parser import HTMLParser
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -20,11 +22,13 @@ from backend.tools.company_sources import (
     GLEIF_LEI_RECORDS_URL, US_STATE_CODES, company_record,
     fetch_usaspending_recipients, parse_gleif_lei_records,
 )
+from backend.tools.employer_dol_lca import fetch_dol_lca_employers
 
 WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 USER_AGENT = "JobFinder-employer-master/1.0 (+https://github.com/baimukhanalan/JOBFINDER)"
 EVERIFY_MIRROR_URL = "https://h1btrack.com/e-verify/employers/"
+HIRING_INTEL_PATH = Path(__file__).resolve().parents[1] / "data" / "employer_intel.json"
 _BLOCKED_DOMAIN_SUFFIXES = (
     "facebook.com", "instagram.com", "linkedin.com", "linktr.ee", "x.com",
     "wikipedia.org", "youtube.com",
@@ -83,6 +87,10 @@ def mark_employer_candidate(record: dict) -> dict:
             "candidate_public_mirror", "workforce_range_10000_plus"),
         "wikidata_employer": (
             "candidate_structured", "published_employee_count_candidate"),
+        "hiring_signal_employer": (
+            "candidate_official_hiring_signal", "official_careers_or_ats_reference"),
+        "dol_oflc_lca": (
+            "candidate_official_hiring_activity", "certified_lca_worker_positions"),
         "usaspending": (
             "candidate_government_activity", "federal_award_recipient"),
         "gleif_lei": ("authoritative_registry", "legal_identity_only"),
@@ -104,10 +112,104 @@ def mark_employer_candidate(record: dict) -> dict:
         "risk_flags": sorted(set(risk_flags)),
         "employer_evidence_level": (
             "proven" if source in {"everify_large_employer", "wikidata_employer"}
-            else "activity_backed" if source == "usaspending" else "candidate"),
+            else "activity_backed" if source in {
+                "usaspending", "hiring_signal_employer", "dol_oflc_lca"
+            } else "candidate"),
     })
     out["metadata"] = metadata
     return out
+
+
+_HTTPS_URL = re.compile(r"https://[^\s)\]}]+", re.I)
+_HIRING_HINT = re.compile(r"(?:career|jobs?|hiring|apply|work[-_]?from[-_]?home)", re.I)
+_ATS_HOSTS = {
+    "greenhouse.io": "greenhouse", "lever.co": "lever", "ashbyhq.com": "ashby",
+    "myworkdayjobs.com": "workday", "icims.com": "icims",
+    "smartrecruiters.com": "smartrecruiters", "workable.com": "workable",
+    "oraclecloud.com": "oracle",
+}
+
+
+def _hiring_reference(url: str) -> tuple[str, str]:
+    clean = str(url or "").rstrip(".,;:'\"")
+    parsed = urlparse(clean)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    if parsed.scheme != "https" or not host:
+        return "", ""
+    ats = next((name for suffix, name in _ATS_HOSTS.items()
+                if host == suffix or host.endswith("." + suffix)), "")
+    if not ats and not _HIRING_HINT.search(f"{host}{parsed.path}"):
+        return "", ""
+    return clean, ats
+
+
+def _display_name(value: object) -> str:
+    name = str(value or "").strip()
+    return re.split(r"\s+(?:\(|—|\+)", name, maxsplit=1)[0].strip()
+
+
+def load_hiring_signal_employers(*, path: str | Path = HIRING_INTEL_PATH,
+                                 limit: int = 1000) -> list[dict]:
+    """Load curated employers only when an independent official hiring URL exists.
+
+    This adapter never reads the vacancy catalog.  Employer labels remain explicitly
+    unverified legal identities; the accepted fact is only the careers/ATS reference.
+    """
+    if limit < 1:
+        return []
+    source_path = Path(path)
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("hiring employer manifest must be a JSON list")
+    observed_at = datetime.fromtimestamp(
+        source_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+    records: list[dict] = []
+    seen: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        activity = str(item.get("hiring_remote_cs_now") or "").strip().casefold()
+        if activity not in {"yes", "few"}:
+            continue
+        references = []
+        for raw_url in _HTTPS_URL.findall(str(item.get("apply_url") or "")):
+            url, ats = _hiring_reference(raw_url)
+            if url and url not in {entry["url"] for entry in references}:
+                references.append({"url": url, "signal_type": "ats_board" if ats
+                                   else "official_careers", "ats": ats or None})
+        name = _display_name(item.get("employer"))
+        key = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")
+        if not name or not key or not references or key in seen:
+            continue
+        seen.add(key)
+        ats_reference = next((entry for entry in references if entry["ats"]), None)
+        primary = ats_reference or references[0]
+        primary_host = (urlparse(primary["url"]).hostname or "").lower().removeprefix("www.")
+        domain = "" if primary["ats"] else primary_host
+        record = company_record(
+            source="hiring_signal_employer", source_external_id=key,
+            source_url=primary["url"], source_observed_at=observed_at,
+            legal_name=name, trade_name=name, domain=domain,
+            careers_url=references[0]["url"], country="US",
+            ats=primary["ats"] or "", ats_url=primary["url"] if primary["ats"] else "",
+            metadata={
+                "brand_name": name,
+                "identity_name_type": "curated_employer_label",
+                "legal_identity_unverified": True,
+                "hiring_signal_present": True,
+                "hiring_signal_status": "source_asserted_official_reference",
+                "hiring_activity": activity,
+                "hiring_references": references,
+                "source_manifest": "backend/data/employer_intel.json",
+                "source_manifest_field": "apply_url",
+                "country_semantics": "US hiring market; not legal domicile evidence",
+            },
+        )
+        record["discovery_confidence"] = 0.80
+        records.append(mark_employer_candidate(record))
+        if len(records) >= limit:
+            break
+    return records
 
 
 class _EmployerTableParser(HTMLParser):
@@ -446,6 +548,8 @@ def fetch_gleif_employer_candidates(*, limit: int = 15000,
 
 
 def fetch_employer_reservoir(*, reservoir_min: int = 15000,
+                             hiring_signal_limit: int = 1000,
+                             dol_lca_limit: int = 15000,
                              everify_limit: int = 3000,
                              wikidata_limit: int = 5000,
                              usaspending_limit: int = 2000,
@@ -460,15 +564,41 @@ def fetch_employer_reservoir(*, reservoir_min: int = 15000,
     if reservoir_min < 1:
         raise ValueError("reservoir_min must be positive")
     mandatory = [mark_employer_candidate(row) for row in mandatory_employer_records()]
+    hiring_signals = load_hiring_signal_employers(limit=max(1, int(hiring_signal_limit)))
+    dol_lca = [mark_employer_candidate(row) for row in fetch_dol_lca_employers(
+        limit=max(1, int(dol_lca_limit)))]
     everify = fetch_large_everify_employers(limit=max(1, int(everify_limit)))
     wikidata = fetch_wikidata_employers(
         limit=max(1, int(wikidata_limit)), min_employees=min_employees)
     usaspending = [mark_employer_candidate(row) for row in fetch_usaspending_recipients(
         limit=max(1, int(usaspending_limit)), max_pages=20)]
     gleif = fetch_gleif_employer_candidates(limit=max(1, int(gleif_limit)))
-    reservoir = mandatory + everify + wikidata + usaspending + gleif
+    reservoir = mandatory + hiring_signals + dol_lca + everify + wikidata + usaspending + gleif
     if len(reservoir) < reservoir_min:
         raise RuntimeError(
             f"employer reservoir produced only {len(reservoir)} candidates; "
+            f"need at least {reservoir_min}")
+    return reservoir
+
+
+def fetch_activity_employer_reservoir(*, reservoir_min: int = 15_000,
+                                      hiring_signal_limit: int = 1_000,
+                                      dol_lca_limit: int = 15_000) -> list[dict]:
+    """Build the fast cohort reservoir from hiring-backed sources only."""
+    if reservoir_min < 1:
+        raise ValueError("reservoir_min must be positive")
+    mandatory = [mark_employer_candidate(row) for row in mandatory_employer_records()]
+    local_hiring = load_hiring_signal_employers(
+        limit=max(1, int(hiring_signal_limit)))
+    dol_lca = [mark_employer_candidate(row) for row in fetch_dol_lca_employers(
+        limit=max(1, int(dol_lca_limit)))]
+    reservoir = mandatory + local_hiring + dol_lca
+    allowed = {"mandatory_employer", "hiring_signal_employer", "dol_oflc_lca"}
+    unexpected = sorted({str(row.get("source") or "") for row in reservoir} - allowed)
+    if unexpected:
+        raise RuntimeError(f"activity-only reservoir contains disallowed sources: {unexpected}")
+    if len(reservoir) < reservoir_min:
+        raise RuntimeError(
+            f"activity-only employer reservoir produced only {len(reservoir)} candidates; "
             f"need at least {reservoir_min}")
     return reservoir

@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import threading
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
@@ -17,6 +20,8 @@ from backend.tools.employer_sources import USER_AGENT, WIKIDATA_API
 
 _BLOCKED = {"facebook.com", "instagram.com", "linkedin.com", "x.com",
             "wikipedia.org", "youtube.com"}
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+WIKIDATA_ENRICHMENT_CONTRACT = 1
 
 
 def _text(value) -> str | None:
@@ -305,62 +310,245 @@ def structured_row(record: dict, entity_id: str, entity: dict,
     }
 
 
+class WikidataRateLimiter:
+    """One global request cadence shared by all Wikidata workers."""
+    def __init__(self, interval: float) -> None:
+        self.interval = max(0.0, float(interval))
+        self.next_at = 0.0
+        self.lock = threading.Lock()
+
+    def wait(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            if self.next_at > now:
+                time.sleep(self.next_at - now)
+                now = time.monotonic()
+            self.next_at = max(now, self.next_at) + self.interval
+
+
+def _wikidata_json(client: httpx.Client, params: dict[str, str], *,
+                   limiter: WikidataRateLimiter, retries: int = 3,
+                   sleep=time.sleep) -> dict:
+    """Bounded retry for network failures, 429 and provider 5xx responses."""
+    last_error: Exception | None = None
+    for attempt in range(max(0, int(retries)) + 1):
+        limiter.wait()
+        try:
+            response = client.get(WIKIDATA_API, params=params)
+            status = int(getattr(response, "status_code", 200))
+            if status in _RETRYABLE_STATUS:
+                retry_after = getattr(response, "headers", {}).get("Retry-After", "")
+                try:
+                    delay = min(5.0, max(0.0, float(retry_after)))
+                except (TypeError, ValueError):
+                    delay = min(5.0, 0.25 * (2 ** attempt))
+                if attempt < max(0, int(retries)):
+                    sleep(delay)
+                    continue
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Wikidata response is not an object")
+            return payload
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            status = int(getattr(exc.response, "status_code", 0))
+            if status not in _RETRYABLE_STATUS:
+                break
+            if attempt < max(0, int(retries)):
+                sleep(min(5.0, 0.25 * (2 ** attempt)))
+                continue
+        except (httpx.TransportError, OSError, ValueError, AttributeError) as exc:
+            last_error = exc
+            if attempt < max(0, int(retries)):
+                sleep(min(5.0, 0.25 * (2 ** attempt)))
+                continue
+    raise RuntimeError("Wikidata request failed after bounded retries") from last_error
+
+
+def _list_wikidata_rows(*, limit: int, retry_transient: bool = False) -> list[dict]:
+    if retry_transient:
+        checkpoint = " AND COALESCE(m.qualification_evidence#>>'{wikidata_enrichment,status}','')='transient'"
+    else:
+        checkpoint = " AND NOT (m.qualification_evidence ? 'wikidata_enrichment') AND NOT (m.qualification_evidence ? 'wikidata_entity')"
+    with company_db._cur() as cur:
+        cur.execute("""
+          SELECT m.company_id,m.brand_name,m.employee_count,m.employee_count_min,
+            m.employee_count_max,m.employee_size_source,m.industry,m.headquarters,
+            c.legal_name,c.trade_name
+          FROM company_employer_master m JOIN company_discovery c ON c.id=m.company_id
+          WHERE m.in_target_population AND m.identity_status IN ('candidate','quarantined')
+        """ + checkpoint + " ORDER BY m.company_id LIMIT %s",
+                    (max(1, min(int(limit), 10_000)),))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def _persist_wikidata_results(results: list[dict]) -> dict[str, int]:
+    counts = {"matched": 0, "no_match": 0, "transient": 0, "updated": 0}
+    if not results:
+        return counts
+    with company_db._cur(False) as cur:
+        for result in results:
+            status = str(result.get("status") or "")
+            if status not in counts or status == "updated":
+                continue
+            counts[status] += 1
+            checkpoint = json.dumps({
+                "status": status, "reason": result.get("reason"),
+                "retryable": status == "transient", "checked_at": datetime.now(
+                    timezone.utc).isoformat(timespec="seconds"),
+                "contract_version": WIKIDATA_ENRICHMENT_CONTRACT,
+            })
+            company_id = int(result["company_id"])
+            enriched = result.get("enriched")
+            if status == "matched" and isinstance(enriched, dict):
+                evidence = json.dumps(enriched.get("domain_evidence") or [])
+                qualification = json.dumps({
+                    **dict(enriched.get("qualification_evidence") or {}),
+                    "wikidata_enrichment": json.loads(checkpoint),
+                })
+                cur.execute("""
+                  UPDATE company_employer_master SET
+                    candidate_domain=COALESCE(%s,candidate_domain),
+                    identity_confidence=GREATEST(identity_confidence,%s),
+                    domain_evidence=COALESCE((SELECT jsonb_agg(e)
+                      FROM jsonb_array_elements(domain_evidence) e
+                      WHERE COALESCE(e->>'provider','')<>'wikidata'),'[]'::jsonb)
+                      || %s::jsonb,
+                    qualification_evidence=qualification_evidence || %s::jsonb,
+                    updated_at=now()
+                  WHERE company_id=%s AND in_target_population
+                """, (enriched.get("candidate_domain"),
+                      float(enriched.get("identity_confidence") or 0), evidence,
+                      qualification, company_id))
+            else:
+                cur.execute("""
+                  UPDATE company_employer_master SET
+                    qualification_evidence=qualification_evidence ||
+                      jsonb_build_object('wikidata_enrichment',%s::jsonb),updated_at=now()
+                  WHERE company_id=%s AND in_target_population
+                """, (checkpoint, company_id))
+            counts["updated"] += cur.rowcount
+    return counts
+
+
+def _title_chunk(client: httpx.Client, chunk: list[dict], *,
+                 limiter: WikidataRateLimiter, retries: int) -> dict:
+    titles = []
+    for row in chunk:
+        titles.extend(str(row.get(field) or "").strip()
+                      for field in ("brand_name", "legal_name") if row.get(field))
+    return _wikidata_json(client, {
+        "action": "wbgetentities", "sites": "enwiki",
+        "titles": "|".join(dict.fromkeys(titles)),
+        "props": "labels|aliases|claims", "languages": "en",
+        "redirects": "yes", "format": "json", "origin": "*",
+    }, limiter=limiter, retries=retries)
+
+
 def enrich_structured(*, limit: int = 2000, min_interval: float = 0.25,
+                      workers: int = 4, checkpoint_size: int = 200,
+                      retries: int = 3, retry_transient: bool = False,
                       client: httpx.Client | None = None) -> dict:
-    rows = master_db.list_candidates(limit=limit)
+    """Concurrent exact-label Wikidata enrichment with commit-per-batch resume."""
+    worker_count = max(1, min(int(workers), 4))
+    batch_size = max(1, min(int(checkpoint_size), 500))
+    rows = _list_wikidata_rows(limit=limit, retry_transient=retry_transient)
     owned = client is None
     client = client or httpx.Client(timeout=httpx.Timeout(30.0),
                                     headers={"User-Agent": USER_AGENT})
-    matches: list[tuple[dict, str, dict]] = []
-    linked_ids: set[str] = set()
+    limiter = WikidataRateLimiter(min_interval)
+    totals = {"matched": 0, "no_match": 0, "transient": 0, "updated": 0}
+    batches = errors = processed = 0
+    last_company_id = 0
     try:
-        for start in range(0, len(rows), 10):
-            chunk = rows[start:start + 10]
-            titles = []
-            for row in chunk:
-                titles.extend(str(row.get(field) or "").strip()
-                              for field in ("brand_name", "legal_name") if row.get(field))
-            response = client.get(WIKIDATA_API, params={
-                "action": "wbgetentities", "sites": "enwiki",
-                "titles": "|".join(dict.fromkeys(titles)),
-                "props": "labels|aliases|claims", "languages": "en",
-                "redirects": "yes", "format": "json", "origin": "*",
+        for batch_start in range(0, len(rows), batch_size):
+            batch = rows[batch_start:batch_start + batch_size]
+            chunks = [batch[start:start + 25] for start in range(0, len(batch), 25)]
+            entity_matches: dict[int, list[tuple[str, dict]]] = defaultdict(list)
+            transient_ids: set[int] = set()
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {pool.submit(_title_chunk, client, chunk, limiter=limiter,
+                                       retries=retries): chunk for chunk in chunks}
+                for future in as_completed(futures):
+                    chunk = futures[future]
+                    try:
+                        entities = (future.result().get("entities") or {})
+                    except Exception:
+                        errors += 1
+                        transient_ids.update(int(row["company_id"]) for row in chunk)
+                        continue
+                    for entity_id, entity in entities.items():
+                        if entity_id == "-1" or entity.get("missing") is not None:
+                            continue
+                        entity_names = _names(entity)
+                        matched_rows = [row for row in chunk if entity_names & {
+                            company_db.normalize_company_name(row.get("brand_name")),
+                            company_db.normalize_company_name(row.get("legal_name")),
+                        }]
+                        if len(matched_rows) == 1:
+                            entity_matches[int(matched_rows[0]["company_id"])].append(
+                                (entity_id, entity))
+
+            unique_matches = {company_id: items[0] for company_id, items in entity_matches.items()
+                              if len(items) == 1 and company_id not in transient_ids}
+            linked_ids = sorted({
+                _entity_id(value) for _company_id, (_qid, entity) in unique_matches.items()
+                for prop in ("P452", "P159") for value, _claim in _claim_values(entity, prop)
+                if _entity_id(value).startswith("Q")
             })
-            response.raise_for_status()
-            entities = (response.json().get("entities") or {})
-            for entity_id, entity in entities.items():
-                if entity_id == "-1" or entity.get("missing") is not None:
+            linked_labels: dict[str, str] = {}
+            label_failed = False
+            label_chunks = [linked_ids[start:start + 50]
+                            for start in range(0, len(linked_ids), 50)]
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = [pool.submit(_wikidata_json, client, {
+                    "action": "wbgetentities", "ids": "|".join(chunk),
+                    "props": "labels", "languages": "en", "format": "json", "origin": "*",
+                }, limiter=limiter, retries=retries) for chunk in label_chunks]
+                for future in as_completed(futures):
+                    try:
+                        entities = future.result().get("entities") or {}
+                    except Exception:
+                        errors += 1
+                        label_failed = True
+                        continue
+                    for qid, entity in entities.items():
+                        label = (((entity.get("labels") or {}).get("en") or {}).get("value") or "")
+                        if label:
+                            linked_labels[qid] = label
+
+            results = []
+            for row in batch:
+                company_id = int(row["company_id"])
+                if company_id in transient_ids or (label_failed and company_id in unique_matches):
+                    results.append({"company_id": company_id, "status": "transient",
+                                    "reason": "wikidata_provider_error"})
                     continue
-                entity_names = _names(entity)
-                matched_rows = [row for row in chunk if entity_names & {
-                    company_db.normalize_company_name(row.get("brand_name")),
-                    company_db.normalize_company_name(row.get("legal_name")),
-                }]
-                if len(matched_rows) != 1:
+                matches = entity_matches.get(company_id) or []
+                if len(matches) != 1:
+                    results.append({"company_id": company_id, "status": "no_match",
+                                    "reason": "ambiguous_exact_entity" if len(matches) > 1
+                                    else "no_exact_entity"})
                     continue
-                matches.append((matched_rows[0], entity_id, entity))
-                for prop in ("P452", "P159"):
-                    linked_ids.update(_entity_id(value) for value, _ in _claim_values(entity, prop))
-            if min_interval:
-                time.sleep(max(0.0, min_interval))
-        linked_labels = {}
-        ordered = sorted(item for item in linked_ids if item.startswith("Q"))
-        for start in range(0, len(ordered), 50):
-            response = client.get(WIKIDATA_API, params={
-                "action": "wbgetentities", "ids": "|".join(ordered[start:start + 50]),
-                "props": "labels", "languages": "en", "format": "json", "origin": "*",
-            })
-            response.raise_for_status()
-            for qid, entity in (response.json().get("entities") or {}).items():
-                label = (((entity.get("labels") or {}).get("en") or {}).get("value") or "")
-                if label:
-                    linked_labels[qid] = label
-            if min_interval:
-                time.sleep(max(0.0, min_interval))
-        enriched = [result for row, entity_id, entity in matches
-                    if (result := structured_row(row, entity_id, entity, linked_labels))]
-        updated = master_db.update_structured_evidence(enriched)
-        return {"selected": len(rows), "matched": len(enriched), "updated": updated}
+                entity_id, entity = matches[0]
+                enriched = structured_row(row, entity_id, entity, linked_labels)
+                has_candidate = bool(enriched and enriched.get("candidate_domain"))
+                results.append({"company_id": company_id,
+                                "status": "matched" if has_candidate else "no_match",
+                                "reason": None if has_candidate else (
+                                    "official_website_missing" if enriched
+                                    else "exact_label_recheck_failed"),
+                                "enriched": enriched if has_candidate else None})
+            persisted = _persist_wikidata_results(results)
+            for key in totals:
+                totals[key] += persisted[key]
+            batches += 1
+            processed += len(batch)
+            last_company_id = max(int(row["company_id"]) for row in batch)
+        return {"selected": len(rows), "processed": processed, **totals,
+                "batches": batches, "last_company_id": last_company_id,
+                "workers": worker_count, "errors": errors}
     finally:
         if owned:
             client.close()
@@ -461,6 +649,13 @@ def main(argv: list[str] | None = None) -> int:
     bulk.add_argument("--max-batches", type=int)
     bulk.add_argument("--after-company-id", type=int, default=0)
     bulk.add_argument("--retry-incomplete", action="store_true")
+    wikidata = sub.add_parser("wikidata")
+    wikidata.add_argument("--limit", type=int, default=10_000)
+    wikidata.add_argument("--workers", type=int, default=4)
+    wikidata.add_argument("--min-interval", type=float, default=0.25)
+    wikidata.add_argument("--checkpoint-size", type=int, default=200)
+    wikidata.add_argument("--retries", type=int, default=3)
+    wikidata.add_argument("--retry-transient", action="store_true")
     sub.add_parser("stored-report")
     args = parser.parse_args(argv)
     master_db.ensure_schema()
@@ -469,6 +664,11 @@ def main(argv: list[str] | None = None) -> int:
             batch_size=args.batch_size, max_batches=args.max_batches,
             after_company_id=args.after_company_id,
             retry_incomplete=args.retry_incomplete)
+    elif args.command == "wikidata":
+        result = enrich_structured(
+            limit=args.limit, workers=args.workers, min_interval=args.min_interval,
+            checkpoint_size=args.checkpoint_size, retries=args.retries,
+            retry_transient=args.retry_transient)
     else:
         result = stored_identity_report()
     print(json.dumps(result, ensure_ascii=False, default=str))

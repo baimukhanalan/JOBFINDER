@@ -14,6 +14,7 @@ def run_audit(*, expected: int = 10_000) -> dict:
           SELECT COUNT(*) total,
             COUNT(*) FILTER (WHERE mandatory_seed) mandatory,
             COUNT(*) FILTER (WHERE identity_status='verified') identity_verified,
+            COUNT(*) FILTER (WHERE hiring_cohort_status='verified_hiring') hiring_verified,
             COUNT(*) FILTER (WHERE monitoring_status='qualified') qualified,
             COUNT(*) FILTER (WHERE monitoring_status='monitoring') monitoring
           FROM company_employer_master WHERE in_target_population
@@ -22,6 +23,7 @@ def run_audit(*, expected: int = 10_000) -> dict:
         total = population["total"]
         mandatory = population["mandatory"]
         identity_verified = population["identity_verified"]
+        hiring_verified = population["hiring_verified"]
         qualified = population["qualified"]
         monitoring = population["monitoring"]
         cur.execute("SELECT COUNT(*) physical_total FROM company_employer_master")
@@ -35,7 +37,8 @@ def run_audit(*, expected: int = 10_000) -> dict:
             OR (m.employee_count IS NULL AND m.employee_count_min IS NULL)
             OR NULLIF(m.industry,'') IS NULL OR NULLIF(m.headquarters,'') IS NULL
             OR NOT m.domain_verified OR NULLIF(c.domain,'') IS NULL
-            OR NULLIF(c.careers_url,'') IS NULL OR NULLIF(c.ats,'') IS NULL)
+            OR NULLIF(c.careers_url,'') IS NULL OR NULLIF(c.ats,'') IS NULL
+            OR NULLIF(c.ats_slug,'') IS NULL)
         """)
         incomplete_employers = next(iter(cur.fetchone().values()))
         cur.execute("""
@@ -64,8 +67,47 @@ def run_audit(*, expected: int = 10_000) -> dict:
         invalid_verified_identities = next(iter(cur.fetchone().values()))
         cur.execute("""
           SELECT COUNT(*) FROM company_employer_master m
+          JOIN company_discovery c ON c.id=m.company_id
+          WHERE m.in_target_population AND m.hiring_cohort_status='verified_hiring' AND (
+            m.identity_status<>'verified' OR NOT m.domain_verified
+            OR m.entity_risk_flags ?| ARRAY[
+              'shell_or_shared_services','fund_or_trust','aggregate_or_sentence_name']
+            OR NULLIF(c.domain,'') IS NULL OR NULLIF(c.careers_url,'') IS NULL
+            OR c.ats<>ALL(%s) OR NULLIF(c.ats_slug,'') IS NULL
+            OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(m.domain_evidence) e
+              WHERE e->>'class'='structured_corporate_source'
+                AND regexp_replace(lower(COALESCE(e->>'candidate_domain',e->>'domain','')),
+                                   '^www\\.','')=
+                    regexp_replace(lower(c.domain),'^www\\.',''))
+            OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(m.domain_evidence) e
+              WHERE e->>'class'='official_site_identity' AND regexp_replace(lower(COALESCE(
+                NULLIF(e->>'domain',''),
+                split_part(split_part(COALESCE(e->>'homepage_url',e->>'url',''),'://',2),'/',1)
+              )),'^www\\.','')=regexp_replace(lower(c.domain),'^www\\.',''))
+            OR NOT EXISTS (SELECT 1 FROM company_remote_job_scans s
+              WHERE s.company_id=m.company_id AND s.scan_complete AND s.scan_succeeded
+                AND lower(BTRIM(s.source))=lower(BTRIM(c.ats))
+                AND lower(BTRIM(s.source_board_id))=lower(BTRIM(c.ats_slug)))
+            OR NOT EXISTS (SELECT 1 FROM company_remote_jobs j
+              JOIN company_remote_job_scans s ON s.id=j.last_scan_id
+              WHERE j.company_id=m.company_id AND j.status='active'
+                AND s.scan_complete AND s.scan_succeeded
+                AND lower(BTRIM(j.source))=lower(BTRIM(c.ats))
+                AND lower(BTRIM(j.source_board_id))=lower(BTRIM(c.ats_slug)))
+          )
+        """, (list(SUPPORTED_ATS),))
+        invalid_verified_hiring = next(iter(cur.fetchone().values()))
+        cur.execute("""
+          SELECT COUNT(*) FROM company_employer_master
+          WHERE in_target_population AND monitoring_status IN ('qualified','monitoring')
+            AND hiring_cohort_status<>'verified_hiring'
+        """)
+        unverified_qualified = next(iter(cur.fetchone().values()))
+        cur.execute("""
+          SELECT COUNT(*) FROM company_employer_master m
           WHERE m.in_target_population AND m.monitoring_status='monitoring' AND (
-            m.identity_status<>'verified' OR NOT m.is_monitoring_representative
+            m.identity_status<>'verified' OR m.hiring_cohort_status<>'verified_hiring'
+            OR NOT m.is_monitoring_representative
             OR m.score_confidence<0.7 OR m.remote_score<40
             OR m.mass_hiring_score<50 OR m.hiring_activity_score<45
             OR NOT EXISTS (
@@ -84,6 +126,7 @@ def run_audit(*, expected: int = 10_000) -> dict:
             m.in_target_population AND
             j.status='active' AND j.remote_type='remote' AND j.questions_status='success'
             AND m.identity_status='verified' AND m.monitoring_status='monitoring'
+            AND m.hiring_cohort_status='verified_hiring'
             AND m.is_monitoring_representative AND m.score_confidence>=0.7
             AND m.remote_score>=40 AND m.mass_hiring_score>=50
             AND m.hiring_activity_score>=45)
@@ -106,6 +149,8 @@ def run_audit(*, expected: int = 10_000) -> dict:
         "incomplete_employers": int(incomplete_employers),
         "invalid_domain_evidence": int(invalid_domain_evidence),
         "invalid_verified_identities": int(invalid_verified_identities),
+        "invalid_verified_hiring_cohort": int(invalid_verified_hiring),
+        "unverified_qualified_employers": int(unverified_qualified),
         "invalid_monitoring": int(invalid_monitoring),
         "invalid_application_queue": int(invalid_queue),
         "duplicate_monitoring_domains": int(duplicate_monitoring_domains),
@@ -115,6 +160,7 @@ def run_audit(*, expected: int = 10_000) -> dict:
         "active_total": int(total), "physical_total": int(physical_total),
         "mandatory": int(mandatory),
         "identity_verified": int(identity_verified), "qualified": int(qualified),
+        "hiring_verified": int(hiring_verified),
         "monitoring": int(monitoring), "blockers": blockers,
         "passed": not any(blockers.values()),
     }

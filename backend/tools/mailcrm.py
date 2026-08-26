@@ -55,8 +55,7 @@ DEFAULT_KEYWORDS = {
     # being missed (Salmon HR-interview invite, GoFasti "won't be able to move forward").
     "interview": [
         "interview invitation", "invitation to interview", "invitation to an interview",
-        "invitation to a technical interview", "hr interview", "schedule an interview",
-        "schedule interview", "phone screen invitation", "invite you to an interview",
+        "invitation to a technical interview", "hr interview", "schedule your interview", "to schedule your interview", "phone screen invitation", "invite you to an interview",
         "invite you for an interview", "invite you to schedule", "would like to invite you to an interview",
         "schedule a first interview", "confirmation of your upcoming interview",
         "choose a time for your interview", "select a time for your interview",

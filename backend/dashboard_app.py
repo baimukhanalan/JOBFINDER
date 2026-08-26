@@ -1192,15 +1192,15 @@ def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,
     run = bulk_log.start(len(job_ids))
     with _FILL_ALL_LOCK:
         _FILL_ALL["run_id"] = run["run_id"]
-    # captcha / non-auto-submit ATS → ledger immediately (a human finishes them in noVNC)
-    for jid, job in captcha:
-        try:
-            bulk_log.record(run, jobid=jid, company=(job or {}).get("company", ""),
-                            title=(job or {}).get("job_title", ""), state="needs_human",
-                            submit={"confirmed": False, "reason": "click_failed"})
-        except Exception:
-            pass
-        _bump(done=1, failed=1)
+    # Lever/Workable = a LIVE human captcha, unsolvable from this datacenter IP. Do NOT park them
+    # in «Незавершённые» — they accumulate to thousands the human will never captcha-solve (they
+    # re-inflated the ledger to 1775 on 2026-08-26). Count them as skipped so the run tally is
+    # honest; a specific Lever/Workable job can still be done by hand via the /catalog one-click.
+    if captcha:
+        _bump(done=len(captcha), failed=len(captcha))
+        logging.getLogger(__name__).info(
+            "skipped %d Lever/Workable captcha jobs — not parked (datacenter IP can't solve captcha)",
+            len(captcha))
     try:
         if para and not _FILL_ALL_STOP.is_set():
             ports = bulk_pool.start_workers(min(n_workers, len(para)))

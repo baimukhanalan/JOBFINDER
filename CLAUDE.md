@@ -500,9 +500,12 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   2026-08-25). The confirmation email takes MINUTES, so the worker is held that long (adaptive scaling
   adds workers to compensate); a job that doesn't confirm within 5 min falls to «Незавершённые», where
   «Докрутить» finishes it on the single co-pilot's full 10-min watch. `_watch_submit` now returns True on
-  submit-detected so the inline path can set `submit_result["confirmed"]`. **Lever/Workable (and any non-`_PARA_ATS` = greenhouse/ashby)
-  go STRAIGHT to the «Незавершённые» ledger** (recorded `needs_human`, never auto-filled in bulk — a
-  human finishes the captcha via «Докрутить»). Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
+  submit-detected so the inline path can set `submit_result["confirmed"]`. **Lever/Workable (and any
+  non-`_PARA_ATS` = greenhouse/ashby) are SKIPPED in bulk, NOT parked (changed 2026-08-26).** They need a
+  LIVE human captcha unsolvable from this datacenter IP, so parking them as `needs_human` re-inflated
+  «Незавершённые» to 1775 with jobs no human would ever captcha-solve. The bulk lane now just `_bump`s
+  them as skipped (logs the count); a specific Lever/Workable job can still be done by hand via the
+  /catalog one-click. (Previously they were recorded `needs_human` with `reason=click_failed`.) Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
   submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are
   bumped under `_FILL_ALL_LOCK` (thread-safe). **`bulk_log`'s own shared-state files are now thread-safe
   too (2026-08-26):** the parallel lane's worker threads share one `run` dict and all call

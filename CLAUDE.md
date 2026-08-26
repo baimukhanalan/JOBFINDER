@@ -383,10 +383,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   (`.ashby-application-form-autofill-input-root` `data-state`), and the value+button-toggle signature
   unchanged across two reads (every re-render pass has landed) — before returning, so the analyzer fills onto
   a settled form. Verified live: a Cohere job that previously failed now returns "Your application has been
-  submitted!". The researcher's fallback option (a gated re-assert of button-toggles right before Submit in
-  `copilot._click_submit_after_fill`) was NOT needed — the settle-wait alone fixed it; if a future Ashby
-  variant still clobbers, that's the next lever (must use a NEW harvest that ignores the "answered" skip,
-  since that skip reads the same stale visual state). Tests: `test_dom_fixtures.py::test_ashby_autofill_waits_for_parser_settle`
+  submitted!". **PARTIAL though — ~1/3 of Cohere now submit; the rest still hit needs-correction because a
+  SECOND async Ashby pass lands AFTER the stability window returns and clobbers one screener** (verified: a
+  2-screener Cohere job where "based in Singapore?" committed but "Singaporean citizen?" stayed unbound). The
+  settle-wait can't fully win a non-deterministic multi-pass race. **Next lever (the real completion): a
+  gated re-assert in `copilot._click_submit_after_fill` — on `ev["blocked"]` matching "needs correction /
+  missing entry" AND `strategy=="ashby"`, re-click the flagged screener's known answer then re-submit ONCE.**
+  It's safe (fires only on an ACTUAL validation failure -> zero regression on working forms) but must use a
+  NEW button harvest that IGNORES the "answered" skip (that skip reads the same stale visual state that's
+  lying). Deferred 2026-08-26 (adding re-submit attempts under a load-16 bulk run was unwise then; the
+  settle-wait is a no-regression partial win). Tests: `test_dom_fixtures.py::test_ashby_autofill_waits_for_parser_settle`
   / `_noop_without_autofill_input`. Verify Ashby fill changes with a `dry_run` co-pilot fill on one Cohere +
   one known-good (elevenlabs) jobid.
 - **Structured Greenhouse Employment/Education work-history block.** Newer Greenhouse hosted forms render

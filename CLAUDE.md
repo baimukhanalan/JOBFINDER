@@ -368,6 +368,27 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a dash+copilot restart is all it takes to go live (no `_SCRAPE_V` bump). Tests: `test_dom_fixtures.py`
   (reveal+fill / plain textarea / no-touch-other / no-op) + `test_catalog_drafts.py` (synthetic-only gating).
   NB the 7 `test_workable_*` DOM failures are PRE-EXISTING (a stale datepicker assertion), unrelated.
+- **Ashby "Autofill from resume" clobbers screener fills — wait for it to SETTLE (2026-08-26).** Some Ashby
+  forms (Cohere, all ~23 in a run) have an "Upload resume to autofill" parser input (separate from the
+  `_systemfield_resume` attachment). Ashby parses the résumé server-side and **RE-RENDERS its controlled
+  form state in one or more ASYNC passes.** `ashby.autofill_from_resume` used to return as soon as ONE text
+  field populated (+1500ms) — often BEFORE the screener re-render — so the analyzer's subsequent fill (e.g.
+  the required "Are you authorized to work in the country you currently reside in?" Yes/No **button-toggle**,
+  filled by `dropdowns.apply_button_choice` — a sound Playwright click, NOT the bug) ran between passes and a
+  later pass **unbound it from React state**: submit then failed **"Your form needs corrections — Missing
+  entry for required field: …"** while the button still SHOWED selected (different jobs flagged different
+  fields = a pure timing race). Fix (`ashby.py` only → zero regression to GH/Lever/Workable or non-autofill
+  Ashby like elevenlabs/Salmon/1Password, which have no autofill input): `autofill_from_resume` now waits
+  until the form is STABLE — a field populated, no `parsing/pending` indicator visible
+  (`.ashby-application-form-autofill-input-root` `data-state`), and the value+button-toggle signature
+  unchanged across two reads (every re-render pass has landed) — before returning, so the analyzer fills onto
+  a settled form. Verified live: a Cohere job that previously failed now returns "Your application has been
+  submitted!". The researcher's fallback option (a gated re-assert of button-toggles right before Submit in
+  `copilot._click_submit_after_fill`) was NOT needed — the settle-wait alone fixed it; if a future Ashby
+  variant still clobbers, that's the next lever (must use a NEW harvest that ignores the "answered" skip,
+  since that skip reads the same stale visual state). Tests: `test_dom_fixtures.py::test_ashby_autofill_waits_for_parser_settle`
+  / `_noop_without_autofill_input`. Verify Ashby fill changes with a `dry_run` co-pilot fill on one Cohere +
+  one known-good (elevenlabs) jobid.
 - **Structured Greenhouse Employment/Education work-history block.** Newer Greenhouse hosted forms render
   an EMPLOYMENT block (Company name, Title, Start/End date month+year, a 'Current role' checkbox) and an
   EDUCATION block (School, Discipline, Degree). `materialize_prefill` supplies these as exact-label known

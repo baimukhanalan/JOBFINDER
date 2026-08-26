@@ -776,6 +776,8 @@ _UNFIXABLE_JOBIDS = {"3462", "33445"}   # oscar / hioscar (per CLAUDE.md)
 
 
 _DRAIN_MAX_RETRIES = 3   # re-run a fixable unfinished job this many times, then drop it dead
+_DRAIN_TRANSIENT_MAX = 6  # higher cap for TRANSIENT worker failures (ReadTimeout etc.) — the job is
+#                           fillable; only the over-parallel run timed out. Don't discard it early.
 _DRAIN_SPAM_MAX = 1      # an Ashby datacenter-IP spam-block can't succeed from the same IP —
 #                          drop after 1 retry instead of 3 so we don't keep re-spamming Ashby.
 _SPAM_BLOCK_RE = re.compile(r"couldn|spam|flagged", re.I)
@@ -810,7 +812,11 @@ def _drain_partition(jobs) -> tuple[list[int], list[str]]:
         if _SPAM_BLOCK_RE.search(str(job.get("blocked") or "")) and retries >= _DRAIN_SPAM_MAX:
             drop.append(jid); continue                # Ashby datacenter-IP spam — re-running from
             #                                           the same IP just re-spams; drop after 1 try
-        if retries >= _DRAIN_MAX_RETRIES:
+        # A TRANSIENT worker failure (ReadTimeout etc. from LLM-contended over-parallelism) is not
+        # the job's fault — the same form fills fine at low concurrency — so give it a higher retry
+        # cap instead of discarding a fillable job as dead.
+        transient = bool(_TRANSIENT_ERR_RE.search(str(job.get("error") or "")))
+        if retries >= (_DRAIN_TRANSIENT_MAX if transient else _DRAIN_MAX_RETRIES):
             drop.append(jid); continue                # exhausted — give up
         if st in ("error", "done"):
             try:
@@ -1050,6 +1056,13 @@ _PROXY_ERR_RE = re.compile(
     #                                          slow-proxy jobs errored without a retry (batch 5).
     r"|ERR_TUNNEL_CONNECTION|ERR_PROXY_CONNECTION|ERR_SOCKS|ERR_EMPTY_RESPONSE"
     r"|ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED|ProxyError|ConnectTimeout", re.I)
+# TRANSIENT (not the job's fault) worker failures — the fill was fine, the dashboard just lost the
+# HTTP call to a slow/contended worker (LLM-serialized fills blow the 300s timeout; the worker keeps
+# running and often submits). These MUST be retried and MUST NOT be counted toward the drain's
+# dead-drop — else a perfectly fillable job (samsara/natera) is discarded (root-caused 2026-08-26).
+_TRANSIENT_ERR_RE = re.compile(
+    r"ReadTimeout|read timed out|\btimed out\b|Connection refused|has been closed"
+    r"|ReadError|RemoteProtocolError|ConnectError", re.I)
 
 
 def _bump(*, done=0, ok=0, failed=0, current=None):
@@ -1227,7 +1240,14 @@ _ADAPT_INITIAL = 4            # start here, then ramp
 _ADAPT_STEP = 2              # workers added per sample when there's headroom
 _ADAPT_SAMPLE = 12          # seconds between resource samples
 _ADAPT_TARGET_CPU = 70      # %; this I/O-bound work rarely reaches it — RAM/load bind first
-_ADAPT_MAX = 18             # hard ceiling regardless of headroom
+# Hard ceiling. The ENTIRE parallel lane is _PARA_ATS (greenhouse/ashby), and every one of those
+# fills calls the SINGLE local LLM (127.0.0.1:8080) for choose_options + draft_answers. The
+# adaptive ramp gates on CPU/load/RAM — none of which sense LLM saturation — so at 12-18 workers
+# the one LLM serializes, per-fill time balloons to ~240s and blows the 300s _PER_JOB_TIMEOUT →
+# the dashboard ReadTimeouts WHILE the worker keeps filling+submitting, and the job is mis-recorded
+# as a permanent `error` (root-caused 2026-08-26). Capped at 6 to match real LLM throughput; this
+# also removes the RAM/swap pressure the 14-18-worker fleet caused.
+_ADAPT_MAX = 6              # hard ceiling — matches single-LLM throughput, not CPU headroom
 _ADAPT_RESERVE_MB = 6000    # never grow if free RAM would drop below this
 
 

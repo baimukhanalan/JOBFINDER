@@ -517,8 +517,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   and passes it to the worker's `/load` (one cursor). **`count` is OPTIONAL: empty = EVERY available job;
   a number = first `count`, clamped 1..20000. `workers` is ADAPTIVE by default (2026-08-25): empty/
   "auto"/0 → `_do_fill_all_adaptive` seeds 4 workers and ramps +2 every ~12s WHILE there's headroom —
-  CPU < 70% (`_ADAPT_TARGET_CPU`), 1-min load < 1.2×cores, and ≥6 GB RAM free — up to `_ADAPT_MAX`=18
-  (grow-only; drains as the queue empties). A NUMBER pins a fixed count (`_do_fill_all_parallel`, clamped
+  CPU < 70% (`_ADAPT_TARGET_CPU`), 1-min load < 1.2×cores, and ≥6 GB RAM free — up to `_ADAPT_MAX`=**6**
+  (grow-only; drains as the queue empties). **`_ADAPT_MAX` was lowered 18→6 on 2026-08-26: the ENTIRE
+  parallel lane is `_PARA_ATS` (GH/Ashby) and every fill calls the ONE local LLM (127.0.0.1:8080); the
+  ramp gates on CPU/load/RAM, none of which sense LLM saturation, so at 12-18 workers the single LLM
+  serialized, per-fill time ballooned to ~240s and blew the 300s `_PER_JOB_TIMEOUT` → the dashboard
+  ReadTimeout'd WHILE the worker kept filling+submitting, and the job was mis-recorded a permanent
+  `error` (113 such in one run + it drove swap to 100%). Do NOT raise `_ADAPT_MAX` back up without a
+  real LLM-latency probe. A `_TRANSIENT_ERR_RE` (ReadTimeout/Connection-refused/browser-closed) now
+  gives such jobs a higher drain retry cap (`_DRAIN_TRANSIENT_MAX`=6) so a fillable job isn't dropped
+  as dead. A NUMBER pins a fixed count (`_do_fill_all_parallel`, clamped
   1..18). NOTE the fills are I/O-bound (proxy/page/LLM waits) so CPU stays low — the real limiter is the
   **load-average gate**, not CPU%: measured ~216 MB RAM per idle worker, and adaptive ramped to ~12 and
   self-capped when load hit ~15-21 on the 12-core box (12/12 Ashby jobs submitted in ~4 min). Optionally

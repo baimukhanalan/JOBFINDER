@@ -70,7 +70,7 @@ _HUMAN_FILE_RE = re.compile(
 # NO demographic keyword — the signal ('Person with disability', 'Neurodivergent', 'Veteran',
 # 'Refugee') lives only in the options. Kept in sync with dropdowns._DEMOGRAPHIC / analyzer._skip.
 _DEMOGRAPHIC_LABEL_RE = re.compile(
-    r"(?i)(gender|rac(e|ial)|ethnic|veteran|military|armed\s*forces|disabilit|demographic|"
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|"
     r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|self.?identif"
     r"|under-?represented|marginali[sz]ed (?:group|communit)"
     r"|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
@@ -904,7 +904,7 @@ def apply_url_for_job(job: dict) -> str:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 9  # bump: drop stray postal_code key from synth persona profile (crashed Profile.from_dict in co-pilot /load)
+_SCRAPE_V = 10  # bump: axon military/armed-forces demographic false-positive removed (regenerate cached axon drafts)
 
 
 def ensure_and_wire(job_id: int, gender: str | None = None) -> tuple[str, str, bool]:

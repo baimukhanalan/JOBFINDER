@@ -12,20 +12,28 @@ from __future__ import annotations
 
 import html
 import hashlib
+import json
+import os
 import re
 import time
 from html.parser import HTMLParser
 from typing import Any, Callable, Iterable, Mapping
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse, urlunparse
 
 import httpx
 
+from backend.tools.company_enrichment import _get, extract_links
 
-SUPPORTED_ATS = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "workday")
+
+SUPPORTED_ATS = (
+    "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "workday",
+    "icims", "oracle", "successfactors", "eightfold", "custom",
+)
 USER_AGENT = "JobFinder-company-jobs/1.0 (+https://github.com/baimukhanalan/JOBFINDER)"
 REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
 MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 MAX_PAGES = 500
+MAX_PUBLIC_BOARD_PAGES = 50
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 _REMOTE_STRONG = re.compile(
@@ -543,7 +551,7 @@ def parse_workday_jobs(payload: Any, company_id: Any, slug: str, *,
             location=location, employment_type=str(employment),
             description_html=description_html, description_plain=html_to_text(description_html),
             apply_url=external_url, job_url=external_url,
-            posted_at=info.get("postedOn") or raw.get("postedOn"),
+            posted_at=info.get("startDate") or info.get("postedOn") or raw.get("postedOn"),
             updated_at=info.get("updatedOn"),
             compensation=info.get("compensation") or info.get("salary"),
             questions=[], questions_state="not_available", raw_payload=dict(raw),
@@ -553,14 +561,425 @@ def parse_workday_jobs(payload: Any, company_id: Any, slug: str, *,
     return out
 
 
+def parse_oracle_jobs(details: list[Mapping[str, Any]], company_id: Any, slug: str,
+                      *, public_base_url: str) -> list[dict]:
+    out = []
+    for raw in details:
+        listing = raw.get("_listing") if isinstance(raw.get("_listing"), Mapping) else {}
+        description_html = str(raw.get("ExternalDescriptionStr") or "")
+        location = str(raw.get("PrimaryLocation") or listing.get("PrimaryLocation") or "")
+        secondary = listing.get("secondaryLocations") or []
+        secondary_names = [str(item.get("Name") or "") for item in secondary
+                           if isinstance(item, Mapping) and item.get("Name")]
+        workplace = str(raw.get("WorkplaceType") or listing.get("WorkplaceType") or "")
+        if not _remote_confident(
+            explicit_remote="remote" in workplace.casefold(), workplace=workplace,
+            location=", ".join([location] + secondary_names),
+            title=str(raw.get("Title") or listing.get("Title") or ""),
+            description=html_to_text(description_html),
+        ):
+            continue
+        job_id = raw.get("Id") or listing.get("Id")
+        job_url = f"{public_base_url.rstrip('/')}/job/{quote(str(job_id), safe='')}"
+        row = _base(
+            ats="oracle", company_id=company_id, slug=slug, source_job_id=job_id,
+            title=str(raw.get("Title") or listing.get("Title") or ""),
+            department=str(raw.get("Category") or raw.get("JobFunction")
+                           or listing.get("JobFamily") or ""),
+            location=location,
+            employment_type=str(raw.get("JobSchedule") or raw.get("RequisitionType") or ""),
+            description_html=description_html, description_plain=html_to_text(description_html),
+            apply_url=job_url, job_url=job_url,
+            posted_at=raw.get("ExternalPostedStartDate") or listing.get("PostedDate"),
+            updated_at=listing.get("PostingEndDate"), compensation=raw.get("Compensation"),
+            questions=[], questions_state="not_available", raw_payload=dict(raw),
+        )
+        row["locations"] = [item for item in dict.fromkeys([location] + secondary_names) if item]
+        out.append(row)
+    return out
+
+
+class _JsonLdExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocks: list[str] = []
+        self._capture = False
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        values = {str(key).lower(): str(value or "").lower() for key, value in attrs}
+        if tag.lower() == "script" and "ld+json" in values.get("type", ""):
+            self._capture = True
+            self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._capture:
+            self._parts.append(str(data))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script" and self._capture:
+            self.blocks.append("".join(self._parts))
+            self._capture = False
+            self._parts = []
+
+
+def _jsonld_job_objects(value: Any) -> list[Mapping[str, Any]]:
+    out: list[Mapping[str, Any]] = []
+    if isinstance(value, Mapping):
+        kind = value.get("@type")
+        kinds = kind if isinstance(kind, list) else [kind]
+        if any(str(item).lower() == "jobposting" for item in kinds):
+            out.append(value)
+        for key in ("@graph", "itemListElement", "mainEntity"):
+            if key in value:
+                out.extend(_jsonld_job_objects(value[key]))
+    elif isinstance(value, list):
+        for item in value:
+            out.extend(_jsonld_job_objects(item))
+    return out
+
+
+def parse_structured_html_jobs(page_html: str, company_id: Any, slug: str, *,
+                               ats: str, page_url: str) -> list[dict]:
+    parser = _JsonLdExtractor()
+    try:
+        parser.feed(page_html or "")
+    except Exception:
+        return []
+    objects: list[Mapping[str, Any]] = []
+    for block in parser.blocks:
+        try:
+            objects.extend(_jsonld_job_objects(json.loads(block)))
+        except (ValueError, TypeError):
+            continue
+    out = []
+    for job in objects:
+        title = str(job.get("title") or job.get("name") or "")
+        description_html = str(job.get("description") or "")
+        location_type = str(job.get("jobLocationType") or "")
+        locations = job.get("jobLocation") or []
+        if not isinstance(locations, list):
+            locations = [locations]
+        location_parts = []
+        for location in locations:
+            address = (location or {}).get("address") if isinstance(location, Mapping) else {}
+            if isinstance(address, Mapping):
+                location_parts.append(", ".join(str(address.get(key) or "") for key in
+                                                ("addressLocality", "addressRegion", "addressCountry")
+                                                if address.get(key)))
+        location = "; ".join(part for part in location_parts if part)
+        explicit_remote = "telecommute" in location_type.casefold()
+        if not _remote_confident(explicit_remote=explicit_remote, workplace=location_type,
+                                 location=location, title=title,
+                                 description=html_to_text(description_html)):
+            continue
+        identifier = job.get("identifier") or ""
+        if isinstance(identifier, Mapping):
+            identifier = identifier.get("value") or identifier.get("name") or ""
+        job_url = str(job.get("url") or page_url)
+        employment = job.get("employmentType") or ""
+        if isinstance(employment, list):
+            employment = ", ".join(str(item) for item in employment)
+        out.append(_base(
+            ats=ats, company_id=company_id, slug=slug,
+            source_job_id=_stable_id(identifier, job_url), title=title,
+            department=str(job.get("occupationalCategory") or ""), location=location,
+            employment_type=str(employment), description_html=description_html,
+            description_plain=html_to_text(description_html),
+            apply_url=job_url, job_url=job_url, posted_at=job.get("datePosted"),
+            updated_at=job.get("validThrough"), compensation=job.get("baseSalary"),
+            questions=[], questions_state="not_available", raw_payload=dict(job),
+        ))
+    return out
+
+
+def _likely_job_detail(ats: str, url: str, board_url: str) -> bool:
+    parsed = urlparse(url)
+    board = urlparse(board_url)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    path = parsed.path.lower()
+    if ats == "icims":
+        return bool(re.search(r"/jobs?/\d+(?:/|$)", path))
+    if ats == "oracle":
+        return "/job/" in path or "jobid=" in parsed.query.lower()
+    if ats == "successfactors":
+        return ("jobreqcareer" in path or "jobid=" in parsed.query.lower()
+                or bool(re.search(r"/job/(?:[^/]+/)+\d+/?$", path)))
+    if ats == "eightfold":
+        return "/careers/job/" in path or "/jobs?/" in path
+    return (parsed.hostname == board.hostname and bool(re.search(r"/jobs?/[^/]+", path))
+            and url.rstrip("/") != board_url.rstrip("/"))
+
+
+class _JobPageText(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title: list[str] = []
+        self.headings: list[str] = []
+        self._capture = ""
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        values = {str(key).lower(): str(value or "") for key, value in attrs}
+        if tag.lower() == "meta" and values.get("property", "").lower() in {
+                "og:title", "twitter:title"} and values.get("content"):
+            self.headings.append(values["content"])
+        if tag.lower() in {"title", "h1"}:
+            self._capture = tag.lower()
+            self._parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._capture:
+            self._parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._capture == tag.lower():
+            value = " ".join(" ".join(self._parts).split())
+            if value:
+                (self.title if tag.lower() == "title" else self.headings).append(value)
+            self._capture = ""
+            self._parts = []
+
+
+def parse_public_job_detail(page_html: str, company_id: Any, slug: str, *,
+                            ats: str, page_url: str) -> dict | None:
+    parser = _JobPageText()
+    try:
+        parser.feed(page_html or "")
+    except Exception:
+        return None
+    plain = html_to_text(page_html)
+    title = next((value for value in parser.headings if len(value) >= 3), "")
+    if not title:
+        title = next((re.split(r"\s+[|–—-]\s+", value, maxsplit=1)[0]
+                      for value in parser.title if value), "")
+    location_match = re.search(
+        r"(?:^|\n)(?:location|locations|work location|job location)\s*[:\n]\s*([^\n]{2,160})",
+        plain, re.I,
+    )
+    location = location_match.group(1).strip() if location_match else ""
+    if not title or not _remote_confident(
+            location=location, title=title, description=plain):
+        return None
+    parsed = urlparse(page_url)
+    id_match = re.search(r"/(\d+)(?:/|$)", parsed.path)
+    if not id_match:
+        id_match = re.search(r"(?:jobid|jobId|jobreqid)=([^&]+)", parsed.query, re.I)
+    posted_match = re.search(
+        r"(?:^|\n)(?:date posted|posted|publish start date)\s*[:\n]\s*([^\n]{4,60})",
+        plain, re.I,
+    )
+    return _base(
+        ats=ats, company_id=company_id, slug=slug,
+        source_job_id=_stable_id(id_match.group(1) if id_match else "", page_url),
+        title=title, department="", location=location, employment_type="",
+        description_html=page_html, description_plain=plain,
+        apply_url=page_url, job_url=page_url,
+        posted_at=posted_match.group(1).strip() if posted_match else None,
+        updated_at=None, compensation=None, questions=[],
+        questions_state="not_available",
+        raw_payload={"page_url": page_url, "html": page_html},
+    )
+
+
+def _public_job_detail_recognized(page_html: str) -> bool:
+    """Distinguish a non-remote job page from an unparseable/challenge page."""
+    plain = html_to_text(page_html)
+    if re.search(r"\b(?:access denied|verify you are human|captcha|security challenge|"
+                 r"temporarily unavailable)\b", plain, re.I):
+        return False
+    parser = _JobPageText()
+    try:
+        parser.feed(page_html or "")
+    except Exception:
+        return False
+    return any(len(value.strip()) >= 3 for value in parser.headings + parser.title)
+
+
+def parse_eightfold_positions(payload: Any, company_id: Any, slug: str, *,
+                              careers_url: str = "") -> list[dict]:
+    """Normalize the authenticated Eightfold position-list response."""
+    if isinstance(payload, Mapping):
+        rows = payload.get("positions") or payload.get("results") or payload.get("data") or []
+        if isinstance(rows, Mapping):
+            rows = rows.get("positions") or rows.get("results") or rows.get("items") or []
+    else:
+        rows = payload
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for raw in rows:
+        if not isinstance(raw, Mapping):
+            continue
+        ats_data = raw.get("atsData") if isinstance(raw.get("atsData"), Mapping) else {}
+        description_html = str(
+            raw.get("jobDescriptionHtml") or raw.get("descriptionHtml")
+            or raw.get("jobDescription") or raw.get("description") or "")
+        description_plain = html_to_text(description_html)
+        locations = raw.get("locations") or raw.get("location") or []
+        if not isinstance(locations, list):
+            locations = [locations]
+        location_names = []
+        for location in locations:
+            if isinstance(location, Mapping):
+                value = location.get("name") or location.get("displayName") \
+                    or location.get("formattedAddress") or location.get("location")
+            else:
+                value = location
+            if value:
+                location_names.append(str(value))
+        location = "; ".join(dict.fromkeys(location_names))
+        workplace = str(raw.get("workplaceType") or raw.get("workplaceMode")
+                        or raw.get("workLocationType") or "")
+        explicit_remote = raw.get("isRemote") is True or raw.get("remote") is True
+        title = str(raw.get("name") or raw.get("title") or raw.get("positionName") or "")
+        if not _remote_confident(explicit_remote=explicit_remote, workplace=workplace,
+                                 location=location, title=title,
+                                 description=description_plain):
+            continue
+        job_id = raw.get("positionId") or raw.get("id") or raw.get("atsPositionId") \
+            or ats_data.get("atsPositionId") or ats_data.get("jobId")
+        job_url = str(raw.get("positionUrl") or raw.get("jobUrl") or raw.get("url")
+                      or ats_data.get("jobUrl") or ats_data.get("applyUrl") or careers_url)
+        apply_url = str(raw.get("applyUrl") or ats_data.get("applyUrl") or job_url)
+        row = _base(
+            ats="eightfold", company_id=company_id, slug=slug,
+            source_job_id=_stable_id(job_id, job_url, apply_url), title=title,
+            department=str(raw.get("department") or raw.get("jobFamily") or ""),
+            location=location,
+            employment_type=str(raw.get("employmentType") or raw.get("positionType") or ""),
+            description_html=description_html, description_plain=description_plain,
+            apply_url=apply_url, job_url=job_url,
+            posted_at=raw.get("postedAt") or raw.get("createdAt") or raw.get("startDate"),
+            updated_at=raw.get("updatedAt") or raw.get("lastModifiedAt"),
+            compensation=raw.get("compensation") or raw.get("salary"), questions=[],
+            questions_state="not_available", raw_payload=dict(raw),
+        )
+        row["locations"] = location_names
+        out.append(row)
+    return out
+
+
+def _public_board_url(ats: str, ats_url: str) -> str:
+    parsed = urlparse(ats_url)
+    if ats == "icims":
+        return urlunparse(parsed._replace(
+            path="/jobs/search", query=urlencode({"ss": "1", "in_iframe": "1"}),
+            fragment=""))
+    if ats == "successfactors" and "successfactors." not in (parsed.hostname or ""):
+        return urlunparse(parsed._replace(
+            path="/search/",
+            query=urlencode({"q": "", "sortColumn": "referencedate",
+                             "sortDirection": "desc"}), fragment=""))
+    return ats_url
+
+
+def _fetch_public_html_board(ats: str, slug: str, company_id: Any,
+                             ats_url: str | None, client: httpx.Client) -> JobFetchResult:
+    if not ats_url:
+        raise ValueError(f"{ats} requires a verified public ats_url or careers_url")
+    first_url = _public_board_url(ats, ats_url)
+    pending = [first_url]
+    seen_pages: set[str] = set()
+    detail_urls: list[str] = []
+    errors: list[str] = []
+    portal_label = (urlparse(first_url).hostname or "").split(".", 1)[0].casefold()
+    if ats == "icims" and re.match(r"events?(?:-|$)", portal_label):
+        # Event/microsite portals expose only a filtered subset and therefore can
+        # contribute jobs but can never authorize absence-based closures.
+        errors.append("iCIMS event portal is not an authoritative full job inventory")
+    zero_confirmed = False
+    while pending and len(seen_pages) < MAX_PUBLIC_BOARD_PAGES:
+        page_url = pending.pop(0)
+        if page_url in seen_pages:
+            continue
+        page = _get(client, page_url)
+        if page is None:
+            errors.append(f"job board page unavailable: {page_url}")
+            continue
+        final_url = str(page.url)
+        seen_pages.add(page_url)
+        page_text = html_to_text(page.text)
+        zero_confirmed = zero_confirmed or bool(re.search(
+            r"\b(?:0 jobs?|no (?:open )?(?:jobs|positions) (?:found|available))\b",
+            page_text, re.I))
+        for url, text in extract_links(page.text, final_url):
+            if _likely_job_detail(ats, url, final_url):
+                detail_urls.append(url)
+                continue
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            is_page = (ats == "icims" and "pr" in query) or (
+                ats == "successfactors" and "startrow" in query)
+            if is_page and url not in seen_pages and url not in pending:
+                pending.append(url)
+    if pending:
+        errors.append(
+            f"{ats} pagination exceeded {MAX_PUBLIC_BOARD_PAGES} public board pages")
+    jobs = []
+    unique_detail_urls = list(dict.fromkeys(detail_urls))
+    if len(unique_detail_urls) > MAX_PAGES:
+        errors.append(
+            f"{ats} job details exceeded bounded limit of {MAX_PAGES}")
+    for url in unique_detail_urls[:MAX_PAGES]:
+        detail = _get(client, url)
+        if detail is None:
+            errors.append(f"job detail unavailable: {url}")
+            continue
+        job = parse_public_job_detail(
+            detail.text, company_id, slug, ats=ats, page_url=str(detail.url))
+        if job:
+            jobs.append(job)
+        elif not _public_job_detail_recognized(detail.text):
+            errors.append(f"unparseable job detail: {url}")
+    if not detail_urls and not zero_confirmed:
+        errors.append("no public job-detail links or authoritative zero result detected")
+    unique = {(job["source_job_id"], job["job_url"]): job for job in jobs}
+    return _result(unique.values(), errors=errors)
+
+
+def _fetch_structured_html(ats: str, slug: str, company_id: Any, ats_url: str | None,
+                           client: httpx.Client) -> JobFetchResult:
+    board_url = str(ats_url or "").strip()
+    if not board_url:
+        raise ValueError(f"{ats} requires a verified public ats_url or careers_url")
+    board = _get(client, board_url)
+    if board is None:
+        raise JobSourceError(f"{ats} public careers page is unavailable")
+    jobs = parse_structured_html_jobs(board.text, company_id, slug, ats=ats,
+                                      page_url=str(board.url))
+    links = [url for url, _text in extract_links(board.text, str(board.url))
+             if _likely_job_detail(ats, url, str(board.url))]
+    errors: list[str] = []
+    seen_urls = {job["job_url"] for job in jobs}
+    for url in list(dict.fromkeys(links))[:MAX_PAGES]:
+        if url in seen_urls:
+            continue
+        detail = _get(client, url)
+        if detail is None:
+            errors.append(f"job detail unavailable: {url}")
+            continue
+        parsed = parse_structured_html_jobs(detail.text, company_id, slug, ats=ats,
+                                            page_url=str(detail.url))
+        jobs.extend(parsed)
+        seen_urls.update(job["job_url"] for job in parsed)
+    if not jobs and not links:
+        errors.append("no public structured job feed or job-detail links detected")
+    unique = {(job["source_job_id"], job["job_url"]): job for job in jobs}
+    return _result(unique.values(), errors=errors)
+
+
 def _request_json(client: httpx.Client, url: str, *, retries: int = 3,
                   sleep: Callable[[float], None] = time.sleep, method: str = "GET",
-                  json_body: Mapping[str, Any] | None = None) -> Any:
+                  json_body: Mapping[str, Any] | None = None,
+                  headers: Mapping[str, str] | None = None) -> Any:
     last_error: Exception | None = None
     for attempt in range(max(1, retries)):
         try:
+            request_headers = {"User-Agent": USER_AGENT, **dict(headers or {})}
             response = client.request(method, url, json=json_body, follow_redirects=True,
-                                      headers={"User-Agent": USER_AGENT})
+                                      headers=request_headers)
             if response.status_code in _RETRYABLE_STATUS and attempt + 1 < max(1, retries):
                 retry_after = response.headers.get("retry-after", "")
                 delay = float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 0.5 * (2 ** attempt)
@@ -687,7 +1106,8 @@ def _workday_context(slug: str, ats_url: str | None) -> tuple[str, str, str]:
     if len(parts) >= 4 and parts[:2] == ["wday", "cxs"]:
         tenant, site = parts[2], parts[3]
     else:
-        public_parts = [part for part in parts if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", part)]
+        public_parts = [part for part in parts
+                        if not re.fullmatch(r"[a-z]{2}-[a-z]{2}", part, re.I)]
         if "job" in public_parts:
             public_parts = public_parts[:public_parts.index("job")]
         site = public_parts[0] if public_parts else ""
@@ -709,7 +1129,11 @@ def _fetch_workday(slug: str, company_id: Any, ats_url: str | None,
     for _page_number in range(MAX_PAGES):
         page = _request_json(
             client, f"{cxs_base}/jobs", retries=retries, method="POST",
-            json_body={"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""},
+            # Workday search is server-side full text. Every job we can accept must
+            # expose a strong remote signal, so querying "remote" avoids downloading
+            # thousands of unrelated requisition details before the strict gate.
+            json_body={"appliedFacets": {}, "limit": limit, "offset": offset,
+                       "searchText": "remote"},
         )
         content = page.get("jobPostings") or page.get("jobs") or [] if isinstance(page, Mapping) else []
         if not isinstance(content, list):
@@ -760,9 +1184,128 @@ def _fetch_workday(slug: str, company_id: Any, ats_url: str | None,
     )
 
 
+def _oracle_context(ats_url: str | None) -> tuple[str, str, str]:
+    raw = str(ats_url or "").strip()
+    parsed = urlparse(raw)
+    if not parsed.hostname or not parsed.hostname.endswith("oraclecloud.com"):
+        raise ValueError("Oracle requires a verified oraclecloud.com CandidateExperience URL")
+    match = re.search(r"/hcmUI/CandidateExperience/(?:[a-z]{2}/)?sites/([^/]+)", parsed.path, re.I)
+    if not match:
+        raise ValueError("Oracle ats_url must include the public site number")
+    origin = f"https://{parsed.hostname}"
+    site = match.group(1)
+    public_base = f"{origin}/hcmUI/CandidateExperience/en/sites/{quote(site, safe='')}"
+    return origin, site, public_base
+
+
+def _fetch_oracle(slug: str, company_id: Any, ats_url: str | None,
+                  client: httpx.Client, retries: int) -> JobFetchResult:
+    origin, site, public_base = _oracle_context(ats_url)
+    endpoint = f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+    initial = _request_json(
+        client,
+        f"{endpoint}?onlyData=true&expand=workplaceTypesFacet,requisitionList.secondaryLocations"
+        f"&finder=findReqs;siteNumber={quote(site, safe='')},limit=1,offset=0",
+        retries=retries,
+    )
+    container = (initial.get("items") or [{}])[0] if isinstance(initial, Mapping) else {}
+    workplace_facets = container.get("workplaceTypesFacet") or []
+    remote_ids = [str(item.get("Id") or "") for item in workplace_facets
+                  if isinstance(item, Mapping) and "remote" in str(item.get("Name") or "").casefold()]
+    # A complete provider facet declaring only on-site jobs is authoritative zero.
+    if workplace_facets and not remote_ids:
+        return _result([])
+    selected = remote_ids[0] if remote_ids else ""
+    listings: list[Mapping[str, Any]] = []
+    offset = 0
+    limit = 50
+    for _page in range(MAX_PAGES):
+        selected_arg = f",selectedWorkplaceTypesFacet={quote(selected, safe='')}" if selected else ""
+        page = _request_json(
+            client,
+            f"{endpoint}?onlyData=true&expand=requisitionList.secondaryLocations"
+            f"&finder=findReqs;siteNumber={quote(site, safe='')},limit={limit},offset={offset}"
+            f"{selected_arg}", retries=retries,
+        )
+        value = (page.get("items") or [{}])[0] if isinstance(page, Mapping) else {}
+        rows = value.get("requisitionList") or []
+        listings.extend(item for item in rows if isinstance(item, Mapping))
+        total = int(value.get("TotalJobsCount") or len(listings))
+        if not rows or len(listings) >= total:
+            break
+        offset += len(rows)
+    else:
+        raise JobSourceError(f"Oracle pagination exceeded {MAX_PAGES} pages")
+    details = []
+    errors = []
+    detail_endpoint = f"{origin}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails"
+    for listing in listings:
+        job_id = str(listing.get("Id") or "")
+        if not job_id:
+            errors.append("Oracle listing without Id")
+            continue
+        try:
+            detail = _request_json(client, f"{detail_endpoint}/{quote(job_id, safe='')}?onlyData=true",
+                                   retries=retries)
+        except JobSourceError as exc:
+            errors.append(f"job {job_id} detail: {exc}")
+            continue
+        if isinstance(detail, Mapping):
+            details.append({**detail, "_listing": dict(listing)})
+    return _result(parse_oracle_jobs(details, company_id, slug, public_base_url=public_base),
+                   errors=errors)
+
+
+def _fetch_eightfold(slug: str, company_id: Any, ats_url: str | None,
+                     client: httpx.Client, retries: int,
+                     token: str | None = None) -> JobFetchResult:
+    """Use Eightfold's documented OAuth API; never treat missing auth as zero jobs."""
+    token = str(token or os.getenv("EIGHTFOLD_API_TOKEN") or "").strip()
+    if not token:
+        return _result([], errors=[
+            "Eightfold requires EIGHTFOLD_API_TOKEN or eightfold_token; "
+            "public PCS X pages are not an authoritative job feed",
+        ])
+    api_base = str(os.getenv("EIGHTFOLD_API_BASE")
+                   or "https://apiv2.eightfold.ai").rstrip("/")
+    limit = 100
+    start = 0
+    positions: list[Mapping[str, Any]] = []
+    errors: list[str] = []
+    for _page in range(MAX_PAGES):
+        url = (f"{api_base}/api/v2/core/positions?start={start}&limit={limit}"
+               "&include=atsData")
+        try:
+            payload = _request_json(
+                client, url, retries=retries,
+                headers={"Authorization": f"Bearer {token}"})
+        except JobSourceError as exc:
+            errors.append(str(exc))
+            break
+        if isinstance(payload, Mapping):
+            rows = payload.get("positions") or payload.get("results") or payload.get("data") or []
+            if isinstance(rows, Mapping):
+                rows = rows.get("positions") or rows.get("results") or rows.get("items") or []
+        else:
+            rows = payload
+        if not isinstance(rows, list):
+            errors.append("Eightfold position response has an unsupported shape")
+            break
+        positions.extend(item for item in rows if isinstance(item, Mapping))
+        if len(rows) < limit:
+            break
+        start += len(rows)
+    else:
+        errors.append(f"Eightfold pagination exceeded {MAX_PAGES} pages")
+    jobs = parse_eightfold_positions(
+        positions, company_id, slug, careers_url=str(ats_url or ""))
+    return _result(jobs, errors=errors)
+
+
 def fetch_remote_jobs(ats: str, slug: str, company_id: Any = None, *,
                       client: httpx.Client | None = None, retries: int = 3,
-                      ats_url: str | None = None) -> JobFetchResult:
+                      ats_url: str | None = None,
+                      eightfold_token: str | None = None) -> JobFetchResult:
     """Fetch remote jobs plus whether the board was complete enough for closures."""
     ats_key = (ats or "").strip().lower()
     slug = (slug or "").strip()
@@ -790,7 +1333,16 @@ def fetch_remote_jobs(ats: str, slug: str, company_id: Any = None, *,
             return _result(parse_workable_jobs(payload, company_id, slug))
         if ats_key == "smartrecruiters":
             return _fetch_smartrecruiters(slug, company_id, client, retries)
-        return _fetch_workday(slug, company_id, ats_url, client, retries)
+        if ats_key == "workday":
+            return _fetch_workday(slug, company_id, ats_url, client, retries)
+        if ats_key == "oracle":
+            return _fetch_oracle(slug, company_id, ats_url, client, retries)
+        if ats_key in {"icims", "successfactors"}:
+            return _fetch_public_html_board(ats_key, slug, company_id, ats_url, client)
+        if ats_key == "eightfold":
+            return _fetch_eightfold(
+                slug, company_id, ats_url, client, retries, eightfold_token)
+        return _fetch_structured_html(ats_key, slug, company_id, ats_url, client)
     finally:
         if owned:
             client.close()
@@ -800,4 +1352,6 @@ __all__ = [
     "SUPPORTED_ATS", "JobSourceError", "JobFetchResult", "fetch_remote_jobs", "html_to_text",
     "normalize_greenhouse_question", "parse_greenhouse_jobs", "parse_lever_jobs",
     "parse_ashby_jobs", "parse_workable_jobs", "parse_smartrecruiters_jobs", "parse_workday_jobs",
+    "parse_oracle_jobs", "parse_structured_html_jobs", "parse_public_job_detail",
+    "parse_eightfold_positions",
 ]

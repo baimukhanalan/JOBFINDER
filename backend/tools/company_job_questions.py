@@ -25,9 +25,13 @@ ScrapeState = Literal["complete", "partial", "failed"]
 
 _WS_RE = re.compile(r"\s+")
 _REQUIRED_SUFFIX_RE = re.compile(r"\s*(?:\*|\(required\)|required)\s*$", re.I)
+_HONEYPOT_LABEL_RE = re.compile(
+    r"(?:for\s+(?:robots|bots)\s+only|leave\s+(?:this\s+)?(?:field\s+)?blank|"
+    r"do\s+not\s+(?:fill|enter|complete).*(?:human|person))", re.I,
+)
 _KNOWN_ATS = {
     "ashby", "lever", "workable", "greenhouse", "smartrecruiters", "workday",
-    "generic", "custom",
+    "icims", "successfactors", "oracle", "generic", "custom",
 }
 def clean_text(value: Any) -> str:
     """Return human text in a stable, single-line Unicode representation."""
@@ -41,13 +45,16 @@ def normalize_label(value: Any) -> str:
 
 
 def normalize_type(value: Any) -> str:
-    raw = clean_text(value).lower().replace("-", "_").replace(" ", "_")
+    raw = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", clean_text(value))
+    raw = raw.lower().replace("-", "_").replace(" ", "_")
     aliases = {
         "string": "text", "input": "text", "tel": "phone", "telephone": "phone",
         "dropdown": "select", "single_select": "select", "radio": "choice",
-        "radio_group": "choice", "checkbox_group": "multi_select",
+        "radio_button": "choice", "radio_group": "choice",
+        "checkbox": "multi_select", "checkbox_group": "multi_select",
         "multiselect": "multi_select", "multi_choice": "multi_select",
-        "boolean": "choice", "long_text": "textarea", "file_upload": "file",
+        "multi_select_list": "multi_select", "boolean": "choice",
+        "long_text": "textarea", "rich_text": "textarea", "file_upload": "file",
     }
     return aliases.get(raw, raw or "text")
 
@@ -57,7 +64,8 @@ def _clean_options(values: Iterable[Any] | None) -> list[str]:
     seen: set[str] = set()
     for value in values or ():
         if isinstance(value, Mapping):
-            value = value.get("label", value.get("name", value.get("value", "")))
+            value = value.get("label", value.get("name", value.get(
+                "text", value.get("title", value.get("value", "")))))
         option = clean_text(value)
         key = option.casefold()
         if option and key not in seen:
@@ -82,10 +90,11 @@ def question_fingerprint(question: Mapping[str, Any]) -> str:
 def normalize_question(question: Mapping[str, Any], *, order: int = 0,
                        source: str = "rendered_form") -> dict[str, Any] | None:
     """Normalize one provider/DOM question into the acquisition schema."""
-    label = normalize_label(question.get("label") or question.get("question_text")
+    label = normalize_label(question.get("label") or question.get("displayName")
+                            or question.get("question") or question.get("question_text")
                             or question.get("title") or question.get("prompt")
                             or question.get("text"))
-    if not label:
+    if not label or _HONEYPOT_LABEL_RE.search(label):
         return None
     options = _clean_options(question.get("options") or question.get("values")
                              or question.get("choices"))
@@ -176,7 +185,8 @@ def build_application_url(ats: str, url: str) -> str:
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError("application URL must be an absolute http(s) URL")
     path = parts.path.rstrip("/") or "/"
-    suffix = {"ashby": "/application", "lever": "/apply", "workable": "/apply"}.get(ats_key)
+    suffix = {"ashby": "/application", "lever": "/apply", "workable": "/apply",
+              "workday": "/apply/applyManually"}.get(ats_key)
     if suffix and not path.lower().endswith(suffix):
         path = path.rstrip("/") + suffix
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
@@ -194,11 +204,11 @@ _EXTRACT_JS = r"""() => {
    if(el.id){const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`);if(l&&(s=textOnly(l)))return s;}
    const wrap=el.closest('label');if(wrap&&(s=textOnly(wrap)))return s;
    if((s=clean(el.getAttribute('aria-label'))))return s;
-   const c=el.closest('.ashby-application-form-field-entry,[class*="fieldEntry"],.application-question,[class*="application-question"],fieldset,[role="group"],[role="radiogroup"],li');
-   if(c){const l=c.querySelector('.ashby-application-form-question-title,.application-label,legend,[class*="question-title"],[class*="QuestionTitle"],[class*="_heading_"],label');if(l)return textOnly(l);}
+   const c=el.closest('.ashby-application-form-field-entry,[class*="fieldEntry"],.application-question,[class*="application-question"],[data-automation-id*="question" i],[class*="form-field" i],[class*="field-container" i],fieldset,[role="group"],[role="radiogroup"],li');
+   if(c){const l=c.querySelector('.ashby-application-form-question-title,.application-label,.field-label,.questionText,legend,[data-automation-id*="label" i],[class*="question-title"],[class*="QuestionTitle"],[class*="_heading_"],label');if(l)return textOnly(l);}
    return '';
  };
- const containerFor=el=>el.closest('.ashby-application-form-field-entry,[class*="fieldEntry"],.application-question,[class*="application-question"],fieldset,[role="group"],[role="radiogroup"],li')||el.parentElement;
+ const containerFor=el=>el.closest('.ashby-application-form-field-entry,[class*="fieldEntry"],.application-question,[class*="application-question"],[data-automation-id*="question" i],[class*="form-field" i],[class*="field-container" i],fieldset,[role="group"],[role="radiogroup"],li')||el.parentElement;
  const sectionFor=el=>{
    let n=containerFor(el);for(let i=0;i<6&&n;i++,n=n.parentElement){
      const own=n.querySelector(':scope > legend,:scope > h1,:scope > h2,:scope > h3,:scope > h4,:scope > [data-section-title]');
@@ -208,7 +218,7 @@ _EXTRACT_JS = r"""() => {
  const selectorFor=el=>el.id?`#${CSS.escape(el.id)}`:(el.name?`${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`:el.tagName.toLowerCase());
  const evidenceFor=el=>({source:'rendered_form',tag:el.tagName.toLowerCase(),input_type:el.type||'',id:el.id||'',name:el.name||'',role:el.getAttribute('role')||'',aria_labelledby:el.getAttribute('aria-labelledby')||'',selector:selectorFor(el),html:(el.outerHTML||'').slice(0,1000)});
  const optionLabel=el=>{const w=el.closest('label');if(w){const t=textOnly(w);if(t)return t;}if(el.id){const l=document.querySelector(`label[for="${CSS.escape(el.id)}"]`);if(l)return textOnly(l);}return clean(el.getAttribute('aria-label')||el.value);};
- const controls=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]),select,textarea,[role=combobox]')].filter(el=>visible(el)||el.type==='file');
+ const controls=[...document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]),select,textarea,[role=combobox],[role=textbox],[contenteditable=true]')].filter(el=>visible(el)||el.type==='file'||((el.type==='radio'||el.type==='checkbox')&&visible(containerFor(el))));
  const out=[], consumed=new Set();
  const groups=new Map();
  controls.filter(el=>el.matches('input[type=radio],input[type=checkbox]')).forEach(el=>{
@@ -219,20 +229,26 @@ _EXTRACT_JS = r"""() => {
  groups.forEach(g=>{g.members.forEach(el=>consumed.add(el));out.push({label:g.label,type:g.type,required:g.required,options:g.options,section:sectionFor(g.el),raw_evidence:{...evidenceFor(g.el),group_size:g.members.length}});});
  controls.filter(el=>!consumed.has(el)).forEach(el=>{
    const tag=el.tagName.toLowerCase();const role=el.getAttribute('role');
-   const type=tag==='select'||role==='combobox'?'select':tag==='textarea'?'textarea':(el.type||'text');
+   const type=tag==='select'||role==='combobox'?'select':tag==='textarea'||el.isContentEditable?'textarea':(el.type||'text');
    const options=tag==='select'?[...el.options].map(o=>clean(o.textContent)).filter(Boolean):[];
    out.push({label:labelFor(el),type,required:!!(el.required||el.getAttribute('aria-required')==='true'),options,section:sectionFor(el),raw_evidence:evidenceFor(el)});
  });
  // Ashby and custom forms sometimes implement choices as buttons only.
- document.querySelectorAll('.ashby-application-form-field-entry,[class*="fieldEntry"],[role=radiogroup]').forEach(c=>{
+ document.querySelectorAll('.ashby-application-form-field-entry,[class*="fieldEntry"],[data-automation-id*="question" i],[class*="form-field" i],[role=radiogroup]').forEach(c=>{
    const buttons=[...c.querySelectorAll('button')].filter(visible).map(b=>clean(b.textContent)).filter(t=>t&&!/^(submit|apply|next|back|upload)/i.test(t));
    if(buttons.length<2)return;const anchor=c.querySelector('button');const label=labelFor(anchor);if(label)out.push({label,type:'choice',required:c.getAttribute('aria-required')==='true',options:[...new Set(buttons)],section:sectionFor(anchor),raw_evidence:{...evidenceFor(anchor),group_size:buttons.length}});
  });
  const unlabeled=out.filter(q=>!clean(q.label)).length;
  const actionable=[...document.querySelectorAll('button,input[type=button],input[type=submit]')].filter(visible);
  const nextCount=actionable.filter(el=>/^(next|continue|save and continue)$/i.test(clean(el.innerText||el.value))).length;
- const challenge=!!document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],[class*="captcha" i]')||/captcha|verify you are human|access denied/i.test(document.title+' '+(document.body.innerText||'').slice(0,2000));
- return {questions:out, evidence:{url:location.href,title:document.title,form_count:document.forms.length,visible_control_count:controls.length,unlabeled_control_count:unlabeled,submit_control_count:document.querySelectorAll('button[type=submit],input[type=submit]').length,next_control_count:nextCount,challenge_detected:challenge}};
+ const bodyText=(document.body.innerText||'').slice(0,10000);
+ const challenge=!!document.querySelector('iframe[src*="recaptcha"],iframe[src*="hcaptcha"],[class*="captcha" i]')||/captcha|verify you are human|access denied/i.test(document.title+' '+bodyText.slice(0,2000));
+ const providerMultistep=/step\s+\d+\s+(?:of|\/)+\s*\d+/i.test(bodyText)||!!document.querySelector('[aria-current=step],[role=progressbar],[data-automation-id*="progress" i]');
+ const passwordVisible=[...document.querySelectorAll('input[type=password]')].some(visible);
+ const accountGate=passwordVisible||!!document.querySelector('[data-automation-id*="createAccount" i],[class*="create-account" i]')||/(?:sign|log)\s+in\s+(?:to|and)\s+(?:apply|continue)|create\s+(?:an?\s+)?account\s+(?:to|and)\s+(?:apply|continue)/i.test(bodyText);
+ const consentControl=controls.some(el=>el.type==='checkbox'&&(/consent|privacy|terms|data processing|agree/i.test(labelFor(el))));
+ const consentGate=consentControl||/(?:must|required to)\s+(?:agree|consent|accept)|consent\s+(?:is\s+)?required/i.test(bodyText);
+ return {questions:out, evidence:{url:location.href,title:document.title,form_count:document.forms.length,visible_control_count:controls.length,unlabeled_control_count:unlabeled,submit_control_count:document.querySelectorAll('button[type=submit],input[type=submit]').length,next_control_count:nextCount,challenge_detected:challenge,provider_multistep:providerMultistep,account_gate_detected:accountGate,consent_gate_detected:consentGate}};
 }"""
 
 
@@ -242,6 +258,70 @@ def _snapshot_signature(snapshot: Mapping[str, Any]) -> str:
         [(q["fingerprint"], q["required"], q["options"]) for q in questions],
         ensure_ascii=False, separators=(",", ":"),
     ).encode()).hexdigest()
+
+
+def _merge_frame_snapshots(snapshots: Sequence[tuple[int, str, Mapping[str, Any]]],
+                           *, frame_errors: int = 0) -> dict[str, Any]:
+    """Merge bounded, read-only snapshots from a page and its application frames."""
+    questions: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {
+        "frame_count": len(snapshots) + frame_errors,
+        "frames_read": len(snapshots),
+        "frame_error_count": frame_errors,
+        "frame_urls": [],
+    }
+    count_fields = (
+        "form_count", "visible_control_count", "unlabeled_control_count",
+        "submit_control_count", "next_control_count",
+    )
+    bool_fields = (
+        "challenge_detected", "provider_multistep", "account_gate_detected",
+        "consent_gate_detected",
+    )
+    for frame_index, frame_url, snapshot in snapshots:
+        frame_evidence = dict(snapshot.get("evidence") or {})
+        actual_url = clean_text(frame_evidence.get("url") or frame_url)
+        if actual_url and actual_url not in evidence["frame_urls"]:
+            evidence["frame_urls"].append(actual_url)
+        evidence.setdefault("url", actual_url)
+        evidence.setdefault("title", clean_text(frame_evidence.get("title")))
+        for field in count_fields:
+            evidence[field] = int(evidence.get(field) or 0) + int(
+                frame_evidence.get(field) or 0)
+        for field in bool_fields:
+            evidence[field] = bool(evidence.get(field) or frame_evidence.get(field))
+        for raw in snapshot.get("questions") or []:
+            if not isinstance(raw, Mapping):
+                continue
+            item = dict(raw)
+            raw_evidence = dict(item.get("raw_evidence") or {})
+            raw_evidence.update({"frame_index": frame_index, "frame_url": actual_url})
+            item["raw_evidence"] = raw_evidence
+            questions.append(item)
+    return {"questions": questions, "evidence": evidence}
+
+
+def _evaluate_all_frames(page: Any) -> dict[str, Any]:
+    """Evaluate the extraction pass in every readable frame, without DOM mutation."""
+    page_frames = getattr(page, "frames", None)
+    frames = list(page_frames) if isinstance(page_frames, Sequence) else [page]
+    if not frames:
+        frames = [page]
+    snapshots: list[tuple[int, str, Mapping[str, Any]]] = []
+    errors = 0
+    last_error: Exception | None = None
+    for frame_index, frame in enumerate(frames[:20]):
+        try:
+            snapshot = frame.evaluate(_EXTRACT_JS) or {"questions": [], "evidence": {}}
+            if not isinstance(snapshot, Mapping):
+                raise TypeError("frame snapshot is not an object")
+            snapshots.append((frame_index, clean_text(getattr(frame, "url", "")), snapshot))
+        except Exception as exc:
+            errors += 1
+            last_error = exc
+    if not snapshots:
+        raise RuntimeError("all frame extractions failed") from last_error
+    return _merge_frame_snapshots(snapshots, frame_errors=errors)
 
 
 def _poll_hydration(page: Any, *, cap_s: float = 12.0, interval_s: float = 0.5,
@@ -254,7 +334,7 @@ def _poll_hydration(page: Any, *, cap_s: float = 12.0, interval_s: float = 0.5,
     previous = ""
     reads = 0
     while True:
-        snapshot = page.evaluate(_EXTRACT_JS) or {"questions": [], "evidence": {}}
+        snapshot = _evaluate_all_frames(page)
         reads += 1
         if len(snapshot.get("questions") or []) >= len(best.get("questions") or []):
             best = snapshot
@@ -270,6 +350,10 @@ def _poll_hydration(page: Any, *, cap_s: float = 12.0, interval_s: float = 0.5,
 def _result(ats: str, source_url: str, form_url: str, state: ScrapeState,
             questions: list[dict[str, Any]], reasons: list[str],
             evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    scrape_evidence = dict(evidence or {})
+    # Machine-auditable safety invariant: this collector has no fill or submit path.
+    scrape_evidence["form_submission_attempted"] = False
+    scrape_evidence["action_controls_clicked"] = 0
     result = {
         "ats": clean_text(ats).lower() or "generic",
         "source_url": source_url,
@@ -278,7 +362,7 @@ def _result(ats: str, source_url: str, form_url: str, state: ScrapeState,
         "questions": questions,
         "question_count": len(questions),
         "reasons": reasons,
-        "scrape_evidence": dict(evidence or {}),
+        "scrape_evidence": scrape_evidence,
     }
     # Short aliases make the contract convenient for queue/CLI callers while the
     # more descriptive names remain self-documenting in stored acquisition JSON.
@@ -307,7 +391,13 @@ def _harvest_combobox_options(page: Any, raw_questions: list[dict[str, Any]], *,
             evidence["option_count_captured"] = 0
             continue
         try:
-            box = page.query_selector(selector)
+            target = page
+            page_frames = getattr(page, "frames", None)
+            frame_index = evidence.get("frame_index")
+            if isinstance(page_frames, Sequence) and isinstance(frame_index, int) \
+                    and 0 <= frame_index < len(page_frames):
+                target = page_frames[frame_index]
+            box = target.query_selector(selector)
             if box is None:
                 raise LookupError("combobox disappeared")
             # Playwright's default click wait is 30 seconds per control.  A
@@ -316,7 +406,7 @@ def _harvest_combobox_options(page: Any, raw_questions: list[dict[str, Any]], *,
             remaining_ms = max(100, min(1_500, int((deadline - clock()) * 1000)))
             box.click(timeout=remaining_ms)
             page.wait_for_timeout(250)
-            for node in page.query_selector_all(
+            for node in target.query_selector_all(
                     "[role='listbox'] [role='option'], [role='option']")[:100]:
                 text = clean_text(node.inner_text())
                 if text and text not in options:
@@ -368,6 +458,8 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     questions = normalize_questions(raw_questions)
     evidence = dict(snapshot.get("evidence") or {})
     evidence.update({"hydration_stable": stable, "hydration_reads": reads})
+    if clean_text(ats).lower() == "workday":
+        evidence["direct_apply_url_used"] = True
     reasons: list[str] = []
     if navigation_error:
         reasons.append(f"networkidle_failed:{navigation_error}")
@@ -380,11 +472,25 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     if unresolved_combos:
         reasons.append("combobox_options_unavailable")
         evidence["comboboxes_without_options"] = unresolved_combos
-    if int(evidence.get("next_control_count") or 0):
+    if int(evidence.get("next_control_count") or 0) or evidence.get("provider_multistep"):
         # We intentionally do not populate required fields to unlock later steps.
         reasons.append("multi_step_form_not_traversed")
+    if evidence.get("account_gate_detected"):
+        reasons.append("account_gate_not_traversed")
+    if evidence.get("consent_gate_detected"):
+        reasons.append("consent_gate_not_accepted")
+    if int(evidence.get("frame_error_count") or 0):
+        reasons.append("embedded_frame_unreadable")
     if evidence.get("challenge_detected"):
         reasons.append("anti_bot_challenge_detected")
+    gate_reasons = [reason for reason in reasons if reason in {
+        "multi_step_form_not_traversed", "account_gate_not_traversed",
+        "consent_gate_not_accepted", "embedded_frame_unreadable",
+        "anti_bot_challenge_detected",
+    }]
+    if gate_reasons:
+        evidence["coverage_scope"] = "visible_steps_only"
+        evidence["gate_reasons"] = gate_reasons
     visible = int(evidence.get("visible_control_count") or 0)
     if visible > len(questions) and not evidence.get("unlabeled_control_count"):
         # Groups legitimately collapse several controls into one question, so this is
@@ -393,7 +499,9 @@ def scrape_questions_with_page(page: Any, ats: str, url: str, *,
     state: ScrapeState = "complete" if questions and stable and not any(
         r in reasons for r in ("unlabelled_controls_present", "hydration_not_stable",
                                "combobox_options_unavailable", "multi_step_form_not_traversed",
-                               "anti_bot_challenge_detected")) else "partial"
+                               "account_gate_not_traversed", "consent_gate_not_accepted",
+                               "embedded_frame_unreadable", "anti_bot_challenge_detected")) \
+        else "partial"
     return _result(ats, url, form_url, state, questions, reasons, evidence)
 
 

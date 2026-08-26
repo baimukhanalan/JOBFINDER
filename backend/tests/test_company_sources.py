@@ -66,6 +66,12 @@ def test_gleif_parser_requires_us_general_entity_and_preserves_provenance():
     assert rows[0]["states"] == ["DE", "NY"]
     assert rows[0]["source_observed_at"] == "2026-08-25T08:00:00Z"
     assert rows[0]["metadata"]["registration_status"] == "ISSUED"
+    assert rows[0]["metadata"]["addresses"] == [
+        {"address_type": "registered",
+         "value": {"country": "US", "region": "US-DE"}},
+        {"address_type": "headquarters",
+         "value": {"country": "US", "region": "US-NY"}},
+    ]
 
 
 def test_gleif_fetch_paginates_deduplicates_retries_and_filters_general_active():
@@ -205,6 +211,22 @@ def test_usaspending_parser_and_pagination_deduplicate():
     assert rows[-1]["states"] == ["TX"]
 
 
+def test_usaspending_profile_preserves_official_location_and_business_types_only():
+    result = cs.parse_usaspending_recipient_profile({
+        "name": "Acme LLC", "alternate_names": ["Acme"], "uei": "UEI1",
+        "recipient_id": "hash-R", "recipient_level": "R",
+        "business_types": ["small_business"],
+        "location": {"address_line1": "1 Main", "city_name": "Austin",
+                     "state_code": "TX", "country_code": "USA"},
+        "employee_count": 999, "naics": "123456",
+    })
+    assert result["business_types"] == ["small_business"]
+    assert result["recipient_location"]["address_type"] == "recipient_location"
+    assert result["recipient_location"]["value"]["state_code"] == "TX"
+    assert "employee_count" not in result
+    assert "naics" not in result
+
+
 def test_sam_is_optional_without_key(monkeypatch):
     monkeypatch.delenv("SAM_API_KEY", raising=False)
     assert cs.fetch_sam_companies() == []
@@ -215,7 +237,9 @@ def test_sam_parser_and_fetch_pagination():
 
     def handler(request):
         requested_pages.append(int(request.url.params["page"]))
-        assert request.url.params["api_key"] == "secret-test-key"
+        assert request.headers["x-api-key"] == "secret-test-key"
+        assert "api_key" not in request.url.params
+        assert "secret-test-key" not in str(request.url)
         return httpx.Response(200, json={
             "entityData": [{
                 "entityRegistration": {

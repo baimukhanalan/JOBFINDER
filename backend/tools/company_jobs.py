@@ -68,6 +68,7 @@ def collect_company_jobs(
     collect_questions: bool = True,
     question_limit: int = 0,
     headless: bool = True,
+    company_id: int | None = None,
     store: Any = jobs_db,
     fetcher: Callable[..., list[dict]] = fetch_remote_jobs,
     question_scraper: Callable[..., dict] = scrape_questions,
@@ -79,11 +80,18 @@ def collect_company_jobs(
     jobs.  Question collection is authoritative only for a complete ATS API
     response or a complete rendered-form scrape.
     """
-    try:
-        targets = store.list_company_targets(
-            status=status, limit=limit_companies, supported_ats=SUPPORTED_ATS)
-    except TypeError:  # Backward-compatible custom/test stores.
-        targets = store.list_company_targets(status=status, limit=limit_companies)
+    if company_id is not None:
+        try:
+            target = store.get_company_target(company_id, supported_ats=SUPPORTED_ATS)
+        except TypeError:
+            target = store.get_company_target(company_id)
+        targets = [target] if target else []
+    else:
+        try:
+            targets = store.list_company_targets(
+                status=status, limit=limit_companies, supported_ats=SUPPORTED_ATS)
+        except TypeError:  # Backward-compatible custom/test stores.
+            targets = store.list_company_targets(status=status, limit=limit_companies)
     result = {
         "companies_selected": len(targets),
         "companies_succeeded": 0,
@@ -121,6 +129,7 @@ def collect_company_jobs(
             continue
         seen: list[str] = []
         pending_questions: list[tuple[int, dict, dict]] = []
+        scan_finalized = False
         try:
             fetch_result = fetcher(
                 ats, fetch_slug, company_id=company_id,
@@ -142,6 +151,7 @@ def collect_company_jobs(
             scan_error = "; ".join(source_errors) or None
             result["jobs_closed"] += store.finish_scan(
                 scan_id, seen, complete=source_complete, error=scan_error)
+            scan_finalized = True
             if source_complete:
                 result["companies_succeeded"] += 1
             else:
@@ -150,7 +160,13 @@ def collect_company_jobs(
                     f"{target.get('canonical_name') or company_id}: {scan_error or 'incomplete ATS response'}")
         except Exception as exc:
             error = f"{target.get('canonical_name') or company_id}: {exc}"
-            store.finish_scan(scan_id, seen, complete=False, error=str(exc))
+            if not scan_finalized:
+                try:
+                    store.finish_scan(scan_id, seen, complete=False, error=str(exc))
+                except Exception as finalize_exc:
+                    result["errors"].append(
+                        f"{target.get('canonical_name') or company_id}: "
+                        f"scan finalize: {finalize_exc}")
             result["companies_failed"] += 1
             result["errors"].append(error)
             continue
@@ -198,6 +214,38 @@ def collect_company_jobs(
     return result
 
 
+def collect_pending_questions(*, limit: int = 100, headless: bool = True,
+                              retry_failed: bool = False,
+                              store: Any = jobs_db,
+                              question_scraper: Callable[..., dict] = scrape_questions) -> dict:
+    try:
+        rows = store.list_pending_question_jobs(limit=limit, retry_failed=retry_failed)
+    except TypeError:
+        rows = store.list_pending_question_jobs(limit=limit)
+    result = {"selected": len(rows), "complete": 0, "failed": 0,
+              "questions_stored": 0, "errors": []}
+    for row in rows:
+        url = row.get("apply_url") or row.get("job_url") or ""
+        try:
+            scraped = question_scraper(str(row.get("source") or ""), url, headless=headless)
+            if scraped.get("state") == "complete":
+                count = store.save_questions(
+                    int(row["id"]), scraped.get("questions") or [], "success")
+                result["complete"] += 1
+                result["questions_stored"] += count
+            else:
+                error = _question_error(scraped)
+                store.save_questions(int(row["id"]), scraped.get("questions") or [],
+                                     "failed", error=error)
+                result["failed"] += 1
+                result["errors"].append(f"{row.get('canonical_name')}: {error}")
+        except Exception as exc:
+            store.save_questions(int(row["id"]), None, "failed", error=str(exc))
+            result["failed"] += 1
+            result["errors"].append(f"{row.get('canonical_name')}: {exc}")
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Collect complete remote jobs from independently discovered companies")
@@ -207,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--status", default="novel",
                          choices=("novel", "known", "possible_duplicate", "promoted"))
     collect.add_argument("--limit-companies", type=int, default=100)
+    collect.add_argument("--company-id", type=int)
     collect.add_argument(
         "--skip-questions", action="store_true",
         help="skip rendered-form fallback; ATS API questions are still stored")
@@ -215,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="maximum rendered forms per run; 0 means all")
     collect.add_argument("--headed", action="store_true",
                          help="show browser while reading application questions")
+    questions = sub.add_parser("questions", help="retry pending rendered application forms")
+    questions.add_argument("--limit", type=int, default=100)
+    questions.add_argument("--headed", action="store_true")
+    questions.add_argument("--retry-failed", action="store_true")
     sub.add_parser("stats", help="show isolated remote-job counts")
     return parser
 
@@ -227,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
             output = {"initialized": True}
         elif args.command == "stats":
             output = jobs_db.counts()
-        else:
+        elif args.command == "collect":
             if args.limit_companies < 1:
                 raise ValueError("--limit-companies must be at least 1")
             if args.question_limit < 0:
@@ -236,10 +289,17 @@ def main(argv: list[str] | None = None) -> int:
             output = collect_company_jobs(
                 status=args.status,
                 limit_companies=args.limit_companies,
+                company_id=args.company_id,
                 collect_questions=not args.skip_questions,
                 question_limit=args.question_limit,
                 headless=not args.headed,
             )
+        else:
+            if args.limit < 1:
+                raise ValueError("--limit must be at least 1")
+            jobs_db.ensure_schema()
+            output = collect_pending_questions(limit=args.limit, headless=not args.headed,
+                                               retry_failed=args.retry_failed)
         print(json.dumps({"ok": True, **output}, ensure_ascii=False, default=str))
         return 0
     except Exception as exc:

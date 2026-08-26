@@ -189,6 +189,11 @@ def parse_gleif_lei_records(payload: Any) -> list[dict[str, Any]]:
             for value in (legal_address.get("region"), headquarters.get("region"), jurisdiction)
             if value
         ]
+        addresses = []
+        if legal_address:
+            addresses.append({"address_type": "registered", "value": dict(legal_address)})
+        if headquarters:
+            addresses.append({"address_type": "headquarters", "value": dict(headquarters)})
         records.append(company_record(
             source="gleif_lei", source_external_id=lei,
             source_url=_text(links.get("self")) or f"{GLEIF_LEI_RECORDS_URL}/{lei}",
@@ -202,6 +207,9 @@ def parse_gleif_lei_records(payload: Any) -> list[dict[str, Any]]:
                 "legal_form_id": _text(legal_form.get("id")),
                 "registered_at": _text(registered_at.get("id")),
                 "registered_as": _text(entity.get("registeredAs")),
+                "legal_address": dict(legal_address),
+                "headquarters_address": dict(headquarters),
+                "addresses": addresses,
                 "registration_status": _text(registration.get("status")),
                 "last_update_date": _text(registration.get("lastUpdateDate")),
             },
@@ -463,10 +471,39 @@ def parse_usaspending_recipients(payload: Any) -> list[dict[str, Any]]:
             metadata={
                 "uei": _text(row.get("uei")),
                 "duns": _text(row.get("duns")),
+                "recipient_id": _text(row.get("id")),
+                "recipient_level": _text(row.get("recipient_level")),
                 "amount": row.get("amount", row.get("aggregated_amount")),
             },
         ))
     return records
+
+
+def parse_usaspending_recipient_profile(payload: Any) -> dict[str, Any]:
+    """Keep only identity, business classification and recipient-location fields."""
+    if not isinstance(payload, Mapping):
+        return {}
+    location = payload.get("location")
+    location = dict(location) if isinstance(location, Mapping) else {}
+    business_types = payload.get("business_types")
+    business_types = [str(value) for value in business_types if _text(value)] \
+        if isinstance(business_types, list) else []
+    return {
+        "name": _text(payload.get("name")),
+        "alternate_names": [str(value) for value in payload.get("alternate_names", [])
+                            if _text(value)] if isinstance(payload.get("alternate_names"), list) else [],
+        "uei": _text(payload.get("uei")), "duns": _text(payload.get("duns")),
+        "recipient_id": _text(payload.get("recipient_id")),
+        "recipient_level": _text(payload.get("recipient_level")),
+        "parent_id": _text(payload.get("parent_id")),
+        "parent_name": _text(payload.get("parent_name")),
+        "parent_uei": _text(payload.get("parent_uei")),
+        "business_types": business_types,
+        "recipient_location": {
+            "address_type": "recipient_location",
+            "value": location,
+        } if location else None,
+    }
 
 
 def fetch_usaspending_recipients(
@@ -581,12 +618,12 @@ def fetch_sam_companies(
             response = http.get(
                 SAM_ENTITIES_URL,
                 params={
-                    "api_key": key,
                     "registrationStatus": "A",
                     "includeSections": "entityRegistration,coreData,assertions",
                     "page": page,
                     "size": min(size, limit - len(records)),
                 },
+                headers={"X-Api-Key": key},
                 timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()

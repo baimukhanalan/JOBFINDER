@@ -1,13 +1,18 @@
 import httpx
+from contextlib import contextmanager
 
 from backend.tools.company_enrichment import (
+    MANDATORY_CAREER_AUDIT,
     _get,
+    apply_mandatory_career_audit,
     canonical_domain,
     career_candidates,
     detect_ats,
     enrich_company,
     enrich_database,
+    looks_like_career_page,
     public_http_url,
+    verify_mandatory_official_site,
 )
 
 
@@ -38,12 +43,38 @@ def test_canonical_domain():
     assert canonical_domain("") == ""
 
 
-def test_career_candidates_prefers_anchor_text():
+def test_career_candidates_prefers_explicit_path_and_anchor_text():
     html = '<a href="/about">About</a><a href="/join">Careers</a><a href="/jobs">Jobs</a>'
     assert career_candidates(html, "https://acme.test/")[:2] == [
-        "https://acme.test/join",
         "https://acme.test/jobs",
+        "https://acme.test/join",
     ]
+
+
+def test_career_candidates_rejects_job_article_title():
+    html = (
+        '<a href="/articles/ai-reshaping-customer-service-jobs">'
+        'AI is reshaping customer service jobs</a>'
+        '<a href="/about/careers">Careers</a>'
+    )
+    assert career_candidates(html, "https://acme.test/") == [
+        "https://acme.test/about/careers"
+    ]
+
+
+def test_career_page_signal_rejects_article_and_accepts_careers_heading():
+    assert not looks_like_career_page(
+        "https://acme.test/articles/customer-service-jobs",
+        "<title>AI is reshaping customer service jobs</title>",
+    )
+    assert looks_like_career_page(
+        "https://acme.test/work-with-us",
+        "<title>Build your career with Acme</title>",
+    )
+    assert not looks_like_career_page(
+        "https://acme.test/careers/summer-festival",
+        "<title>Acme summer festival</title>",
+    )
 
 
 def test_detects_supported_ats_urls():
@@ -58,11 +89,64 @@ def test_detects_supported_ats_urls():
         "https://job-boards.greenhouse.io/acme": ("greenhouse", "acme"),
         "https://acme.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX": ("oracle", "acme"),
         "https://acme.successfactors.com/career?company=acme": (
-            "successfactors", "acme.successfactors.com"),
+            "successfactors", "acme"),
     }
     for url, expected in cases.items():
         result = detect_ats([url])
         assert (result["ats"], result["ats_slug"]) == expected
+
+
+def test_detect_ats_preserves_workday_site_and_oracle_site_number():
+    workday = detect_ats([
+        "https://ghr.wd1.myworkdayjobs.com/en-us/lateral-us/login"
+    ])
+    assert workday["ats_url"].endswith("/en-us/lateral-us/login")
+    oracle = detect_ats([
+        "https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/requisitions"
+    ])
+    assert "/sites/CX_1001/requisitions" in oracle["ats_url"]
+
+
+def test_detect_ats_preserves_customer_identity_for_shared_hosts():
+    successfactors = detect_ats([
+        'href="https://career8.successfactors.com/career?company=jetblueair&amp;site=external"'
+    ])
+    assert successfactors["ats_slug"] == "jetblueair"
+    assert "company=jetblueair" in successfactors["ats_url"]
+    eightfold = detect_ats([
+        'https://app.eightfold.ai/careers?domain=elcompanies.com'
+    ])
+    assert eightfold["ats_slug"] == "app:elcompanies.com"
+    assert eightfold["ats_url"].endswith("domain=elcompanies.com")
+
+
+def test_detect_ats_rejects_shared_host_without_customer_identity():
+    assert detect_ats(["https://career8.successfactors.com/career"])["ats"] == ""
+    assert detect_ats(["https://app.eightfold.ai/careers"])["ats"] == ""
+
+
+def test_detect_ats_prefers_main_icims_tenant_over_event_portal():
+    result = detect_ats([
+        "https://events-statefarm.icims.com/jobs/search",
+        "https://careers-statefarm.icims.com/jobs/login?loginOnly=1",
+    ])
+    assert result["ats"] == "icims"
+    assert result["ats_slug"] == "careers-statefarm"
+
+
+def test_enrich_detects_successfactors_rmk_on_official_custom_domain():
+    home = "https://foundever.test/"
+    careers = "https://jobs.foundever.test/careers"
+    client = _Client({
+        home: _Response(home, f'<a href="{careers}">Careers</a>'),
+        careers: _Response(careers, (
+            '<script src="https://performancemanager4.successfactors.com/x.js"></script>'
+            '<img src="https://rmkcdn.successfactors.com/site/logo.png">')),
+    })
+    result = enrich_company({"id": 1, "domain": "foundever.test"}, client)
+    assert result["ats"] == "successfactors"
+    assert result["ats_slug"] == "jobs.foundever.test"
+    assert result["ats_url"] == careers
 
 
 def test_enriches_from_official_homepage_without_job_catalog():
@@ -188,3 +272,86 @@ def test_database_batch_preserves_completed_rows_when_one_worker_fails(monkeypat
     assert result["updated"] == 1
     assert result["errors"] == 1
     assert [row["id"] for row in saved] == [1]
+
+
+def test_mandatory_audit_has_unique_tenants_and_excludes_event_portal():
+    assert len(MANDATORY_CAREER_AUDIT) == 15
+    identities = {(row["ats"], row["ats_slug"])
+                  for row in MANDATORY_CAREER_AUDIT.values()}
+    assert len(identities) == 15
+    state_farm = MANDATORY_CAREER_AUDIT["statefarm.com"]
+    assert state_farm["ats_slug"] == "careers-statefarm"
+    assert "events-statefarm" not in state_farm["ats_url"]
+    assert MANDATORY_CAREER_AUDIT["concentrix.com"]["ats_url"].endswith(
+        "/external_global")
+
+
+def test_mandatory_audit_atomically_overwrites_stale_enrichment(monkeypatch):
+    from backend.tools import company_discovery_db as db
+
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+
+        def fetchall(self):
+            return [(number, source_id) for number, source_id in enumerate(
+                sorted(MANDATORY_CAREER_AUDIT), 1)]
+
+    cursor = Cursor()
+
+    @contextmanager
+    def fake_cur(_dict_rows=True):
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    result = apply_mandatory_career_audit()
+    assert result == {"selected": 15, "updated": 15, "careers": 15,
+                      "named_ats": 7, "custom_experiences": 8}
+    assert len(cursor.calls) == 16
+    updates = cursor.calls[1:]
+    assert all("careers_url=%s,ats=%s,ats_slug=%s,ats_url=%s" in sql
+               and "COALESCE" not in sql for sql, _ in updates)
+
+
+def test_live_official_site_is_a_separate_identity_factor(monkeypatch):
+    from backend.tools import company_discovery_db as db
+
+    class Cursor:
+        rowcount = 1
+
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((sql, params))
+
+        def fetchone(self):
+            return {"id": 11982, "domain": "jpmorganchase.com",
+                    "candidate_domain": "jpmorganchase.com",
+                    "trade_name": "JPMorganChase",
+                    "legal_name": "JPMorgan Chase & Co."}
+
+    cursors = []
+
+    @contextmanager
+    def fake_cur(_dict_rows=True):
+        cursor = Cursor()
+        cursors.append(cursor)
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    home = "https://jpmorganchase.com/"
+    client = _Client({home: _Response(
+        home, "<title>JPMorganChase | Global Financial Services</title>")})
+    result = verify_mandatory_official_site("jpmorganchase.com", client=client)
+    assert result["verified"] is True
+    master_sql, master_params = cursors[1].calls[0]
+    assert "provider'<>'official_site_identity'" in master_sql
+    assert "independent_live_official_site" in master_params[0]
+    assert '"class": "official_site_identity"' in master_params[0]
+    assert "authoritative_first_factor" not in master_params[0]

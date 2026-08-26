@@ -13,6 +13,8 @@ def test_build_application_url_for_supported_ats_preserves_query():
         "https://apply.workable.com/acme/j/ABC/apply")
     assert qx.build_application_url("generic", "https://acme.test/careers/apply#form") == (
         "https://acme.test/careers/apply")
+    assert qx.build_application_url("workday", "https://acme.test/job/42") == (
+        "https://acme.test/job/42/apply/applyManually")
 
 
 def test_invalid_relative_application_url_is_rejected():

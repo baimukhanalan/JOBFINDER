@@ -7,6 +7,7 @@ on rank alone: its public homepage must independently match the company name.
 from __future__ import annotations
 
 import html as html_lib
+import base64
 import json
 import re
 import threading
@@ -26,6 +27,7 @@ from backend.tools.company_enrichment import _get, enrich_company, public_http_u
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 DDG_HTML = "https://html.duckduckgo.com/html/"
+BING_HTML = "https://www.bing.com/search"
 USER_AGENT = "JobFinder-company-discovery/1.0 (+https://github.com/baimukhanalan/JOBFINDER)"
 _BLOCKED_HOSTS = {
     "bloomberg.com", "crunchbase.com", "facebook.com", "instagram.com",
@@ -447,6 +449,21 @@ def _decode_ddg_url(value: str) -> str:
     return value
 
 
+def _decode_bing_url(value: str) -> str:
+    value = html_lib.unescape(value or "")
+    parsed = urlparse(value)
+    if not (parsed.hostname or "").lower().endswith("bing.com"):
+        return value
+    encoded = parse_qs(parsed.query).get("u", [""])[0]
+    if not encoded.startswith("a1"):
+        return ""
+    try:
+        payload = encoded[2:] + "=" * (-len(encoded[2:]) % 4)
+        return base64.urlsafe_b64decode(payload).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
 def search_candidates(record: dict, client, limiter: RateLimiter,
                       max_results: int = 3) -> list[Candidate]:
     company = _company_name(record)
@@ -458,20 +475,37 @@ def search_candidates(record: dict, client, limiter: RateLimiter,
         )
     except (httpx.HTTPError, ValueError):
         return []
-    if response.status_code != 200 or "html" not in response.headers.get("content-type", ""):
-        return []
-    if len((response.text or "").encode("utf-8")) > 2 * 1024 * 1024:
-        return []
+    ddg_ok = (response.status_code == 200
+              and "html" in response.headers.get("content-type", "")
+              and len((response.text or "").encode("utf-8")) <= 2 * 1024 * 1024)
     parser = _DdgResults()
-    parser.feed(response.text)
+    if ddg_ok:
+        parser.feed(response.text)
+    raw_results = [(href, title, "duckduckgo_html") for href, title in parser.results]
+    if not raw_results:
+        limiter.wait()
+        try:
+            bing = client.get(BING_HTML, params={
+                "q": f'"{company}" official website', "count": max(5, max_results),
+            }, headers={"User-Agent": "Mozilla/5.0 (compatible; JobFinder/1.0)"},
+                            follow_redirects=False)
+        except (httpx.HTTPError, ValueError):
+            return []
+        if (bing.status_code != 200 or "html" not in bing.headers.get("content-type", "")
+                or len((bing.text or "").encode("utf-8")) > 2 * 1024 * 1024):
+            return []
+        matches = re.findall(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                             bing.text or "", re.I | re.S)
+        raw_results = [(href, html_lib.unescape(re.sub(r"<[^>]+>", " ", title)),
+                        "bing_html") for href, title in matches]
     out: list[Candidate] = []
     seen: set[str] = set()
-    for href, _title in parser.results:
-        url = _decode_ddg_url(href)
+    for href, _title, provider in raw_results:
+        url = _decode_ddg_url(href) if provider == "duckduckgo_html" else _decode_bing_url(href)
         domain = normalize_domain(url)
         if domain and domain not in seen and _allowed_candidate(url):
             seen.add(domain)
-            out.append(Candidate(url, "duckduckgo_html", search_rank=len(out) + 1))
+            out.append(Candidate(url, provider, search_rank=len(out) + 1))
         if len(out) >= max_results:
             break
     return out

@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-08-26",
+  "employers": [
+    {
+      "key": "amazon", "brand_name": "Amazon", "brand_aliases": [],
+      "legal_name": "Amazon.com, Inc.", "exact_domain": "amazon.com",
+      "employee_count": 1576000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "full-time and part-time employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "e-commerce, cloud computing, advertising and digital services",
+      "operational_headquarters": {"city": "Seattle", "region": "WA", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "Amazon.com, Inc. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "concentrix", "brand_name": "Concentrix", "brand_aliases": [],
+      "legal_name": "Concentrix Corporation", "exact_domain": "concentrix.com",
+      "employee_count": 455000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "employees and staff",
+      "employee_count_as_of": "2025-11-30",
+      "industry": "customer experience solutions and technology",
+      "operational_headquarters": {"city": "Newark", "region": "CA", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "Concentrix Corporation / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/1803599/000180359926000027/cnxc-20251130.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "foundever", "brand_name": "Foundever", "brand_aliases": ["Sitel Group"],
+      "legal_name": "Foundever Group S.A.", "exact_domain": "foundever.com",
+      "employee_count": 130000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "current site figure", "employee_count_scope": "associates across the globe",
+      "employee_count_as_of": null,
+      "industry": "customer experience management and business process outsourcing",
+      "operational_headquarters": {"city": "Luxembourg", "region": null, "country": "LU"},
+      "sources": [
+        {"id": "official_about", "publisher": "Foundever", "type": "official_company_page", "url": "https://foundever.com/about/who-we-are/", "observed_at": "2026-08-26", "supports": ["brand_name", "employee_count", "industry"]},
+        {"id": "official_terms", "publisher": "Foundever Group", "type": "official_legal_notice", "url": "https://foundever.com/terms-of-use/", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "operational_headquarters"]}
+      ]
+    },
+    {
+      "key": "ttec", "brand_name": "TTEC", "brand_aliases": [],
+      "legal_name": "TTEC Holdings, Inc.", "exact_domain": "ttec.com",
+      "employee_count": 51000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "employees globally",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "customer experience technology and services",
+      "operational_headquarters": {"city": "Austin", "region": "TX", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "TTEC Holdings, Inc. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/1013880/000110465926020532/ttec-20251231x10k.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "teleperformance", "brand_name": "TP", "brand_aliases": ["Teleperformance"],
+      "legal_name": "Teleperformance SE", "exact_domain": "tp.com",
+      "employee_count": 485606, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "reported total workforce", "employee_count_scope": "employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "digital business services and customer experience management",
+      "operational_headquarters": {"city": "Paris", "region": null, "country": "FR"},
+      "sources": [
+        {"id": "urd_2025", "publisher": "Teleperformance SE", "type": "universal_registration_document", "url": "https://www.tp.com/media/msvfbns0/tp-urd-2025.pdf", "observed_at": "2026-08-26", "supports": ["legal_name", "employee_count", "industry", "operational_headquarters"]},
+        {"id": "official_legal", "publisher": "Teleperformance SE", "type": "official_legal_notice", "url": "https://www.tp.com/en-ca/footer/legal-statement/", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "operational_headquarters", "brand_name"]}
+      ]
+    },
+    {
+      "key": "cvs_health", "brand_name": "CVS Health", "brand_aliases": [],
+      "legal_name": "CVS Health Corporation", "exact_domain": "cvshealth.com",
+      "employee_count": null, "employee_count_min": 300000, "employee_count_max": null,
+      "employee_count_qualifier": "over", "employee_count_scope": "colleagues",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "health solutions, pharmacy, health benefits and care delivery",
+      "operational_headquarters": {"city": "Woonsocket", "region": "RI", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "CVS Health Corporation / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/64803/000006480326000010/cvs-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "unitedhealth_group", "brand_name": "UnitedHealth Group", "brand_aliases": [],
+      "legal_name": "UnitedHealth Group Incorporated", "exact_domain": "unitedhealthgroup.com",
+      "employee_count": null, "employee_count_min": 390000, "employee_count_max": null,
+      "employee_count_qualifier": "more than", "employee_count_scope": "employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "health benefits and health care services",
+      "operational_headquarters": {"city": "Eden Prairie", "region": "MN", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "UnitedHealth Group Incorporated / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/731766/000073176626000062/unh-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "jpmorgan_chase", "brand_name": "JPMorganChase", "brand_aliases": ["JPMorgan Chase"],
+      "legal_name": "JPMorgan Chase & Co.", "exact_domain": "jpmorganchase.com",
+      "employee_count": 318512, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "reported", "employee_count_scope": "full-time and part-time employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "financial services and banking",
+      "operational_headquarters": {"city": "New York", "region": "NY", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "JPMorgan Chase & Co. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/19617/000162828026008131/jpm-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "walmart", "brand_name": "Walmart", "brand_aliases": [],
+      "legal_name": "Walmart Inc.", "exact_domain": "walmart.com",
+      "employee_count": 2100000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "associates worldwide",
+      "employee_count_as_of": "2026-01-31",
+      "industry": "omnichannel retail and wholesale",
+      "operational_headquarters": {"city": "Bentonville", "region": "AR", "country": "US"},
+      "sources": [{"id": "sec_10k_2026", "publisher": "Walmart Inc. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/104169/000010416926000055/wmt-20260131.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "target", "brand_name": "Target", "brand_aliases": [],
+      "legal_name": "Target Corporation", "exact_domain": "target.com",
+      "employee_count": 415000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "full-time, part-time and seasonal team members",
+      "employee_count_as_of": "2026-01-31",
+      "industry": "omnichannel general merchandise retail",
+      "operational_headquarters": {"city": "Minneapolis", "region": "MN", "country": "US"},
+      "sources": [{"id": "sec_10k_2026", "publisher": "Target Corporation / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/27419/000002741926000016/tgt-20260131.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "hilton", "brand_name": "Hilton", "brand_aliases": [],
+      "legal_name": "Hilton Worldwide Holdings Inc.", "exact_domain": "hilton.com",
+      "employee_count": 182000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "individuals employed or managed at leased and managed hotels and corporate offices; excludes 328,000 owner-employed franchise workers",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "hotel management, franchising and hospitality",
+      "operational_headquarters": {"city": "McLean", "region": "VA", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "Hilton Worldwide Holdings Inc. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/1585689/000158568926000007/hlt-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "marriott", "brand_name": "Marriott International", "brand_aliases": ["Marriott"],
+      "legal_name": "Marriott International, Inc.", "exact_domain": "marriott.com",
+      "employee_count": 148000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately", "employee_count_scope": "associates employed by Marriott; excludes 266,000 owner-employed workers managed by Marriott",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "hotel management, franchising and hospitality",
+      "operational_headquarters": {"city": "Bethesda", "region": "MD", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "Marriott International, Inc. / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/1048286/000104828626000007/mar-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "progressive", "brand_name": "Progressive", "brand_aliases": [],
+      "legal_name": "The Progressive Corporation", "exact_domain": "progressive.com",
+      "employee_count": 70000, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "about", "employee_count_scope": "employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "property and casualty insurance",
+      "operational_headquarters": {"city": "Mayfield Village", "region": "OH", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "The Progressive Corporation / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/80661/000008066126000086/pgr-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "state_farm", "brand_name": "State Farm", "brand_aliases": [],
+      "legal_name": "State Farm Mutual Automobile Insurance Company", "exact_domain": "statefarm.com",
+      "employee_count": null, "employee_count_min": 62000, "employee_count_max": null,
+      "employee_count_qualifier": "over", "employee_count_scope": "employees; independent contractor agents excluded",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "insurance and financial services",
+      "operational_headquarters": {"city": "Bloomington", "region": "IL", "country": "US"},
+      "sources": [{"id": "official_2025_results", "publisher": "State Farm Mutual Automobile Insurance Company", "type": "official_company_results", "url": "https://newsroom.statefarm.com/state-farm-reports-2025-financial-results/", "observed_at": "2026-08-26", "supports": ["brand_name", "legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    },
+    {
+      "key": "allstate", "brand_name": "Allstate", "brand_aliases": [],
+      "legal_name": "The Allstate Corporation", "exact_domain": "allstate.com",
+      "employee_count": 53300, "employee_count_min": null, "employee_count_max": null,
+      "employee_count_qualifier": "approximately; 53,000 full-time plus 300 part-time", "employee_count_scope": "full-time and part-time employees",
+      "employee_count_as_of": "2025-12-31",
+      "industry": "property and casualty insurance and protection services",
+      "operational_headquarters": {"city": "Northbrook", "region": "IL", "country": "US"},
+      "sources": [{"id": "sec_10k_2025", "publisher": "The Allstate Corporation / SEC EDGAR", "type": "regulatory_filing", "url": "https://www.sec.gov/Archives/edgar/data/899051/000089905126000031/all-20251231.htm", "observed_at": "2026-08-26", "supports": ["legal_name", "exact_domain", "employee_count", "industry", "operational_headquarters"]}]
+    }
+  ]
+}

@@ -242,6 +242,10 @@ def test_target_selection_is_supported_and_oldest_scan_first(monkeypatch):
     assert rows[0]["ats_slug"] == " RawSlug "
     sql, args = cursor.calls[0]
     assert "lower(c.ats)=ANY(%s)" in sql
+    assert "m.domain_verified" in sql
+    assert "m.identity_status='verified'" in sql
+    assert "m.monitoring_status IN ('qualified','monitoring')" in sql
+    assert "m.is_monitoring_representative" in sql
     assert "last_scan.last_scanned_at ASC NULLS FIRST" in sql
     assert args == ("novel", ["lever", "workday"], 10)
 

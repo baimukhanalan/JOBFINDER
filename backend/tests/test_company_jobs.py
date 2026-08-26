@@ -187,3 +187,36 @@ def test_raw_board_slug_is_preserved_for_identity_but_trimmed_for_request():
     )
     assert fetched == ["CaseSensitiveBoard"]
     assert store.row["source_board_id"] == "  CaseSensitiveBoard  "
+
+
+def test_pending_question_queue_retries_without_rescanning_board():
+    class PendingStore:
+        def __init__(self): self.saved = []
+        def list_pending_question_jobs(self, limit):
+            return [{"id": 41, "source": "workday", "apply_url": "https://jobs.test/41",
+                     "canonical_name": "Acme"}]
+        def save_questions(self, job_id, questions, state, error=None):
+            self.saved.append((job_id, questions, state, error))
+            return len(questions or [])
+
+    store = PendingStore()
+    result = company_jobs.collect_pending_questions(
+        limit=1, store=store,
+        question_scraper=lambda *_a, **_k: {
+            "state": "complete", "questions": [{"label": "Can you work weekends?"}]})
+    assert result == {"selected": 1, "complete": 1, "failed": 0,
+                      "questions_stored": 1, "errors": []}
+    assert store.saved[0][2] == "success"
+
+
+def test_targeted_cycle_uses_one_qualified_company():
+    store = Store()
+    store.get_company_target = lambda company_id, **_: {
+        "id": company_id, "canonical_name": "DXC", "ats": "workday",
+        "ats_slug": "dxc", "ats_url": "https://dxc.test/careers",
+    }
+    result = company_jobs.collect_company_jobs(
+        company_id=77, store=store, fetcher=lambda *_a, **_k: [],
+        collect_questions=False)
+    assert result["companies_selected"] == 1
+    assert result["companies_succeeded"] == 1

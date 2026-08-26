@@ -39,6 +39,7 @@ _ATS_HOSTS = {
     "icims.com": "icims",
     "oraclecloud.com": "oracle",
     "successfactors.com": "successfactors",
+    "eightfold.ai": "eightfold",
     "workable.com": "workable",
 }
 _COMPANY_SUFFIXES = {
@@ -141,6 +142,13 @@ def normalize_slug(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").casefold())
 
 
+def normalize_ats_slug(ats: str | None, value: str | None) -> str:
+    """Preserve separators that carry tenant identity on shared ATS hosts."""
+    if normalize_ats(ats) in {"icims", "successfactors", "eightfold"}:
+        return re.sub(r"[^a-z0-9._:-]+", "", (value or "").casefold())
+    return normalize_slug(value)
+
+
 def _external_ids(row: dict) -> dict[str, str]:
     ids = row.get("external_ids") or {}
     if isinstance(ids, dict):
@@ -187,7 +195,7 @@ def catalog_identity(row: dict) -> dict:
 
 def _record_ats_identity(row: dict) -> tuple[str, str]:
     ats = normalize_ats(row.get("ats"))
-    slug = normalize_slug(row.get("ats_slug"))
+    slug = normalize_ats_slug(ats, row.get("ats_slug"))
     for field in ("ats_url", "careers_url"):
         _domain, url_ats, url_slug = _catalog_url_identity(row.get(field))
         ats = ats or url_ats
@@ -441,7 +449,7 @@ def update_enrichment_results(rows: list[dict]) -> int:
         values.append((
             row.get("careers_url") or None,
             normalize_ats(row.get("ats")) or None,
-            normalize_slug(row.get("ats_slug")) or None,
+            normalize_ats_slug(row.get("ats"), row.get("ats_slug")) or None,
             row.get("ats_url") or None,
             row.get("domain_confidence"),
             row.get("careers_confidence"),

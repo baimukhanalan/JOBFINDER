@@ -114,6 +114,242 @@ def test_lever_rejects_ambiguous_and_hybrid_jobs():
     assert src.parse_lever_jobs(jobs, 1, "acme") == []
 
 
+@pytest.mark.parametrize("ats", ["icims", "oracle", "successfactors", "eightfold", "custom"])
+def test_structured_html_connectors_keep_remote_full_jd(ats):
+    payload = json.dumps({
+        "@context": "https://schema.org", "@type": "JobPosting",
+        "identifier": {"value": "REQ-7"}, "title": "Remote Support Specialist",
+        "jobLocationType": "TELECOMMUTE", "employmentType": "FULL_TIME",
+        "description": "<h2>Requirements</h2><p>Clear writing</p>",
+        "url": "https://careers.acme.test/jobs/REQ-7", "datePosted": "2026-08-25",
+    })
+    html = f'<script type="application/ld+json">{payload}</script>'
+    jobs = src.parse_structured_html_jobs(
+        html, 9, "acme", ats=ats, page_url="https://careers.acme.test/jobs/REQ-7")
+    assert len(jobs) == 1
+    assert jobs[0]["source"] == ats
+    assert jobs[0]["source_job_id"] == "REQ-7"
+    assert jobs[0]["requirements"] == "Clear writing"
+    assert jobs[0]["questions_state"] == "not_available"
+
+
+def test_structured_html_connectors_reject_onsite_job():
+    payload = json.dumps({
+        "@type": "JobPosting", "identifier": "REQ-8", "title": "Office Support",
+        "jobLocation": {"address": {"addressLocality": "Dallas", "addressRegion": "TX"}},
+        "description": "<p>Work from our office.</p>",
+    })
+    html = f'<script type="application/ld+json">{payload}</script>'
+    assert src.parse_structured_html_jobs(
+        html, 9, "acme", ats="custom", page_url="https://acme.test/jobs/REQ-8") == []
+
+
+def test_icims_public_board_uses_iframe_pages_and_full_details(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if request.url.path == "/jobs/search":
+            if request.url.params.get("pr") == "1":
+                return httpx.Response(200, text='''
+                  <a href="/jobs/102/office-agent/job?in_iframe=1">Office Agent</a>
+                ''', headers={"content-type": "text/html"})
+            return httpx.Response(200, text='''
+              <a href="/jobs/101/remote-support/job?in_iframe=1">Remote Support</a>
+              <a href="/jobs/search?pr=1&amp;ss=1&amp;in_iframe=1">Next</a>
+            ''', headers={"content-type": "text/html"})
+        if "/jobs/101/" in request.url.path:
+            return httpx.Response(200, text='''
+              <html><head><meta property="og:title" content="Remote Support Specialist"></head>
+              <body><h1>Remote Support Specialist</h1><div>Location:</div>
+              <div>Remote, United States</div><h2>Overview</h2>
+              <p>This is a 100% remote position helping customers.</p></body></html>
+            ''', headers={"content-type": "text/html"})
+        return httpx.Response(200, text='''
+          <h1>Office Agent</h1><div>Location:</div><div>Dallas, TX</div>
+          <p>This is an in-office position.</p>
+        ''', headers={"content-type": "text/html"})
+
+    result = src.fetch_remote_jobs(
+        "icims", "careers-acme", 12,
+        ats_url="https://careers-acme.icims.com/jobs", client=_client(handler))
+    assert result.complete is True
+    assert [job["source_job_id"] for job in result] == ["101"]
+    assert result[0]["location_raw"] == "Remote, United States"
+    assert any("in_iframe=1" in url and "/jobs/search" in url for url in calls)
+    assert any("pr=1" in url for url in calls)
+
+
+def test_icims_event_portal_is_never_authoritative_for_closures(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    client = _client(lambda request: httpx.Response(
+        200, text="<p>0 jobs found</p>", headers={"content-type": "text/html"}))
+    result = src.fetch_remote_jobs(
+        "icims", "events-acme", 12,
+        ats_url="https://events-acme.icims.com/jobs", client=client)
+    assert result == []
+    assert result.complete is False
+    assert "not an authoritative full job inventory" in result.errors[0]
+
+
+def test_successfactors_rmk_uses_branded_search_and_job_paths(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if request.url.path == "/search/":
+            return httpx.Response(200, text='''
+              <a href="/job/Remote-Support-US-00000/1409884000/">Remote Support</a>
+            ''', headers={"content-type": "text/html"})
+        return httpx.Response(200, text='''
+          <html><head><meta property="og:title" content="Remote Support Analyst"></head>
+          <body><h1>Remote Support Analyst</h1><div>Location:</div>
+          <div>Remote - United States</div><p>This is a fully remote role.</p></body></html>
+        ''', headers={"content-type": "text/html"})
+
+    result = src.fetch_remote_jobs(
+        "successfactors", "jetblueair", 13,
+        ats_url="https://careers.acme.test/index", client=_client(handler))
+    assert result.complete is True
+    assert [job["source_job_id"] for job in result] == ["1409884000"]
+    assert calls[0].startswith("https://careers.acme.test/search/")
+    assert "sortColumn=referencedate" in calls[0]
+
+
+def test_icims_pending_pagination_at_cap_is_incomplete(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(src, "MAX_PUBLIC_BOARD_PAGES", 1)
+    client = _client(lambda request: httpx.Response(
+        200, text='<a href="/jobs/search?pr=2&amp;ss=1">Next</a>',
+        headers={"content-type": "text/html"}))
+    result = src.fetch_remote_jobs(
+        "icims", "careers-acme", 12,
+        ats_url="https://careers-acme.icims.com/jobs", client=client)
+    assert result.complete is False
+    assert any("pagination exceeded" in error for error in result.errors)
+
+
+def test_successfactors_detail_truncation_is_incomplete(monkeypatch):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(src, "MAX_PAGES", 1)
+
+    def handler(request):
+        if request.url.path == "/search/":
+            return httpx.Response(200, text='''
+              <a href="/job/Remote-One-US/101/">One</a>
+              <a href="/job/Remote-Two-US/102/">Two</a>
+            ''', headers={"content-type": "text/html"})
+        return httpx.Response(200, text='''
+          <h1>Remote Support</h1><div>Location:</div><div>Remote - United States</div>
+          <p>This is a fully remote role.</p>
+        ''', headers={"content-type": "text/html"})
+
+    result = src.fetch_remote_jobs(
+        "successfactors", "acme", 13,
+        ats_url="https://careers.acme.test/index", client=_client(handler))
+    assert result.complete is False
+    assert len(result) == 1
+    assert any("details exceeded bounded limit" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(("ats", "ats_url"), [
+    ("icims", "https://careers-acme.icims.com/jobs"),
+    ("successfactors", "https://careers.acme.test/index"),
+])
+def test_public_board_unparseable_detail_is_incomplete(monkeypatch, ats, ats_url):
+    monkeypatch.setattr(
+        "backend.tools.company_enrichment.public_http_url", lambda *_args, **_kwargs: True)
+
+    def handler(request):
+        if request.url.path in {"/jobs/search", "/search/"}:
+            link = ("/jobs/101/remote/job" if ats == "icims"
+                    else "/job/Remote-Support-US/101/")
+            return httpx.Response(200, text=f'<a href="{link}">Remote Support</a>',
+                                  headers={"content-type": "text/html"})
+        return httpx.Response(200, text=(
+            "<html><title>Access Denied</title><body>Access denied. "
+            "Verify you are human.</body></html>"),
+                              headers={"content-type": "text/html"})
+
+    result = src.fetch_remote_jobs(
+        ats, "acme", 13, ats_url=ats_url, client=_client(handler))
+    assert result == []
+    assert result.complete is False
+    assert any("unparseable job detail" in error for error in result.errors)
+
+
+def test_eightfold_without_token_is_incomplete_and_makes_no_request(monkeypatch):
+    monkeypatch.delenv("EIGHTFOLD_API_TOKEN", raising=False)
+    calls = []
+    client = _client(lambda request: calls.append(str(request.url)) or httpx.Response(500))
+    result = src.fetch_remote_jobs(
+        "eightfold", "citi:citi.com", 14,
+        ats_url="https://citi.eightfold.ai/careers", client=client)
+    assert result == []
+    assert result.complete is False
+    assert "requires EIGHTFOLD_API_TOKEN" in result.errors[0]
+    assert calls == []
+
+
+def test_eightfold_authenticated_positions_are_remote_filtered(monkeypatch):
+    monkeypatch.delenv("EIGHTFOLD_API_TOKEN", raising=False)
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        assert request.headers["authorization"] == "Bearer secret-test-token"
+        return httpx.Response(200, json={"data": [
+            {"positionId": "EF-1", "name": "Remote Support", "isRemote": True,
+             "locations": [{"name": "United States"}],
+             "jobDescription": "Help customers from home.",
+             "atsData": {"applyUrl": "https://citi.eightfold.ai/careers/job/EF-1"}},
+            {"positionId": "EF-2", "name": "Office Support",
+             "locations": [{"name": "New York, NY"}],
+             "jobDescription": "This is an in-office role."},
+        ]})
+
+    result = src.fetch_remote_jobs(
+        "eightfold", "citi:citi.com", 14,
+        ats_url="https://citi.eightfold.ai/careers", client=_client(handler),
+        eightfold_token="secret-test-token")
+    assert result.complete is True
+    assert [job["source_job_id"] for job in result] == ["EF-1"]
+    assert result[0]["apply_url"].endswith("/EF-1")
+    assert "/api/v2/core/positions?" in calls[0]
+
+
+def test_oracle_parser_keeps_remote_detail_and_secondary_locations():
+    details = [{
+        "Id": "77", "Title": "Remote Service Agent", "Category": "Support",
+        "ExternalDescriptionStr": "<h2>Requirements</h2><p>Clear writing</p>",
+        "PrimaryLocation": "Remote, United States", "JobSchedule": "Full time",
+        "_listing": {"WorkplaceType": "Remote", "secondaryLocations": [
+            {"Name": "Remote, Canada"},
+        ]},
+    }]
+    job = src.parse_oracle_jobs(
+        details, 4, "acme", public_base_url=
+        "https://acme.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1")[0]
+    assert job["source_job_id"] == "77"
+    assert job["requirements"] == "Clear writing"
+    assert job["locations"] == ["Remote, United States", "Remote, Canada"]
+
+
+def test_workday_context_skips_lowercase_locale_before_site():
+    cxs, public, site = src._workday_context(
+        "ghr", "https://ghr.wd1.myworkdayjobs.com/en-us/lateral-us/login")
+    assert site == "lateral-us"
+    assert cxs.endswith("/wday/cxs/ghr/lateral-us")
+    assert public.endswith("/lateral-us")
+
+
 def test_ashby_keeps_maximum_fields_and_raw_payload():
     payload = {"jobs": [{
         "id": "ash-1", "title": "Data Entry", "isRemote": True, "workplaceType": "Remote",
@@ -199,6 +435,7 @@ def test_workday_uses_exact_cxs_site_paginates_and_fetches_full_detail():
             assert request.method == "POST"
             body = json.loads(request.content)
             assert body["appliedFacets"] == {}
+            assert body["searchText"] == "remote"
             row = ({"title": "Support", "externalPath": "/job/US/Support_R1", "locationsText": "Remote"}
                    if body["offset"] == 0 else
                    {"title": "Office", "externalPath": "/job/US/Office_R2", "locationsText": "Austin"})
@@ -208,7 +445,8 @@ def test_workday_uses_exact_cxs_site_paginates_and_fetches_full_detail():
                 "id": "R1", "jobReqId": "R1", "title": "Customer Support",
                 "jobDescription": "<h2>Requirements</h2><p>Clear writing</p><h2>Benefits</h2><p>Medical</p>",
                 "location": "Remote - United States", "additionalLocations": ["Remote - Canada"],
-                "jobFamily": "Customer Care", "timeType": "Full time", "postedOn": "Posted 2 Days Ago",
+                "jobFamily": "Customer Care", "timeType": "Full time",
+                "startDate": "2026-08-01", "postedOn": "Posted 2 Days Ago",
             }, "unmodeled": {"preserved": True}})
         return httpx.Response(200, json={"jobPostingInfo": {
             "id": "R2", "title": "Office", "jobDescription": "<p>In-office role.</p>",
@@ -227,6 +465,7 @@ def test_workday_uses_exact_cxs_site_paginates_and_fetches_full_detail():
     assert job["locations"] == ["Remote - United States", "Remote - Canada"]
     assert job["job_url"] == "https://acme.wd5.myworkdayjobs.com/External/job/US/Support_R1"
     assert job["questions_state"] == "not_available"
+    assert job["posted_at"] == "2026-08-01"
     assert job["raw_payload"]["unmodeled"] == {"preserved": True}
     assert len([url for method, url in calls if method == "POST" and url.endswith("/jobs")]) == 2
 

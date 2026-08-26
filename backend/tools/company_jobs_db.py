@@ -12,6 +12,7 @@ import os
 import re
 import threading
 import unicodedata
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -36,6 +37,7 @@ _scan_sessions_lock = threading.Lock()
 
 SUPPORTED_COMPANY_JOB_ATS = (
     "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "workday",
+    "icims", "oracle", "successfactors", "eightfold", "custom",
 )
 
 
@@ -44,6 +46,7 @@ class BoardScanLocked(RuntimeError):
 
 JOB_STATUSES = ("active", "closed")
 QUESTION_STATUSES = ("not_attempted", "success", "failed")
+SNAPSHOT_EVENTS = ("first_seen", "content_changed", "closed", "reopened")
 _MEANINGFUL_FIELDS = (
     "title", "department", "location_raw", "location_normalized", "locations", "country",
     "state", "city", "remote_type", "employment_type", "salary_min",
@@ -232,6 +235,19 @@ def has_meaningful_change(previous_hash: str | None, row: dict) -> bool:
     return previous_hash != job_content_hash(row)
 
 
+def snapshot_event(previous: Mapping[str, Any] | None, current_status: str) -> str:
+    """Classify the immutable observation written for a meaningful transition."""
+    if previous is None:
+        return "first_seen"
+    old_status = str(previous.get("status") or "active").casefold()
+    new_status = str(current_status or "active").casefold()
+    if old_status == "closed" and new_status == "active":
+        return "reopened"
+    if old_status == "active" and new_status == "closed":
+        return "closed"
+    return "content_changed"
+
+
 def normalize_question(question: dict, position: int = 0) -> dict:
     """Normalize one application question while preserving its full source payload."""
     label = normalize_text(question.get("label") or question.get("question")
@@ -323,12 +339,17 @@ def ensure_schema() -> None:
         CREATE TABLE IF NOT EXISTS company_remote_job_snapshots (
           id             BIGSERIAL PRIMARY KEY,
           job_id         BIGINT NOT NULL REFERENCES company_remote_jobs(id) ON DELETE CASCADE,
+          event_type     TEXT NOT NULL DEFAULT 'content_changed'
+                         CHECK (event_type IN ('first_seen','content_changed','closed','reopened')),
           content_hash   TEXT NOT NULL,
           observed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
           content        JSONB NOT NULL,
           source_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
           provenance     JSONB NOT NULL DEFAULT '{}'::jsonb
         );""")
+        cur.execute(
+            "ALTER TABLE company_remote_job_snapshots ADD COLUMN IF NOT EXISTS "
+            "event_type TEXT NOT NULL DEFAULT 'content_changed'")
         cur.execute("CREATE INDEX IF NOT EXISTS crjs_job_observed ON company_remote_job_snapshots (job_id, observed_at DESC)")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS company_remote_job_questions (
@@ -401,7 +422,7 @@ def upsert_job(company_id: int | dict, record: dict | None = None,
         lock_key = "\x1f".join(str(value) for value in identity)
         cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (lock_key,))
         cur.execute(
-            "SELECT id, content_hash FROM company_remote_jobs WHERE company_id=%s "
+            "SELECT id, content_hash, status FROM company_remote_jobs WHERE company_id=%s "
             "AND source=%s AND source_board_id=%s AND source_job_id=%s FOR UPDATE", identity)
         existing = cur.fetchone()
         values = tuple(_db_json(prepared.get(c)) if c in _JSON_COLS
@@ -413,16 +434,20 @@ def upsert_job(company_id: int | dict, record: dict | None = None,
             "INSERT INTO company_remote_jobs (" + ",".join(_JOB_COLS) + ") VALUES ("
             + placeholders + ") ON CONFLICT (company_id,source,source_board_id,source_job_id) "
             "DO UPDATE SET " + ",".join(f"{c}=EXCLUDED.{c}" for c in updates)
-            + ",last_seen_at=now(),closed_at=NULL,updated_at=now() RETURNING id",
+            + ",last_seen_at=now(),closed_at=CASE WHEN EXCLUDED.status='closed' "
+              "THEN COALESCE(company_remote_jobs.closed_at,now()) ELSE NULL END,"
+              "updated_at=now() RETURNING id",
             values)
         returned = cur.fetchone()
         job_id = returned["id"] if isinstance(returned, dict) else returned[0]
         changed = existing is None or existing["content_hash"] != content_hash
         if changed:
+            event_type = snapshot_event(existing, prepared["status"])
             cur.execute(
                 "INSERT INTO company_remote_job_snapshots "
-                "(job_id,content_hash,content,source_payload,provenance) VALUES (%s,%s,%s,%s,%s)",
-                (job_id, content_hash, _db_json(content),
+                "(job_id,event_type,content_hash,content,source_payload,provenance) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (job_id, event_type, content_hash, _db_json(content),
                  _db_json(prepared["source_payload"]), _db_json(prepared["provenance"])))
         return {"job_id": job_id, "content_hash": content_hash,
                 "snapshot_created": changed}
@@ -497,8 +522,8 @@ def _mark_missing_jobs_closed_cur(cur: Any, *, company_id: int, source: str,
             "AND source=%s AND source_board_id=%s AND status='active' "
             "AND NOT (source_job_id = ANY(%s)) FOR UPDATE), snapshots AS ("
             "INSERT INTO company_remote_job_snapshots "
-            "(job_id,content_hash,content,source_payload,provenance) SELECT id,"
-            "md5(content_hash || ':closed'),jsonb_build_object("
+            "(job_id,event_type,content_hash,content,source_payload,provenance) SELECT id,"
+            "'closed',md5(content_hash || ':closed'),jsonb_build_object("
             "'title',title,'department',department,'location_raw',location_raw,"
             "'location_normalized',location_normalized,'country',country,'state',state,"
             "'locations',locations,"
@@ -530,11 +555,31 @@ def list_company_targets(status: str = "novel", limit: int = 100,
             "FROM company_remote_job_scans s WHERE s.company_id=c.id "
             "AND s.source=lower(c.ats) AND s.source_board_id=c.ats_slug "
             "ORDER BY s.started_at DESC LIMIT 1) last_scan ON TRUE "
-            "WHERE c.status=%s AND lower(c.ats)=ANY(%s) "
+            "JOIN company_employer_master m ON m.company_id=c.id "
+            "WHERE c.status=%s AND m.in_target_population AND m.domain_verified "
+            "AND m.identity_status='verified' "
+            "AND m.is_monitoring_representative "
+            "AND m.monitoring_status IN ('qualified','monitoring') AND lower(c.ats)=ANY(%s) "
             "AND c.ats_slug IS NOT NULL AND c.ats_slug <> '' "
             "ORDER BY last_scan.last_scanned_at ASC NULLS FIRST,c.id ASC LIMIT %s",
             (status, list(supported_ats), int(limit)))
         return [dict(row) for row in cur.fetchall()]
+
+
+def get_company_target(company_id: int,
+                       supported_ats: tuple[str, ...] = SUPPORTED_COMPANY_JOB_ATS) -> dict | None:
+    with _cur() as cur:
+        cur.execute("""
+          SELECT c.id,c.canonical_name,c.domain,c.careers_url,c.ats,c.ats_slug,c.ats_url
+          FROM company_discovery c JOIN company_employer_master m ON m.company_id=c.id
+          WHERE c.id=%s AND m.in_target_population AND m.domain_verified
+            AND m.identity_status='verified'
+            AND m.is_monitoring_representative
+            AND m.monitoring_status IN ('qualified','monitoring')
+            AND lower(c.ats)=ANY(%s)
+        """, (int(company_id), list(supported_ats)))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def begin_scan(company_id: int, ats: str, ats_slug: str) -> int:
@@ -611,6 +656,21 @@ def save_questions(job_id: int, questions: list[dict] | None, scrape_state: str,
     return 0
 
 
+def list_pending_question_jobs(*, limit: int = 100,
+                               retry_failed: bool = False) -> list[dict]:
+    statuses = ["not_attempted", "failed"] if retry_failed else ["not_attempted"]
+    with _cur() as cur:
+        cur.execute("""
+          SELECT j.id,j.company_id,j.source,j.apply_url,j.job_url,j.title,c.canonical_name
+          FROM company_remote_jobs j JOIN company_discovery c ON c.id=j.company_id
+          JOIN company_employer_master m ON m.company_id=j.company_id
+          WHERE m.in_target_population AND j.status='active' AND j.questions_status=ANY(%s)
+            AND m.monitoring_status IN ('qualified','monitoring')
+          ORDER BY j.first_seen_at,j.id LIMIT %s
+        """, (statuses, max(1, int(limit))))
+        return [dict(row) for row in cur.fetchall()]
+
+
 def finish_scan(scan_id: int, seen_source_job_ids: list[str], complete: bool = True,
                 error: str | None = None) -> int:
     """Finish a scan and close missing jobs only for a successful complete result."""
@@ -645,11 +705,13 @@ def _finish_scan_cur(cur: Any, scan_id: int, seen_source_job_ids: list[str], *,
                      complete: bool, error: str | None) -> int:
     """Finalize scan metadata and closures atomically on one transaction."""
     cur.execute(
-        "SELECT company_id,source,source_board_id FROM company_remote_job_scans "
+        "SELECT company_id,source,source_board_id,finished_at FROM company_remote_job_scans "
         "WHERE id=%s FOR UPDATE", (int(scan_id),))
     scan = cur.fetchone()
     if not scan:
         raise ValueError(f"unknown scan id: {scan_id}")
+    if scan.get("finished_at") is not None:
+        raise ValueError(f"scan already finalized: {scan_id}")
     succeeded = bool(complete and not error)
     cur.execute(
         "UPDATE company_remote_job_scans SET finished_at=now(),scan_complete=%s,"

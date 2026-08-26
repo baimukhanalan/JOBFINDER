@@ -20,6 +20,8 @@ def test_normalizes_domains_and_ats_identity():
         "", "greenhouse", "acme")
     assert db._catalog_url_identity("https://jobs.acme.com/opening") == (
         "acme.com", "", "")
+    assert db.normalize_ats_slug("icims", "Careers-Acme") == "careers-acme"
+    assert db.normalize_ats_slug("eightfold", "app:Acme.com") == "app:acme.com"
 
 
 @pytest.mark.parametrize(
@@ -91,6 +93,17 @@ def test_prepare_record_validates_and_normalizes():
     assert row["external_ids"] == {"sec_cik": "42"}
     with pytest.raises(ValueError):
         db.prepare_record({"source": "sec", "legal_name": "Acme"})
+
+
+def test_prepare_record_preserves_shared_ats_tenant_identity():
+    row = db.prepare_record({
+        "source": "gleif_lei", "source_external_id": "LEI-1",
+        "legal_name": "Acme", "ats": "Eightfold",
+        "ats_slug": "app:Acme.com",
+        "ats_url": "https://app.eightfold.ai/careers?domain=acme.com",
+    })
+    assert row["ats"] == "eightfold"
+    assert row["ats_slug"] == "app:acme.com"
 
 
 class FakeCursor:

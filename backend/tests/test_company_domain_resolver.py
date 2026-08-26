@@ -1,4 +1,5 @@
 import json
+import base64
 from contextlib import contextmanager
 
 from backend.tools import company_discovery as cli
@@ -8,12 +9,19 @@ from backend.tools.company_domain_resolver import (
     RateLimiter,
     _allowed_candidate,
     _decode_ddg_url,
+    _decode_bing_url,
     bulk_mediawiki_candidates,
     bulk_wikidata_candidates,
     resolve_company,
     verify_candidate,
     wikidata_candidates,
 )
+
+
+def test_bing_redirect_decodes_public_result_url():
+    target = "https://www.example.com/careers"
+    encoded = "a1" + base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
+    assert _decode_bing_url(f"https://www.bing.com/ck/a?u={encoded}") == target
 
 
 class Response:

@@ -111,3 +111,26 @@ def test_consent_regex_matches_required_not_marketing():
                 "subscribe to our newsletter for updates about future roles",
                 "add me to your talent community"):
         assert _CONSENT_SKIP_RE.search(mkt.lower()), mkt
+
+
+def test_demographic_data_consent_ticks_but_selfid_does_not():
+    """A GDPR consent to PROCESS the (declined) demographic survey is a required legal box that must
+    tick — but a real protected-characteristic self-ID must stay vetoed (dropdowns.py, 2026-08-26)."""
+    from backend.applier.dropdowns import (_CONSENT_RE, _CONSENT_SKIP_RE,
+                                           _DEMOGRAPHIC, _DEMOGRAPHIC_CONSENT_RE)
+
+    def should_tick(lab: str) -> bool:
+        low = lab.lower()
+        is_demo = bool(_DEMOGRAPHIC.search(low)) and not _DEMOGRAPHIC_CONSENT_RE.search(low)
+        return bool(_CONSENT_RE.search(low)) and not _CONSENT_SKIP_RE.search(low) and not is_demo
+
+    # required demographic-DATA-consent + skillsoft company-subject phrasing → TICK
+    for good in ("I consent to Datadog collecting, storing, and processing my responses to the "
+                 "demographic data surveys above.",
+                 "Skillsoft has my consent to collect, store, and process my data for the purpose "
+                 "of considering me for employment."):
+        assert should_tick(good), good
+    # genuine protected-characteristic self-ID (no consent verb) → must NOT tick
+    for selfid in ("I am a person with a disability", "I identify as a protected veteran",
+                   "Which of the following describes your gender identity? Prefer not to answer"):
+        assert not should_tick(selfid), selfid

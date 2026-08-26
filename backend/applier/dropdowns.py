@@ -407,13 +407,22 @@ async def fill_demographic_checkboxes_decline(page) -> dict:
 # terms). NOT an optional MARKETING opt-in — those (_CONSENT_SKIP_RE) we leave untouched.
 _CONSENT_RE = re.compile(
     r"(?i)\bi (?:agree|consent|accept|acknowledge|have read|understand)\b"
-    r"|agree to the|consent to (?:the|my|processing)|accept the (?:terms|privacy)"
+    r"|agree to the|consent to (?:the|my|processing|collect|stor|process)|accept the (?:terms|privacy)"
     r"|privacy (?:policy|notice|statement)|data (?:processing|protection)"
-    r"|terms (?:and|&) conditions|processing of my (?:personal )?data|\bgdpr\b")
+    r"|terms (?:and|&) conditions|processing of my (?:personal )?data|\bgdpr\b"
+    r"|\bhas my consent\b")
 _CONSENT_SKIP_RE = re.compile(
     r"(?i)contact you|job opportunit|marketing|newsletter|subscribe|updates about|promotional"
     r"|future (?:roles|openings|opportunities)|keep me (?:informed|posted)|stay in touch"
     r"|add me to|talent (?:community|network|pool)|hear about (?:new|other)")
+# A GDPR consent to *process* the demographic-survey answers (which we DECLINE via
+# fill_demographics_decline) is a REQUIRED legal consent, NOT a protected-characteristic self-ID —
+# so it must ESCAPE the _DEMOGRAPHIC veto in fill_required_consent (else datadog/smartsheet/varicent
+# block the submit with "Please accept"). Fires ONLY on the tight
+# "consent … demographic/diversity … data/survey/question/response" shape, so a real self-ID box
+# ("I am a person with a disability", "protected veteran") — which has no consent verb — stays vetoed.
+_DEMOGRAPHIC_CONSENT_RE = re.compile(
+    r"(?i)consent[\w\s,'\-]{0,120}(?:demographic|diversity)[\w\s]{0,30}(?:data|survey|question|response)")
 
 
 async def fill_required_consent(page) -> dict:
@@ -432,7 +441,10 @@ async def fill_required_consent(page) -> dict:
                 continue
             lab = (await cb.evaluate(_LABEL_JS) or "")
             low = lab.lower()
-            if not _CONSENT_RE.search(low) or _CONSENT_SKIP_RE.search(low) or _DEMOGRAPHIC.search(low):
+            # A demographic-DATA-processing consent is a required legal box, not a self-ID → let it
+            # through the _DEMOGRAPHIC veto; a genuine protected-characteristic self-ID stays vetoed.
+            is_demo = bool(_DEMOGRAPHIC.search(low)) and not _DEMOGRAPHIC_CONSENT_RE.search(low)
+            if not _CONSENT_RE.search(low) or _CONSENT_SKIP_RE.search(low) or is_demo:
                 continue
             try:
                 await cb.check(timeout=2500)

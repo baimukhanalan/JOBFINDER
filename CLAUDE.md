@@ -610,7 +610,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   unfilled REQUIRED fields silently blocking 1Password/Ashby submits (verified live: the radio
   demographics already declined, but the checkbox racial survey + 'I agree' stayed blank). NO
   protected-characteristic is ever claimed — the demographic answer is always the decline option. Tests:
-  `test_dropdowns.py::test_consent_regex_matches_required_not_marketing`. So the user's ask to "pick a
+  `test_dropdowns.py::test_consent_regex_matches_required_not_marketing`. **The `_DEMOGRAPHIC` veto in
+  `fill_required_consent` is carved out for a demographic-DATA-CONSENT box (`_DEMOGRAPHIC_CONSENT_RE`,
+  2026-08-26):** Greenhouse's `gdpr_demographic_data_consent_given` ("I consent to <Co> collecting…my
+  responses to the demographic data surveys above") is a REQUIRED legal consent, not a self-ID — vetoing
+  it blocked datadog/smartsheet/varicent on "Please accept". Consenting to PROCESS a declined survey
+  claims nothing, so it's ticked; a real self-ID ("I am a person with a disability", "protected veteran")
+  has no consent verb → stays vetoed + blank. Also widened `_CONSENT_RE` for skillsoft's company-subject
+  phrasing ("Skillsoft **has my consent** to collect/store/process my data" — `consent to
+  (collect|stor|process)` + `has my consent`). `_CONSENT_SKIP_RE` still wins, so marketing never ticks.
+  Test: `test_dropdowns.py::test_demographic_data_consent_ticks_but_selfid_does_not`. So the user's ask to "pick a
   gender for the required field" is moot: 1Password (and its kind) offer 'Prefer not to say', which we
   select — no need to state a gender/orientation. **`_DECLINE_RE` must match "do not **want** to answer"**,
   not only "wish to": Greenhouse's Disability Status decline is "I do not want to answer", so a want-only

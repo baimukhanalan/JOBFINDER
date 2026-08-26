@@ -779,6 +779,7 @@ def _company_mass_snapshot(profile: str = "") -> dict:
     selected = profile if profile in profile_ids else (profiles[0]["id"] if profiles else "")
     try:
         companies = company_discovery_db.counts()
+        enrichment = company_discovery_db.enrichment_counts()
         jobs = company_jobs_db.counts()
         applications = company_apply_db.stats(selected) if selected else {
             "total": 0, "by_state": {}}
@@ -786,7 +787,9 @@ def _company_mass_snapshot(profile: str = "") -> dict:
             profile_id=selected, limit=75) if selected else []
         available, error = True, ""
     except Exception as exc:
-        companies, jobs = {"total": 0}, {"active": 0}
+        companies, enrichment, jobs = {"total": 0}, {
+            "domains": 0, "careers": 0, "ats": 0,
+            "domain_attempted": 0, "web_attempted": 0}, {"active": 0}
         applications, rows = {"total": 0, "by_state": {}}, []
         available, error = False, str(exc)[:240]
     if not available:
@@ -801,7 +804,7 @@ def _company_mass_snapshot(profile: str = "") -> dict:
                    "Основной контур заявок продолжает работать отдельно.")
     return {"available": available, "error": error, "message": message,
             "profiles": profiles, "selected_profile": selected,
-            "companies": companies, "jobs": jobs,
+            "companies": companies, "enrichment": enrichment, "jobs": jobs,
             "applications": applications, "rows": rows}
 
 
@@ -830,12 +833,18 @@ def _do_company_sync(limit: int) -> None:
                               "error": None})
     commands = [
         [sys.executable, "-m", "backend.tools.company_discovery", "collect",
-         "--source", "usaspending", "--limit", str(limit), "--country", "US"],
+         "--source", "gleif", "--limit", str(limit), "--country", "US"],
+        [sys.executable, "-m", "backend.tools.company_discovery", "resolve-domains",
+         "--limit", str(limit), "--workers", "4", "--min-interval", "0.25",
+         "--no-search-fallback", "--wikidata-api-bulk", "--bulk-size", "25"],
+        [sys.executable, "-m", "backend.tools.company_enrichment",
+         "--limit", str(limit), "--workers", "4", "--min-interval", "0.1"],
         [sys.executable, "-m", "backend.tools.company_jobs", "collect",
          "--status", "novel", "--limit-companies", str(limit)],
     ]
     try:
-        for phase, command in zip(("companies", "remote_jobs"), commands):
+        for phase, command in zip(
+                ("companies", "domains", "careers_ats", "remote_jobs"), commands):
             _COMPANY_SYNC_RUN["phase"] = phase
             result = subprocess.run(command, cwd=str(PROJECT_ROOT), text=True,
                                     capture_output=True, timeout=60 * 45)

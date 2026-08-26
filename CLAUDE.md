@@ -91,7 +91,7 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
 `backend.tools.company_discovery` builds a separate `company_discovery` table from company/entity
 registries, not from vacancies. It MUST NOT be wired into `applier.discovery.py`, `targets.json`,
 `discovered_slugs.json`, `boards.collect()` or `job_catalog` acquisition. Supported inputs are SEC
-EDGAR, USAspending and optional SAM.gov (`SAM_API_KEY`). SEC also supports the nightly
+EDGAR, USAspending, GLEIF's public LEI Registry, and optional SAM.gov (`SAM_API_KEY`). SEC also supports the nightly
 `submissions.zip` via `--sec-bulk`, or a locally downloaded archive via `--sec-archive` when SEC
 blocks the server IP. `--enrich-web` starts only from a source-provided official domain, discovers a
 careers page and fingerprints Greenhouse/Lever/Ashby/Workable/Workday/SmartRecruiters/iCIMS/Oracle/
@@ -99,9 +99,11 @@ SAP SuccessFactors. It never promotes a company into the vacancy catalog automat
 
 After import, `reconcile_records()` reads `job_catalog` only as an exclusion snapshot: exact domain
 or `(ATS, slug)` → `known`; name-only similarity → `possible_duplicate`; otherwise → `novel`.
-No dashboard route or navigation item exists for this phase. Commands:
+The `/mass-hiring` dashboard section may display Company Master and enrichment counters,
+but acquisition and persistence remain isolated from the legacy vacancy pipeline. Commands:
 
 - dry smoke: `python -m backend.tools.company_discovery collect --source usaspending --limit 5 --dry-run`
+- 10k US seed: `python -m backend.tools.company_discovery collect --source gleif --limit 10000 --max-pages 50`
 - initialize/store: `python -m backend.tools.company_discovery init`, then `collect --source ...`
 - inspect/export: `python -m backend.tools.company_discovery stats` / `export --status novel --output novel.jsonl`
 

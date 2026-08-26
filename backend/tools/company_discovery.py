@@ -5,6 +5,7 @@ Examples:
   python -m backend.tools.company_discovery collect --source usaspending --limit 100
   python -m backend.tools.company_discovery collect --source sec --sec-bulk --limit 10000
   python -m backend.tools.company_discovery collect --source sam --limit 1000
+  python -m backend.tools.company_discovery collect --source gleif --limit 10000 --max-pages 50
   python -m backend.tools.company_discovery stats
   python -m backend.tools.company_discovery export --status novel --output novel.jsonl
 
@@ -18,16 +19,20 @@ import csv
 import json
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.tools import company_discovery_db as company_db
 from backend.tools import company_sources
 from backend.tools.company_enrichment import enrich_company
+from backend.tools.company_domain_resolver import (
+    RateLimiter, bulk_mediawiki_candidates, bulk_wikidata_candidates,
+    resolve_company, resolve_from_candidates,
+)
 
 
-_SOURCE_NAMES = ("sec", "usaspending", "sam")
+_SOURCE_NAMES = ("sec", "usaspending", "sam", "gleif")
 
 
 def _external_ids(record: dict) -> dict[str, str]:
@@ -38,6 +43,8 @@ def _external_ids(record: dict) -> dict[str, str]:
         return {"sec_cik": external_id}
     if source == "sam_gov":
         return {"sam_uei": external_id}
+    if source == "gleif_lei":
+        return {"lei": external_id}
     if source == "usaspending":
         uei = str(metadata.get("uei") or "")
         return {"sam_uei": uei} if uei else {"usaspending": external_id}
@@ -73,6 +80,9 @@ def fetch_source(source: str, *, limit: int, sec_bulk: bool = False,
     if source == "usaspending":
         return company_sources.fetch_usaspending_recipients(
             limit=limit, max_pages=max_pages)
+    if source == "gleif":
+        return company_sources.fetch_gleif_companies(
+            limit=limit, max_pages=max_pages, country="US")
     if source == "sam":
         if not os.getenv("SAM_API_KEY"):
             raise RuntimeError("SAM_API_KEY is required for --source sam")
@@ -160,6 +170,190 @@ def _export_command(args) -> dict:
     return {"exported": len(records), "output": str(path), "format": args.format}
 
 
+def _resolve_domains_command(args) -> dict:
+    rows = company_db.list_without_domain(
+        limit=args.limit, source=args.source_name, offset=args.offset,
+        retry_attempted=args.retry_attempted)
+    ambiguous_ids = _ambiguous_company_ids(rows)
+    limiter = RateLimiter(args.min_interval)
+    if args.wikidata_bulk or args.wikidata_api_bulk:
+        return _resolve_domains_bulk(rows, args, limiter, ambiguous_ids)
+    resolved: list[tuple[dict, dict]] = []
+    provider_counts: dict[str, int] = {}
+    errors = 0
+    bulk_map = None
+    bulk_available = False
+    bulk_completed: set[int] = set()
+    bulk_failed: set[int] = set()
+    if args.wikidata_bulk and rows:
+        bulk_map, bulk_completed, bulk_failed = bulk_wikidata_candidates(
+            rows, limiter=limiter, batch_size=args.bulk_size)
+        bulk_available = bool(bulk_completed)
+
+    def work(row: dict):
+        attempt: dict = {}
+        if int(row["id"]) in ambiguous_ids:
+            attempt.update({
+                "attempted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "resolver": "company_name_guard", "result": "ambiguous_name",
+            })
+            result = None
+        elif args.wikidata_bulk and int(row["id"]) in bulk_completed:
+            result = resolve_from_candidates(
+                row, bulk_map.get(int(row["id"]), []), limiter=limiter,
+                threshold=args.threshold, attempt_out=attempt)
+        elif (not args.wikidata_bulk or
+              (args.bulk_per_item_fallback and int(row["id"]) in bulk_failed)):
+            result = resolve_company(
+                row, limiter=limiter, search_fallback=not args.no_search_fallback,
+                threshold=args.threshold, attempt_out=attempt)
+        else:
+            attempt.update({
+                "attempted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "resolver": "wikidata_sparql_p856", "result": "provider_unavailable",
+            })
+            result = None
+        return result, attempt
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = {pool.submit(work, row): row for row in rows}
+        for future in as_completed(futures):
+            try:
+                result, attempt = future.result()
+            except Exception:
+                # One malformed/temporarily failing public response must not abort
+                # an otherwise resumable bounded batch.
+                errors += 1
+                continue
+            if result:
+                resolved.append((futures[future], result))
+                provider = result["domain_resolution"]["resolver"]
+                provider_counts[provider] = provider_counts.get(provider, 0) + 1
+            else:
+                resolved.append((futures[future], {"domain_resolution": attempt}))
+
+    updated = 0
+    attempted = 0
+    transient_errors = errors
+    if not args.dry_run:
+        successful = [(row, result) for row, result in resolved if result.get("domain")]
+        negative = [(row["id"], result["domain_resolution"])
+                    for row, result in resolved
+                    if not result.get("domain") and (
+                        (int(row["id"]) in bulk_completed
+                         and result["domain_resolution"].get("result") == "no_exact_match")
+                        or (not args.wikidata_bulk
+                            and result["domain_resolution"].get("result") == "unresolved"))]
+        transient_errors += sum(
+            1 for _row, result in resolved
+            if not result.get("domain")
+            and result["domain_resolution"].get("result") in
+                ("verification_failed", "provider_unavailable", "ambiguous_name"))
+        for row, result in successful:
+            updated += int(company_db.update_resolved_company(row["id"], result))
+        attempted = company_db.record_domain_resolution_attempts(negative)
+    resolved_count = sum(1 for _row, result in resolved if result.get("domain"))
+    return {
+        "selected": len(rows), "resolved": resolved_count, "updated": updated,
+        "unresolved_recorded": attempted,
+        "dry_run": bool(args.dry_run), "providers": provider_counts,
+        "errors": errors, "transient_errors": transient_errors,
+        "bulk_used": bool(args.wikidata_bulk and bulk_completed),
+        "bulk_fallback": bool(args.wikidata_bulk and bulk_failed),
+        "bulk_completed": len(bulk_completed), "bulk_retryable": len(bulk_failed),
+        "coverage": round(resolved_count / len(rows), 4) if rows else 0.0,
+    }
+
+
+def _ambiguous_company_ids(rows: list[dict]) -> set[int]:
+    """Return rows whose names cannot identify one legal entity in this batch."""
+    by_name: dict[str, set[int]] = {}
+    for row in rows:
+        company_id = int(row["id"])
+        for field in ("legal_name", "trade_name", "canonical_name"):
+            name = company_db.normalize_company_name(row.get(field))
+            if name:
+                by_name.setdefault(name, set()).add(company_id)
+    return {company_id for ids in by_name.values() if len(ids) > 1 for company_id in ids}
+
+
+def _resolve_domains_bulk(rows: list[dict], args, limiter: RateLimiter,
+                          ambiguous_ids: set[int] | None = None) -> dict:
+    """Resolve SPARQL chunks concurrently and checkpoint each completed chunk."""
+    ambiguous_ids = ambiguous_ids or set()
+    resolvable = [row for row in rows if int(row["id"]) not in ambiguous_ids]
+    chunk_size = 100
+    chunks = [resolvable[i:i + chunk_size]
+              for i in range(0, len(resolvable), chunk_size)]
+
+    def process(chunk: list[dict]) -> dict:
+        bulk_fn = bulk_mediawiki_candidates if args.wikidata_api_bulk \
+            else bulk_wikidata_candidates
+        mapping, completed, failed = bulk_fn(
+            chunk, limiter=limiter, batch_size=args.bulk_size)
+        successful: list[tuple[dict, dict]] = []
+        negative: list[tuple[int, dict]] = []
+        verification_failed = 0
+        for row in chunk:
+            company_id = int(row["id"])
+            if company_id not in completed:
+                continue
+            attempt: dict = {}
+            result = resolve_from_candidates(
+                row, mapping.get(company_id, []), limiter=limiter,
+                threshold=args.threshold, attempt_out=attempt,
+                resolver_name=("wikidata_api_p856" if args.wikidata_api_bulk
+                               else "wikidata_sparql_p856"))
+            if result:
+                successful.append((row, result))
+            elif attempt.get("result") == "no_exact_match":
+                negative.append((company_id, attempt))
+            else:
+                verification_failed += 1
+        updated = unresolved = 0
+        if not args.dry_run:
+            for row, result in successful:
+                updated += int(company_db.update_resolved_company(row["id"], result))
+            unresolved = company_db.record_domain_resolution_attempts(negative)
+        providers: dict[str, int] = {}
+        for _row, result in successful:
+            provider = result["domain_resolution"]["resolver"]
+            providers[provider] = providers.get(provider, 0) + 1
+        return {
+            "resolved": len(successful), "updated": updated,
+            "unresolved": unresolved, "completed": len(completed),
+            "retryable": len(failed) + verification_failed,
+            "providers": providers,
+        }
+
+    totals = {"resolved": 0, "updated": 0, "unresolved": 0,
+              "completed": 0, "retryable": len(ambiguous_ids)}
+    providers: dict[str, int] = {}
+    errors = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = [pool.submit(process, chunk) for chunk in chunks]
+        for future, chunk in zip(futures, chunks):
+            try:
+                result = future.result()
+            except Exception:
+                errors += 1
+                totals["retryable"] += len(chunk)
+                continue
+            for key in totals:
+                totals[key] += result[key]
+            for provider, count in result["providers"].items():
+                providers[provider] = providers.get(provider, 0) + count
+    return {
+        "selected": len(rows), "resolved": totals["resolved"],
+        "updated": totals["updated"], "unresolved_recorded": totals["unresolved"],
+        "dry_run": bool(args.dry_run), "providers": providers, "errors": errors,
+        "transient_errors": totals["retryable"], "bulk_used": totals["completed"] > 0,
+        "bulk_fallback": totals["retryable"] > 0,
+        "bulk_completed": totals["completed"], "bulk_retryable": totals["retryable"],
+        "coverage": round(totals["resolved"] / len(rows), 4) if rows else 0.0,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Independent US company discovery (separate from vacancy collection)")
@@ -189,6 +383,31 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--limit", type=int, default=0)
     sub.add_parser("stats", help="show company discovery counts")
 
+    resolve = sub.add_parser(
+        "resolve-domains",
+        help="resolve missing official domains without reading vacancy-derived data")
+    resolve.add_argument("--limit", type=int, default=100)
+    resolve.add_argument("--offset", type=int, default=0)
+    resolve.add_argument("--source-name")
+    resolve.add_argument("--workers", type=int, default=2,
+                         help="bounded concurrency (maximum 4)")
+    resolve.add_argument("--min-interval", type=float, default=1.0,
+                         help="global delay between public request starts (minimum 0.25s)")
+    resolve.add_argument("--threshold", type=float, default=0.88)
+    resolve.add_argument("--no-search-fallback", action="store_true",
+                         help="use only exact-name Wikidata P856 evidence")
+    resolve.add_argument("--dry-run", action="store_true")
+    resolve.add_argument("--retry-attempted", action="store_true",
+                         help="retry rows with a previous negative resolution attempt")
+    resolve.add_argument("--wikidata-bulk", action="store_true",
+                         help="use exact-label Wikidata SPARQL VALUES batches")
+    resolve.add_argument("--wikidata-api-bulk", action="store_true",
+                         help="use exact-title MediaWiki wbgetentities batches")
+    resolve.add_argument("--bulk-size", type=int, default=75,
+                         help="labels per SPARQL request (25-100)")
+    resolve.add_argument("--bulk-per-item-fallback", action="store_true",
+                         help="explicitly fall back to slow per-company Wikidata requests")
+
     export = sub.add_parser("export", help="export discovered companies")
     export.add_argument("--status", choices=company_db.STATUSES)
     export.add_argument("--source-name")
@@ -214,6 +433,22 @@ def main(argv: list[str] | None = None) -> int:
                       "counts": company_db.counts()}
         elif args.command == "stats":
             result = company_db.counts()
+        elif args.command == "resolve-domains":
+            if args.limit < 1:
+                raise ValueError("--limit must be at least 1")
+            if not 1 <= args.workers <= 4:
+                raise ValueError("--workers must be between 1 and 4")
+            if args.min_interval < 0.25:
+                raise ValueError("--min-interval must be at least 0.25 seconds")
+            if not 0.8 <= args.threshold <= 1.0:
+                raise ValueError("--threshold must be between 0.8 and 1.0")
+            if not 25 <= args.bulk_size <= 100:
+                raise ValueError("--bulk-size must be between 25 and 100")
+            if args.wikidata_bulk and args.wikidata_api_bulk:
+                raise ValueError("choose only one Wikidata bulk mode")
+            if (args.wikidata_bulk or args.wikidata_api_bulk) and not args.no_search_fallback:
+                raise ValueError("Wikidata bulk modes require --no-search-fallback")
+            result = _resolve_domains_command(args)
         else:
             result = _export_command(args)
     except Exception as exc:

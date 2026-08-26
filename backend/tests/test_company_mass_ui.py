@@ -10,6 +10,8 @@ def _snapshot(**overrides):
         "message": "Основной контур не затронут.",
         "profiles": [{"id": "alan", "name": "Alan B"}],
         "companies": {"total": 1200},
+        "enrichment": {"domains": 410, "careers": 280, "ats": 190,
+                       "domain_attempted": 940, "web_attempted": 450},
         "jobs": {"active": 84},
         "applications": {"total": 3, "by_state": {
             "awaiting_approval": 2, "auto_submitted": 1}},
@@ -30,6 +32,10 @@ def test_mass_hiring_page_uses_shared_shell_and_only_new_routes():
         selected_profile="alan")
     assert "JobFinder — Массовый найм" in html
     assert "Массовый найм" in html
+    assert "Обогащение Company Master" in html
+    assert "410" in html and "280" in html and "190" in html
+    assert "940" in html and "450" in html
+    assert "доменов проверено" in html and "сайтов проверено" in html
     assert 'href="/mass-hiring"' in html
     assert "/mass-hiring/sync" in html
     assert "/mass-hiring/build" in html

@@ -21,6 +21,85 @@ def test_record_contract_and_domain_normalization():
     assert row["metadata"] == {}
 
 
+def test_gleif_parser_requires_us_general_entity_and_preserves_provenance():
+    payload = {
+        "meta": {"goldenCopy": {"publishDate": "2026-08-25T08:00:00Z"}},
+        "data": [
+            {
+                "id": "LEI-US-1",
+                "attributes": {
+                    "lei": "LEI-US-1",
+                    "entity": {
+                        "legalName": {"name": "Acme Holdings LLC"},
+                        "otherNames": [{"name": "Acme"}],
+                        "legalAddress": {"country": "US", "region": "US-DE"},
+                        "headquartersAddress": {"country": "US", "region": "US-NY"},
+                        "jurisdiction": "US-DE", "status": "ACTIVE",
+                        "category": "GENERAL", "legalForm": {"id": "HZEH"},
+                        "registeredAt": {"id": "RA000602"}, "registeredAs": "123",
+                    },
+                    "registration": {"status": "ISSUED", "lastUpdateDate": "2026-08-24"},
+                },
+                "links": {"self": "https://api.gleif.org/api/v1/lei-records/LEI-US-1"},
+            },
+            {
+                "id": "LEI-CA-1",
+                "attributes": {"entity": {
+                    "legalName": {"name": "Canadian Acme"},
+                    "legalAddress": {"country": "CA"},
+                }},
+            },
+            {
+                "id": "LEI-FUND-1",
+                "attributes": {"entity": {
+                    "legalName": {"name": "Acme Fund"},
+                    "legalAddress": {"country": "US"},
+                    "category": "FUND", "status": "ACTIVE",
+                }},
+            },
+        ],
+    }
+    rows = cs.parse_gleif_lei_records(payload)
+    assert len(rows) == 1
+    assert rows[0]["source_external_id"] == "LEI-US-1"
+    assert rows[0]["trade_name"] == "Acme"
+    assert rows[0]["states"] == ["DE", "NY"]
+    assert rows[0]["source_observed_at"] == "2026-08-25T08:00:00Z"
+    assert rows[0]["metadata"]["registration_status"] == "ISSUED"
+
+
+def test_gleif_fetch_paginates_deduplicates_retries_and_filters_general_active():
+    calls = []
+    sleeps = []
+
+    def item(lei):
+        return {"id": lei, "attributes": {"lei": lei, "entity": {
+            "legalName": {"name": f"Company {lei}"},
+            "legalAddress": {"country": "US", "region": "US-CA"},
+        }}}
+
+    def handler(request):
+        page = int(request.url.params["page[number]"])
+        calls.append(page)
+        assert request.url.params["filter[entity.legalAddress.country]"] == "US"
+        assert request.url.params["filter[entity.category]"] == "GENERAL"
+        assert request.url.params["filter[entity.status]"] == "ACTIVE"
+        if len(calls) == 1:
+            return httpx.Response(503, headers={"Retry-After": "0"})
+        if page == 1:
+            return httpx.Response(200, json={
+                "data": [item("LEI1"), item("LEI2")], "links": {"next": "page2"}})
+        return httpx.Response(200, json={
+            "data": [item("LEI2"), item("LEI3")], "links": {"next": None}})
+
+    with _client(handler) as client:
+        rows = cs.fetch_gleif_companies(
+            limit=3, page_size=2, max_pages=3, client=client, sleep=sleeps.append)
+    assert calls == [1, 1, 2]
+    assert sleeps == [0.0]
+    assert [row["source_external_id"] for row in rows] == ["LEI1", "LEI2", "LEI3"]
+
+
 def test_parse_sec_tickers_is_bounded_and_normalized():
     rows = cs.parse_sec_tickers({
         "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},

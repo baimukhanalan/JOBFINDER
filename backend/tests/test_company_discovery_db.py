@@ -102,6 +102,26 @@ class FakeCursor:
         self.calls.append((sql, values))
         self.rowcount = len(values)
 
+    def execute(self, sql, values=()):
+        self.calls.append((sql, values))
+
+    def fetchall(self):
+        return []
+
+
+def test_schema_migrates_source_provenance_columns(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_cur(dict_rows=True):
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    db.ensure_schema()
+    sql = "\n".join(call[0] for call in cursor.calls)
+    assert "ADD COLUMN IF NOT EXISTS source_url" in sql
+    assert "ADD COLUMN IF NOT EXISTS source_observed_at" in sql
+
 
 def test_upsert_uses_source_identity_boundary(monkeypatch):
     cursor = FakeCursor()
@@ -124,3 +144,41 @@ def test_upsert_uses_source_identity_boundary(monkeypatch):
 def test_empty_upsert_does_not_open_database(monkeypatch):
     monkeypatch.setattr(db, "_cur", lambda *_: pytest.fail("database was opened"))
     assert db.upsert_records([]) == 0
+
+
+def test_enrichment_candidates_require_domain_and_are_bounded(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_cur(dict_rows=True):
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    assert db.list_enrichment_candidates(limit=25) == []
+    sql, values = cursor.calls[0]
+    assert "domain IS NOT NULL" in sql
+    assert "provenance ? 'web_enrichment'" in sql
+    assert "ORDER BY id LIMIT %s" in sql
+    assert values == (25,)
+
+
+def test_enrichment_update_only_writes_enrichment_fields(monkeypatch):
+    cursor = FakeCursor()
+
+    @contextmanager
+    def fake_cur(dict_rows=True):
+        yield cursor
+
+    monkeypatch.setattr(db, "_cur", fake_cur)
+    updated = db.update_enrichment_results([{
+        "id": 7, "careers_url": "https://acme.test/careers",
+        "ats": "Lever", "ats_slug": "acme", "ats_url": "https://jobs.lever.co/acme",
+        "domain_confidence": 0.9, "careers_confidence": 0.95,
+        "provenance": {"web_enrichment": {"result": "ats_found"}},
+    }])
+    assert updated == 1
+    sql, values = cursor.calls[0]
+    assert "careers_url=COALESCE" in sql
+    assert "provenance=provenance ||" in sql
+    assert "domain=" not in sql
+    assert values[0][1:4] == ("lever", "acme", "https://jobs.lever.co/acme")

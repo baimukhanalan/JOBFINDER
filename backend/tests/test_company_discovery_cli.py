@@ -32,6 +32,11 @@ def test_prepare_source_record_adds_provenance_and_namespaced_id():
     assert row["discovery_confidence"] == 1.0
 
 
+def test_prepare_gleif_record_uses_lei_namespace():
+    row = cli.prepare_source_record(_record("gleif_lei", "LEI123"))
+    assert row["external_ids"] == {"lei": "LEI123"}
+
+
 def test_collect_records_filters_country_and_never_reads_catalog(monkeypatch):
     rows = [_record(), {**_record(external_id="2"), "country": "CA"}]
     monkeypatch.setattr(cli, "fetch_source", lambda *args, **kwargs: rows)

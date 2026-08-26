@@ -291,6 +291,10 @@ def ensure_schema() -> None:
           updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
           UNIQUE (source, source_external_id)
         );""")
+        cur.execute("ALTER TABLE company_discovery ADD COLUMN IF NOT EXISTS source_url TEXT")
+        cur.execute(
+            "ALTER TABLE company_discovery ADD COLUMN IF NOT EXISTS "
+            "source_observed_at TIMESTAMPTZ")
         cur.execute("CREATE INDEX IF NOT EXISTS cd_status ON company_discovery (status)")
         cur.execute("CREATE INDEX IF NOT EXISTS cd_name ON company_discovery (canonical_name)")
         cur.execute("CREATE INDEX IF NOT EXISTS cd_domain ON company_discovery (domain)")
@@ -412,6 +416,149 @@ def list_companies(status: str | None = None, source: str | None = None,
                     + " ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
                     tuple(args) + (int(limit), int(offset)))
         return [dict(row) for row in cur.fetchall()]
+
+
+def list_enrichment_candidates(*, limit: int = 1000,
+                               retry_attempted: bool = False) -> list[dict]:
+    """Return a bounded stable batch with domains, without doing domain discovery."""
+    attempted = "" if retry_attempted else \
+        " AND NOT (provenance ? 'web_enrichment')"
+    with _cur() as cur:
+        cur.execute(
+            "SELECT * FROM company_discovery WHERE domain IS NOT NULL AND domain<>''"
+            + attempted + " ORDER BY id LIMIT %s", (max(1, int(limit)),))
+        return [dict(row) for row in cur.fetchall()]
+
+
+def update_enrichment_results(rows: list[dict]) -> int:
+    """Persist only careers/ATS evidence; never overwrite acquisition identity."""
+    if not rows:
+        return 0
+    values = []
+    for row in rows:
+        provenance = row.get("provenance") or {}
+        evidence = {"web_enrichment": provenance.get("web_enrichment", {})}
+        values.append((
+            row.get("careers_url") or None,
+            normalize_ats(row.get("ats")) or None,
+            normalize_slug(row.get("ats_slug")) or None,
+            row.get("ats_url") or None,
+            row.get("domain_confidence"),
+            row.get("careers_confidence"),
+            Json(evidence) if Json is not None else evidence,
+            int(row["id"]),
+        ))
+    with _cur(False) as cur:
+        cur.executemany("""
+          UPDATE company_discovery SET
+            careers_url=COALESCE(%s,careers_url),
+            ats=COALESCE(%s,ats), ats_slug=COALESCE(%s,ats_slug),
+            ats_url=COALESCE(%s,ats_url),
+            domain_confidence=GREATEST(COALESCE(domain_confidence,0),COALESCE(%s,0)),
+            careers_confidence=GREATEST(COALESCE(careers_confidence,0),COALESCE(%s,0)),
+            provenance=provenance || %s, updated_at=now()
+          WHERE id=%s
+        """, values)
+        return cur.rowcount
+
+
+def enrichment_counts() -> dict[str, int]:
+    with _cur(False) as cur:
+        cur.execute("""
+          SELECT
+            COUNT(*) FILTER (WHERE domain IS NOT NULL AND domain<>'') AS domains,
+            COUNT(*) FILTER (WHERE careers_url IS NOT NULL AND careers_url<>'') AS careers,
+            COUNT(*) FILTER (WHERE ats IS NOT NULL AND ats<>'') AS ats,
+            COUNT(*) FILTER (WHERE provenance ? 'domain_resolution') AS domain_attempted,
+            COUNT(*) FILTER (WHERE provenance ? 'web_enrichment') AS web_attempted
+          FROM company_discovery
+        """)
+        domains, careers, ats, domain_attempted, web_attempted = cur.fetchone()
+    return {"domains": domains, "careers": careers, "ats": ats,
+            "domain_attempted": domain_attempted, "web_attempted": web_attempted,
+            # Backwards-compatible alias for existing CLI/API consumers.
+            "attempted": web_attempted}
+
+
+def list_without_domain(*, limit: int = 100, source: str | None = None,
+                        offset: int = 0, retry_attempted: bool = False) -> list[dict]:
+    """Return only discovery rows which still need an official-domain lookup.
+
+    This query intentionally touches no vacancy/catalog table.  A stable ID order
+    makes bounded/resumable enrichment runs predictable.
+    """
+    where = ["NULLIF(BTRIM(domain), '') IS NULL"]
+    if not retry_attempted:
+        where.append("NOT (COALESCE(provenance, '{}'::jsonb) ? 'domain_resolution')")
+    args: list[object] = []
+    if source:
+        where.append("source=%s")
+        args.append(source.casefold())
+    with _cur() as cur:
+        cur.execute(
+            "SELECT * FROM company_discovery WHERE " + " AND ".join(where)
+            + " ORDER BY id LIMIT %s OFFSET %s",
+            tuple(args) + (max(0, int(limit)), max(0, int(offset))),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def record_domain_resolution_attempts(rows: list[tuple[int, dict]]) -> int:
+    """Persist completed negative lookups so the default batch is resumable."""
+    if not rows:
+        return 0
+    values = [
+        (Json(evidence) if Json is not None else evidence, int(company_id))
+        for company_id, evidence in rows
+    ]
+    with _cur(False) as cur:
+        cur.executemany(
+            """
+            UPDATE company_discovery SET
+              provenance=COALESCE(provenance, '{}'::jsonb)
+                || jsonb_build_object('domain_resolution', %s::jsonb),
+              updated_at=now()
+            WHERE id=%s AND NULLIF(BTRIM(domain), '') IS NULL
+            """,
+            values,
+        )
+        return cur.rowcount
+
+
+def update_resolved_company(company_id: int, enrichment: dict) -> bool:
+    """Persist a verified domain and optional careers/ATS signals for one row.
+
+    The ``domain IS NULL`` predicate prevents a background run from overwriting a
+    domain supplied by a newer source/manual decision.  Resolver evidence is
+    merged below ``provenance.domain_resolution`` instead of replacing source
+    provenance.
+    """
+    domain = normalize_domain(enrichment.get("domain"))
+    confidence = float(enrichment.get("domain_confidence") or 0.0)
+    evidence = enrichment.get("domain_resolution") or {}
+    if not domain or not (0.0 <= confidence <= 1.0):
+        raise ValueError("verified domain and confidence in [0,1] are required")
+    with _cur(False) as cur:
+        cur.execute(
+            """
+            UPDATE company_discovery SET
+              domain=%s,
+              careers_url=COALESCE(NULLIF(%s, ''), careers_url),
+              ats=COALESCE(NULLIF(%s, ''), ats),
+              ats_slug=COALESCE(NULLIF(%s, ''), ats_slug),
+              ats_url=COALESCE(NULLIF(%s, ''), ats_url),
+              domain_confidence=%s,
+              careers_confidence=COALESCE(%s, careers_confidence),
+              provenance=COALESCE(provenance, '{}'::jsonb)
+                || jsonb_build_object('domain_resolution', %s::jsonb),
+              updated_at=now()
+            WHERE id=%s AND NULLIF(BTRIM(domain), '') IS NULL
+            """,
+            (domain, enrichment.get("careers_url"), enrichment.get("ats"),
+             enrichment.get("ats_slug"), enrichment.get("ats_url"), confidence,
+             enrichment.get("careers_confidence"), Json(evidence), int(company_id)),
+        )
+        return cur.rowcount == 1
 
 
 def counts() -> dict:

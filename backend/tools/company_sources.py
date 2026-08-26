@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import io
 import json
+import time
 import zipfile
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -23,6 +24,7 @@ SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 SEC_SUBMISSIONS_BULK_URL = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
 USASPENDING_RECIPIENTS_URL = "https://api.usaspending.gov/api/v2/recipient/"
 SAM_ENTITIES_URL = "https://api.sam.gov/entity-information/v3/entities"
+GLEIF_LEI_RECORDS_URL = "https://api.gleif.org/api/v1/lei-records"
 
 # SEC asks automated clients to identify themselves.  Deployments should override
 # this with SEC_USER_AGENT and include a monitored contact address.
@@ -43,6 +45,8 @@ US_STATE_CODES = frozenset({
 RECORD_FIELDS = (
     "source",
     "source_external_id",
+    "source_url",
+    "source_observed_at",
     "legal_name",
     "trade_name",
     "domain",
@@ -104,6 +108,7 @@ def _states(*values: Any) -> list[str]:
 
 def company_record(
     *, source: str, source_external_id: Any, legal_name: Any,
+    source_url: Any = "", source_observed_at: Any = "",
     trade_name: Any = "", domain: Any = "", careers_url: Any = "",
     country: Any = "US", states: Any = None, industry: Any = "",
     naics: Any = "", employee_size: Any = "", ats: Any = "",
@@ -113,6 +118,8 @@ def company_record(
     record = {
         "source": _text(source),
         "source_external_id": _text(source_external_id),
+        "source_url": _text(source_url) or None,
+        "source_observed_at": _text(source_observed_at) or None,
         "legal_name": _text(legal_name),
         "trade_name": _text(trade_name),
         "domain": _domain(domain),
@@ -129,6 +136,139 @@ def company_record(
     }
     assert tuple(record) == RECORD_FIELDS
     return record
+
+
+def parse_gleif_lei_records(payload: Any) -> list[dict[str, Any]]:
+    """Parse a US GLEIF JSON:API page into the stable discovery contract."""
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        return []
+    meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else {}
+    golden = meta.get("goldenCopy") if isinstance(meta.get("goldenCopy"), Mapping) else {}
+    observed_at = _text(golden.get("publishDate"))
+    records: list[dict[str, Any]] = []
+    for item in payload["data"]:
+        if not isinstance(item, Mapping):
+            continue
+        attributes = item.get("attributes")
+        attributes = attributes if isinstance(attributes, Mapping) else {}
+        entity = attributes.get("entity")
+        entity = entity if isinstance(entity, Mapping) else {}
+        legal_name = entity.get("legalName")
+        legal_name = legal_name if isinstance(legal_name, Mapping) else {}
+        legal_address = entity.get("legalAddress")
+        legal_address = legal_address if isinstance(legal_address, Mapping) else {}
+        headquarters = entity.get("headquartersAddress")
+        headquarters = headquarters if isinstance(headquarters, Mapping) else {}
+        lei = _text(_first(attributes, "lei") or item.get("id"))
+        name = _text(legal_name.get("name"))
+        country = _text(legal_address.get("country")).upper()
+        if country in {"USA", "UNITED STATES", "UNITED STATES OF AMERICA"}:
+            country = "US"
+        category = _text(entity.get("category")).upper()
+        entity_status = _text(entity.get("status")).upper()
+        # Defense in depth: never trust a caller to have supplied the API filter.
+        if (not lei or not name or country != "US"
+                or (category and category != "GENERAL")
+                or (entity_status and entity_status != "ACTIVE")):
+            continue
+        other_names = entity.get("otherNames")
+        other_names = other_names if isinstance(other_names, list) else []
+        trade_name = next(
+            (_text(other.get("name")) for other in other_names
+             if isinstance(other, Mapping) and _text(other.get("name"))), "")
+        registration = attributes.get("registration")
+        registration = registration if isinstance(registration, Mapping) else {}
+        legal_form = entity.get("legalForm")
+        legal_form = legal_form if isinstance(legal_form, Mapping) else {}
+        registered_at = entity.get("registeredAt")
+        registered_at = registered_at if isinstance(registered_at, Mapping) else {}
+        links = item.get("links") if isinstance(item.get("links"), Mapping) else {}
+        jurisdiction = _text(entity.get("jurisdiction"))
+        states = [
+            value[3:] if _text(value).upper().startswith("US-") else value
+            for value in (legal_address.get("region"), headquarters.get("region"), jurisdiction)
+            if value
+        ]
+        records.append(company_record(
+            source="gleif_lei", source_external_id=lei,
+            source_url=_text(links.get("self")) or f"{GLEIF_LEI_RECORDS_URL}/{lei}",
+            source_observed_at=observed_at or registration.get("lastUpdateDate"),
+            legal_name=name, trade_name=trade_name, country=country, states=states,
+            metadata={
+                "lei": lei,
+                "jurisdiction": jurisdiction,
+                "entity_status": entity_status,
+                "entity_category": category,
+                "legal_form_id": _text(legal_form.get("id")),
+                "registered_at": _text(registered_at.get("id")),
+                "registered_as": _text(entity.get("registeredAs")),
+                "registration_status": _text(registration.get("status")),
+                "last_update_date": _text(registration.get("lastUpdateDate")),
+            },
+        ))
+    return records
+
+
+def fetch_gleif_companies(
+    *, limit: int = 1000, page_size: int = 200, max_pages: int = 20,
+    country: str = "US", retries: int = 3, client: httpx.Client | None = None,
+    sleep=time.sleep,
+) -> list[dict[str, Any]]:
+    """Fetch active general entities from the public GLEIF LEI Registry.
+
+    Restricting category to GENERAL excludes funds, branches and other special-purpose
+    categories, producing a materially more employer-relevant starting universe.
+    """
+    if limit <= 0 or max_pages <= 0:
+        return []
+    country = _country(country, default="US")
+    size = max(1, min(int(page_size), 200))
+    request_size = min(size, int(limit))
+    http, owned = _client(client, {"User-Agent": DEFAULT_SEC_USER_AGENT})
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        for page in range(1, max_pages + 1):
+            response = None
+            for attempt in range(max(0, int(retries)) + 1):
+                response = http.get(
+                    GLEIF_LEI_RECORDS_URL,
+                    params={
+                        "filter[entity.legalAddress.country]": country,
+                        "filter[entity.category]": "GENERAL",
+                        "filter[entity.status]": "ACTIVE",
+                        "page[number]": page,
+                        # Keep page size stable: changing it mid-pagination changes
+                        # offsets and can repeat or skip records after a duplicate.
+                        "page[size]": request_size,
+                    },
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if response.status_code not in {429, 500, 502, 503, 504}:
+                    break
+                if attempt < retries:
+                    retry_after = response.headers.get("Retry-After", "")
+                    delay = float(retry_after) if retry_after.replace(".", "", 1).isdigit() \
+                        else min(2 ** attempt, 8)
+                    sleep(delay)
+            assert response is not None
+            response.raise_for_status()
+            body = response.json()
+            parsed = parse_gleif_lei_records(body)
+            for record in parsed:
+                lei = record["source_external_id"]
+                if lei not in seen:
+                    seen.add(lei)
+                    records.append(record)
+                    if len(records) >= limit:
+                        return records
+            links = body.get("links") if isinstance(body, Mapping) else {}
+            if not parsed or not (links or {}).get("next"):
+                break
+        return records
+    finally:
+        if owned:
+            http.close()
 
 
 def parse_sec_tickers(payload: Any, limit: int = 0) -> list[dict[str, Any]]:

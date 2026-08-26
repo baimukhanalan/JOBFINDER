@@ -81,6 +81,7 @@ def render_page(snapshot: dict, run: dict, *, selected_profile: str = "") -> str
         options = '<option value="">Нет готового реального профиля</option>'
 
     companies = snapshot.get("companies") or {}
+    enrichment = snapshot.get("enrichment") or {}
     jobs = snapshot.get("jobs") or {}
     apps = snapshot.get("applications") or {}
     by_state = apps.get("by_state") or {}
@@ -106,7 +107,7 @@ def render_page(snapshot: dict, run: dict, *, selected_profile: str = "") -> str
 @media(max-width:760px){main{padding:18px 14px 28px}.mh-head{display:block}.mh-runtime{display:inline-flex;margin-top:14px}.mh-grid{grid-template-columns:1fr 1fr}.mh-stat{padding:15px}.mh-control{grid-template-columns:1fr}.mh-actions{grid-column:auto;display:grid;grid-template-columns:1fr 1fr}.mh-actions .primary{grid-column:1/-1}.mh-row{grid-template-columns:minmax(0,1fr) auto}.mh-fit{display:none}.mh-state{font-size:9px}.mh-job>a{white-space:normal}.mh-list-head span{display:none}}
 </style>"""
     body = f"""
-<style>.mh-state.submit_approved{{background:var(--accent-soft);color:var(--accent-deep)}}.mh-confirm{{flex-direction:column}}.mh-confirm input{{width:100%;background:#fff}}</style>
+<style>.mh-state.submit_approved{{background:var(--accent-soft);color:var(--accent-deep)}}.mh-confirm{{flex-direction:column}}.mh-confirm input{{width:100%;background:#fff}}.mh-enrich{{display:flex;align-items:center;gap:22px;flex-wrap:wrap;margin:-8px 0 18px;padding:10px 16px;color:var(--ink-soft);background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm)}}.mh-enrich b{{color:var(--ink);margin-right:auto}}.mh-enrich span strong{{font-family:var(--ff-mono);color:var(--accent-deep);margin-right:5px}}@media(max-width:760px){{.mh-enrich{{gap:8px 16px;margin-top:-6px}}.mh-enrich b{{width:100%}}}}</style>
 <section class="mh">
   <header class="mh-head"><div><h1>Массовый найм</h1><p>Независимая база компаний и REMOTE-вакансий. Очередь и браузерный worker отделены от основного каталога JobFinder.</p></div><div class="mh-runtime {runtime_class}"><i></i>{escape(runtime_text)}</div></header>
   <div class="mh-grid">
@@ -115,6 +116,7 @@ def render_page(snapshot: dict, run: dict, *, selected_profile: str = "") -> str
     <div class="mh-stat"><b>{_n(ready)}</b><span>готово к запуску</span></div>
     <div class="mh-stat"><b>{_n(submitted)}</b><span>отправлено</span></div>
   </div>
+  <div class="mh-enrich"><b>Обогащение Company Master</b><span><strong>{_n(enrichment.get('domains'))}</strong>доменов</span><span><strong>{_n(enrichment.get('careers'))}</strong>career pages</span><span><strong>{_n(enrichment.get('ats'))}</strong>ATS</span><span><strong>{_n(enrichment.get('domain_attempted'))}</strong>доменов проверено</span><span><strong>{_n(enrichment.get('web_attempted'))}</strong>сайтов проверено</span></div>
   <form class="mh-control" id="mh-controls" onsubmit="return false">
     <div><label for="mh-profile">Профиль кандидата</label><select id="mh-profile">{options}</select></div>
     <div><label for="mh-count">Размер пакета</label><input id="mh-count" type="number" min="1" max="250" value="25"></div>

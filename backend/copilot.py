@@ -66,7 +66,12 @@ WATCH_MAX = 10 * 60         # give up after 10 minutes
 # full 10-min WATCH_MAX); we cap it at 5 min so throughput still moves (adaptive scaling adds
 # workers to compensate for the longer per-job hold) and a genuinely stuck job falls to
 # «Незавершённые», where «Докрутить» finishes it on the single co-pilot's 10-min watch.
-WAIT_SUBMIT_MAX = 300
+# 120s not 300s: measured the emailed security code → ATS ack gap is a MEDIAN 33s (max ~67s),
+# so a job that hasn't confirmed in 120s is almost certainly dead (spam/blocked), not slow. The
+# old 300s held a worker on a dead job for 5 min for nothing; 120s frees it ~2.5× faster (big
+# throughput win — batches are dominated by the failing jobs' wait). A rare slow code is still
+# caught later by the ground-truth reconciler via the ATS receipt, so nothing is lost.
+WAIT_SUBMIT_MAX = 120
 
 app = FastAPI(title="JobFinder co-pilot")
 _S: dict = {"pw": None, "browser": None, "page": None, "ctx": None,

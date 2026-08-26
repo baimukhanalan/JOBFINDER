@@ -994,10 +994,11 @@ def _fill_all_public() -> dict:
 # ---- Parallel bulk lane (headless worker pool) -----------------------------
 _FILL_ALL_LOCK = threading.Lock()
 _PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
-_PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill (~≤120s) + inline confirm
-#                                        wait (WAIT_SUBMIT_MAX=300s) + margin, so a genuinely
+_PER_JOB_TIMEOUT = 300                 # hard cap per /load: fill (~≤120s) + inline confirm
+#                                        wait (WAIT_SUBMIT_MAX=120s) + margin, so a genuinely
 #                                        pending confirmation doesn't ReadTimeout into `error`
-#                                        (blocked jobs now return fast — copilot skips the watch)
+#                                        (blocked jobs return fast — copilot skips the watch).
+#                                        Cut from 480 with WAIT_SUBMIT_MAX 300→120 (code ≤~67s).
 # A dead/slow residential proxy makes the apply page fail to LOAD (fast Chromium net error,
 # not a slow fill) — retry the job on a FRESH proxy instead of failing it.
 _PROXY_ERR_RE = re.compile(

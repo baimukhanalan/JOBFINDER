@@ -350,6 +350,24 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   a real IP where the geocode resolves) instead of a phantom "complete". OPTIONAL locations aren't in
   `failed_required`, so they stay silently blank. Lever marks the location `required` in the DOM even with
   no visible asterisk, so most Lever forms carry this one human task — that is honest, not a regression.
+- **Required Cover Letter is filled for SYNTHETIC personas only (2026-08-26).** Many GH/Ashby forms have a
+  REQUIRED "Cover Letter" field (Attach/Dropbox/**Enter manually**); the engine already GENERATED the body
+  (`services/tailor/answers.cover_letter` → stored in the draft's `cover_letter` key) but never wired it in,
+  so ~390 submits/history blocked on "Cover Letter is required"/"please enter"/"please complete" (the single
+  biggest FIXABLE block bucket — bigger than the 368 Ashby datacenter-spam blocks; 56% of the live catalog
+  mentions a cover letter). Fix (3 parts): (A) `catalog_drafts.materialize_prefill` injects `d["cover_letter"]`
+  as a known answer under "Cover Letter"/"Motivation Letter"/… **gated `profile_id.startswith("demo_")`** —
+  a REAL applicant's letter must be human-written, never auto-fabricated prose, so real personas leave it
+  blank (human finishes). (B) `dropdowns.fill_cover_letter_known(page, known)` fills a plain `<textarea>`
+  directly, OR on a GH file-upload widget **clicks "Enter manually", waits for the revealed textarea, then
+  types** — the textarea does NOT exist in the DOM until the toggle is clicked (React renders on click), so a
+  bare known-answer replay hit the hidden file input and failed. Called additively in `base.prefill` after
+  `fill_required_consent`. (C) `base.prefill` removes the handled cover-letter label from `unfilled` (the
+  recheck reads the HIDDEN file input, whose `.value` stays empty → would phantom-block a complete form).
+  `_fill_one_on_worker`→`ensure_and_wire`→`generate_draft`+`materialize_prefill` runs FRESH per bulk job, so
+  a dash+copilot restart is all it takes to go live (no `_SCRAPE_V` bump). Tests: `test_dom_fixtures.py`
+  (reveal+fill / plain textarea / no-touch-other / no-op) + `test_catalog_drafts.py` (synthetic-only gating).
+  NB the 7 `test_workable_*` DOM failures are PRE-EXISTING (a stale datepicker assertion), unrelated.
 - **Structured Greenhouse Employment/Education work-history block.** Newer Greenhouse hosted forms render
   an EMPLOYMENT block (Company name, Title, Start/End date month+year, a 'Current role' checkbox) and an
   EDUCATION block (School, Discipline, Degree). `materialize_prefill` supplies these as exact-label known

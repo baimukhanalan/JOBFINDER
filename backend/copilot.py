@@ -341,7 +341,11 @@ def _same_apply_page(actual: str, expected: str) -> bool:
 _SUBMIT_BLOCK_RE = re.compile(
     r"(verify (you|that you).{0,20}human|are you (a )?robot|recaptcha|hcaptcha|captcha|"
     r"press (and hold|&)|we're updating your forms|please try again|something went wrong|"
-    r"this field is required|please (fill|complete|correct|enter)|is required|"
+    # NOTE: "please enter" was REMOVED — it false-matched the benign FILLED-form hint
+    # "If you do not have a preferred name, please enter your legal name." (Samsara/Greenhouse),
+    # which falsely flagged a fully-filled form as blocked → skipped the email-code watch →
+    # killed an application that was completing fine. Keep only error-specific "please" wordings.
+    r"this field is required|please (?:fill|complete|correct) (?:in |out |this|the|all|your)|is required|"
     # Real ATS rejection wordings observed on GH/Ashby (these were MISSED, so a rejected
     # submit was mislabeled "awaiting confirmation" and burned the full 300s watch):
     r"flagged as possible spam|turn off your (vpn|proxy)|couldn.?t submit(?: your)?|"
@@ -362,6 +366,14 @@ async def _submit_evidence(page, shot_dir) -> dict:
         ev["confirmed"] = bool(looks_submitted(txt, ev.get("post_url") or ""))
         m = _SUBMIT_BLOCK_RE.search(txt or "")
         ev["blocked"] = m.group(0)[:60] if m else None
+        # A page that already CONFIRMED or reached the emailed-security-code step has PROGRESSED
+        # — the submit was accepted. Never let a stray block-phrase match on the filled form
+        # (a field hint / privacy "please" text) flag it as blocked, which would SKIP the
+        # code-fill watch (gated on `not blocked`) and kill an application that was completing.
+        if ev["blocked"] and (ev["confirmed"] or re.search(
+                r"(?i)verification code|security code|enter the .{0,25}code|"
+                r"confirm you'?re a human|code (?:was |has been )?sent", txt or "")):
+            ev["blocked"] = None
     except Exception:
         pass
     try:

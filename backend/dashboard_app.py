@@ -1279,14 +1279,13 @@ def _do_fill_all_adaptive(job_ids: list[int], gender: str | None = None) -> None
     run = bulk_log.start(len(job_ids))
     with _FILL_ALL_LOCK:
         _FILL_ALL["run_id"] = run["run_id"]
-    for jid, job in captcha:
-        try:
-            bulk_log.record(run, jobid=jid, company=(job or {}).get("company", ""),
-                            title=(job or {}).get("job_title", ""), state="needs_human",
-                            submit={"confirmed": False, "reason": "click_failed"})
-        except Exception:
-            pass
-        _bump(done=1, failed=1)
+    # Lever/Workable = a LIVE human captcha, unsolvable from this datacenter IP → skip, don't park
+    # (see the identical note in _do_fill_all_parallel; parking them re-inflated the ledger to 1775).
+    if captcha:
+        _bump(done=len(captcha), failed=len(captcha))
+        logging.getLogger(__name__).info(
+            "skipped %d Lever/Workable captcha jobs — not parked (datacenter IP can't solve captcha)",
+            len(captcha))
     try:
         if para and not _FILL_ALL_STOP.is_set():
             q: _queue.Queue = _queue.Queue()

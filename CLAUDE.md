@@ -145,6 +145,17 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
 `/queue` still defaults to `profile="michael"`.
 
 ## Gotchas
+- **A `text/plain` MIME part can contain raw HTML — flatten it before render (`mailcrm._parse_full`, 2026-08-26).**
+  Some senders (GoFasti/HeyMilo async-interview "magic link" mails) put a literal `<a href="URL">URL</a>`
+  INSIDE the `text/plain` alternative. The open-view (`_msg_card`) renders `plain` via `escape()` then
+  `_linkify` (`https?://[^\s<]+`); `escape()` turns every `<` into `&lt;`, so the link regex has no `<`
+  to stop at and swallows the closing `">…</a>.` into the href → a DEAD link ("не открывается") + visible
+  `">…</a>` garbage. (The list snippet was fine because it uses `_message_text`, which strips tags.) Fix:
+  `_parse_full` now runs `_html_to_text(plain)` when the plain body matches `_PLAIN_HTML_RE` (a FIXED HTML-tag
+  whitelist, so it never mistakes a bare `<someone@example.com>` address for a tag). Tests:
+  `test_mailcrm_body.py::test_plain_part_containing_html_is_flattened` / `_plain_email_address_is_not_treated_as_html`.
+  NB: this is `_parse_full` (open-view/`get_message`), NOT `build_index_row` (the indexer's path already uses
+  `_message_text`), so only the dashboard needs a restart for it.
 - **`no_button` on a "fully-filled" GH/Ashby job = a DEAD posting, not a detection bug (2026-08-26).**
   ~11% of bulk GH/Ashby applies failed with `submit_reason=no_button` on forms that looked complete
   (`unfilled=[]`). Live-DOM investigation proved these are postings **GONE at the ATS by bulk-run time**

@@ -535,6 +535,16 @@ def _mailbox_of(path: str) -> dict | None:
     return None
 
 
+# Detects real HTML tags embedded in a text/plain body. Some senders (GoFasti/HeyMilo) ship
+# "<a href='URL'>URL</a>" INSIDE the text/plain part, which escape()+linkify downstream turns
+# into a broken giant href (the closing tag gets swallowed into the URL) + visible ">...</a>"
+# garbage. Fixed tag whitelist on purpose, so it never matches a bare "<someone@example.com>"
+# address in a genuine plain-text mail.
+_PLAIN_HTML_RE = re.compile(
+    r"</?(?:a|p|div|br|span|table|tr|td|th|thead|tbody|li|ul|ol|h[1-6]|strong|em|b|i|"
+    r"body|html|head|img|font|center|blockquote)\b[^>]*>", re.I)
+
+
 def _parse_full(path: str, path_hash: str) -> dict | None:
     try:
         with open(path, "rb") as f:
@@ -559,6 +569,11 @@ def _parse_full(path: str, path_hash: str) -> dict | None:
     # the UI's linkify). The html is still kept for anyone who wants the rich version.
     if not (plain or "").strip() and (html or "").strip():
         plain = _html_to_text(html)
+    # Reverse case: a text/plain part that actually CONTAINS HTML markup (GoFasti/HeyMilo put
+    # a raw <a href="URL">URL</a> in text/plain). Flatten it the same way, so the sturdy <div>
+    # path renders a clean, correctly-linkified URL instead of a broken href + literal tag text.
+    if plain and _PLAIN_HTML_RE.search(plain):
+        plain = _html_to_text(plain)
     box = _mailbox_of(path)
     frm = str(msg["From"] or "")
     subj = str(msg["Subject"] or "")

@@ -49,3 +49,31 @@ def test_html_to_text_extracts_readable_body_with_code():
     assert "VnUQ6qIR" in txt, "the security code must survive the html->text strip"
     assert "<" not in txt and "color:red" not in txt, "tags + style must be stripped"
     assert "Hi Inkar" in txt
+
+
+def test_plain_part_containing_html_is_flattened(tmp_path):
+    """GoFasti/HeyMilo ship a raw <a href="URL">URL</a> INSIDE the text/plain part. Left as-is,
+    downstream escape()+linkify builds a broken giant href (the closing tag is swallowed into the
+    URL) and shows literal ">...</a>" garbage. _parse_full must flatten such a plain body."""
+    from email.message import EmailMessage
+    url = "https://interview.gofasti.com/gofasti/i/ABC123"
+    m = EmailMessage()
+    m["From"] = "GoFasti <dasher@eymilo.com>"
+    m["To"] = "bianca@takhet.com"
+    m["Subject"] = "Interview Confirmation"
+    m.set_content(f'The magic link is <a href="{url}">{url}</a>. Come back anytime.')
+    m.add_alternative(f'<p>The magic link is <a href="{url}">{url}</a>.</p>', subtype="html")
+    p = tmp_path / "msg.eml"
+    p.write_bytes(m.as_bytes())
+    row = mailcrm._parse_full(str(p), "hash1")
+    assert row is not None
+    plain = row["plain"]
+    assert "<a href" not in plain and "</a>" not in plain, "raw anchor tag must be stripped"
+    assert url in plain, "the URL itself must survive the flatten"
+
+
+def test_plain_email_address_is_not_treated_as_html():
+    """The tag whitelist must NOT match a bare <someone@example.com> in a genuine plain body,
+    else _html_to_text would delete the address as if it were a tag."""
+    assert not mailcrm._PLAIN_HTML_RE.search("reach me at <john.doe@example.com> please")
+    assert mailcrm._PLAIN_HTML_RE.search('click <a href="https://x/y">here</a>')

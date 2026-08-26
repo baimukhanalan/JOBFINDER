@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobfinder.employer-updater</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/alanbaimukhan/Desktop/jobf/JOBFINDER/.venv/bin/python</string>
+    <string>-m</string>
+    <string>backend.tools.employer_updater</string>
+    <string>run</string>
+    <string>--apply</string>
+    <string>--resume</string>
+    <string>--limit</string>
+    <string>10000</string>
+    <string>--question-limit</string>
+    <string>10000</string>
+    <string>--workers</string>
+    <string>4</string>
+    <string>--min-interval</string>
+    <string>0.25</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/alanbaimukhan/Desktop/jobf/JOBFINDER</string>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/alanbaimukhan/Desktop/jobf/JOBFINDER/.cache/jobfinder/employer-updater.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alanbaimukhan/Desktop/jobf/JOBFINDER/.cache/jobfinder/employer-updater.stderr.log</string>
+</dict>
+</plist>

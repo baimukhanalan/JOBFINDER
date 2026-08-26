@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import threading
@@ -22,6 +23,7 @@ _BLOCKED = {"facebook.com", "instagram.com", "linkedin.com", "x.com",
             "wikipedia.org", "youtube.com"}
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 WIKIDATA_ENRICHMENT_CONTRACT = 1
+WIKIDATA_SEARCH_CONTRACT = 1
 
 
 def _text(value) -> str | None:
@@ -249,10 +251,20 @@ def _latest_employee_count(entity: dict) -> int | None:
 
 
 def _official_domain(entity: dict) -> str:
-    for value, _claim in _claim_values(entity, "P856"):
+    for value, claim in _claim_values(entity, "P856"):
+        if claim.get("rank") == "deprecated":
+            continue
         parsed = urlparse(str(value))
         host = (parsed.hostname or "").lower().removeprefix("www.")
-        if host and not any(host == item or host.endswith("." + item) for item in _BLOCKED):
+        try:
+            ipaddress.ip_address(host)
+            continue
+        except ValueError:
+            pass
+        if ("." in host and host != "localhost"
+                and re.fullmatch(r"[a-z0-9.-]+", host)
+                and not any(host == item or host.endswith("." + item)
+                            for item in _BLOCKED)):
             return company_db.normalize_domain(host)
     return ""
 
@@ -554,91 +566,302 @@ def enrich_structured(*, limit: int = 2000, min_interval: float = 0.25,
             client.close()
 
 
-def enrich_structured_search(*, limit: int = 2000, min_interval: float = 0.25,
-                             client: httpx.Client | None = None) -> dict:
-    """Resolve exact normalized employer labels through Wikidata entity search.
+def _list_wikidata_search_rows(*, limit: int,
+                               retry_transient: bool = False) -> list[dict]:
+    checkpoint = (
+        " AND COALESCE(m.qualification_evidence#>>"
+        "'{wikidata_search_enrichment,status}','')='transient'"
+        if retry_transient else
+        " AND NOT (m.qualification_evidence ? 'wikidata_search_enrichment')")
+    with company_db._cur() as cur:
+        cur.execute("""
+          SELECT m.company_id,m.brand_name,m.headquarters,m.headquarters_country,
+            c.legal_name,c.trade_name,c.states,c.country,c.source,c.source_external_id,
+            c.metadata
+          FROM company_employer_master m JOIN company_discovery c ON c.id=m.company_id
+          WHERE m.in_target_population AND m.identity_status IN ('candidate','quarantined')
+            AND NULLIF(m.candidate_domain,'') IS NULL
+        """ + checkpoint + " ORDER BY m.company_id LIMIT %s",
+                    (max(1, min(int(limit), 10_000)),))
+        return [dict(row) for row in cur.fetchall()]
 
-    This is a fallback for legal names that are not exact English Wikipedia titles.
-    It only creates structured candidates; domain acceptance still requires the live
-    official-site second factor.
-    """
-    rows = master_db.list_structured_search_candidates(limit=limit)
+
+def _record_names(row: dict) -> set[str]:
+    return {value for field in ("brand_name", "legal_name", "trade_name")
+            if (value := company_db.normalize_company_name(row.get(field)))}
+
+
+def _record_city(row: dict) -> str:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    address = metadata.get("employer_address")
+    if not isinstance(address, dict):
+        return ""
+    return company_db.normalize_company_name(address.get("city"))
+
+
+def _exact_hit_ids(row: dict, hits: list[dict]) -> list[str]:
+    expected = _record_names(row)
+    output = []
+    for hit in hits:
+        hit_names = {company_db.normalize_company_name(value) for value in (
+            hit.get("label"), (hit.get("match") or {}).get("text")) if value}
+        qid = str(hit.get("id") or "")
+        if qid.startswith("Q") and expected & hit_names and qid not in output:
+            output.append(qid)
+    return output
+
+
+def _qid_claims(entity: dict, prop: str) -> set[str]:
+    return {_entity_id(value) for value, _claim in _claim_values(entity, prop)
+            if _claim.get("rank") != "deprecated" and _entity_id(value).startswith("Q")}
+
+
+def _search_identity_guard(row: dict, entity: dict,
+                           location_entities: dict[str, dict]) -> tuple[bool, dict]:
+    """Require exact legal/alias identity plus a structured US/location claim."""
+    matched_names = sorted(_record_names(row) & _names(entity))
+    exact_name = bool(matched_names)
+    country_us = "Q30" in _qid_claims(entity, "P17")
+    source_city = _record_city(row)
+    location_ids = _qid_claims(entity, "P159")
+    matched_locations = sorted(qid for qid in location_ids
+                               if source_city and source_city in _names(
+                                   location_entities.get(qid) or {}))
+    location_match = bool(matched_locations)
+    return exact_name and (country_us or location_match), {
+        "exact_normalized_label_or_alias": exact_name,
+        "matched_normalized_names": matched_names,
+        "us_country_claim": country_us,
+        "source_city": source_city or None,
+        "headquarters_location_match": location_match,
+        "matched_location_qids": matched_locations,
+    }
+
+
+def _persist_wikidata_search_results(results: list[dict]) -> dict[str, int]:
+    counts = {"matched": 0, "no_match": 0, "ambiguous": 0,
+              "transient": 0, "updated": 0}
+    if not results:
+        return counts
+    with company_db._cur(False) as cur:
+        for result in results:
+            status = str(result.get("status") or "")
+            if status not in counts or status == "updated":
+                continue
+            counts[status] += 1
+            checkpoint_data = {
+                "status": status, "reason": result.get("reason"),
+                "retryable": status == "transient",
+                "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "contract_version": WIKIDATA_SEARCH_CONTRACT,
+            }
+            company_id = int(result["company_id"])
+            enriched = result.get("enriched")
+            if status == "matched" and isinstance(enriched, dict):
+                evidence = json.dumps(enriched.get("domain_evidence") or [])
+                qualification = json.dumps({
+                    **dict(enriched.get("qualification_evidence") or {}),
+                    "wikidata_search_enrichment": checkpoint_data,
+                })
+                cur.execute("""
+                  UPDATE company_employer_master SET
+                    candidate_domain=COALESCE(%s,candidate_domain),
+                    identity_confidence=GREATEST(identity_confidence,%s),
+                    domain_evidence=COALESCE((SELECT jsonb_agg(e)
+                      FROM jsonb_array_elements(domain_evidence) e
+                      WHERE COALESCE(e->>'provider','')<>'wikidata_entity_search'),
+                      '[]'::jsonb) || %s::jsonb,
+                    qualification_evidence=qualification_evidence || %s::jsonb,
+                    updated_at=now()
+                  WHERE company_id=%s AND in_target_population
+                """, (enriched.get("candidate_domain"),
+                      float(enriched.get("identity_confidence") or 0), evidence,
+                      qualification, company_id))
+            else:
+                cur.execute("""
+                  UPDATE company_employer_master SET
+                    qualification_evidence=qualification_evidence ||
+                      jsonb_build_object('wikidata_search_enrichment',%s::jsonb),
+                    updated_at=now()
+                  WHERE company_id=%s AND in_target_population
+                """, (json.dumps(checkpoint_data), company_id))
+            counts["updated"] += cur.rowcount
+    return counts
+
+
+def _fetch_entity_chunks(client: httpx.Client, qids: list[str], *,
+                         limiter: WikidataRateLimiter, retries: int,
+                         workers: int, props: str) -> tuple[dict[str, dict], set[str], int]:
+    entities: dict[str, dict] = {}
+    failed: set[str] = set()
+    errors = 0
+    chunks = [qids[start:start + 50] for start in range(0, len(qids), 50)]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_wikidata_json, client, {
+            "action": "wbgetentities", "ids": "|".join(chunk), "props": props,
+            "languages": "en", "format": "json", "origin": "*",
+        }, limiter=limiter, retries=retries): chunk for chunk in chunks}
+        for future in as_completed(futures):
+            chunk = futures[future]
+            try:
+                entities.update(future.result().get("entities") or {})
+            except Exception:
+                errors += 1
+                failed.update(chunk)
+    return entities, failed, errors
+
+
+def enrich_structured_search(*, limit: int = 2000, min_interval: float = 0.25,
+                             workers: int = 4, checkpoint_size: int = 100,
+                             retries: int = 3, retry_transient: bool = False,
+                             dry_run: bool = False,
+                             client: httpx.Client | None = None) -> dict:
+    """Search exact Wikidata labels/aliases and retain P856 as a candidate only."""
+    worker_count = max(1, min(int(workers), 4))
+    batch_size = max(1, min(int(checkpoint_size), 500))
+    rows = _list_wikidata_search_rows(limit=limit,
+                                      retry_transient=retry_transient)
     owned = client is None
     client = client or httpx.Client(timeout=httpx.Timeout(30.0),
                                     headers={"User-Agent": USER_AGENT})
-    matched: list[tuple[dict, str]] = []
-    errors = 0
+    limiter = WikidataRateLimiter(min_interval)
+    totals = {"matched": 0, "no_match": 0, "ambiguous": 0,
+              "transient": 0, "updated": 0}
+    reason_counts: dict[str, int] = defaultdict(int)
+    processed = batches = errors = 0
+    proposals: list[dict] = []
     try:
-        for row in rows:
-            query = str(row.get("brand_name") or row.get("legal_name") or "").strip()
-            try:
-                response = client.get(WIKIDATA_API, params={
-                    "action": "wbsearchentities", "search": query, "language": "en",
-                    "uselang": "en", "type": "item", "limit": 5,
-                    "format": "json", "origin": "*",
-                })
-                response.raise_for_status()
-                hits = response.json().get("search") or []
-            except (httpx.HTTPError, ValueError, AttributeError):
-                errors += 1
-                if min_interval:
-                    time.sleep(min_interval)
-                continue
-            record_names = {
-                company_db.normalize_company_name(row.get(field))
-                for field in ("brand_name", "legal_name", "trade_name") if row.get(field)
-            }
-            exact_ids = []
-            for hit in hits:
-                names = [hit.get("label", ""), ((hit.get("match") or {}).get("text", ""))]
-                if any(company_db.normalize_company_name(name) in record_names for name in names):
-                    qid = str(hit.get("id") or "")
-                    if qid.startswith("Q") and qid not in exact_ids:
-                        exact_ids.append(qid)
-            if len(exact_ids) == 1:
-                matched.append((row, exact_ids[0]))
-            if min_interval:
-                time.sleep(min_interval)
+        for start in range(0, len(rows), batch_size):
+            batch = rows[start:start + batch_size]
+            exact_ids: dict[int, list[str]] = {}
+            transient_ids: set[int] = set()
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {}
+                for row in batch:
+                    query = str(row.get("legal_name") or row.get("brand_name") or "").strip()
+                    future = pool.submit(_wikidata_json, client, {
+                        "action": "wbsearchentities", "search": query, "language": "en",
+                        "uselang": "en", "type": "item", "limit": "10",
+                        "format": "json", "origin": "*",
+                    }, limiter=limiter, retries=retries)
+                    futures[future] = row
+                for future in as_completed(futures):
+                    row = futures[future]
+                    company_id = int(row["company_id"])
+                    try:
+                        exact_ids[company_id] = _exact_hit_ids(
+                            row, future.result().get("search") or [])
+                    except Exception:
+                        errors += 1
+                        transient_ids.add(company_id)
 
-        entities: dict[str, dict] = {}
-        qids = list(dict.fromkeys(qid for _row, qid in matched))
-        for start in range(0, len(qids), 50):
-            response = client.get(WIKIDATA_API, params={
-                "action": "wbgetentities", "ids": "|".join(qids[start:start + 50]),
-                "props": "labels|aliases|claims", "languages": "en",
-                "format": "json", "origin": "*",
-            })
-            response.raise_for_status()
-            entities.update(response.json().get("entities") or {})
-            if min_interval:
-                time.sleep(min_interval)
-        linked_ids = {
-            _entity_id(value) for entity in entities.values() for prop in ("P452", "P159")
-            for value, _claim in _claim_values(entity, prop) if _entity_id(value).startswith("Q")
-        }
-        linked_labels: dict[str, str] = {}
-        ordered = sorted(linked_ids)
-        for start in range(0, len(ordered), 50):
-            response = client.get(WIKIDATA_API, params={
-                "action": "wbgetentities", "ids": "|".join(ordered[start:start + 50]),
-                "props": "labels", "languages": "en", "format": "json", "origin": "*",
-            })
-            response.raise_for_status()
-            for qid, entity in (response.json().get("entities") or {}).items():
-                label = (((entity.get("labels") or {}).get("en") or {}).get("value") or "")
-                if label:
-                    linked_labels[qid] = label
-            if min_interval:
-                time.sleep(min_interval)
-        enriched = [result for row, qid in matched
-                    if (entity := entities.get(qid))
-                    if (result := structured_row(row, qid, entity, linked_labels))]
-        updated = master_db.update_structured_evidence(enriched)
-        return {"selected": len(rows), "matched": len(enriched), "updated": updated,
-                "errors": errors}
+            all_qids = sorted({qid for values in exact_ids.values() for qid in values})
+            entities, failed_qids, fetch_errors = _fetch_entity_chunks(
+                client, all_qids, limiter=limiter, retries=retries,
+                workers=worker_count, props="labels|aliases|claims")
+            errors += fetch_errors
+            location_qids = sorted({qid for entity in entities.values()
+                                    for qid in _qid_claims(entity, "P159")})
+            locations, failed_locations, location_errors = _fetch_entity_chunks(
+                client, location_qids, limiter=limiter, retries=retries,
+                workers=worker_count, props="labels|aliases")
+            errors += location_errors
+
+            results = []
+            for row in batch:
+                company_id = int(row["company_id"])
+                qids = exact_ids.get(company_id) or []
+                if company_id in transient_ids or any(qid in failed_qids for qid in qids):
+                    results.append({"company_id": company_id, "status": "transient",
+                                    "reason": "wikidata_provider_error"})
+                    continue
+                eligible = []
+                location_dependency_failed = False
+                guarded_entity_seen = False
+                for qid in qids:
+                    entity = entities.get(qid) or {}
+                    location_ids = _qid_claims(entity, "P159")
+                    country_us = "Q30" in _qid_claims(entity, "P17")
+                    if not country_us and location_ids & failed_locations:
+                        location_dependency_failed = True
+                        continue
+                    guarded, guard = _search_identity_guard(row, entity, locations)
+                    guarded_entity_seen = guarded_entity_seen or guarded
+                    enriched = structured_row(row, qid, entity, {}) if guarded else None
+                    if not enriched or not enriched.get("candidate_domain"):
+                        continue
+                    enriched["identity_confidence"] = min(
+                        float(enriched.get("identity_confidence") or 0), 0.68)
+                    for item in enriched.get("domain_evidence") or []:
+                        item.update({
+                            "provider": "wikidata_entity_search",
+                            "method": "exact_normalized_label_or_alias_with_us_guard",
+                            "identity_guards": guard,
+                            "source_record": {
+                                "source": row.get("source"),
+                                "source_external_id": row.get("source_external_id"),
+                                "searched_legal_name": row.get("legal_name"),
+                                "states": row.get("states") or [],
+                            },
+                        })
+                    enriched["qualification_evidence"] = {
+                        "wikidata_entity": qid,
+                        "wikidata_search_identity": guard,
+                        "structured_name_match": True,
+                    }
+                    eligible.append(enriched)
+                if location_dependency_failed:
+                    results.append({"company_id": company_id, "status": "transient",
+                                    "reason": "wikidata_location_provider_error"})
+                elif len(eligible) == 1:
+                    results.append({"company_id": company_id, "status": "matched",
+                                    "reason": None, "enriched": eligible[0]})
+                    if len(proposals) < 25:
+                        proposals.append({"company_id": company_id,
+                                          "candidate_domain": eligible[0]["candidate_domain"],
+                                          "wikidata_entity": eligible[0][
+                                              "qualification_evidence"]["wikidata_entity"]})
+                elif len(eligible) > 1:
+                    results.append({"company_id": company_id, "status": "ambiguous",
+                                    "reason": "multiple_guarded_exact_entities"})
+                else:
+                    reason = ("no_exact_search_hit" if not qids else
+                              "official_website_missing_or_unsafe" if guarded_entity_seen else
+                              "identity_guard_failed")
+                    results.append({"company_id": company_id, "status": "no_match",
+                                    "reason": reason})
+
+            if dry_run:
+                persisted = {key: sum(1 for item in results if item["status"] == key)
+                             for key in ("matched", "no_match", "ambiguous", "transient")}
+                persisted["updated"] = 0
+            else:
+                persisted = _persist_wikidata_search_results(results)
+            for key in totals:
+                totals[key] += persisted[key]
+            for item in results:
+                reason_counts[str(item.get("reason") or "matched")] += 1
+            processed += len(batch)
+            batches += 1
+        return {"selected": len(rows), "processed": processed, **totals,
+                "batches": batches, "workers": worker_count, "errors": errors,
+                "dry_run": bool(dry_run), "reasons": dict(sorted(reason_counts.items())),
+                "proposals": proposals}
     finally:
         if owned:
             client.close()
+
+
+def enrich_wikidata_search(*, limit: int = 2000, min_interval: float = 0.25,
+                           workers: int = 4, checkpoint_size: int = 100,
+                           retries: int = 3, retry_transient: bool = False,
+                           dry_run: bool = False,
+                           client: httpx.Client | None = None) -> dict:
+    """Stable updater-facing name for exact label/alias Wikidata discovery."""
+    return enrich_structured_search(
+        limit=limit, min_interval=min_interval, workers=workers,
+        checkpoint_size=checkpoint_size, retries=retries,
+        retry_transient=retry_transient, dry_run=dry_run, client=client)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -656,6 +879,14 @@ def main(argv: list[str] | None = None) -> int:
     wikidata.add_argument("--checkpoint-size", type=int, default=200)
     wikidata.add_argument("--retries", type=int, default=3)
     wikidata.add_argument("--retry-transient", action="store_true")
+    search = sub.add_parser("wikidata-search")
+    search.add_argument("--limit", type=int, default=10_000)
+    search.add_argument("--workers", type=int, default=4)
+    search.add_argument("--min-interval", type=float, default=0.25)
+    search.add_argument("--checkpoint-size", type=int, default=100)
+    search.add_argument("--retries", type=int, default=3)
+    search.add_argument("--retry-transient", action="store_true")
+    search.add_argument("--dry-run", action="store_true")
     sub.add_parser("stored-report")
     args = parser.parse_args(argv)
     master_db.ensure_schema()
@@ -669,6 +900,11 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit, workers=args.workers, min_interval=args.min_interval,
             checkpoint_size=args.checkpoint_size, retries=args.retries,
             retry_transient=args.retry_transient)
+    elif args.command == "wikidata-search":
+        result = enrich_wikidata_search(
+            limit=args.limit, workers=args.workers, min_interval=args.min_interval,
+            checkpoint_size=args.checkpoint_size, retries=args.retries,
+            retry_transient=args.retry_transient, dry_run=args.dry_run)
     else:
         result = stored_identity_report()
     print(json.dumps(result, ensure_ascii=False, default=str))

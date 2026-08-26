@@ -75,6 +75,7 @@ def test_search_fallback_accepts_only_one_exact_normalized_entity(monkeypatch):
            "employee_size_source": "E-Verify workforce range"}
     entity = {"labels": {"en": {"value": "Acme"}}, "claims": {
         "P856": [_claim("https://acme.example/")],
+        "P17": [_claim({"id": "Q30"})],
     }}
 
     class Response:
@@ -90,14 +91,16 @@ def test_search_fallback_accepts_only_one_exact_normalized_entity(monkeypatch):
 
     saved = []
     monkeypatch.setattr(
-        "backend.tools.employer_identity_enrichment.master_db.list_structured_search_candidates",
+        "backend.tools.employer_identity_enrichment._list_wikidata_search_rows",
         lambda **_: [row])
     monkeypatch.setattr(
-        "backend.tools.employer_identity_enrichment.master_db.update_structured_evidence",
-        lambda values: saved.extend(values) or len(values))
+        "backend.tools.employer_identity_enrichment._persist_wikidata_search_results",
+        lambda values: saved.extend(values) or {
+            "matched": 1, "no_match": 0, "ambiguous": 0,
+            "transient": 0, "updated": 1})
     result = enrich_structured_search(limit=1, min_interval=0, client=Client())
     assert result["matched"] == 1
-    assert saved[0]["candidate_domain"] == "acme.example"
+    assert saved[0]["enriched"]["candidate_domain"] == "acme.example"
 
 
 def test_stored_identity_keeps_missing_fields_as_explicit_gaps():

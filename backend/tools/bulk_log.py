@@ -13,10 +13,22 @@ pressed; `submit_confirmed` = an ATS confirmation was seen right after the click
 """
 import json
 import logging
+import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# The parallel bulk lane («Подать на все») runs a dozen dashboard WORKER THREADS (plus the
+# reconciler / drain / status daemons) — all in THIS process — that mutate the three
+# shared-state files below concurrently. Two bugs resulted (2026-08-26): (1) every save
+# wrote a FIXED '<name>.json.tmp', so one thread's tmp got os.replace'd out from under
+# another → FileNotFoundError on replace; (2) the ledger/done read-modify-write was
+# unlocked, so concurrent updates LOST each other → «Незавершённые» entries silently
+# dropped and jobs never drained/finished. Fix: a reentrant lock serializes every
+# read-modify-write, and _atomic_write_json writes to a UNIQUE per-pid/per-thread tmp.
+_LOCK = threading.RLock()
 
 _LOGDIR = Path(__file__).resolve().parents[2] / "logs"
 _LOG = _LOGDIR / "bulk_apply.log"
@@ -37,6 +49,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _atomic_write_json(path: Path, data, *, indent=None) -> None:
+    """Write JSON atomically via a UNIQUE tmp (pid+thread id) then os.replace, so concurrent
+    writers never collide on a shared '.tmp' name. Same-dir tmp ⇒ os.replace is atomic."""
+    _LOGDIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=indent), encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _append(line: str) -> None:
     try:
         _LOGDIR.mkdir(parents=True, exist_ok=True)
@@ -48,10 +69,7 @@ def _append(line: str) -> None:
 
 def _write_report(run: dict) -> None:
     try:
-        _LOGDIR.mkdir(parents=True, exist_ok=True)
-        tmp = _REPORT.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(_REPORT)
+        _atomic_write_json(_REPORT, run, indent=2)
     except Exception:
         logger.warning("bulk_apply_last.json write failed", exc_info=True)
 
@@ -66,10 +84,7 @@ def _load_ledger() -> dict:
 
 def _save_ledger(d: dict) -> None:
     try:
-        _LOGDIR.mkdir(parents=True, exist_ok=True)
-        tmp = _LEDGER.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(_LEDGER)
+        _atomic_write_json(_LEDGER, d, indent=2)
     except Exception:
         logger.warning("unfinished.json write failed", exc_info=True)
 
@@ -84,10 +99,7 @@ def _load_done() -> set:
 
 def _save_done(s: set) -> None:
     try:
-        _LOGDIR.mkdir(parents=True, exist_ok=True)
-        tmp = _DONE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(sorted(s), ensure_ascii=False), encoding="utf-8")
-        tmp.replace(_DONE)
+        _atomic_write_json(_DONE, sorted(s))
     except Exception:
         logger.warning("submitted_jobids.json write failed", exc_info=True)
 
@@ -98,10 +110,11 @@ def mark_submitted(jobid) -> None:
     key = str(jobid)
     if not key or key == "None":
         return
-    s = _load_done()
-    if key not in s:
-        s.add(key)
-        _save_done(s)
+    with _LOCK:
+        s = _load_done()
+        if key not in s:
+            s.add(key)
+            _save_done(s)
 
 
 def submitted_jobids() -> set:
@@ -117,20 +130,21 @@ def _update_ledger(job: dict, run_id: str, confirmed) -> None:
     key = str(job.get("jobid"))
     if not key or key == "None":
         return
-    led = _load_ledger()
-    if confirmed:
-        mark_submitted(key)
-        led.pop(key, None)
-    elif key in _load_done():
-        led.pop(key, None)          # already done elsewhere — don't churn it
-    else:
-        # Track how many times this job has been re-parked (failed). The drain re-runs a
-        # fixable job up to a retry cap, then drops it as dead — so we finish what we can and
-        # stop re-spamming what we can't.
-        prev = led.get(key)
-        retries = (int((prev or {}).get("retries", 0)) + 1) if prev else 0
-        led[key] = {**job, "run_id": run_id, "retries": retries}
-    _save_ledger(led)
+    with _LOCK:
+        led = _load_ledger()
+        if confirmed:
+            mark_submitted(key)
+            led.pop(key, None)
+        elif key in _load_done():
+            led.pop(key, None)          # already done elsewhere — don't churn it
+        else:
+            # Track how many times this job has been re-parked (failed). The drain re-runs a
+            # fixable job up to a retry cap, then drops it as dead — so we finish what we can
+            # and stop re-spamming what we can't.
+            prev = led.get(key)
+            retries = (int((prev or {}).get("retries", 0)) + 1) if prev else 0
+            led[key] = {**job, "run_id": run_id, "retries": retries}
+        _save_ledger(led)
 
 
 def start(total: int) -> dict:
@@ -150,31 +164,34 @@ def record(run: dict, *, jobid, company="", title="", state="", filled=None,
     clicked = bool(submit.get("clicked"))
     reason = submit.get("reason") or ("error" if state == "error" else "")
     confirmed, blocked = submit.get("confirmed"), submit.get("blocked")
-    run["jobs"].append({
-        "ts": _now(), "jobid": jobid, "company": company, "title": title,
-        "state": state, "filled": filled, "unfilled": unfilled,
-        "unfilled_list": (unfilled_list or [])[:8], "profile": profile,
-        "submit_clicked": clicked, "submit_reason": reason,
-        "confirmed": confirmed, "blocked": blocked, "error": error})
-    run["done"] = len(run["jobs"])
-    if state == "error":
-        run["errors"] += 1
-    else:
-        run["filled_ok"] += 1
-    if clicked:
-        run["submit_clicked"] += 1
-        run["submit_confirmed"] += 1 if confirmed else 0
-        run["submit_blocked"] += 1 if blocked else 0
-    elif state != "error" and reason and reason != "clicked":
-        run["skipped"] += 1
-    _append(
-        f'{run["jobs"][-1]["ts"]} run={run["run_id"]} [{run["done"]}/{run["total"]}] '
-        f'jobid={jobid} {company!r} "{title}" fill={state or "?"} filled={filled} '
-        f'unfilled={unfilled} submit={"clicked" if clicked else (reason or "no")} '
-        f'confirmed={confirmed} blocked={blocked}'
-        + (f' error={error!r}' if error else ""))
-    _update_ledger(run["jobs"][-1], run["run_id"], confirmed)
-    _write_report(run)   # keep fresh so a mid-run restart still shows progress
+    # Serialize the whole record: the parallel lane's worker threads share ONE `run` dict,
+    # so the counter increments + report write below would otherwise race and lose counts.
+    with _LOCK:
+        run["jobs"].append({
+            "ts": _now(), "jobid": jobid, "company": company, "title": title,
+            "state": state, "filled": filled, "unfilled": unfilled,
+            "unfilled_list": (unfilled_list or [])[:8], "profile": profile,
+            "submit_clicked": clicked, "submit_reason": reason,
+            "confirmed": confirmed, "blocked": blocked, "error": error})
+        run["done"] = len(run["jobs"])
+        if state == "error":
+            run["errors"] += 1
+        else:
+            run["filled_ok"] += 1
+        if clicked:
+            run["submit_clicked"] += 1
+            run["submit_confirmed"] += 1 if confirmed else 0
+            run["submit_blocked"] += 1 if blocked else 0
+        elif state != "error" and reason and reason != "clicked":
+            run["skipped"] += 1
+        _append(
+            f'{run["jobs"][-1]["ts"]} run={run["run_id"]} [{run["done"]}/{run["total"]}] '
+            f'jobid={jobid} {company!r} "{title}" fill={state or "?"} filled={filled} '
+            f'unfilled={unfilled} submit={"clicked" if clicked else (reason or "no")} '
+            f'confirmed={confirmed} blocked={blocked}'
+            + (f' error={error!r}' if error else ""))
+        _update_ledger(run["jobs"][-1], run["run_id"], confirmed)
+        _write_report(run)   # keep fresh so a mid-run restart still shows progress
 
 
 def finish(run: dict, state: str = "done") -> None:
@@ -210,12 +227,13 @@ def mark_done(jobid) -> bool:
     """Clear one job from the ledger (a human finished it, or the reconciler found its
     receipt) and record it done so it's never re-applied. True if it was in the ledger."""
     key = str(jobid)
-    mark_submitted(key)
-    led = _load_ledger()
-    if led.pop(key, None) is not None:
-        _save_ledger(led)
-        return True
-    return False
+    with _LOCK:
+        mark_submitted(key)
+        led = _load_ledger()
+        if led.pop(key, None) is not None:
+            _save_ledger(led)
+            return True
+        return False
 
 
 def drop_many(jobids) -> int:
@@ -225,14 +243,15 @@ def drop_many(jobids) -> int:
     ids = {str(j) for j in (jobids or [])}
     if not ids:
         return 0
-    led = _load_ledger()
-    n = 0
-    for j in ids:
-        if led.pop(j, None) is not None:
-            n += 1
-    if n:
-        _save_ledger(led)
-    return n
+    with _LOCK:
+        led = _load_ledger()
+        n = 0
+        for j in ids:
+            if led.pop(j, None) is not None:
+                n += 1
+        if n:
+            _save_ledger(led)
+        return n
 
 
 def log_path() -> Path:

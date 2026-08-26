@@ -475,7 +475,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   go STRAIGHT to the «Незавершённые» ledger** (recorded `needs_human`, never auto-filled in bulk — a
   human finishes the captcha via «Докрутить»). Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
   submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are
-  bumped under `_FILL_ALL_LOCK` (thread-safe). Proxy rotation: the DASHBOARD picks `next_proxy()` per job
+  bumped under `_FILL_ALL_LOCK` (thread-safe). **`bulk_log`'s own shared-state files are now thread-safe
+  too (2026-08-26):** the parallel lane's worker threads share one `run` dict and all call
+  `record()`/`mark_submitted()`/`mark_done()`/`drop_many()`, which did an UNLOCKED read-modify-write and
+  wrote a FIXED `<name>.json.tmp` — so concurrent writers crashed with `FileNotFoundError` when one
+  thread's tmp was `os.replace`'d out from under another (caught → warning, not fatal) AND silently LOST
+  each other's updates, dropping «Незавершённые» ledger entries so those jobs were never drained. Fixed
+  with a module `_LOCK` (RLock) around every mutation + `_atomic_write_json` (UNIQUE per-pid/tid tmp).
+  Bookkeeping-only leak (the ATS submits + the mail-derived reconciler/`submitted_jobids` are unaffected),
+  so it's safe to let a mid-flight run finish on old code and apply on the next restart. Test:
+  `tests/test_bulk_log_concurrency.py`. Proxy rotation: the DASHBOARD picks `next_proxy()` per job
   and passes it to the worker's `/load` (one cursor). **`count` is OPTIONAL: empty = EVERY available job;
   a number = first `count`, clamped 1..20000. `workers` is ADAPTIVE by default (2026-08-25): empty/
   "auto"/0 → `_do_fill_all_adaptive` seeds 4 workers and ramps +2 every ~12s WHILE there's headroom —

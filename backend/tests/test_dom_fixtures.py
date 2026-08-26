@@ -928,3 +928,67 @@ def test_cover_letter_no_known_answer_is_noop():
 
     res = asyncio.run(_with_inline_page(_GH_COVER_WIDGET, coro))
     assert res == {"filled": 0, "handled": []}, res
+
+
+# ===========================================================================
+# A S H B Y   autofill_from_resume  wait-for-settle
+# ===========================================================================
+
+# Ashby's "autofill from resume" parser re-renders the form asynchronously (sometimes in
+# multiple passes). autofill_from_resume must NOT return until the form has SETTLED, else a
+# later re-render clobbers fields the analyzer fills afterward (the Cohere "needs correction /
+# Missing entry" bug — a Yes/No screener still shows selected but its React value was wiped).
+_ASHBY_AUTOFILL_WIDGET = """
+<form>
+  <div class="ashby-application-form-autofill-input-root" data-state="default">
+    <span>Autofill from resume</span>
+    <div class="_pending_x" data-state="hidden">Parsing your resume. Autofilling key fields...</div>
+    <input type="file" id="autofill_input" accept=".pdf,.doc,.docx,.txt">
+  </div>
+  <input type="text" id="name" value="">
+  <script>
+    document.getElementById('autofill_input').addEventListener('change', function() {
+      var pend = document.querySelector('._pending_x');
+      pend.setAttribute('data-state','pending');           // parser working
+      setTimeout(function(){                                // 1.3s async parse
+        document.getElementById('name').value = 'Parsed Name';
+        pend.setAttribute('data-state','hidden');           // done
+      }, 1300);
+    });
+  </script>
+</form>
+"""
+
+
+def test_ashby_autofill_waits_for_parser_settle(tmp_path):
+    """autofill_from_resume returns only AFTER the pending indicator clears and a field
+    populated — so subsequent fills land on a settled form (not clobbered by a late pass)."""
+    from backend.applier.strategies.ashby import AshbyStrategy
+    dummy = tmp_path / "resume.pdf"
+    dummy.write_bytes(b"%PDF-1.4 stub")
+
+    async def coro(page):
+        # set_content already ran; upload triggers the simulated async parse
+        ok = await AshbyStrategy().autofill_from_resume(page, str(dummy))
+        # when it returns, the parser must have finished (name populated, pending hidden)
+        name = await page.eval_on_selector("#name", "el=>el.value")
+        pend = await page.eval_on_selector("._pending_x", "el=>el.getAttribute('data-state')")
+        return ok, name, pend
+
+    ok, name, pend = asyncio.run(_with_inline_page(_ASHBY_AUTOFILL_WIDGET, coro))
+    assert ok is True, "autofill_from_resume should report success on an Ashby autofill form"
+    assert name == "Parsed Name", f"returned before parser populated the field: name={name!r}"
+    assert pend == "hidden", f"returned while parser still pending: {pend!r}"
+
+
+def test_ashby_autofill_noop_without_autofill_input(tmp_path):
+    """No 'autofill from resume' input (plain form) -> returns False fast, no wait, no regression."""
+    from backend.applier.strategies.ashby import AshbyStrategy
+    dummy = tmp_path / "resume.pdf"
+    dummy.write_bytes(b"%PDF-1.4 stub")
+
+    async def coro(page):
+        return await AshbyStrategy().autofill_from_resume(page, str(dummy))
+
+    ok = asyncio.run(_with_inline_page("<form><input type='file' id='r' accept='.pdf'></form>", coro))
+    assert ok is False, "no autofill input -> must be a no-op returning False"

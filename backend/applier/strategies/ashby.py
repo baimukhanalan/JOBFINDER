@@ -60,19 +60,53 @@ class AshbyStrategy(ApplyStrategy):
                                and "image/" not in (info.get("acc") or ""))
                 if is_autofill:
                     await inp.set_input_files(resume_path)
-                    # Ashby parses server-side then fills fields. Poll until a text
-                    # field actually populates (up to ~15s) instead of a fixed guess,
-                    # so we capture the MAXIMUM the parser fills before returning.
-                    for _ in range(15):
+                    # Ashby parses server-side then RE-RENDERS its controlled form state,
+                    # sometimes in MORE THAN ONE async pass. If our field fill runs between
+                    # passes, a later pass unbinds it from React state — the Cohere
+                    # "needs correction / Missing entry" bug, where a Yes/No screener button
+                    # still SHOWS selected but its value was wiped. The old wait returned as
+                    # soon as ONE text field populated (+1500ms), often BEFORE the screener
+                    # re-render, so our subsequent fill got clobbered. Now wait until the form
+                    # is STABLE: a field populated, no "parsing/pending" indicator visible, and
+                    # the value+button-toggle signature unchanged across two reads (every
+                    # re-render pass has landed) — so the analyzer fills onto a settled form.
+                    _SNAP_JS = (
+                        '()=>{const f=[...document.querySelectorAll("input,textarea")];'
+                        'const filled=f.some(e=>["text","email","tel",""].includes('
+                        '(e.type||"").toLowerCase()) && (e.value||"").trim().length>0);'
+                        'const sig=f.map(e=>e.value||"").join("|")+"#"+'
+                        '[...document.querySelectorAll("button,[role=radio],[role=checkbox]")]'
+                        '.map(b=>(b.getAttribute("aria-pressed")||"")+(b.getAttribute("aria-checked")||"")'
+                        '+(b.getAttribute("data-state")||"")).join("");'
+                        'const pending=[...document.querySelectorAll("[data-state],[class*=pending],[class*=parsing]")]'
+                        '.some(e=>{const st=(e.getAttribute("data-state")||"").toLowerCase();'
+                        'const cn=(e.className||"").toString().toLowerCase();'
+                        'return e.offsetParent!==null && (st==="pending" || (/pending|parsing/.test(cn) && st!=="hidden"));});'
+                        'return {filled, pending, sig};}')
+                    prev = None
+                    stable = 0
+                    landed = False
+                    for _ in range(20):
                         await page.wait_for_timeout(1000)
-                        landed = await page.evaluate(
-                            '()=>[...document.querySelectorAll("input,textarea")]'
-                            '.some(e=>["text","email","tel",""].includes('
-                            '(e.type||"").toLowerCase()) && (e.value||"").trim().length>0)')
-                        if landed:
-                            await page.wait_for_timeout(1500)  # let the rest land too
-                            return True
-                    return True
+                        try:
+                            s = await page.evaluate(_SNAP_JS)
+                        except Exception:
+                            break
+                        if not (s.get("filled") and not s.get("pending")):
+                            stable = 0
+                            prev = s.get("sig")
+                            continue
+                        landed = True
+                        if prev is not None and s.get("sig") == prev:
+                            stable += 1
+                            if stable >= 2:  # two consecutive unchanged reads = fully settled
+                                return True
+                        else:
+                            stable = 0
+                        prev = s.get("sig")
+                    # settle window exhausted — give one last beat for a trailing pass
+                    await page.wait_for_timeout(1500)
+                    return landed or True
         except Exception:
             return False
         return False

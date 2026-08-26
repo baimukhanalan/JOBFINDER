@@ -168,6 +168,30 @@ def test_stats_distinguish_domain_and_full_identity_verification():
     assert '"identity_verified"' in source
 
 
+def test_reconcile_can_shrink_active_cohort_without_deleting_history(monkeypatch):
+    mandatory = [{
+        "source": "mandatory_employer", "source_external_id": f"m{i}",
+        "legal_name": f"Mandatory {i}", "trade_name": f"Mandatory {i}",
+        "domain": f"mandatory{i}.test", "country": "US", "metadata": {},
+    } for i in range(15)]
+    reserve = mandatory + [{
+        "source": "wikidata_employer", "source_external_id": f"q{i}",
+        "legal_name": f"Employer {i}", "trade_name": f"Employer {i}",
+        "country": "US", "metadata": {"employee_count": 10000 + i},
+    } for i in range(25)]
+    current = {(row["source"], row["source_external_id"]) for row in reserve}
+    monkeypatch.setattr(employer_master, "load_stored_reservoir", lambda: reserve)
+    monkeypatch.setattr(employer_master, "_active_source_identities", lambda: current)
+
+    result = employer_master.reconcile_stored_population(limit=20, reservoir_min=40)
+
+    assert result["resized"] is True
+    assert result["selected"] == 20
+    assert result["current_active"] == 40
+    assert result["removed"] == 20
+    assert result["mandatory"] == 15
+
+
 def test_population_switch_preserves_history_and_requires_exact_active_count(monkeypatch):
     class Cursor:
         def __init__(self):

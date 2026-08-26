@@ -67,7 +67,8 @@ def _selected_row(row: dict, *, name: str, quality: dict,
 
 
 def select_employers(reservoir: list[dict], *, limit: int = 10000,
-                     reservoir_min: int = 15000) -> tuple[list[dict], dict]:
+                     reservoir_min: int = 15000,
+                     require_complete_profile: bool = False) -> tuple[list[dict], dict]:
     """Strictly filter, deduplicate and rank source-backed employer candidates."""
     if len(reservoir) < reservoir_min:
         raise RuntimeError(
@@ -98,6 +99,18 @@ def select_employers(reservoir: list[dict], *, limit: int = 10000,
                     and str(row.get("country") or "US").upper() != "US")):
             invalid += 1
             continue
+        if require_complete_profile and not mandatory_row:
+            profile_complete = (
+                bool(row.get("brand_name") or row.get("trade_name") or row.get("legal_name"))
+                and bool(row.get("employee_count") or row.get("employee_count_min")
+                         or row.get("employee_size"))
+                and bool(row.get("master_industry") or row.get("industry"))
+                and bool(row.get("master_headquarters")
+                         or (row.get("metadata") or {}).get("headquarters"))
+            )
+            if not profile_complete:
+                invalid += 1
+                continue
         quality = classify_employer_record(row)
         if not mandatory_row and quality["proposed_lane"] == "quarantine":
             risk_excluded += 1
@@ -164,15 +177,18 @@ def load_stored_reservoir() -> list[dict]:
         with connection.cursor() as cursor:
             cursor.execute("SET TRANSACTION READ ONLY")
             cursor.execute("""
-              SELECT id,source,source_external_id,external_ids,source_url,
-                source_observed_at,legal_name,trade_name,canonical_name,domain,
-                careers_url,country,states,industry,naics,employee_size,ats,ats_slug,
-                ats_url,remote_supported,typical_roles,discovery_confidence,
-                domain_confidence,careers_confidence,status,match_reason,
-                matched_catalog_company_key,provenance,metadata
-              FROM company_discovery
-              WHERE source=ANY(%s)
-              ORDER BY source,source_external_id
+              SELECT c.id,c.source,c.source_external_id,c.external_ids,c.source_url,
+                c.source_observed_at,c.legal_name,c.trade_name,c.canonical_name,c.domain,
+                c.careers_url,c.country,c.states,c.industry,c.naics,c.employee_size,c.ats,c.ats_slug,
+                c.ats_url,c.remote_supported,c.typical_roles,c.discovery_confidence,
+                c.domain_confidence,c.careers_confidence,c.status,c.match_reason,
+                c.matched_catalog_company_key,c.provenance,c.metadata
+                ,m.employee_count,m.employee_count_min,
+                m.industry AS master_industry,m.headquarters AS master_headquarters
+              FROM company_discovery c
+              LEFT JOIN company_employer_master m ON m.company_id=c.id
+              WHERE c.source=ANY(%s)
+              ORDER BY c.source,c.source_external_id
             """, (list(_SOURCE_PRIORITY),))
             columns = [item[0] for item in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -194,7 +210,8 @@ def _active_source_identities() -> set[tuple[str, str]]:
 
 def reconcile_stored_population(*, limit: int = 10_000,
                                 reservoir_min: int = 15_000,
-                                apply: bool = False) -> dict:
+                                apply: bool = False,
+                                require_complete_profile: bool = False) -> dict:
     """Plan or atomically activate a replacement set from saved source records.
 
     Dry-run is the default.  Applying may add missing master rows, then switches the
@@ -205,9 +222,6 @@ def reconcile_stored_population(*, limit: int = 10_000,
     if len(reservoir) < reservoir_min:
         raise RuntimeError(
             f"stored employer reservoir has {len(reservoir)} rows; need {reservoir_min}")
-    if len(current) != limit:
-        raise RuntimeError(
-            f"active population has {len(current)} rows; expected {limit}")
     by_identity = {
         (str(row.get("source") or ""), str(row.get("source_external_id") or "")): row
         for row in reservoir
@@ -216,6 +230,44 @@ def reconcile_stored_population(*, limit: int = 10_000,
     if missing:
         raise RuntimeError(
             f"stored reservoir is missing {len(missing)} active source identities")
+
+    # An explicit new limit means a cohort resize, not an error. Re-rank the whole
+    # stored reservoir so shrinking from 10k to 2k keeps the strongest known employers
+    # instead of preserving whichever rows happened to be active previously.
+    if len(current) != limit:
+        selected, diagnostics = select_employers(
+            reservoir, limit=limit, reservoir_min=reservoir_min,
+            require_complete_profile=require_complete_profile)
+        proposed = {(str(row["source"]), str(row["source_external_id"]))
+                    for row in selected}
+        added = sorted(proposed - current)
+        removed = sorted(current - proposed)
+        result = {
+            "applied": False, "resized": True, "selected": len(selected),
+            "current_active": len(current), "added": len(added),
+            "removed": len(removed),
+            "mandatory": sum(
+                row.get("source") == "mandatory_employer" for row in selected),
+            "added_source_ids": [list(item) for item in added],
+            "removed_source_ids": [list(item) for item in removed],
+            **diagnostics,
+        }
+        if not apply:
+            return result
+        selected_by_identity = {
+            (str(row["source"]), str(row["source_external_id"])): row
+            for row in selected
+        }
+        synced = 0
+        for source in _SOURCE_PRIORITY:
+            rows = [selected_by_identity[item] for item in added if item[0] == source]
+            if rows:
+                synced += master_db.sync_source(source, rows)
+        activated = master_db.set_target_population(selected, expected=limit)
+        segments = refresh_segments()
+        return {**result, "applied": True, "synced": synced,
+                "activated": activated, "segments": segments,
+                **master_db.counts()}
 
     kept: list[dict] = []
     removed_rows: list[dict] = []
@@ -358,6 +410,8 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--reservoir-min", type=int, default=15000)
     reconcile.add_argument("--apply", action="store_true",
                            help="activate the plan; default is read-only dry-run")
+    reconcile.add_argument("--require-complete-profile", action="store_true",
+                           help="retain only employers with size, industry and headquarters")
     enrich = sub.add_parser("enrich-structured")
     enrich.add_argument("--limit", type=int, default=2000)
     enrich.add_argument("--min-interval", type=float, default=0.25)
@@ -408,7 +462,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("invalid stored reconcile bounds")
             result = reconcile_stored_population(
                 limit=args.limit, reservoir_min=args.reservoir_min,
-                apply=args.apply)
+                apply=args.apply,
+                require_complete_profile=args.require_complete_profile)
         elif args.command == "enrich-structured":
             from backend.tools.employer_identity_enrichment import enrich_structured
             if args.limit < 1 or args.min_interval < 0.1:

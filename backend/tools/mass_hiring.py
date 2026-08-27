@@ -131,7 +131,7 @@ _CATEGORIES = [
         r"patient (access|service|care|support|advoc|coordinator)|"
         r"claims (processor|specialist|associate|rep|examiner|agent|adjuster)|"
         r"enrollment (specialist|rep|coordinator|advisor)|intake (specialist|coordinator|rep)|"
-        r"(healthcare|insurance|benefits|billing|financial services) (representative|agent|associate|advisor)|"
+        r"(healthcare|insurance|benefits|billing|financial services) (rep\b|representative|agent|associate|advisor)|"
         r"trust (and|&) safety|content (review|moderat)|community (support|moderat)", re.I)),
     ("sales", re.compile(
         r"\bsdr\b|\bbdr\b|sales (development|dev) rep|business development rep|"
@@ -322,26 +322,49 @@ def fetch_remoteok() -> list[dict]:
     return rows
 
 
+def _amazon_row(j: dict) -> dict | None:
+    """One amazon.jobs result → row or None. Amazon marks a remote job with **city='Virtual'**;
+    `normalized_location` is the COUNTRY (e.g. 'USA', 'GBR', 'ZAF'), so it never contains the word
+    'virtual' — the old `"virtual" in normalized_location` test therefore dropped EVERYTHING. Keep
+    only US-based virtual roles (Amazon's virtual CS is mostly offshore GBR/ZAF language-moderation;
+    the US slice is seasonal)."""
+    city = (j.get("city") or "").strip().lower()
+    nloc = (j.get("normalized_location") or "").strip()
+    text_loc = (j.get("location") or j.get("normalized_location") or "").lower()
+    is_remote = city == "virtual" or "virtual" in text_loc
+    is_us = nloc.upper() in ("USA", "US") or "united states" in nloc.lower()
+    if not (is_remote and is_us):
+        return None
+    url = "https://www.amazon.jobs" + (j.get("job_path") or "")
+    # Pass a US-naming location string so us_eligible() resolves True.
+    return _mk_row("amazon", j.get("id"), "Amazon", j.get("title"),
+                   f"Virtual, {nloc or 'USA'}", url,
+                   posted_at=_iso_epoch(j.get("updated_time") or j.get("posted_date")))
+
+
 def fetch_amazon_remote() -> list[dict]:
-    """Amazon's (small) remote slice — a job is remote only if its location says Virtual."""
-    rows = []
-    queries = ["customer service", "customer support", "sales", "data"]
-    for q in queries:
+    """Amazon's (small, seasonal) US virtual slice. Pin country=USA, keep the `city='Virtual'`
+    rows. Yields ~0 out of peak season — that is CORRECT (US virtual CS hiring is seasonal), and
+    non-zero when Amazon runs it; the old connector yielded 0 unconditionally due to the
+    normalized_location bug (see _amazon_row)."""
+    rows, seen = [], set()
+    for q in ("work from home", "customer service", "virtual"):
         try:
             r = httpx.get("https://www.amazon.jobs/en/search.json", headers=_UA, timeout=30,
                           params={"base_query": q, "country": "USA", "result_limit": 200,
                                   "sort": "recent"})
-            for j in (r.json().get("jobs") or []):
-                loc = (j.get("normalized_location") or "")
-                if "virtual" not in loc.lower():        # remote-only rule
-                    continue
-                url = "https://www.amazon.jobs" + (j.get("job_path") or "")
-                row = _mk_row("amazon", j.get("id"), "Amazon", j.get("title"), loc, url,
-                              posted_at=_iso_epoch(j.get("updated_time") or j.get("posted_date")))
-                if row:
-                    rows.append(row)
+            jobs = r.json().get("jobs") or []
         except Exception as e:
             print(f"[amazon/{q}] {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        for j in jobs:
+            jid = j.get("id")
+            if jid in seen:
+                continue
+            row = _amazon_row(j)
+            if row:
+                seen.add(jid)
+                rows.append(row)
     return rows
 
 
@@ -434,38 +457,45 @@ def fetch_alorica() -> list[dict]:
     return rows
 
 
+def _concentrix_row(j: dict) -> dict | None:
+    """One Concentrix Workday posting → row or None. Keep only the US work-at-home slice
+    (locationsText like 'USA Work at Home'); the bulk of the board is offshore
+    (PHL/CZE/MEX/… Work-at-Home), correctly rejected by us_eligible()."""
+    loc = j.get("locationsText") or ""
+    if not (_is_remote(loc) and us_eligible(loc)):
+        return None
+    ep = j.get("externalPath") or ""
+    jid = ep.rstrip("/").split("_")[-1] or ep.rstrip("/").split("/")[-1]
+    return _mk_row("concentrix", jid or ep, "Concentrix", j.get("title"), loc,
+                   "https://cnx.wd1.myworkdayjobs.com/en-US/external_global" + ep)
+
+
 def fetch_concentrix() -> list[dict]:
-    """Concentrix — Workday CxS. POST jobs, paginate offset. Mostly offshore; we keep only
-    the 'USA Work-at-Home' slice (bounded pagination — the US-remote fraction is small)."""
+    """Concentrix — Workday CxS. Two bugs fixed (2026-08-27): (1) the old
+    searchText='customer service work at home' was too narrow and returned only offshore rows —
+    the broader 'work at home' surfaces the 'USA Work at Home' slice; (2) the response's `total`
+    comes back 0, so the old `offset >= total` exit killed pagination after the first page — now
+    we paginate until jobPostings is empty (bounded by the offset cap)."""
     rows, offset, limit = [], 0, 20
     while offset < 400:
         try:
             r = httpx.post("https://cnx.wd1.myworkdayjobs.com/wday/cxs/cnx/external_global/jobs",
                            json={"appliedFacets": {}, "limit": limit, "offset": offset,
-                                 "searchText": "customer service work at home"},
+                                 "searchText": "work at home"},
                            timeout=30, headers={**_UA, "Content-Type": "application/json",
                                                 "Accept": "application/json",
                                                 "Referer": "https://cnx.wd1.myworkdayjobs.com/external_global"})
-            d = r.json()
-            js = d.get("jobPostings") or []
+            js = r.json().get("jobPostings") or []
         except Exception as e:
             print(f"[concentrix offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
             break
         if not js:
             break
         for j in js:
-            loc = j.get("locationsText") or ""
-            if "usa" not in loc.lower() or not _is_remote(loc):
-                continue
-            ep = j.get("externalPath") or ""
-            jid = ep.rstrip("/").split("_")[-1] or ep.rstrip("/").split("/")[-1]
-            row = _mk_row("concentrix", jid or ep, "Concentrix", j.get("title"), loc,
-                          "https://cnx.wd1.myworkdayjobs.com/en-US/external_global" + ep)
+            row = _concentrix_row(j)
             if row:
                 rows.append(row)
         offset += limit
-        if offset >= int(d.get("total") or 0):
-            break
     return rows
 
 

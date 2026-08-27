@@ -127,6 +127,10 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
 - `15 6` `catalog_collector --backfill-regions` — LLM residue pass over `regions IS NULL` rows → `logs/regions.log`.
 - `45 6` `catalog_forms --limit 200` — Playwright question scrape for Ashby/Lever/Workable → `logs/forms.log`.
 - `0 7 * * 0` `applier.discovery` — weekly company/slug discovery refresh → `logs/discovery.log`.
+- `0 6` `mass_hiring --collect` — nightly refresh of the **Mass Hiring** board (`mass_hiring_jobs`,
+  the human-apply remote-US mass-hiring surface, SEPARATE from auto-apply `job_catalog`) →
+  `logs/masshiring.log`. Added 2026-08-27 (the board had NO cron and was going stale ~30h+; light
+  ~40-60s job). `cd`s into the LOWERCASE repo root like every other line.
 - `15 4` `prefill_retention --days 20` — delete `uploads/prefill/<cand>/<jobid>/` artifacts (tailored
   résumé PDF, screenshots, report.json) older than 20 days so résumés don't pile up forever →
   `logs/prefill_retention.log`. Added 2026-08-24; `cd`s into the LOWERCASE `/home/projects/jobfinder`
@@ -826,3 +830,22 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   ("work from anywhere", "hire anywhere", …). Full US **state names** count as US in a location; 2-letter
   state codes are deliberately NOT used (", CA"/", DE" collide with Canada/Germany ISO) — those fall to
   the LLM. Tests: `backend/tests/test_regions.py`.
+- **Mass Hiring source connectors: Amazon + Concentrix were silently returning 0 (`tools/mass_hiring.py`,
+  fixed 2026-08-27).** The board (`mass_hiring_jobs`, human-apply remote-US mass-hiring surface, SEPARATE
+  from `job_catalog`) had two dead connectors. **Amazon:** a remote role is marked by **`city='Virtual'`**;
+  `normalized_location` is the COUNTRY (`USA`/`GBR`/`ZAF`), so the old `"virtual" in normalized_location`
+  test matched NOTHING → 0 unconditionally. Fixed in the pure helper `_amazon_row` (remote = `city=='virtual'`,
+  US = `normalized_location∈{USA,US}`). NOTE Amazon's US virtual CS hiring is **seasonal** — the connector
+  correctly yields 0 out of peak season (its virtual roles are mostly offshore GBR/ZAF language moderation)
+  and non-zero when Amazon runs it; **0 is not a bug**. **Concentrix:** two bugs — (1) `searchText='customer
+  service work at home'` was too narrow (only offshore), broadened to `'work at home'` which surfaces the
+  `'USA Work at Home'` slice; (2) the Workday response's `total` comes back **0**, so the old
+  `offset >= total` exit killed pagination after page 1 — now paginate until `jobPostings` is empty. Pure
+  helper `_concentrix_row` keeps only US work-at-home (`_is_remote` + `us_eligible`); the `external_global`
+  Workday board is Concentrix's PROFESSIONAL tier (most US-remote rows are senior/dev, dropped by
+  `categorize`), so yield is small (1 live) — their frontline CSR board isn't publicly on this endpoint
+  (`careers.concentrix.com` doesn't resolve). Also **`categorize`'s healthcare/insurance bucket now matches
+  bare `rep`** (not only `representative`) so "Licensed Health Insurance Rep" (a real high-volume BPO
+  enrollment role) isn't dropped — guarded so bare "Sales Rep"/"Legal Rep" don't leak, `_NOT_MASS` still
+  drops senior. Per-job decisions are pure + unit-tested (`tests/test_mass_hiring.py`, no network); do NOT
+  re-test remote via `normalized_location` for Amazon or re-add the `total`-based exit for Concentrix.

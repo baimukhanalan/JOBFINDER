@@ -66,3 +66,19 @@ def test_atomic_write_uses_unique_tmp(tmp_path):
     assert json.loads(bl._LEDGER.read_text()) == {"a": 1}
     # no stray .tmp left behind
     assert not list(tmp_path.glob(".*tmp"))
+
+
+def test_spam_blocked_job_not_parked_in_ledger(tmp_path, monkeypatch):
+    """An Ashby datacenter-IP spam block is un-completable from here — it must NOT be parked
+    in «Незавершённые» (same policy as skipping captcha), while a genuine fill-gap IS parked."""
+    import backend.tools.bulk_log as bl
+    monkeypatch.setattr(bl, "_LEDGER", tmp_path / "unfinished.json")
+    monkeypatch.setattr(bl, "_DONE", tmp_path / "submitted_jobids.json")
+    # spam-blocked, not confirmed -> dropped (not parked)
+    bl._update_ledger({"jobid": 111, "blocked": "We couldn't submit your application. "
+                       "Flagged as possible spam."}, "run1", confirmed=False)
+    # a real required-field gap, not confirmed -> parked
+    bl._update_ledger({"jobid": 222, "blocked": "This field is required"}, "run1", confirmed=False)
+    led = bl._load_ledger()
+    assert "111" not in led, "spam-blocked job was wrongly parked in the ledger"
+    assert "222" in led, "a genuine fill-gap must still be parked for the human/drain"

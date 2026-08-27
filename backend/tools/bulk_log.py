@@ -14,11 +14,20 @@ pressed; `submit_confirmed` = an ATS confirmation was seen right after the click
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# A datacenter-IP Ashby spam block ("We couldn't submit your application. Flagged as possible
+# spam.") is UN-COMPLETABLE from here — a human can't finish it from noVNC either (same IP), so
+# parking it in «Незавершённые» just re-inflates the tab with jobs nobody can action (same as
+# skipping Lever/Workable captcha). Owner accepted the spam failure itself (free/direct); we
+# only keep the ledger honest by not parking it. Kept narrow so a human-fixable "couldn't
+# upload"/other block is NOT swallowed.
+_SPAM_LEDGER_RE = re.compile(r"couldn'?t submit|flagged as possible spam|possible spam", re.I)
 
 # The parallel bulk lane («Подать на все») runs a dozen dashboard WORKER THREADS (plus the
 # reconciler / drain / status daemons) — all in THIS process — that mutate the three
@@ -137,6 +146,8 @@ def _update_ledger(job: dict, run_id: str, confirmed) -> None:
             led.pop(key, None)
         elif key in _load_done():
             led.pop(key, None)          # already done elsewhere — don't churn it
+        elif _SPAM_LEDGER_RE.search(str(job.get("blocked") or "")):
+            led.pop(key, None)          # datacenter-IP spam block — un-completable, don't park
         else:
             # Track how many times this job has been re-parked (failed). The drain re-runs a
             # fixable job up to a retry cap, then drops it as dead — so we finish what we can

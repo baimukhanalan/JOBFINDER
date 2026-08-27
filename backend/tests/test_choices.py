@@ -252,3 +252,21 @@ def test_deterministic_choices_referral_never_needs_specify():
     q = {"question_text": "How did you hear about us?",
          "options": ["Telegram * (please specify)", "Other *(please specify)"]}
     assert choices.deterministic_choices([q], {"referral": "Telegram"})[0]["index"] is None
+
+
+def test_data_consent_select_is_backed_not_review():
+    """A required legal 'consent to process my self-identification data' SELECT must be answered
+    affirmatively AND backed (no review) — else it blocks the whole submit (was 367 Remote jobs,
+    0 auto-submits). It must NOT match a real self-ID or a behavioral question."""
+    from backend.services.tailor.choices import deterministic_choices, _DATA_CONSENT_RE
+    q = "Please confirm you consent your self-identification data to be processed for the listed purposes"
+    opts = ["Yes, I consent", "No, I do not consent"]
+    res = deterministic_choices([{"question_text": q, "options": opts}], {})
+    assert res[0]["index"] == 0, "must pick the affirmative consent option"
+    assert res[0]["backed"] is True, "required data-processing consent must be BACKED (no review)"
+    # never a protected-characteristic self-ID, never behavioral
+    assert not _DATA_CONSENT_RE.search("Are you a person with a disability?")
+    assert not _DATA_CONSENT_RE.search("Which of the following describes your gender identity?")
+    assert not _DATA_CONSENT_RE.search("Describe a time you handled a conflict")
+    # a plain GDPR personal-data consent is also a required consent -> caught (beneficial)
+    assert _DATA_CONSENT_RE.search("I consent to my personal data being processed")

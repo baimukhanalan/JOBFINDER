@@ -280,6 +280,33 @@ def _consent_pick(question_text: str, options: list[str]) -> int | None:
     return None
 
 
+# Required legal consent to PROCESS self-identification / demographic / personal data — a
+# Greenhouse demographic-section SELECT (live-only; the nightly scrape never captures it), e.g.
+# "Please confirm you consent your self-identification data to be processed for the listed
+# purposes" -> "Yes, I consent". This is a required legal data-processing consent, NOT a
+# protected-characteristic self-ID: consenting to PROCESS a (separately declined) survey claims
+# nothing — same rationale as the checkbox-side _DEMOGRAPHIC_CONSENT_RE / fill_required_consent.
+# Answered BACKED so it does NOT fall to the LLM as an unbacked choice_review, which was blocking
+# EVERY Remote (remote.com) submit (367 jobs, 0 auto-submits) on this one uncached select.
+_DATA_CONSENT_RE = re.compile(
+    r"(?i)consent[\w\s,'\".\-]{0,120}"
+    r"(?:self.?identification|demographic|diversity|personal|sensitive)[\w\s]{0,40}"
+    r"(?:data|information)[\w\s]{0,40}(?:process|collect|stor|use)")
+
+
+def _data_consent_pick(question_text: str, options: list[str]) -> int | None:
+    """Required legal 'consent to process my self-ID / demographic / personal data' SELECT ->
+    the affirmative option. BACKED (a standard required legal consent, not a self-ID claim)."""
+    if len(options) != 2:
+        return None
+    if not _DATA_CONSENT_RE.search(question_text or ""):
+        return None
+    for i, o in enumerate(options):
+        if _CONSENT_AFFIRM_RE.search((o or "").strip()):
+            return i
+    return None
+
+
 # English-proficiency asked as a Yes/No ("Do you master English at C1 level?") — distinct
 # from the _ENGLISH_RE dropdown ("English Level"). Answer Yes only when a fact BACKS it,
 # so we never claim unproven proficiency. NOT routed through _language_pick: on a Yes/No
@@ -353,6 +380,10 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
             idx = _sanctions_pick(qt, opts)  # sanctioned-territory -> No, UNBACKED (review)
         if idx is None:
             idx = _consent_pick(qt, opts)  # SMS/text contact consent -> Yes, UNBACKED (review)
+        if idx is None:
+            idx = _data_consent_pick(qt, opts)  # required self-ID/personal DATA-processing consent
+            if idx is not None:
+                backed = True  # a required legal consent (not a self-ID) -> no review, auto-submit
         if idx is None:
             idx, backed = _english_yesno_pick(qt, opts, facts)  # English Yes/No -> Yes if backed
         if idx is None:

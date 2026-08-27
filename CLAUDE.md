@@ -337,7 +337,21 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   fire on a clean 2-option Yes/No pair. **SMS/text-contact consent** (`_consent_pick`) → the affirmative
   option, detected by LABEL (`communicationConsent`), option SENTENCES, OR the `given`/`notGiven` VALUE
   pair — the live analyzer extracts a radio's `value` attr as its option "text", so a sentence-only match
-  misses; unbacked → review. Tests: `test_choices.py`.
+  misses; unbacked → review. **Required self-ID / personal DATA-processing consent SELECT**
+  (`_data_consent_pick`, `_DATA_CONSENT_RE`, 2026-08-27) → the affirmative option, **BACKED** (unlike the
+  other unbacked picks) so it does NOT create a `choice_review` → `review_item` that blocks auto-submit. It
+  fires on `consent…(self-identification|demographic|diversity|personal|sensitive)…(data|information)…
+  (process|collect|stor|use)` — a required LEGAL consent, NOT a protected-characteristic self-ID (consenting
+  to PROCESS a separately-DECLINED survey claims nothing; same rationale as the checkbox-side
+  `_DEMOGRAPHIC_CONSENT_RE`). This is a **live-only Greenhouse demographic-section select the nightly scrape
+  never captures** (0/243 Remote rows have it), so it's uncached → fell to the LLM → `backed=False` →
+  `choice_review` → blocked EVERY Remote (remote.com) submit (367 jobs, 0 auto-submits). **PARTIAL fix
+  though:** it removes the SELF-ID-CONSENT trigger, but many Remote jobs ALSO have other unbacked-choice
+  review triggers on the same live form (`How did you hear about Remote?` referral with no fact, a `What
+  pronouns…` demographic, `Privacy notice` / `Notice at Collection` selects) and/or a behavioral textarea
+  (`Tell us about a time…`, ~40 jobs, legitimately reviewed) — so a Remote job fully unblocks ONLY when the
+  consent was its SOLE trigger (subagent-confirmed on job 1764). Does NOT touch `_NEEDS_REVIEW` (behavioral
+  contract intact). Tests: `test_choices.py::test_data_consent_select_is_backed_not_review`.
 - **Lever geocode 'Current location' is dead on this datacenter IP — `is_lever_loc` returns False.**
   Verified: after a pick OR a direct JS-set, Lever's React clears BOTH the visible input and the hidden
   `selectedLocation` on a LATER async reconcile (>1.2s — past any settle a single `fill_field` can wait),

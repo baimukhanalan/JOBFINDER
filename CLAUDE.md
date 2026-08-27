@@ -550,7 +550,16 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   LIVE human captcha unsolvable from this datacenter IP, so parking them as `needs_human` re-inflated
   «Незавершённые» to 1775 with jobs no human would ever captcha-solve. The bulk lane now just `_bump`s
   them as skipped (logs the count); a specific Lever/Workable job can still be done by hand via the
-  /catalog one-click. (Previously they were recorded `needs_human` with `reason=click_failed`.) Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
+  /catalog one-click. (Previously they were recorded `needs_human` with `reason=click_failed`.)
+  **Ashby datacenter-IP SPAM blocks are likewise NOT parked (`bulk_log._update_ledger`, 2026-08-27):** a
+  `couldn't submit / flagged as possible spam` block is un-completable from here (a human can't finish it
+  from noVNC either — same IP), so `_update_ledger` DROPs (never parks) a job whose `blocked` matches
+  `_SPAM_LEDGER_RE` (narrow: `couldn't submit|flagged as possible spam|possible spam` — a genuine fill-gap
+  `is required` or a human-fixable `couldn't upload` is STILL parked). Without this, spam re-inflated
+  «Незавершённые» ~+60/tick during Ashby-heavy segments (owner accepted the spam FAILURE itself as
+  free/direct; this only keeps the ledger honest). A one-time purge of 258 existing spam entries was run at
+  deploy (977→725). Test: `test_bulk_log_concurrency.py::test_spam_blocked_job_not_parked_in_ledger`.
+  Verified live: 4 1Password/Ashby jobs, 2 workers → 4/4
   submitted in ~5.5 min (vs ~20 min/job sequential); workers auto-cleaned. `_FILL_ALL` counters are
   bumped under `_FILL_ALL_LOCK` (thread-safe). **`bulk_log`'s own shared-state files are now thread-safe
   too (2026-08-26):** the parallel lane's worker threads share one `run` dict and all call

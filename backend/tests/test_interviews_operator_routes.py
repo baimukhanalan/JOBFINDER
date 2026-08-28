@@ -8,6 +8,9 @@ CRM_PG_DSN is unset / the DB is unreachable (mirrors test_interviews_db.py).
 """
 from __future__ import annotations
 
+import html
+import json
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -23,7 +26,7 @@ except Exception:
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.dashboard_app import app  # noqa: E402
-from backend.interviews import db  # noqa: E402
+from backend.interviews import db, operator_ui, service  # noqa: E402
 
 client = TestClient(app)
 
@@ -66,7 +69,11 @@ def test_grid_route_renders_cells(seeded):
     body = r.text
     # a free green cell for this responsible at an in-window hour (e.g. Monday 09:00)
     assert "iv-free" in body
-    assert f"{rid}:Оператор Тест" in body
+    # data-free is a JSON array now — parse one back and assert this responsible is in it
+    m = re.search(r'data-free="([^"]*)"', body)
+    assert m
+    parsed = json.loads(html.unescape(m.group(1)))
+    assert {"id": rid, "name": "Оператор Тест"} in parsed
     # the 09:00 UTC start for Monday must appear as a bookable cell start
     assert f'data-start="{monday.isoformat()}T09:00:00+00:00"' in body
 
@@ -131,3 +138,54 @@ def test_status_route_reports_assignment(seeded):
     none = client.get("/mail/interview/status",
                       params={"mailbox": MAILBOX, "thread": "no-such"})
     assert none.json()["assigned"] is False
+
+
+def test_grid_data_free_json_roundtrips_name_with_comma():
+    """A responsible name with a comma/colon must survive `data-free` — it's a JSON
+    array now, not a delimiter-joined string."""
+    db.ensure_schema()
+    _cleanup()
+    try:
+        rid = db.add_responsible("test_iv_comma", "h", "Ivanov, A.: Sr")
+        db.set_availability(rid, [{"dow": 0, "start_min": 540, "end_min": 1020,
+                                   "enabled": True}])
+        monday = _next_monday()
+        frag = operator_ui.grid_fragment(MAILBOX, monday)
+        # pull the first free cell's data-free attribute, unescape + JSON-parse it
+        m = re.search(r'data-free="([^"]*)"', frag)
+        assert m, "no free cell rendered"
+        parsed = json.loads(html.unescape(m.group(1)))
+        assert {"id": rid, "name": "Ivanov, A.: Sr"} in parsed
+    finally:
+        _cleanup()
+
+
+def test_grid_route_threads_company_jobid_and_skips_glob(seeded, monkeypatch):
+    """When company/jobid are passed (prev/next-week nav), grid_fragment must NOT call
+    the expensive mailbox_context glob, and the resolved values must reappear in the
+    fragment's week-nav so the next hop keeps threading them."""
+    def _boom(_mailbox):  # mailbox_context must not be called on the threaded path
+        raise AssertionError("mailbox_context should be skipped when company/jobid given")
+    monkeypatch.setattr(service, "mailbox_context", _boom)
+
+    monday = _next_monday()
+    r = client.get("/mail/interview/grid", params={
+        "mailbox": MAILBOX, "monday": monday.isoformat(),
+        "company": "Acme", "jobid": "job-9",
+    })
+    assert r.status_code == 200
+    body = r.text
+    assert "company=Acme" in body      # threaded into the week-nav data-ctx
+    assert "jobid=job-9" in body
+    assert 'value="Acme"' in body       # and into the hidden assign-form field
+
+
+def test_assign_bad_start_iso_returns_400(seeded):
+    rid = seeded
+    r = client.post("/mail/interview/assign", data={
+        "mailbox": MAILBOX, "responsible_id": rid, "start_iso": "not-a-date",
+        "company": "", "jobid": "", "thread_key": "thrbad", "source_message_hash": "hb",
+    })
+    assert r.status_code == 400
+    # and nothing was booked
+    assert db.interview_for_thread(MAILBOX, "thrbad") is None

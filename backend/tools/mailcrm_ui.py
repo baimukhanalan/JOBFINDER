@@ -501,12 +501,14 @@ def _kind_tag(kind: str) -> str:
     return f'<span class="tag" style="color:{fg};background:{bg}">{emoji} {escape(label)}</span>'
 
 
-def _iv_sobes(mailbox: str, thread: str, hash: str) -> str:
+def _iv_sobes(mailbox: str, thread: str, hash: str, as_span: bool = False) -> str:
     """The «Собес» (interview-assign) control. Imported lazily so a problem in the
-    interviews package can never break inbox rendering (returns "")."""
+    interviews package can never break inbox rendering (returns ""). `as_span` renders
+    a <span role=button> for placement inside a row <a> (valid HTML)."""
     try:
         from backend.interviews import operator_ui
-        return operator_ui.sobes_button(mailbox or "", thread or "", hash or "")
+        return operator_ui.sobes_button(mailbox or "", thread or "", hash or "",
+                                        as_span=as_span)
     except Exception:
         return ""
 
@@ -533,7 +535,7 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
         # onclick stops propagation so tapping it opens the assign modal, not the message.
         sobes = (_iv_sobes(m.get("mailbox", ""),
                            m.get("thread") or m.get("thread_key") or "",
-                           m.get("id", ""))
+                           m.get("id", ""), as_span=True)
                  if m.get("kind") == "interview" else "")
         out.append(
             f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}" '

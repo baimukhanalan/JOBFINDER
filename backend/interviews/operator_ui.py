@@ -21,42 +21,64 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from html import escape
+from urllib.parse import quote
 
 from backend.interviews import service
 
 _DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
-def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес") -> str:
-    """A small «Собес» control. Placed inside a row <a> or a thread action bar; the
-    onclick stops propagation/default so it never navigates the row, then opens the
-    modal for this (mailbox, thread, message-hash).
+def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес",
+                 as_span: bool = False) -> str:
+    """A small «Собес» control. Opens the assign modal for this (mailbox, thread,
+    message-hash); the onclick stops propagation/default so it never navigates.
+
+    `as_span=True` renders a `<span role="button" tabindex="0">` (for placement INSIDE
+    a row `<a>`, where a nested `<button>` is invalid interactive-in-interactive HTML —
+    matches the `render_candidate_rows` 📄-chip pattern); default renders a real
+    `<button>` (for the thread action bar, which sits in a `<div>`).
 
     Args are embedded as JS string literals via json.dumps (handles quotes in the
     normalized-subject thread key) and the whole attribute is HTML-escaped, so a
     subject with quotes/angle-brackets can neither break the JS nor inject markup."""
     args = ",".join(json.dumps(x or "") for x in (mailbox, thread, hash))
     onclick = escape(
-        f"event.preventDefault();event.stopPropagation();openSobes({args})",
+        f"event.stopPropagation();event.preventDefault();openSobes({args})",
         quote=True,
     )
+    if as_span:
+        return (f'<span class="iv-sobes" role="button" tabindex="0" onclick="{onclick}" '
+                f'title="Назначить собеседование">{escape(label)}</span>')
     return (f'<button type="button" class="iv-sobes" onclick="{onclick}" '
             f'title="Назначить собеседование">{escape(label)}</button>')
 
 
-def grid_fragment(mailbox: str, monday: date) -> str:
+def grid_fragment(mailbox: str, monday: date,
+                  company: str | None = None, jobid: str | None = None) -> str:
     """Server-rendered week grid starting at `monday` (a date). Free cells are green
-    buttons carrying `data-free` (comma-sep `id:name`) + `data-start` (the hour's UTC
-    ISO start); none-free cells are gray+disabled. Includes prev/next-week buttons and
-    prefilled hidden company/jobid from the mailbox context."""
+    buttons carrying `data-free` (a JSON `[{"id","name"},...]` array) + `data-start`
+    (the hour's UTC ISO start); none-free cells are gray+disabled. Includes prev/next-
+    week buttons and prefilled hidden company/jobid.
+
+    `company`/`jobid` are resolved ONCE (via `service.mailbox_context`) only when not
+    already supplied by the caller, then threaded through the prev/next-week fetch URLs
+    and the hidden assign-form fields — so subsequent week nav never re-globs the ~19k
+    prefill persona.json files (they're invariant across weeks)."""
     grid = service.grid_for_week(monday)
     cells = grid["cells"]
     hours = grid["hours"]
     dates = grid["dates"]  # 7 iso date strings, Mon..Sun
-    ctx = service.mailbox_context(mailbox)
-    company = ctx.get("company", "") or ""
-    jobid = ctx.get("jobid", "") or ""
+    if company is None and jobid is None:
+        ctx = service.mailbox_context(mailbox)
+        company = ctx.get("company", "") or ""
+        jobid = ctx.get("jobid", "") or ""
+    else:
+        company = company or ""
+        jobid = jobid or ""
 
+    # thread the resolved context back into the week-nav fetch URLs so a prev/next click
+    # re-renders WITHOUT re-globbing the prefill dir.
+    ctx_qs = f"&company={quote(company)}&jobid={quote(jobid)}"
     prev_m = (monday - timedelta(days=7)).isoformat()
     next_m = (monday + timedelta(days=7)).isoformat()
     sunday = monday + timedelta(days=6)
@@ -79,12 +101,16 @@ def grid_fragment(mailbox: str, monday: date) -> str:
             if free:
                 d = date.fromisoformat(diso)
                 start_iso = f"{diso}T{hour:02d}:00:00+00:00"
-                data_free = ",".join(f'{r["id"]}:{r["name"]}' for r in free)
+                # JSON payload (not "id:name,..."): a responsible name may contain a comma
+                # or colon ("Ivanov, A."), which a delimiter-split would corrupt.
+                data_free = escape(
+                    json.dumps([{"id": r["id"], "name": r["name"]} for r in free]),
+                    quote=True)
                 lbl = f"{d.day:02d}.{d.month:02d} {hour:02d}:00 GMT"
                 body.append(
                     '<button type="button" class="iv-cell iv-free" '
                     f'data-start="{escape(start_iso, quote=True)}" '
-                    f'data-free="{escape(data_free, quote=True)}" '
+                    f'data-free="{data_free}" '
                     f'data-label="{escape(lbl, quote=True)}" '
                     f'title="Свободно: {len(free)}">{len(free)}</button>')
             else:
@@ -99,7 +125,8 @@ def grid_fragment(mailbox: str, monday: date) -> str:
                     + '</div>')
 
     return (
-        f'<div class="iv-weeknav" data-cur-monday="{escape(monday.isoformat(), quote=True)}">'
+        f'<div class="iv-weeknav" data-cur-monday="{escape(monday.isoformat(), quote=True)}" '
+        f'data-ctx="{escape(ctx_qs, quote=True)}">'
         f'<button type="button" class="iv-wk" data-monday="{escape(prev_m, quote=True)}">← Пред.</button>'
         f'<span class="iv-wk-label">{escape(rng)}</span>'
         f'<button type="button" class="iv-wk" data-monday="{escape(next_m, quote=True)}">След. →</button>'
@@ -162,19 +189,21 @@ _IV_SCRIPT = """<script>
   window._ivState={mailbox:'',thread:'',hash:''};
   window._ivStart='';
   window._ivCurMonday='';
+  window._ivCtx='';   // "&company=…&jobid=…" — resolved once, threaded through week nav
   function el(id){return document.getElementById(id);}
   function ivToast(m){var t=el('ivToast'); if(t) t.textContent=m||'';}
   function ivHideAssign(){var a=el('ivAssign'); if(a) a.setAttribute('hidden',''); window._ivStart='';
     var s=document.querySelector('.iv-cell.iv-sel'); if(s) s.classList.remove('iv-sel');}
-  function ivLoadWeek(monday){
+  function ivLoadWeek(monday, ctx){
     var g=el('ivGrid'); if(!g) return;
     g.innerHTML='<div class="iv-loading">Загрузка…</div>'; ivHideAssign();
     var url='/mail/interview/grid?mailbox='+encodeURIComponent(window._ivState.mailbox||'')
-      +'&monday='+encodeURIComponent(monday||'');
+      +'&monday='+encodeURIComponent(monday||'')+(ctx||'');
     fetch(url).then(function(r){return r.text();}).then(function(html){
       g.innerHTML='<div class="iv-grid-scroll">'+html+'</div>';
-      var cm=g.querySelector('[data-cur-monday]');
-      window._ivCurMonday=cm?cm.getAttribute('data-cur-monday'):'';
+      var nav=g.querySelector('[data-cur-monday]');
+      window._ivCurMonday=nav?nav.getAttribute('data-cur-monday'):'';
+      window._ivCtx=nav?(nav.getAttribute('data-ctx')||''):'';
     }).catch(function(){ g.innerHTML='<div class="iv-loading">Не удалось загрузить сетку.</div>'; });
   }
   window.openSobes=function(mailbox,thread,hash){
@@ -191,11 +220,11 @@ _IV_SCRIPT = """<script>
     var prev=document.querySelector('.iv-cell.iv-sel'); if(prev) prev.classList.remove('iv-sel');
     cell.classList.add('iv-sel');
     window._ivStart=cell.getAttribute('data-start')||'';
-    var free=(cell.getAttribute('data-free')||'').split(',');
+    // data-free is a JSON [{"id","name"},…] array — a name may contain commas/colons.
+    var free=[]; try{ free=JSON.parse(cell.getAttribute('data-free')||'[]'); }catch(e){ free=[]; }
     var sel=el('ivResp'); if(!sel) return; sel.innerHTML='';
-    free.forEach(function(pair){ if(!pair) return; var i=pair.indexOf(':');
-      var id=i<0?pair:pair.slice(0,i), nm=i<0?pair:pair.slice(i+1);
-      var o=document.createElement('option'); o.value=id; o.textContent=nm; sel.appendChild(o); });
+    free.forEach(function(r){ if(!r) return;
+      var o=document.createElement('option'); o.value=r.id; o.textContent=r.name; sel.appendChild(o); });
     var w=el('ivWhen'); if(w) w.textContent=cell.getAttribute('data-label')||window._ivStart;
     var a=el('ivAssign'); if(a) a.removeAttribute('hidden'); ivToast('');
   }
@@ -212,8 +241,8 @@ _IV_SCRIPT = """<script>
     fd.append('source_message_hash', window._ivState.hash||'');
     var btn=el('ivAssignBtn'); if(btn) btn.disabled=true;
     fetch('/mail/interview/assign',{method:'POST',body:fd}).then(function(r){
-      if(r.ok){ ivToast('Собеседование назначено ✓'); ivHideAssign(); ivLoadWeek(window._ivCurMonday||''); }
-      else if(r.status===409){ ivToast('Этот слот уже занят — выберите другой'); ivLoadWeek(window._ivCurMonday||''); }
+      if(r.ok){ ivToast('Собеседование назначено ✓'); ivHideAssign(); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
+      else if(r.status===409){ ivToast('Этот слот уже занят — выберите другой'); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
       else { ivToast('Не удалось назначить'); }
     }).catch(function(){ ivToast('Ошибка сети'); })
       .then(function(){ if(btn) btn.disabled=false; });
@@ -222,7 +251,10 @@ _IV_SCRIPT = """<script>
     if(!e.target||!e.target.closest) return;
     var g=el('ivGrid');
     var wk=e.target.closest('.iv-wk');
-    if(wk && g && g.contains(wk)){ e.preventDefault(); ivLoadWeek(wk.getAttribute('data-monday')); return; }
+    if(wk && g && g.contains(wk)){ e.preventDefault();
+      var nav=g.querySelector('[data-ctx]');
+      ivLoadWeek(wk.getAttribute('data-monday'), nav?(nav.getAttribute('data-ctx')||''):window._ivCtx);
+      return; }
     var cell=e.target.closest('.iv-cell.iv-free');
     if(cell && g && g.contains(cell)){ e.preventDefault(); ivPickCell(cell); return; }
   });

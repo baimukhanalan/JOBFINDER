@@ -35,8 +35,12 @@ def _monday_of(monday: str) -> date:
 
 
 @router.get("/mail/interview/grid")
-def interview_grid(mailbox: str, monday: str = "") -> HTMLResponse:
-    return HTMLResponse(operator_ui.grid_fragment(mailbox, _monday_of(monday)))
+def interview_grid(mailbox: str, monday: str = "", company: str | None = None,
+                   jobid: str | None = None) -> HTMLResponse:
+    # company/jobid absent on the FIRST render (resolved once via mailbox_context);
+    # present on prev/next-week nav so grid_fragment skips the ~19k-file prefill glob.
+    return HTMLResponse(
+        operator_ui.grid_fragment(mailbox, _monday_of(monday), company, jobid))
 
 
 @router.post("/mail/interview/assign")
@@ -55,6 +59,11 @@ def interview_assign(
     except service.SlotConflict as exc:
         return HTMLResponse(f'<div class="iv-conflict">{escape(str(exc))}</div>',
                             status_code=409)
+    except ValueError:
+        # a malformed start_iso reaches service._parse_start → ValueError; answer 400,
+        # not a 500. Neutral Russian, no stack detail.
+        return HTMLResponse('<div class="iv-error">Неверный формат даты/времени</div>',
+                            status_code=400)
     return HTMLResponse('<div class="iv-ok">Назначено</div>')
 
 

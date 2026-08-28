@@ -74,9 +74,17 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
 - `jobfinder-alan-display` → `vnc/copilot_display.sh`: Xvfb **`:98`** + x11vnc **`:5901`** + websockify
   noVNC **`:6090`**.
 - nginx vhost `jobs.systeam.kz` (certbot SSL): `/` → 8099, `/copilot/` → 8102, `/vnc/` → 6090.
-  **basic-auth on EVERYTHING** (`/etc/nginx/.htpasswd-jobs`, user `job2026`, realm "JobFinder CRM").
-  NOTE: unlike the retired lowercase deploy, the extension endpoints are NOT `auth_basic off` here, so
-  the cross-origin one-click extension flow won't reach them through nginx without basic-auth.
+  **AUTH CHANGED 2026-08-28: the operator dashboard basic-auth was REPLACED by a real in-app admin
+  login** (`backend/interviews/dash_auth.py` fail-closed middleware — see the Interview Scheduler
+  section). So `location /` is now `auth_basic off` and gated in-app (unauth → `/login`); **basic-auth
+  (`/etc/nginx/.htpasswd-jobs`, user `job2026`) is kept ONLY on `/copilot/` and `/vnc/`** (proxied apps
+  with no in-app gate). The dash pm2 launch now exports **`IV_COOKIE_SECURE=1`** (Secure cookie + makes a
+  gate-install failure FATAL so the CRM can't boot ungated) and relies on `INTERVIEW_SESSION_SECRET`
+  (in `.env`). Extension endpoints (`/draft /assist /profile_form /job_pack /resume_file /mark_ext`) are
+  on the middleware allowlist and self-auth via `X-Assist-Token`, so the cross-origin one-click flow now
+  reaches them (no basic-auth in the way). **Rollback if the in-app login misbehaves:** re-add the two
+  `auth_basic` lines at server level in the vhost + `systemctl reload nginx` (a timestamped `.bak-*` of
+  the pre-change vhost sits next to it). Admin accounts: `admin_cli add --login … --role admin`.
 - `backend.main:app` (legacy jobs API + APScheduler over the OLD `jobfinder` Postgres) exists but is
   **not deployed / not in nginx.** Treat it as the legacy/DB layer.
 
@@ -1118,8 +1126,17 @@ cabinet is a SEPARATE app.
   never logs the bot token. **Deploy gotcha:** run a one-time `UPDATE iv_interviews SET announced=TRUE`
   before first start so the pre-existing backlog doesn't announce-burst (done at deploy). No `sg mail`
   (reads no Maildirs).
-- **NOT YET BUILT (Phase 3 + auth, planned in the doc):** auto-assign (bot picks a free responsible), and a
-  **unified real-login page with roles (admin|employee) to replace the operator basic-auth**
-  (owner-requested 2026-08-28). The `active` flag + bcrypt/session foundation for that already exist.
+- **Unified login — SHIPPED 2026-08-28 (owner-requested, replaces operator basic-auth).** `iv_responsibles`
+  gained a `role` (`admin`|`employee`). The operator dashboard (`jobs.systeam.kz`) now has a real in-app
+  **admin** login: `backend/interviews/dash_auth.py` adds a **fail-closed middleware** (`AdminAuthMiddleware`)
+  that redirects any non-allowlisted request without a valid `role=='admin'`+`active` session to `/login`,
+  plus `GET/POST /login` + `/logout`; installed via `_install_dash_auth(app)` in `dashboard_app.py` (guarded,
+  but **FATAL when `IV_COOKIE_SECURE=1`** so a broken gate can't boot the CRM ungated). Allowlist = the six
+  `X-Assist-Token` extension endpoints + `/login` `/logout` `/favicon.ico` (EXACT-match, so `/drafts` stays
+  gated). Employees keep using `cabinet.systeam.kz` (`role='employee'`). See the Deploy nginx note above for
+  the basic-auth move + rollback. Manage: `admin_cli {add --role|setrole|passwd} …`.
+- **NOT YET BUILT (Phase 3, deferred by owner 2026-08-28 "пока не надо"):** auto-assign — the bot picks a
+  free responsible for an unassigned interview and books it (optional recruiter auto-reply must stay
+  human-gated). Foundation (`slots`/`service.assign`) is ready.
 - Tests: `backend/tests/test_interviews_*.py` (49→53 pass; live-`jobfinder_crm` DB, `test_iv_%`-prefixed +
   skip if no DSN — run SEQUENTIALLY, concurrent runs share the DB and interfere).

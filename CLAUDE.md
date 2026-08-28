@@ -1059,3 +1059,55 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     **Foundever** (~5) only an XML sitemap; **Liveops** — Rippling board has 0 entry roles, contractor
     product is login-gated Salesforce. NB the full `--collect` is now ~130s (Kelly's proxied paging + the
     Workday/insurer pagination).
+
+## Interview Scheduler & Responsible Cabinet (`backend/interviews/`, added 2026-08-28)
+Assign an incoming interview (a `kind=interview` mail) into a free time-slot of a "responsible"
+(ответственный — the human who attends the interview as the persona), modelled on **orta.study**'s
+lesson-slot assignment. **Visibility == assignment** (orta pattern): a responsible sees a persona's mail
+ONLY because an `iv_interviews` row links them (`responsible_id`); before that the row is invisible.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-08-28-interview-scheduler.*`. All slots/times are **GMT**
+(UTC). Isolated package — the operator side is additive routes+modal on the live dashboard; the employee
+cabinet is a SEPARATE app.
+- **Data (Postgres `jobfinder_crm`, via the `mail_db` pool, `interviews/db.py::ensure_schema`, IF NOT
+  EXISTS):** `iv_responsibles` (login, bcrypt `password_hash`, name, tz='UTC', telegram_chat_id, `active`),
+  `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled; UNIQUE per dow),
+  `iv_interviews` (mailbox=persona addr = the visibility key, thread_key, company, jobid, responsible_id,
+  start_ts UTC, status assigned|done|cancelled, reminded_60/5; partial-UNIQUE `(responsible_id,start_ts)
+  WHERE status<>'cancelled'` = double-book guard). Persona↔responsible link is DERIVED
+  (`assigned_mailboxes(rid)` = DISTINCT mailbox WHERE responsible_id=rid AND status<>'cancelled').
+- **Operator side (inside the existing `/mail` inbox, behind basic-auth — NO new nav tab):** a «Собес»
+  control on `kind=="interview"` rows / the thread view opens a MODAL (mirrors `.cat-modal`) with the
+  orta-style week grid of ALL responsibles' free slots (`interviews/operator_ui.py`); click a free cell →
+  pick a free responsible → «Назначить». Routes `interviews/routes_operator.py`
+  (`GET /mail/interview/grid`, `POST /mail/interview/assign` → 409 on `SlotConflict` / 400 on bad start,
+  `GET /mail/interview/status`) are `include_router`'d into `dashboard_app.py` **inside a try/except**
+  (a broken interviews import degrades to "no button", never crashes the CRM) alongside a guarded
+  `ensure_schema()` call at startup. **Only the dashboard restarts for operator-side changes.**
+- **Employee cabinet — SEPARATE app `interviews/cabinet_app.py` on 127.0.0.1:8103, pm2
+  `jobfinder-alan-cabinet`, nginx `cabinet.systeam.kz` (own SSL, `auth_basic off`, `limit_req` on
+  `/login`).** Own bcrypt+signed-cookie login (`interviews/auth.py`, `itsdangerous`), NOT the operator
+  basic-auth. Employee logs in → edits weekly availability (GMT) → sees ONLY the mail of their assigned
+  personas (read-only; reuses `mailcrm.list_messages`/`get_thread` with `mark=False`) + their upcoming
+  interviews. **Ownership guard lives in the `/thread` route** (`mail_db.get_row(hash).mailbox in
+  assigned_mailboxes(rid)` else 404; `mailcrm` reads UNCHANGED). `current_responsible` re-checks `active`
+  every request (deactivation revokes access immediately). Launch MUST export **`IV_COOKIE_SECURE=1`**
+  (read via `os.environ`, not settings) → Secure cookie; and **`INTERVIEW_SESSION_SECRET`** must be set
+  (in `.env`) — `auth._serializer()` FAILS CLOSED (raises) in prod (`IV_COOKIE_SECURE=1`) if it's absent,
+  because the isolation guarantee rests on it (else the cookie is forgeable). pm2 launch:
+  `cd /home/projects/jobfinder && sg mail -c 'IV_COOKIE_SECURE=1 /usr/bin/python3 -m uvicorn
+  backend.interviews.cabinet_app:app --host 127.0.0.1 --port 8103'` (needs `mail` group to read Maildirs).
+- **Manage responsibles via CLI** (no UI): `python -m backend.interviews.admin_cli
+  {add|list|passwd|setavail|deactivate|reactivate}` (run via `sg mail`). Cabinet docs are disabled
+  (`docs_url=None`).
+- **Gotcha — nginx `/cabinet/login` alias:** the cabinet is root-mounted on its subdomain, but
+  `auth.current_responsible` redirects logged-out users to `/cabinet/login`; the `cabinet.systeam.kz`
+  vhost has `location = /cabinet/login { proxy_pass …:8103/login; }` so that redirect lands. If that
+  location is ever removed, the logout/expiry redirect 404s — the clean fix is to change the redirect to
+  `/login` (a follow-up; left as an alias to avoid a code churn at deploy). Rate-limit zone in
+  `/etc/nginx/conf.d/cabinet-ratelimit.conf`.
+- **NOT YET BUILT (Phase 2/3, planned in the doc):** Telegram bot for responsibles (multi-user `/start`
+  link, set slots, reminders −60/−5 via a daemon), auto-assign, and a **unified real-login page with
+  roles (admin|employee) to replace the operator basic-auth** (owner-requested 2026-08-28). The `active`
+  flag + bcrypt/session foundation for that already exist.
+- Tests: `backend/tests/test_interviews_*.py` (49→53 pass; live-`jobfinder_crm` DB, `test_iv_%`-prefixed +
+  skip if no DSN — run SEQUENTIALLY, concurrent runs share the DB and interfere).

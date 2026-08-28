@@ -248,6 +248,25 @@ def test_position_type_picks_full_time_backed():
     assert choices._position_type_pick("What type of role?", ["Engineering", "Sales"]) is None
 
 
+def test_national_of_applying_country_yes_backed():
+    """'Are you a national of the country where you are applying?' -> Yes, BACKED (the persona's
+    nationality matches the job country; real people are region-gated)."""
+    for qt in ("Are you a national of the country where you are applying?",
+               "Are you a citizen of the country in which you are applying to work?"):
+        out = choices.deterministic_choices([{"question_text": qt, "options": ["Yes", "No"]}], {})[0]
+        assert out["index"] is not None and out["backed"] is True, qt
+        assert ["Yes", "No"][out["index"]] == "Yes", qt
+
+
+def test_self_id_data_consent_matches_without_process_verb():
+    """'Please confirm you consent your self-identification data' (no trailing process verb) -> the
+    affirmative option, BACKED (the widened _DATA_CONSENT_RE)."""
+    q = {"question_text": "Please confirm you consent your self-identification data",
+         "options": ["Yes, I consent", "No"]}
+    out = choices.deterministic_choices([q], {})[0]
+    assert out["index"] == 0 and out["backed"] is True
+
+
 def test_english_yesno_backed_when_fact_meets_level():
     """'Do you master English at C1 level?' -> Yes (backed) with a Fluent fact;
     defers when the fact is below the asked level; the 'English Level' dropdown is

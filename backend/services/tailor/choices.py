@@ -293,7 +293,9 @@ def _consent_pick(question_text: str, options: list[str]) -> int | None:
 _DATA_CONSENT_RE = re.compile(
     r"(?i)consent[\w\s,'\".\-]{0,120}"
     r"(?:self.?identification|demographic|diversity|personal|sensitive)[\w\s]{0,40}"
-    r"(?:data|information)[\w\s]{0,40}(?:process|collect|stor|use)")
+    r"(?:data|information)"
+    # trailing process verb optional: "confirm you consent your self-identification data" is enough
+    r"(?:[\w\s]{0,40}(?:process|collect|stor|use|share|disclos|to be))?")
 
 
 def _data_consent_pick(question_text: str, options: list[str]) -> int | None:
@@ -390,6 +392,28 @@ def _position_type_pick(question_text: str, options: list[str]) -> int | None:
     return None
 
 
+# "Are you a national/citizen of the country where you are applying?" -> Yes. The synthetic persona's
+# nationality is set to the job's country (synth_persona._country_of), and real roster people are
+# region-gated by pick_candidate, so this is truthful. BACKED.
+_NATIONAL_RE = re.compile(
+    r"(?i)(?:are you|do you have).{0,20}(?:a )?(?:national|citizen|citizenship|nationality)"
+    r".{0,40}(?:country|nation).{0,30}(?:where|in which|you are|apply|residing|reside|located)"
+    r"|national of the (?:country|applying)")
+
+
+def _national_pick(question_text: str, options: list[str]) -> int | None:
+    if not _NATIONAL_RE.search(question_text or ""):
+        return None
+    norm = [(o or "").strip().lower() for o in options]
+    if not (len(norm) == 2 and any(n.startswith("yes") for n in norm)
+            and any(n.startswith("no") for n in norm)):
+        return None
+    for i, o in enumerate(norm):
+        if o == "yes" or o.startswith("yes"):
+            return i
+    return None
+
+
 # English-proficiency asked as a Yes/No ("Do you master English at C1 level?") — distinct
 # from the _ENGLISH_RE dropdown ("English Level"). Answer Yes only when a fact BACKS it,
 # so we never claim unproven proficiency. NOT routed through _language_pick: on a Yes/No
@@ -479,6 +503,10 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
                 backed = True
         if idx is None:
             idx = _position_type_pick(qt, opts)  # employment-type -> Full-time -> BACKED
+            if idx is not None:
+                backed = True
+        if idx is None:
+            idx = _national_pick(qt, opts)  # national/citizen of the applying country -> Yes -> BACKED
             if idx is not None:
                 backed = True
         if idx is None:

@@ -112,3 +112,9 @@ def test_pure_helpers():
     assert stats._rank("nonsense") == -1
     d = stats._day_start(1_787_000_000)
     assert d <= 1_787_000_000 and stats._day_start(d) == d
+    # prettify lowercase slugs but keep existing mixed-case names intact
+    assert stats._pretty("affirm") == "Affirm"
+    assert stats._pretty("nebius") == "Nebius"
+    assert stats._pretty("GitLab") == "GitLab"
+    assert stats._pretty("OpenAI") == "OpenAI"
+    assert stats._pretty("1Password") == "1Password"

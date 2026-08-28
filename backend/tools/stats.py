@@ -56,6 +56,16 @@ def _norm_company(name: str) -> str:
     return (name or "").strip().casefold()
 
 
+def _pretty(name: str) -> str:
+    """Prettify an all-lowercase board slug ('affirm' -> 'Affirm') for display, but
+    leave any name that already carries uppercase ('GitLab', 'OpenAI', '1Password',
+    'Remote') untouched."""
+    n = (name or "").strip()
+    if n and n == n.lower():
+        return n[:1].upper() + n[1:]
+    return n
+
+
 def _scan_applications() -> dict:
     """Walk the prefill artifacts, keyed by jobid.
 
@@ -100,7 +110,7 @@ def _scan_applications() -> dict:
     return {
         "jobid_company": jobid_company,
         "jobid_emails": jobid_emails,
-        "display": {k: c.most_common(1)[0][0] for k, c in disp.items()},
+        "display": {k: _pretty(c.most_common(1)[0][0]) for k, c in disp.items()},
         "attempts": attempts,
         "app_emails": app_emails,
     }

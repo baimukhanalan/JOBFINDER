@@ -337,6 +337,46 @@ def _us_state_full(token: str) -> str:
     return ""
 
 
+# Major US cities → state, to LOCATE a persona at a remote job's home city so residence screeners
+# ("do you reside within 40 miles of <city>?") are answered truthfully.
+_US_CITY_STATE = {
+    "oklahoma city": "Oklahoma", "tulsa": "Oklahoma", "new york": "New York",
+    "los angeles": "California", "chicago": "Illinois", "houston": "Texas", "phoenix": "Arizona",
+    "philadelphia": "Pennsylvania", "san antonio": "Texas", "san diego": "California",
+    "dallas": "Texas", "austin": "Texas", "denver": "Colorado", "seattle": "Washington",
+    "columbus": "Ohio", "charlotte": "North Carolina", "indianapolis": "Indiana",
+    "san francisco": "California", "atlanta": "Georgia", "boston": "Massachusetts",
+    "nashville": "Tennessee", "detroit": "Michigan", "memphis": "Tennessee", "portland": "Oregon",
+    "las vegas": "Nevada", "baltimore": "Maryland", "milwaukee": "Wisconsin", "tucson": "Arizona",
+    "fresno": "California", "sacramento": "California", "kansas city": "Missouri", "mesa": "Arizona",
+    "omaha": "Nebraska", "raleigh": "North Carolina", "miami": "Florida", "tampa": "Florida",
+    "orlando": "Florida", "jacksonville": "Florida", "virginia beach": "Virginia",
+    "richmond": "Virginia", "el paso": "Texas", "san juan": "Puerto Rico", "louisville": "Kentucky",
+    "albuquerque": "New Mexico", "birmingham": "Alabama", "salt lake city": "Utah",
+}
+
+
+def _job_us_place(job: dict) -> tuple[str, str]:
+    """Extract a (city, state) the job is based in from its title/location, so a persona can be
+    LOCATED there. Prefers a known US city; falls back to a named US state (city == state name)."""
+    text = f"{job.get('title', '')} {job.get('location', '')}".lower()
+    for city, state in _US_CITY_STATE.items():
+        if city in text:
+            return city.title(), state
+    for full in _US_STATE_BY_CODE.values():
+        if re.search(r"\b" + re.escape(full.lower()) + r"\b", text):
+            return full, full
+    return "", ""
+
+
+def _job_bilingual(job: dict) -> bool:
+    """True when the role explicitly wants a bilingual (Spanish) speaker — so a synthetic persona
+    can be DEFINED as Spanish-bilingual (a persona attribute, like its name/city; not a claim on a
+    real person). Kept narrow to Spanish, the dominant US-CSR bilingual pairing."""
+    text = f"{job.get('title', '')} {job.get('location', '')}".lower()
+    return "bilingual" in text and ("spanish" in text or "bilingual" in (job.get("title") or "").lower())
+
+
 _CITIES = {
     "United States": ["Austin, TX", "Denver, CO", "Columbus, OH", "Seattle, WA"],
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
@@ -578,12 +618,18 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     city = _cparts[0]
     state = ""
     if country == "United States":
-        # Keep a COHERENT (city, state): parse a trailing state token, else fall back to a bank
-        # US city that carries its state (many ATS — Workday/Avature/Oracle — require State).
-        state = _us_state_full(_cparts[1]) if len(_cparts) > 1 else ""
-        if not state:
-            _bank = random.choice(_CITIES["United States"]).split(",")
-            city, state = _bank[0].strip(), _us_state_full(_bank[1] if len(_bank) > 1 else "")
+        # LOCATE the persona at the job's home city when the posting names one (so residence
+        # screeners — "reside within 40 miles of <city>?" — are answered truthfully); else keep a
+        # COHERENT (city, state) parsed from the city text, else a bank US city that carries its
+        # state (many ATS — Workday/Avature/Oracle — require State).
+        jc, js = _job_us_place(job)
+        if jc:
+            city, state = jc, js
+        else:
+            state = _us_state_full(_cparts[1]) if len(_cparts) > 1 else ""
+            if not state:
+                _bank = random.choice(_CITIES["United States"]).split(",")
+                city, state = _bank[0].strip(), _us_state_full(_bank[1] if len(_bank) > 1 else "")
     street = str(raw.get("street_address") or "").strip()
     try:
         yoe = int(raw.get("years_experience"))
@@ -624,6 +670,8 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
         "skills_grouped": {"Skills": skills} if skills else {},
         "certifications": [], "education": edu,
     }
+    bilingual = _job_bilingual(job) if job else False
+    languages = ["English", "Spanish"] if bilingual else ["English"]
     profile = {
         "id": pid, "full_name": name, "email": email, "phone": phone,
         "location": loc, "city": city, "state": state, "street_address": street,
@@ -633,7 +681,9 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
         "years_experience": yoe, "is_synthetic": True, "is_sample": True, "resume": resume,
     }
     facts = {"salary_annual": None, "english_level": "Fluent",
-             "education_level": "Bachelor's" if edu else "", "tools": skills[:10]}
+             "education_level": "Bachelor's" if edu else "", "tools": skills[:10],
+             "languages": languages, "bilingual": bilingual,
+             "spanish_level": "Fluent" if bilingual else ""}
     return {"profile": profile, "facts": facts}
 
 

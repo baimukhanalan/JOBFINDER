@@ -100,7 +100,7 @@ class AvatureStrategy(ApplyStrategy):
             report["account_password"] = ""
             return report
         try:
-            await self._fill_avature_gaps(page, profile_form)
+            await self._fill_avature_gaps(page, profile_form, facts)
         except Exception as exc:
             logger.debug("avature: gap fill raised: %s", exc)
         report["account_password"] = getattr(self, "_account_pw", "")
@@ -127,7 +127,7 @@ class AvatureStrategy(ApplyStrategy):
         ("is current position", "No"),
     )
 
-    async def _fill_avature_gaps(self, page: Page, profile_form: dict) -> None:
+    async def _fill_avature_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
         await self._fill_passwords(page)
         await self._tick_required_checkboxes(page)
         for substr, ans in self._SCREENERS:
@@ -150,8 +150,9 @@ class AvatureStrategy(ApplyStrategy):
         # Languages-fluent and Skills are REQUIRED select2 autocomplete widgets (the native
         # <select> is hidden with 0 options; options load over AJAX on type). English is always
         # truthful for a US persona; Skills is a light self-report for a CSR role.
+        langs = ["English", "Spanish"] if (facts or {}).get("bilingual") else ["English"]
         try:
-            await self._fill_select2(page, "language", ["English"])
+            await self._fill_select2(page, "language", langs)
         except Exception:
             pass
         try:
@@ -396,6 +397,160 @@ class AvatureStrategy(ApplyStrategy):
             await fill_form(page, analysis)
         except Exception as exc:
             logger.debug("avature: step fill raised: %s", exc)
+        # Job-specific screening questions (experience / education / language proficiency /
+        # residence / internet) on the final step — answered deterministically & TRUTHFULLY
+        # (the persona is located at the job's city and defined bilingual for bilingual roles).
+        try:
+            await self._answer_screeners(page, facts)
+        except Exception as exc:
+            logger.debug("avature: screeners raised: %s", exc)
+
+    async def _answer_screeners(self, page: Page, facts) -> None:
+        facts = facts or {}
+        await self._tick_acknowledge(page)
+        try:
+            fields = await page.evaluate(
+                """()=>{const out=[];const seen=new Set();
+                  for(const l of document.querySelectorAll('label')){
+                    const t=(l.innerText||'').trim(); if(t.length<6) continue;
+                    const w=l.closest('div'); if(!w) continue;
+                    const nat=(l.getAttribute('for')&&document.getElementById(l.getAttribute('for'))||{}).tagName==='SELECT'
+                      ? document.getElementById(l.getAttribute('for')) : w.querySelector('select:not([multiple])');
+                    const s2=w.querySelector('.select2-container');
+                    if(!nat&&!s2) continue;
+                    let answered=false;
+                    if(nat) answered=[...nat.selectedOptions].some(o=>o.value);
+                    else{const r=s2.querySelector('.select2-selection__rendered,.select2-selection__choice');
+                      answered=!!(r && !r.classList.contains('select2-selection__placeholder') &&
+                        !/select an option|select a /i.test(r.innerText||''));}
+                    const key=t.slice(0,110);
+                    if(seen.has(key)) continue; seen.add(key);
+                    out.push({label:t, key, answered, s2:!!s2 && !nat});
+                  } return out;}""")
+        except Exception:
+            return
+        for f in fields:
+            if f.get("answered"):
+                continue
+            label = (f.get("label") or "").lower()
+            key = (f.get("key") or "")[:60]
+            # Language-proficiency selects use non-obvious option wording (e.g. "Native or
+            # bilingual proficiency") — pick the ranked option: HIGH for English (persona is
+            # fluent) and for Spanish only when the persona is bilingual; LOW Spanish otherwise.
+            is_prof = bool(re.search(r"proficiency|language", label)
+                           and re.search(r"english|spanish", label))
+            values = self._screener_answer(label, facts)
+            if not values and not is_prof:
+                continue
+            done = False
+            if is_prof and not f.get("s2"):
+                high = True if "english" in label else bool(facts.get("bilingual"))
+                done = await self._pick_proficiency(page, key, high)
+            elif not f.get("s2"):
+                for v in values:
+                    if await self._select_by_label(page, key, v):
+                        done = True
+                        break
+            if not done:
+                await self._fill_select2(page, key, values or ["Native", "Fluent", "Advanced"],
+                                         allow_first=is_prof)
+
+    async def _pick_proficiency(self, page: Page, label_key: str, high: bool) -> bool:
+        """Pick a language-proficiency option by RANK, not exact text: HIGH → the option matching
+        native/fluent/advanced/proficient (else the last real option); LOW → none/basic/limited
+        (else the first real option). Truthful given the persona's defined language ability."""
+        info = await page.evaluate(
+            """([lbl,high])=>{const n=s=>(s||'').toLowerCase();
+              const hi=/native|fluent|bilingual|advanced|proficient|expert|full professional/;
+              const lo=/no proficiency|none|basic|beginner|limited|elementary/;
+              for(const l of document.querySelectorAll('label')){
+                if(!n(l.innerText).includes(lbl))continue;
+                let el=l.getAttribute('for')?document.getElementById(l.getAttribute('for')):null;
+                if(!el||el.tagName!=='SELECT') el=(l.closest('div')||document).querySelector('select');
+                if(!el||el.tagName!=='SELECT')continue;
+                const real=[...el.options].filter(o=>o.value &&
+                  !/select an option|select a |prefer not|decline/.test(n(o.text)));
+                if(!real.length)return null;
+                let o = high ? (real.find(o=>hi.test(n(o.text)))||real[real.length-1])
+                             : (real.find(o=>lo.test(n(o.text)))||real[0]);
+                el.setAttribute('data-jf','1');return {value:o.value};
+              }return null;}""", [label_key.lower(), high])
+        if not info:
+            return False
+        try:
+            await page.select_option("select[data-jf='1']", value=info["value"])
+            ok = True
+        except Exception:
+            ok = False
+        try:
+            await page.eval_on_selector("select[data-jf='1']", "e=>e.removeAttribute('data-jf')")
+        except Exception:
+            pass
+        return ok
+
+    @staticmethod
+    def _screener_answer(t: str, facts: dict):
+        """Deterministic, truthful answer candidates for a job screener question (lowercased
+        label). Returns an ordered list of option-text candidates, or None to leave it."""
+        if re.search(r"acknowledge|i certify|i attest", t):
+            return None                                   # handled by _tick_acknowledge
+        if re.search(r"spanish", t):
+            return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
+                    else ["None", "No proficiency", "Basic", "Beginner", "Limited"])
+        if re.search(r"english", t):
+            return ["Fluent", "Native", "Advanced", "Professional"]
+        if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
+            return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
+                    "Associate", "GED"]
+        if re.search(r"experience.*(customer service|call center|contact center|retail|customer)", t):
+            return ["3-5 years", "1-3 years", "3+ years", "1-2 years", "More than", "2 years",
+                    "1 year", "Yes"]
+        if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
+            return ["Yes"]
+        if re.search(r"commitment|interfere|foresee|conflict|impact.*attendance", t):
+            return ["No"]
+        if re.search(r"willing|able to (work|attend|commit|travel)|onsite|on-site|"
+                     r"in.?office|in person|first week|training", t):
+            return ["Yes"]
+        if re.search(r"private|secure|quiet|workspace|distraction|free from", t):
+            return ["Yes"]
+        if re.search(r"ethernet|hardwired|hard-wired|wired", t):
+            return ["Yes, my home internet is hardwired", "Yes"]
+        if re.search(r"download speed|\bmbps\b|high.?speed|cable or fiber|internet|connection", t):
+            return ["Yes"]
+        if re.search(r"documentation|diploma or ged|provide.*if needed|verify.*education|"
+                     r"able to provide", t):
+            return ["Yes"]
+        if re.search(r"18 (years|and older)|older|authorized|eligible to work", t):
+            return ["Yes"]
+        return None
+
+    async def _tick_acknowledge(self, page: Page) -> None:
+        """Tick a required certification/acknowledgement radio or checkbox (single affirmative
+        option like 'I Acknowledge' / 'I certify')."""
+        try:
+            ids = await page.evaluate(
+                """()=>{const out=[];
+                  for(const el of document.querySelectorAll('input[type=radio],input[type=checkbox]')){
+                    if(el.checked||!el.id)continue;
+                    const l=document.querySelector('label[for="'+el.id+'"]');
+                    const t=((l&&l.innerText)||(el.closest('label')||{}).innerText||'').toLowerCase();
+                    if(/acknowledge|i certify|i attest|i agree|i understand|i confirm/.test(t))
+                      out.push(el.id);}
+                  return out;}""")
+        except Exception:
+            return
+        for eid in ids:
+            try:
+                await page.locator(f'[id="{eid}"]').check(force=True, timeout=2500)
+            except Exception:
+                try:
+                    await page.evaluate(
+                        """(id)=>{const e=document.getElementById(id);if(e){e.checked=true;"""
+                        """e.dispatchEvent(new Event('click',{bubbles:true}));"""
+                        """e.dispatchEvent(new Event('change',{bubbles:true}));}}""", eid)
+                except Exception:
+                    pass
 
     async def _decline_demographics(self, page: Page) -> None:
         """On an EEO / Voluntary Self-ID step, answer every UNANSWERED required demographic with a

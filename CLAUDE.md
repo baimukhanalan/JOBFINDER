@@ -155,20 +155,30 @@ Versant voice, Amazon VJT, SHL) — so end-to-end "auto-apply to hire" is imposs
 (Maximus, cleanest — no captcha/assessment gating submit), **Oracle ORC** (Alorica — guest apply), and
 **Workday** (Centene/Cigna/CVS/Humana — partial, per-tenant reCAPTCHA). iCIMS/Taleo(TTEC,UnitedHealth)/
 Phenom(Conduent)/Amazon/SmartRecruiters(Sutherland)/Kelly/WorkingSolutions are BLOCKED (stacked account +
-live-captcha/WAF + video assessment) — do NOT build. **`strategies/avature.py` (2026-08-28, first PoC):**
-`matches` `avature.net`; `open_form` navigates the board's `Job-Application?folderId=` URL to the real
-`/careers/Register?folderId=` wizard; `super().prefill` fills identity/eligibility/email/résumé, then
-`_fill_avature_gaps` adds what the generic analyzer can't — the two **account password** inputs (net-new;
-the analyzer has no password rule and skips them), label-driven **deterministic Yes/No screeners**
-(ever/currently employed here, contractor, clearance, government, 18+, work-auth, sponsorship — `_SCREENERS`,
-picking only an UNANSWERED select so two similar labels don't collide), the **Country-dependent State**
-select, and Skills. Verified live headless from the datacenter IP: full step-1 fill, `unfilled=[]`, no
-captcha, page_type `application_form` (NOT login_required). **Walking the wizard past step 1 is GATED OFF
-by default** (`advance_wizard = _env_advance()`, env `AVATURE_ADVANCE=1`): advancing transmits the persona
-PII to the employer and the account is created on the final Submit, so a plain fill / co-pilot dry-run is
-side-effect-free at Maximus. `synth_persona` now sets a coherent US **`state`** (`_us_state_full` + a
-bank-city fallback) — was empty, which left the required State blank on every US ATS (Workday/Avature/
-Oracle). Tests: `test_avature.py` (no network).
+live-captcha/WAF + video assessment) — do NOT build. **`strategies/avature.py` — COMPLETES A REAL
+SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
+email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the
+board's `Job-Application?folderId=` URL to the real `/careers/Register?folderId=` wizard; `super().prefill`
+fills identity/eligibility/email/résumé, then `_fill_avature_gaps` adds what the generic analyzer can't:
+the two **account password** inputs (net-new — the analyzer has no password rule), the required **Terms**
+checkbox whose `<label>` is just `*` (`_tick_required_checkboxes`), label-driven **deterministic Yes/No
+screeners** (`_SCREENERS`, picking only an UNANSWERED select so "currently" vs "ever" employed don't
+collide), the **Country-dependent State** select, and the **Languages/Skills select2** autocompletes
+(`_fill_select2` — hidden native `<select>` with 0 static options, AJAX-loaded on type). Then
+`_advance_wizard` walks the 3-step wizard (Personal Info → Compliance → job Screeners) clicking Continue,
+per step: `_decline_demographics` (gender radio decline + "I am not a protected veteran" + Member-of-Armed-
+Forces No — never claiming a protected characteristic) and `_answer_screeners` (acknowledge/certify tick +
+truthful deterministic answers: experience→positive, education→persona level, English→Fluent, Spanish→per
+bilingual, residence→Yes, internet/workspace→Yes, commitments→No; `_pick_proficiency` ranks language-level
+options by wording, not exact text). It records the FINAL submit button and stops; the caller clicks it.
+**GATED OFF by default** (`advance_wizard = _env_advance()`, env `AVATURE_ADVANCE=1`): advancing transmits
+PII and creates the account on the final Submit, so a plain fill / co-pilot dry-run is side-effect-free at
+the employer. **`synth_persona` now makes a US persona FIT the job**: a coherent `state` (`_us_state_full`),
+LOCATED at the job's city (`_job_us_place` / `_US_CITY_STATE` — so residence screeners answer Yes
+truthfully), and defined **bilingual** (`_job_bilingual` → Spanish in `facts`) for bilingual roles — these
+are persona-DESIGN attributes (like its name/city), not claims about a real person; all answers stay
+honest. Real submit is still HUMAN-gated at hire by Maximus's later assessment (the board stays a discovery
+surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py` (no network).
 
 ## Gotchas
 - **A `text/plain` MIME part can contain raw HTML — flatten it before render (`mailcrm._parse_full`, 2026-08-26).**

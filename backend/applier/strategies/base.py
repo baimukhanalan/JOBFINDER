@@ -669,14 +669,14 @@ class ApplyStrategy(ABC):
         except Exception:
             pass
 
-        # Synthetic auto-apply lane (owner policy 2026-08-28): a closed choice the engine PICKED but
-        # the LLM couldn't fact-BACK ("sensible professional default") is ALREADY applied to the
-        # field — for a fictional persona there is no human to review it, so it should auto-submit
-        # rather than park the whole job. Drop kind="choice" review items for a demo_* persona; the
-        # behavioral kind="draft" contract (fabricated prose) and unfilled/index=None still block.
-        # A REAL applicant (non-demo) keeps every review flag — real apply is human-submit.
-        if str(profile_id or "").startswith("demo_") and review_items:
-            review_items = [r for r in review_items if r.get("kind") != "choice"]
+        # Synthetic auto-apply lane (owner policy 2026-08-28): for a FICTIONAL persona there is no
+        # human to review anything, so drop EVERY review item (both kind="choice" — an unbacked
+        # option pick — and kind="draft" — the LLM's short behavioral prose e.g. "why are you
+        # interested"): all of it is already applied to the field, so it auto-submits instead of
+        # parking the whole job. Only genuinely UNFILLED required fields (index=None / no answer)
+        # still block. A REAL applicant (non-demo) keeps every review flag — real apply is human-submit.
+        if str(profile_id or "").startswith("demo_"):
+            review_items = []
 
         return {
             "strategy": self.name,

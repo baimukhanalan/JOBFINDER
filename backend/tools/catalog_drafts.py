@@ -48,6 +48,14 @@ _MULTI_TYPES = {"multi_value_multi_select"}
 _VIDEO_RE = re.compile(r"(?i)\b(video|loom|vidyard|screen[- ]?record|record (?:a|yourself|your)|"
                        r"voice (?:note|recording)|audio recording)\b")
 _COVER_RE = re.compile(r"(?i)cover letter|motivation letter|why do you want")
+# Interview-logistics accommodations ("do you require accommodations/support during the interview?")
+# -> a plain "No". NOT a protected-characteristic self-ID (disability is caught by _is_demographic);
+# deterministic so it never becomes an LLM [review] prose or an unfilled required field.
+_ACCOMMODATION_RE = re.compile(
+    r"(?i)accommodation|special assistance|reasonable adjustment"
+    r"|(?:support|assistance|adjustments?|arrangements?) (?:during|for|with) (?:the )?"
+    r"(?:interview|process|application|recruit)"
+    r"|do you (?:require|need) any (?:support|assistance|adjustments|accommodations)")
 # A headshot/photo upload has no auto-fill source (we hold a résumé, never a portrait) —
 # dumping the résumé PDF into a "Photo" field is wrong-file garbage, so flag it human-only.
 _PHOTO_RE = re.compile(r"(?i)\b(photo|photograph|head\s?shot|selfie|"
@@ -686,6 +694,12 @@ def generate_draft(job_row: dict, candidate: dict, use_ai: bool = True,
                 answers[i] = {**base, "value": val, "source": "identity",
                               "needs_review": False, "status": "filled"}
                 continue
+        # interview-accommodations / special-assistance logistics -> plain "No" (deterministic,
+        # never an LLM [review] prose or an unfilled required field).
+        if _ACCOMMODATION_RE.search(label):
+            answers[i] = {**base, "value": "No, thank you.", "source": "identity",
+                          "needs_review": False, "status": "filled"}
+            continue
         # everything else -> open-text (test: ideal fill; prod: grounded draft)
         if ideal:
             ideal_idx.append(i)

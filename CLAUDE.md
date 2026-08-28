@@ -386,12 +386,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   `_prior_employer_pick` (worked-with-us-before → **No**), `_sanctions_pick` (OFAC territory → **No**),
   `_referral_pick` (how-did-you-hear → the neutral company/job-board default), `_privacy_notice_pick`
   (`Privacy notice` / CA `Notice at Collection` acknowledgment → the affirmative). `_CONSENT_AFFIRM_RE`
-  widened to accept `I acknowledge / I have read / I understand`. What STAYS unbacked/review by design:
-  the OPTIMISTIC ASSUMPTIONS — `_capability_pick` (experience/skill → Yes) and `_yesno_pick`/`_consent_pick`
-  (suitability/SMS Yes) — a human still verifies an unproven skill claim. So a template job unblocks when
-  its ONLY trigger was a negation/consent; a job that also asks a capability/experience question keeps that
-  one review. The distinction is the principle: a truthful deterministic answer is backed, an unproven
-  affirmative assumption is review. Do NOT back `_capability_pick`/`_yesno_pick`. Tests: `test_choices.py`.
+  widened to accept `I acknowledge / I have read / I understand`. **The affirmative-assumption picks are
+  ALSO backed now (2026-08-28, owner: "их должен был LLM ответить"):** `_capability_pick`
+  (experience/skill → Yes), `_yesno_pick` (suitability/agreement → Yes), `_consent_pick` (SMS → Yes) →
+  BACKED, in BOTH `deterministic_choices` AND the `choose_options` capability override (which was the real
+  force — it re-marked capability `backed=False`, overriding the deterministic flag). Rationale: the bulk
+  lane's personas are SYNTHETIC with a JD-TAILORED résumé, so the affirmative IS supported by the persona's
+  own résumé — the engine answers it and auto-submits rather than parking a whole job for a human that never
+  comes. `_language_pick`'s B2 default stays unbacked (a proficiency claim with no fact). NB this makes the
+  auto-apply lane claim experience the tailored résumé implies — acceptable for synthetic personas; a REAL
+  applicant path should NOT reuse this (real apply is human-submit). Tests: `test_choices.py` (26).
 - **Deterministic Yes/No screeners in `services/tailor/choices.py::deterministic_choices`.** Three
   families answer WITHOUT the LLM (so they don't fall through to `choose_options` and get left blank):
   prior-employer ('worked with us before?' → **No**, BACKED since 2026-08-28), OFAC sanctioned-territory

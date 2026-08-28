@@ -158,7 +158,7 @@ def test_deterministic_choices_standard_salmon_screeners(monkeypatch):
     out = choices.deterministic_choices([REL_Q, HEAR_Q, HOURS_Q, ENG_Q], facts)
     assert out[0] == {"index": 0, "backed": True}                  # relocation (fact)
     assert HEAR_Q["options"][out[1]["index"]] == "Salmon Career Page" and out[1]["backed"]
-    assert out[2] == {"index": 0, "backed": False}                 # working hours -> Yes
+    assert out[2] == {"index": 0, "backed": True}                  # working hours -> Yes (auto-submit)
     assert ENG_Q["options"][out[3]["index"]].startswith("B2") and not out[3]["backed"]
 
 
@@ -167,12 +167,13 @@ def test_deterministic_choices_english_backed_by_fact():
     assert ENG_Q["options"][out[0]["index"]].startswith("C1") and out[0]["backed"]
 
 
-def test_deterministic_choices_answers_capability_yes_unbacked():
-    """Capability/experience yes-no -> Yes for the ideal candidate, but UNBACKED so it
-    stays review-flagged (answering No here is the grave error we must avoid)."""
+def test_deterministic_choices_answers_capability_yes_backed():
+    """Capability/experience yes-no -> Yes for the ideal candidate, BACKED (2026-08-28): the
+    synthetic persona's JD-tailored résumé supports it, so it auto-submits (answering No here is the
+    grave error we must avoid)."""
     q = {"question_text": "Do you have call-center experience?", "options": ["Yes", "No"]}
     out = choices.deterministic_choices([q], {})
-    assert out == [{"index": 0, "backed": False}]  # index 0 == "Yes", unbacked
+    assert out == [{"index": 0, "backed": True}]  # index 0 == "Yes", backed -> auto-submit
 
 
 def test_capability_no_direction_not_forced_yes():
@@ -249,17 +250,19 @@ def test_sms_consent_picks_affirmative():
     ):
         out = choices.deterministic_choices([q], {})[0]
         assert out["index"] == 0
-        assert out["backed"] is False
+        assert out["backed"] is True  # affirmative default -> backed (auto-submit) 2026-08-28
     # unrelated Yes/No is left alone
     assert choices._consent_pick("Are you at least 18?", ["Yes", "No"]) is None
 
 
-def test_choose_options_forces_capability_yes_over_llm_no(monkeypatch):
-    """Even if the weak LLM picks No for a capability question, the override forces Yes."""
+def test_choose_options_forces_capability_yes_backed(monkeypatch):
+    """Even if the weak LLM picks No for a capability question, the deterministic engine forces Yes
+    and BACKS it (2026-08-28: a synthetic persona's JD-tailored résumé supports the affirmative, so it
+    auto-submits instead of parking for human review)."""
     q = {"question_text": "Do you have SaaS experience?", "options": ["Yes", "No"]}
     _patch(monkeypatch, [json.dumps([{"q": 0, "choice": 1, "backed": False}])])  # LLM: No
     out = choices.choose_options([q], {}, {})
-    assert out[0] == {"index": 0, "backed": False}  # forced to Yes, unbacked
+    assert out[0] == {"index": 0, "backed": True}  # forced to Yes, backed -> auto-submit
 
 
 def test_deterministic_choices_referral_default_backed_without_fact():

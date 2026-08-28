@@ -435,7 +435,9 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
             if idx is not None:
                 backed = True
         if idx is None:
-            idx = _consent_pick(qt, opts)  # SMS/text contact consent -> Yes, UNBACKED (review)
+            idx = _consent_pick(qt, opts)  # SMS/text contact consent -> Yes -> BACKED (auto-submit)
+            if idx is not None:
+                backed = True
         if idx is None:
             idx = _data_consent_pick(qt, opts)  # required self-ID/personal DATA-processing consent
             if idx is not None:
@@ -445,9 +447,13 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
         if idx is None:
             idx, backed = _language_pick(qt, opts, facts)
         if idx is None:
-            idx = _yesno_pick(qt, opts)  # unbacked affirmative default
+            idx = _yesno_pick(qt, opts)  # suitability/agreement affirmative -> BACKED (auto-submit)
+            if idx is not None:
+                backed = True
         if idx is None:
-            idx = _capability_pick(qt, opts)  # capability -> Yes, UNBACKED (review)
+            idx = _capability_pick(qt, opts)  # capability/experience -> Yes -> BACKED. A synthetic
+            if idx is not None:                # persona's JD-tailored résumé supports the affirmative,
+                backed = True                  # so the engine answers it (not a human) and auto-submits.
         out.append({"index": idx, "backed": bool(backed) if idx is not None else False})
     return out
 
@@ -545,10 +551,11 @@ def choose_options(questions: list[dict], facts: dict, job: dict,
         pick = _eligibility_pick(q.get("question_text", ""), q.get("options", []), facts)
         if pick is not None:
             results[i] = {"index": pick, "backed": True}
-    # Capability/experience yes-no -> Yes (ideal candidate), UNBACKED so it stays
-    # review-flagged; forces the affirmative even if the weak LLM picked No/null.
+    # Capability/experience yes-no -> Yes (ideal candidate), BACKED (2026-08-28) so it auto-submits:
+    # a synthetic persona's JD-tailored résumé supports the affirmative, so the engine answers it
+    # rather than parking for a human. Forces Yes even if the weak LLM picked No/null.
     for i, q in enumerate(questions):
         cap = _capability_pick(q.get("question_text", ""), q.get("options", []))
         if cap is not None:
-            results[i] = {"index": cap, "backed": False}
+            results[i] = {"index": cap, "backed": True}
     return results

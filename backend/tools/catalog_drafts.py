@@ -851,23 +851,21 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
             drafted.setdefault("Title", x0["title"])
         dates = str(x0.get("dates") or "")
         years = re.findall(r"\d{4}", dates)
+        import datetime as _dt
+        _t = _dt.date.today()
+        _MON = ["January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December"]
         if years:
             drafted.setdefault("Start date year", years[0])
-            drafted.setdefault("Start date month", "January")
+        drafted.setdefault("Start date month", "January")
         if re.search(r"(?i)present|current", dates):
             drafted.setdefault("Current role", "Yes")
-            # Safety net: if the 'Current role' checkbox tick fails to WAIVE the End date
-            # (it stays required+blank → submit blocked), supply today as the end so the form
-            # can submit. Harmlessly ignored when the waiver works (setdefault, never override).
-            import datetime as _dt
-            _t = _dt.date.today()
-            _MON = ["January", "February", "March", "April", "May", "June", "July",
-                    "August", "September", "October", "November", "December"]
-            drafted.setdefault("End date year", str(_t.year))
-            drafted.setdefault("End date month", _MON[_t.month - 1])
-        elif len(years) >= 2:
-            drafted.setdefault("End date year", years[-1])
-            drafted.setdefault("End date month", "December")
+        # ALWAYS supply an End date so a required 'End date month'/'End date year' never blocks the
+        # submit — a single-year or unparseable résumé range (the #1 unfilled field, 56 jobs) hit
+        # NEITHER branch before and stayed blank. A 2-year range uses its end; otherwise today.
+        # Harmless when 'Current role=Yes' waives the End date (setdefault never overrides).
+        drafted.setdefault("End date year", years[-1] if len(years) >= 2 else str(_t.year))
+        drafted.setdefault("End date month", "December" if len(years) >= 2 else _MON[_t.month - 1])
 
     # Location/City is usually a live geo-typeahead NOT in the scraped questions, so no
     # drafted answer exists for it (the co-pilot then leaves it blank). Supply the persona's

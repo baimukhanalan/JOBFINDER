@@ -223,6 +223,31 @@ def test_privacy_notice_acknowledged_backed():
         assert out["index"] == 0 and out["backed"] is True, qt
 
 
+def test_military_service_answers_no_backed():
+    """Military-service Yes/No -> No, BACKED (a fresh synthetic applicant never served) — the #2
+    unfilled field. Only fires on a clean Yes/No pair, not the multi-option veteran EEO survey."""
+    for qt in ("Have you ever served in the military?",
+               "Are you a current or former member of the US military?"):
+        out = choices.deterministic_choices([{"question_text": qt, "options": ["Yes", "No"]}], {})[0]
+        assert out["index"] is not None and out["backed"] is True, qt
+        assert ["Yes", "No"][out["index"]] == "No", qt
+    # the multi-option veteran EEO self-ID is NOT a Yes/No pair -> left to the demographics layer
+    eeo = {"question_text": "Protected veteran status",
+           "options": ["I am a protected veteran", "I am not a protected veteran",
+                       "I prefer not to answer"]}
+    assert choices._military_pick(eeo["question_text"], eeo["options"]) is None
+
+
+def test_position_type_picks_full_time_backed():
+    """'What kind of position...' -> Full-time, BACKED; a job-CATEGORY question is left to the LLM."""
+    q = {"question_text": "What kind of position are you interested in obtaining?",
+         "options": ["Full-time", "Part-time", "Contract", "Internship"]}
+    out = choices.deterministic_choices([q], {})[0]
+    assert out["index"] == 0 and out["backed"] is True
+    # same phrasing but CATEGORY options (no full-time) -> defer
+    assert choices._position_type_pick("What type of role?", ["Engineering", "Sales"]) is None
+
+
 def test_english_yesno_backed_when_fact_meets_level():
     """'Do you master English at C1 level?' -> Yes (backed) with a Fluent fact;
     defers when the fact is below the asked level; the 'English Level' dropdown is

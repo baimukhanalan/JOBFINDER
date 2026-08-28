@@ -351,6 +351,45 @@ def _privacy_notice_pick(question_text: str, options: list[str]) -> int | None:
     return None
 
 
+# Military-service / veteran Yes/No -> No: a fresh synthetic applicant never served. A truthful
+# negation -> BACKED. (The multi-option veteran EEO self-ID is handled by the demographics-decline
+# layer; this fires ONLY on a clean 2-option Yes/No, so it never touches the EEO survey.)
+_MILITARY_RE = re.compile(
+    r"(?i)served in the (?:u\.?s\.? )?(?:military|armed forces)|military service"
+    r"|ever (?:been (?:in|a member of)|served (?:in|with)) (?:the )?(?:military|armed forces)"
+    r"|active[- ]duty|are you a (?:military )?veteran|current or former member of the (?:us )?military")
+
+
+def _military_pick(question_text: str, options: list[str]) -> int | None:
+    if not _MILITARY_RE.search(question_text or ""):
+        return None
+    norm = [(o or "").strip().lower() for o in options]
+    if not (len(norm) == 2 and any(n.startswith("no") for n in norm)
+            and any(n.startswith("yes") for n in norm)):
+        return None
+    for i, o in enumerate(norm):
+        if o == "no" or o.startswith("no"):
+            return i
+    return None
+
+
+# "What kind of position are you interested in obtaining?" (employment type) -> Full-time (the
+# persona's default). BACKED. Only fires when a full-time/permanent option is actually present, so a
+# job-CATEGORY question with the same phrasing is left to the LLM.
+_POSITION_TYPE_RE = re.compile(
+    r"(?i)kind of position|type of (?:position|employment|role|work)|employment type"
+    r"|position type|what type of role|desired employment")
+
+
+def _position_type_pick(question_text: str, options: list[str]) -> int | None:
+    if not _POSITION_TYPE_RE.search(question_text or ""):
+        return None
+    for i, o in enumerate(options):
+        if re.search(r"(?i)full.?time|permanent", o or ""):
+            return i
+    return None
+
+
 # English-proficiency asked as a Yes/No ("Do you master English at C1 level?") — distinct
 # from the _ENGLISH_RE dropdown ("English Level"). Answer Yes only when a fact BACKS it,
 # so we never claim unproven proficiency. NOT routed through _language_pick: on a Yes/No
@@ -432,6 +471,14 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
                 backed = True
         if idx is None:
             idx = _privacy_notice_pick(qt, opts)  # privacy/notice acknowledgment -> accept -> BACKED
+            if idx is not None:
+                backed = True
+        if idx is None:
+            idx = _military_pick(qt, opts)  # military-service Yes/No -> No (truthful negation) -> BACKED
+            if idx is not None:
+                backed = True
+        if idx is None:
+            idx = _position_type_pick(qt, opts)  # employment-type -> Full-time -> BACKED
             if idx is not None:
                 backed = True
         if idx is None:

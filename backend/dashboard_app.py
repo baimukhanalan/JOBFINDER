@@ -793,7 +793,7 @@ def _drain_partition(jobs) -> tuple[list[int], list[str]]:
       - keep untouched: `needs_human` (Lever/Workable captcha → a human, not the bot)."""
     from backend.tools import bulk_log
     done = bulk_log.submitted_jobids()
-    rerun: list[int] = []
+    rerun: list[tuple[int, int]] = []   # (priority, jobid) — needs_review first
     drop: list[str] = []
     seen: set = set()
     for job in jobs:
@@ -820,10 +820,15 @@ def _drain_partition(jobs) -> tuple[list[int], list[str]]:
             drop.append(jid); continue                # exhausted — give up
         if st in ("error", "done"):
             try:
-                rerun.append(int(jid))
+                # Process needs_review FIRST: on fresh code the synthetic lane drops review and
+                # auto-submits these, so they're the most-fixable — don't leave them stuck behind
+                # ~480 mostly-unfixable clicked/error jobs (datacenter-IP captcha ceiling).
+                prio = 0 if job.get("submit_reason") == "needs_review" else 1
+                rerun.append((prio, int(jid)))
             except ValueError:
                 pass
-    return rerun, drop
+    rerun.sort(key=lambda t: t[0])
+    return [jid for _prio, jid in rerun], drop
 
 
 @app.post("/unfinished/rerun")

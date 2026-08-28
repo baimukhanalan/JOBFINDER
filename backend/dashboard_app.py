@@ -1627,6 +1627,17 @@ except Exception:
     logging.getLogger(__name__).warning("interview operator routes unavailable", exc_info=True)
 
 
+# In-app admin login + a fail-closed auth gate over every non-allowlisted route
+# (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
+# sits in front for now. Guarded so a broken interviews package can never stop the
+# dashboard from booting.
+try:
+    from backend.interviews import dash_auth
+    dash_auth.install(app)
+except Exception:
+    logging.getLogger(__name__).warning("dashboard admin auth unavailable", exc_info=True)
+
+
 @app.post("/unfinished/reconcile")
 def unfinished_reconcile():
     """Reconcile «Незавершённые» against ATS confirmation emails right now (the loop does

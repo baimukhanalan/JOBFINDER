@@ -26,7 +26,7 @@ except Exception:
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.dashboard_app import app  # noqa: E402
-from backend.interviews import db, operator_ui, service  # noqa: E402
+from backend.interviews import auth, db, operator_ui, service  # noqa: E402
 
 client = TestClient(app)
 
@@ -56,7 +56,14 @@ def seeded():
         {"dow": d, "start_min": 540, "end_min": 1020, "enabled": True}
         for d in range(5)
     ])
+    # These operator routes now sit behind the dashboard's fail-closed admin gate
+    # (backend.interviews.dash_auth); authenticate the client as an admin so the HTTP
+    # calls reach the handlers instead of a 303 -> /login.
+    admin_rid = db.add_responsible("test_iv_op_admin", auth.hash_password("x"),
+                                   "Op Admin", role="admin")
+    client.cookies.set(auth.COOKIE_NAME, auth.make_session(admin_rid))
     yield rid
+    client.cookies.clear()
     _cleanup()
 
 

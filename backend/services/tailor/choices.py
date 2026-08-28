@@ -260,7 +260,9 @@ _CONSENT_LABEL_RE = re.compile(
 _CONSENT_TEXT_RE = re.compile(
     r"(?i)consent.{0,40}(?:receiv\w*\s+)?(?:text message|sms|phone call)"
     r"|(?:text message|sms).{0,25}consent|contact me about")
-_CONSENT_AFFIRM_RE = re.compile(r"(?i)^(?:given|yes\b|i consent|consent|i agree|agree|opt.?in)")
+_CONSENT_AFFIRM_RE = re.compile(
+    r"(?i)^(?:given|yes\b|i consent|consent|i agree|agree|opt.?in"
+    r"|i acknowledge|acknowledge|i have read|i understand|i confirm|read and (?:agree|understand))")
 
 
 def _consent_pick(question_text: str, options: list[str]) -> int | None:
@@ -300,6 +302,48 @@ def _data_consent_pick(question_text: str, options: list[str]) -> int | None:
     if len(options) != 2:
         return None
     if not _DATA_CONSENT_RE.search(question_text or ""):
+        return None
+    for i, o in enumerate(options):
+        if _CONSENT_AFFIRM_RE.search((o or "").strip()):
+            return i
+    return None
+
+
+# Restrictive-covenant / conflict-of-interest Yes/No -> No: a fresh synthetic applicant has no
+# non-compete, prior employment agreement, or COI. A truthful deterministic negation, so it is
+# BACKED (does not block auto-submit) — a top review-trigger on the Remote.com template.
+_NONCOMPETE_RE = re.compile(
+    r"(?i)non-?compete|non-?solicit|conflict of interest|restrictive covenant"
+    r"|(?:subject to|bound by|have|signed|entered into).{0,50}"
+    r"(?:non-?compete|employment agreement|restrictive covenant|post-?employment|garden(?:ing)? leave)"
+    r"|employment agreement.{0,50}(?:restrict|prevent|impede|prohibit|interfere)"
+    r"|(?:restriction|obligation)s?.{0,40}(?:join|work for|employ|previous|current)")
+
+
+def _noncompete_pick(question_text: str, options: list[str]) -> int | None:
+    if not _NONCOMPETE_RE.search(question_text or ""):
+        return None
+    norm = [(o or "").strip().lower() for o in options]
+    if not (len(norm) == 2 and any(n.startswith("no") for n in norm)
+            and any(n.startswith("yes") for n in norm)):
+        return None
+    for i, o in enumerate(norm):
+        if o == "no" or o.startswith("no"):
+            return i
+    return None
+
+
+# Privacy-notice / notice-at-collection acknowledgment SELECT -> the affirmative ('I acknowledge /
+# I have read') option. A required legal acknowledgment (not a self-ID / behavioral claim), so it
+# is BACKED — a recurring review-trigger on Remote.com ('Privacy notice', CA 'Notice at Collection').
+_PRIVACY_NOTICE_RE = re.compile(
+    r"(?i)privacy (?:notice|policy|statement)|notice at collection|data protection notice"
+    r"|acknowledge.{0,50}(?:privacy|notice|policy|collection)"
+    r"|(?:have read|read and).{0,50}(?:privacy|notice|policy|terms)")
+
+
+def _privacy_notice_pick(question_text: str, options: list[str]) -> int | None:
+    if not _PRIVACY_NOTICE_RE.search(question_text or ""):
         return None
     for i, o in enumerate(options):
         if _CONSENT_AFFIRM_RE.search((o or "").strip()):
@@ -373,11 +417,23 @@ def deterministic_choices(questions: list[dict], facts: dict) -> list[dict]:
         if idx is None:
             idx = _referral_pick(qt, opts, facts)
             if idx is not None:
-                backed = bool(str(facts.get("referral", "")).strip())
+                backed = True  # hear-about default (company/job-board) is a benign non-claim -> backed
         if idx is None:
-            idx = _prior_employer_pick(qt, opts)  # prior-employer -> No, UNBACKED (review)
+            idx = _noncompete_pick(qt, opts)  # non-compete/COI -> No (truthful negation) -> BACKED
+            if idx is not None:
+                backed = True
         if idx is None:
-            idx = _sanctions_pick(qt, opts)  # sanctioned-territory -> No, UNBACKED (review)
+            idx = _prior_employer_pick(qt, opts)  # prior-employer -> No (truthful negation) -> BACKED
+            if idx is not None:
+                backed = True
+        if idx is None:
+            idx = _sanctions_pick(qt, opts)  # sanctioned-territory -> No (truthful negation) -> BACKED
+            if idx is not None:
+                backed = True
+        if idx is None:
+            idx = _privacy_notice_pick(qt, opts)  # privacy/notice acknowledgment -> accept -> BACKED
+            if idx is not None:
+                backed = True
         if idx is None:
             idx = _consent_pick(qt, opts)  # SMS/text contact consent -> Yes, UNBACKED (review)
         if idx is None:

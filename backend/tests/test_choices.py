@@ -176,14 +176,14 @@ def test_deterministic_choices_answers_capability_yes_unbacked():
 
 
 def test_capability_no_direction_not_forced_yes():
-    """Negative-direction yes-no screeners must NEVER be forced to Yes.
-    Prior-employer is answered deterministically No (fresh applicant, unbacked ->
-    review); sponsorship is left to the analyzer's own rule and defers here."""
+    """Negative-direction yes-no screeners must NEVER be forced to Yes. Prior-employer is
+    answered deterministically No and BACKED (owner policy 2026-08-28: a truthful negation for a
+    fresh applicant no longer blocks auto-submit); sponsorship defers to the analyzer's own rule."""
     prior = {"question_text": "Have you ever worked with our company before?",
              "options": ["Yes", "No"]}
     out = choices.deterministic_choices([prior], {})[0]
     assert prior["options"][out["index"]] == "No"
-    assert out["backed"] is False  # unbacked -> stays [review]-flagged
+    assert out["backed"] is True  # truthful negation -> backed (no longer review-flagged)
 
     spon = {"question_text": "Will you now or in the future require sponsorship?",
             "options": ["Yes", "No"]}
@@ -191,13 +191,35 @@ def test_capability_no_direction_not_forced_yes():
 
 
 def test_sanctions_screener_answers_no():
-    """OFAC / sanctioned-territory screener -> No, unbacked (review)."""
+    """OFAC / sanctioned-territory screener -> No, BACKED (a US persona is not in a named
+    territory — a truthful negation, no longer review-flagged)."""
     q = {"question_text": "Are you located in Cuba, Iran, North Korea, Syria, "
          "the Russian Federation, Belarus, Crimea, Donetsk or Luhansk?",
          "options": ["Yes", "No"]}
     out = choices.deterministic_choices([q], {})[0]
     assert q["options"][out["index"]] == "No"
-    assert out["backed"] is False
+    assert out["backed"] is True
+
+
+def test_noncompete_answers_no_backed():
+    """Non-compete / restrictive-covenant / conflict-of-interest Yes/No -> No, BACKED (a fresh
+    synthetic applicant has no such constraint) — a top review-trigger on the Remote.com template."""
+    for qt in ("Do you have a non-compete in place with your previous or current employer?",
+               "Are you currently subject to a non-compete agreement or an employment agreement "
+               "that would restrict you from joining?",
+               "Do you have any conflict of interest?"):
+        out = choices.deterministic_choices([{"question_text": qt, "options": ["Yes", "No"]}], {})[0]
+        assert out["index"] is not None and out["backed"] is True, qt
+        assert ["Yes", "No"][out["index"]] == "No", qt
+
+
+def test_privacy_notice_acknowledged_backed():
+    """Privacy-notice / notice-at-collection acknowledgment SELECT -> the affirmative option, BACKED."""
+    for qt in ("Privacy notice", "Notice at Collection for California job applicants"):
+        q = {"question_text": qt,
+             "options": ["I acknowledge that I have read the notice", "I decline"]}
+        out = choices.deterministic_choices([q], {})[0]
+        assert out["index"] == 0 and out["backed"] is True, qt
 
 
 def test_english_yesno_backed_when_fact_meets_level():
@@ -240,10 +262,12 @@ def test_choose_options_forces_capability_yes_over_llm_no(monkeypatch):
     assert out[0] == {"index": 0, "backed": False}  # forced to Yes, unbacked
 
 
-def test_deterministic_choices_referral_default_unbacked_without_fact():
-    out = choices.deterministic_choices([HEAR_Q], {})  # no referral fact
+def test_deterministic_choices_referral_default_backed_without_fact():
+    # hear-about with no referral fact -> a benign default (company/career page), now BACKED
+    # (a neutral non-claim that no longer blocks auto-submit — owner policy 2026-08-28).
+    out = choices.deterministic_choices([HEAR_Q], {})
     assert HEAR_Q["options"][out[0]["index"]] == "Salmon Career Page"
-    assert out[0]["backed"] is False
+    assert out[0]["backed"] is True
 
 
 def test_deterministic_choices_referral_never_needs_specify():

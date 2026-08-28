@@ -375,10 +375,27 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   returns 0 options for an over-qualified query ('Denver, Colorado, United States.') retries progressively
   shorter queries (`_geo_shorten`: strip punctuation → drop trailing comma-segments → city) until the
   geocode resolves. Tests: `test_dropdowns.py`.
+- **Truthful deterministic negations/neutrals are BACKED so they don't block auto-submit
+  (`deterministic_choices`, 2026-08-28 — the biggest `needs_review` drain lever).** The `needs_review`
+  bucket (~528 of the parked bulk jobs, ~half) is driven by the LIVE choice engine flagging a pick
+  `unbacked` → `choice_review` → `review_item` → the co-pilot refuses to auto-submit. It is NOT
+  demographics (those have value `""` and never reach `known_answers`, so they never created a
+  review_item — verified). The recurring template triggers (Remote.com ×145, Fivetran ×99) are
+  DETERMINISTIC and TRUTHFUL for a fresh synthetic persona, so they are now marked **BACKED** (owner
+  policy): `_noncompete_pick` (non-compete / restrictive-covenant / conflict-of-interest → **No**),
+  `_prior_employer_pick` (worked-with-us-before → **No**), `_sanctions_pick` (OFAC territory → **No**),
+  `_referral_pick` (how-did-you-hear → the neutral company/job-board default), `_privacy_notice_pick`
+  (`Privacy notice` / CA `Notice at Collection` acknowledgment → the affirmative). `_CONSENT_AFFIRM_RE`
+  widened to accept `I acknowledge / I have read / I understand`. What STAYS unbacked/review by design:
+  the OPTIMISTIC ASSUMPTIONS — `_capability_pick` (experience/skill → Yes) and `_yesno_pick`/`_consent_pick`
+  (suitability/SMS Yes) — a human still verifies an unproven skill claim. So a template job unblocks when
+  its ONLY trigger was a negation/consent; a job that also asks a capability/experience question keeps that
+  one review. The distinction is the principle: a truthful deterministic answer is backed, an unproven
+  affirmative assumption is review. Do NOT back `_capability_pick`/`_yesno_pick`. Tests: `test_choices.py`.
 - **Deterministic Yes/No screeners in `services/tailor/choices.py::deterministic_choices`.** Three
   families answer WITHOUT the LLM (so they don't fall through to `choose_options` and get left blank):
-  prior-employer ('worked with us before?' → **No**, unbacked/review), OFAC sanctioned-territory
-  ('located in Cuba/Iran/Russia/…?' → **No**, unbacked/review), and English-Yes/No ('master English at
+  prior-employer ('worked with us before?' → **No**, BACKED since 2026-08-28), OFAC sanctioned-territory
+  ('located in Cuba/Iran/Russia/…?' → **No**, BACKED since 2026-08-28), and English-Yes/No ('master English at
   C1?' → **Yes** only when `facts.english_level` BACKS the asked CEFR level, else defer — never
   over-claim). `_english_yesno_pick` must run BEFORE `_language_pick` (a Yes/No pair sent to
   `_language_pick` defaults to `len(opts)//2` = 'No'). `_prior_employer_pick`/`_sanctions_pick` only

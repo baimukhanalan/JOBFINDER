@@ -85,6 +85,17 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   reaches them (no basic-auth in the way). **Rollback if the in-app login misbehaves:** re-add the two
   `auth_basic` lines at server level in the vhost + `systemctl reload nginx` (a timestamped `.bak-*` of
   the pre-change vhost sits next to it). Admin accounts: `admin_cli add --login … --role admin`.
+  **NB for automation (incident 2026-08-29): every non-allowlisted dashboard route now 303-redirects to
+  `/login` without a valid admin SESSION cookie — so a plain `curl`/script can NO LONGER drive
+  `POST /unfinished/rerun`, `/unfinished/reconcile`, `GET /catalog/fill_all_status`, etc. (they silently
+  return a 303 whose body is empty, easy to mistake for "ran fine"). To drive the bulk drain from a
+  script WITHOUT an interactive login, run it OUT of the dash process: import `backend.dashboard_app` and
+  call `_drain_partition(bulk_log.unfinished())` → `_do_fill_all_adaptive(rerun)` directly (no auth; the
+  ledger `logs/unfinished.json` is shared so the live `/unfinished` UI still reflects progress). Importing
+  `dashboard_app` also starts its own background submit-reconciler thread, so do NOT also call
+  `reconcile_ledger()` on the main thread — that just double-scans all ~700 ledger rows and burns CPU.
+  Alternatively authenticate first: `POST /login` (form `password=`) with an `admin`-role account, reuse
+  the session cookie.**
 - `backend.main:app` (legacy jobs API + APScheduler over the OLD `jobfinder` Postgres) exists but is
   **not deployed / not in nginx.** Treat it as the legacy/DB layer.
 

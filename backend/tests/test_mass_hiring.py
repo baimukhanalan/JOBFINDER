@@ -303,6 +303,69 @@ def test_maximus_senior_remote_is_dropped():
     assert mh._maximus_row(_mx("Senior Manager, Remote Operations")) is None
 
 
+# ---- UnitedHealth (TalentBrew) + Humana (Phenom) --------------------------------
+
+def test_talentbrew_row_is_kept():
+    row = mh._talentbrew_row("unitedhealth", "UnitedHealth Group", "9001",
+                             "Customer Service Representative", "/job/x/9001",
+                             "https://careers.unitedhealthgroup.com")
+    assert row is not None
+    assert row["source"] == "unitedhealth"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == "https://careers.unitedhealthgroup.com/job/x/9001"
+
+
+def test_talentbrew_empty_title_dropped():
+    assert mh._talentbrew_row("unitedhealth", "UnitedHealth Group", "1", "", "/x",
+                              "https://careers.unitedhealthgroup.com") is None
+
+
+def test_humana_us_remote_is_kept():
+    row = mh._humana_row({
+        "jobId": "R-1", "title": "Inbound Contacts Representative",
+        "country": "United States of America", "isRemote": "Yes", "city": "Remote",
+        "cityStateCountry": "Remote, Indiana, United States of America",
+        "applyUrl": "https://careers.humana.com/job/R-1"})
+    assert row is not None
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+
+
+def test_humana_non_us_is_dropped():
+    assert mh._humana_row({
+        "jobId": "R-2", "title": "Customer Service Representative",
+        "country": "Philippines", "isRemote": "Yes", "city": "Remote"}) is None
+
+
+def test_humana_onsite_is_dropped():
+    assert mh._humana_row({
+        "jobId": "R-3", "title": "Customer Service Representative",
+        "country": "United States of America", "isRemote": "No", "city": "Louisville"}) is None
+
+
+# ---- category: health-insurer entry roles + clinical drop -----------------------
+
+def test_care_and_member_roles_categorize():
+    assert mh.categorize("Care Coordinator II") == "customer_support"
+    assert mh.categorize("Care Navigator") == "customer_support"
+    assert mh.categorize("Member Advocate II") == "customer_support"
+    assert mh.categorize("Correspondence Representative") == "customer_support"
+    assert mh.categorize("Community Health Worker") == "customer_support"
+    assert mh.categorize("Claims Research & Resolution Representative") == "customer_support"
+    assert mh.categorize("Clinical Administrative Coordinator") == "customer_support"
+    assert mh.categorize("Collections Representative") == "customer_support"
+
+
+def test_clinical_and_senior_care_roles_are_dropped():
+    assert mh.categorize("Care Manager RN") is None           # nurse (clinical)
+    assert mh.categorize("Registered Nurse Care Coordinator") is None
+    assert mh.categorize("Staff Pharmacist") is None
+    assert mh.categorize("Appeals Medical Director") is None    # senior + clinical
+    assert mh.categorize("Behavioral Health Therapist") is None
+    assert mh.categorize("Care Management Director") is None     # senior
+
+
 # ---- category: insurance/healthcare "Rep" (not just "Representative") -----------
 
 def test_insurance_rep_categorizes_but_bare_rep_does_not():

@@ -880,9 +880,20 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     Solutions_jobs/query` with the PUBLIC referer-restricted search key (in code) + `Referer:
     https://apply.workingsolutions.com/` (mandatory, else 403). 100%-remote contractor CSR; keep the US
     `country` facet. Build `apply_url` from `hits[].id`.
-  - **Shared helpers:** `_fetch_workday`/`_workday_row` (Concentrix + CVS; US+remote via `us_eligible(loc)
-    OR _has_us_state(loc)`), `_fetch_smartrecruiters`/`_smartrecruiters_row`, `_has_us_state`/`_US_STATE_ABBR`/
-    `_title_us`. **himalayas resilience (2026-08-28):** its API intermittently returns non-JSON at a random
+  - **Shared helpers:** `_fetch_workday`/`_workday_row` (Concentrix + CVS + Centene + Cigna). A row is
+    REMOTE if `_is_remote` hits the `locationsText` OR the `externalPath` slug (a multi-location row shows
+    loc "16 Locations" while the path is `/job/Tennessee-Work-at-Home/…`). US is taken as given when the
+    caller passed a US-country facet (`us_confirmed=True` — Concentrix/Centene/Cigna); otherwise (CVS,
+    narrowed only by a job-family facet) US is read from the loc (`us_eligible` OR `_has_us_state`). Also
+    `_fetch_smartrecruiters`/`_smartrecruiters_row`, `_talentbrew_row` (TTEC + UnitedHealth), `_has_us_state`/
+    `_US_STATE_ABBR`/`_title_us`. **Classifier (2026-08-28):** `categorize` now also drops `_CLINICAL`
+    (rn/lpn/nurse/physician/pharmacist/… — the big health insurers post huge clinical volume that a CSR
+    board must exclude) and adds `_CARE_EXTRA` → customer_support for the health-insurer member-services
+    lexicon the base rules missed (care coordinator/navigator, member/provider advocate, inbound-contacts /
+    correspondence / claims-resolution / collections / eligibility rep, community health worker, admin
+    coordinator). Tuned against live UnitedHealth/Humana/Centene/Cigna titles — `_NOT_MASS`/`_CLINICAL` still
+    veto senior/clinical (so "Clinical **Admin** Coordinator" stays but "Care Manager **RN**" drops).
+    **himalayas resilience (2026-08-28):** its API intermittently returns non-JSON at a random
     offset; the old `fetch_himalayas` `break`'d the WHOLE pagination on the first hiccup (observed collapse
     70→9), so it now RETRIES the offset (3× with backoff) before giving up. Yield still fluctuates (~7-70)
     with feed rotation + rate-limiting of rapid 200-page pagination — that variance is inherent, not a bug.
@@ -907,7 +918,36 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     `Temporary failure in name resolution`), so `fetch_maximus` RETRIES the whole two-step flow up to 3×
     (an empty result = a transient failure, since the board always has ~20+ reqs) — do NOT let a transient
     deactivate its rows. Uses a real-browser UA (`_BROWSER_UA`, shared with Kelly — the bot UA is WAF-rejected).
-  - **Probed but NOT wired (recipes on file, 2026-08-28):** **Foundever** (~5) exposes only an XML sitemap
-    (no JSON); **Liveops** — its Rippling corporate board has ZERO entry roles, and the actual
-    contractor-agent product is a login-gated Salesforce community (un-scrapable). NB the full `--collect`
-    is now ~85s (Kelly's proxied paging), up from the old ~40-60s.
+  - **UnitedHealth Group / Optum (Radancy TalentBrew, ~44).** `POST careers.unitedhealthgroup.com/
+    search-jobs/resultspost` with a `FacetFilters` array (Remote `custom_fields.WorkSetting` + United States
+    `custom_fields.Country1`) — the fc/fl GET params are ignored on this tenant, ONLY the POST body's
+    FacetFilters filter. Response `results` key is an HTML fragment → parse `a[data-job-id]` (like TTEC,
+    via `_talentbrew_row`). Every returned row is US+remote by construction; `categorize` (with `_CARE_EXTRA`)
+    pares 678 US-remote → ~44 entry (Customer Service Rep, Provider CSR Call&Chat, Collections/Claims-
+    Resolution/Enrollment Rep, Clinical Admin Coordinator, Community Health Worker). W-2 direct employer.
+  - **Centene (Workday, tenant centene, site Centene_External, ~21) + Cigna (tenant cigna, site
+    cignacareers, ~7).** Generic `_fetch_workday` with the US `locationCountry`/`Location_Country` facet
+    (`us_confirmed=True`). NO remote/workplace facet on either tenant — remote is in the location text /
+    path, handled by `_workday_row`. Centene's flagship remote roles are Care Coordinator II / Care
+    Navigator (caught by `_CARE_EXTRA`); its board is otherwise clinical/senior-heavy. Both W-2. NB the
+    marketing sites (jobs.centene.com / jobs.cigna.com) are Akamai/awselb-403 to our IP — only the
+    `*.myworkdayjobs.com` CxS host is open. Cigna's facet param is `Location_Country` (Centene's is
+    `locationCountry`); page with EMPTY searchText (searchText paging is fuzzy and duplicates page 1).
+  - **Humana (Phenom, ~18).** `POST careers.humana.com/widgets` with `selected_fields.city=["Remote"]` (the
+    exact server-side US-remote filter, NOT a top-level `city` array), page by `from`. `_humana_row` keeps
+    `country=="United States of America"` AND (`isRemote=="Yes"` OR `city=="Remote"`). W-2. Big remote-CSR
+    waves are SEASONAL (Medicare AEP, Oct-Dec) so the count swells later in the year.
+  - **Probed but NOT wired (recipes on file, 2026-08-28):** **Elevance/Anthem** (Workday elevancehealth/ANT)
+    — remote is NOT a facet and NOT a field, it lives only in the jobDescription PROSE, and the per-job
+    DETAIL endpoint (needed to read it) is Akamai-rate-limited to 406 after a small burst from our datacenter
+    IP → can't classify remote without a residential proxy + the tenant has largely RTO'd its call centers
+    (~single-digit remote); **U-Haul** (Workday uhaul/UhaulJobs) — its famous WFH "Moonlighter" agent program
+    is essentially ABSENT from the Workday board as remote-tagged reqs (recruited via a separate evergreen
+    flow off the WAF-blocked jobs.uhaul.com), only ~1 US remote entry req live; **GEICO / T-Mobile /
+    Capital One / Discover** (all Workday) and **American Express** (Oracle ORC, direct host
+    egug.fa.us2.oraclecloud.com — vanity host is Akamai-blocked) — all connectable but **0 US-remote-ENTRY
+    roles right now** (their remote CS hiring is seasonal/hybrid/RTO'd; re-probe later, tenants documented);
+    **Progressive** (Phenom) — Cloudflare Turnstile-gated, no plain-curl JSON from a datacenter IP;
+    **Foundever** (~5) only an XML sitemap; **Liveops** — Rippling board has 0 entry roles, contractor
+    product is login-gated Salesforce. NB the full `--collect` is now ~130s (Kelly's proxied paging + the
+    Workday/insurer pagination).

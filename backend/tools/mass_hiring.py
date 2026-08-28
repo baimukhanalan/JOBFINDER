@@ -160,16 +160,46 @@ _NOT_MASS = re.compile(
 # also drop obvious dev/engineering roles that slip through loose source categories
 _DEV = re.compile(r"\b(software|backend|frontend|full[- ]?stack|devops|data|ml|ai) engineer\b|"
                   r"\bdeveloper\b|\bprogrammer\b", re.I)
+# Big health insurers (UnitedHealth/Optum, Humana, Centene, Cigna, Elevance, CVS) post a huge volume
+# of CLINICAL / licensed roles alongside their entry CSR pipeline — drop them (a CSR board is not a
+# nursing/pharmacy board). Kept specific so it never hits a CSR title ("Pharmacy CARE Rep" has no
+# 'pharmacist'; "Clinical ADMIN Coordinator" has no rn/nurse and IS an entry role — see _CARE_EXTRA).
+_CLINICAL = re.compile(
+    r"\b(rn|lpn|lvn|lcsw)\b|registered nurse|nurse practitioner|\bnurse\b|clinician|therapist|"
+    r"physician|pharmacist|medical director|m\.d\.|radiologist|oncolog|dermatolog|cardiolog|"
+    r"psychologist|surgeon|\bresident\b|hedis|dosimetrist", re.I)
+# Extra mass-hiring ENTRY roles that the base _CATEGORIES miss — the health-insurer member-services
+# lexicon (care coordinator/navigator, member/provider advocate, correspondence/claims-resolution rep,
+# community health worker, collections/eligibility rep, admin coordinator). Tuned against live titles
+# from UnitedHealth/Humana/Centene/Cigna (2026-08-28); _NOT_MASS/_CLINICAL still veto senior/clinical.
+_CARE_EXTRA = re.compile(
+    r"care (coordinator|navigator|advocat|guide|specialist|associate)|"
+    r"care management (support|assistant|associate|coordinator)|"
+    r"(inbound|outbound) contacts? (rep\b|representative|associate|specialist|agent)|"
+    r"(clinical )?admin(istrative)? coordinator|"
+    r"(member|provider|patient|client|consumer) (advocat|navigator|liaison|concierge|contact|"
+    r"engagement|experience|resource|support|service)|"
+    r"community health worker|"
+    r"health (program|plan|guide) (rep\b|representative|coordinator|specialist|advisor|advocate)|"
+    r"correspondence (rep\b|representative|specialist)|"
+    r"claims (research|resolution)[^,]*(rep\b|representative|specialist|analyst)|"
+    r"recovery (and|&) resolution (rep\b|representative|specialist)|"
+    r"broker (agent )?service|"
+    r"collections (rep\b|representative|specialist)|"
+    r"eligibility (rep\b|representative|specialist|coordinator)|"
+    r"scheduling (rep\b|representative|coordinator|specialist)", re.I)
 
 
 def categorize(title: str) -> str | None:
     """Return the mass-hiring category for a title, or None if it is NOT a mass-hiring role."""
     t = title or ""
-    if _NOT_MASS.search(t) or _DEV.search(t):
+    if _NOT_MASS.search(t) or _DEV.search(t) or _CLINICAL.search(t):
         return None
     for name, rx in _CATEGORIES:
         if rx.search(t):
             return name
+    if _CARE_EXTRA.search(t):
+        return "customer_support"
     return None
 
 
@@ -519,24 +549,31 @@ def fetch_alorica() -> list[dict]:
 #     off that string: us_eligible() (USA/remote wording) OR _has_us_state() (state code/name). The
 #     bare board's `total` is unreliable (reads 0), so callers narrow with a facet or searchText and
 #     we paginate until jobPostings is empty (bounded by offset_cap; limit caps at 20/page). ---
-def _workday_row(j: dict, source: str, company: str, host: str, site: str) -> dict | None:
+def _workday_row(j: dict, source: str, company: str, host: str, site: str,
+                 us_confirmed: bool = False) -> dict | None:
     loc = j.get("locationsText") or ""
-    if not (_is_remote(loc) and (us_eligible(loc) or _has_us_state(loc))):
-        return None
     ep = j.get("externalPath") or ""
+    # Remote can be encoded in the location OR in the externalPath slug (e.g. a multi-location row
+    # shows loc "16 Locations" while the path is /job/Tennessee-Work-at-Home/...).
+    if not (_is_remote(loc) or _is_remote(ep.replace("-", " "))):
+        return None
+    # US is guaranteed when the caller applied a US-country facet (us_confirmed); otherwise (e.g. CVS,
+    # narrowed only by a job-family facet) confirm it from the location text (US wording or a state).
+    if not (us_confirmed or us_eligible(loc) or _has_us_state(loc)):
+        return None
     jid = (j.get("bulletFields") or [None])[0] or ep.rstrip("/").split("_")[-1] or ep
-    row = _mk_row(source, jid, company, j.get("title"), loc,
+    row = _mk_row(source, jid, company, j.get("title"), loc or "Remote, United States",
                   f"https://{host}/en-US/{site}" + ep)
     if row:
-        # We already confirmed US above (us_eligible OR a state code/name like "RI - Work from
-        # home", which _mk_row's generic us_eligible() misses) — so force the flag True, else
-        # collect(us_only=True) would drop these state-coded work-from-home rows.
+        # US already confirmed above (facet or loc text) — force the flag True so a state-coded /
+        # multi-location work-from-home row isn't dropped by collect(us_only=True).
         row["us_eligible"] = True
     return row
 
 
 def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str, *,
-                   search_texts=("",), applied_facets=None, offset_cap: int = 200) -> list[dict]:
+                   search_texts=("",), applied_facets=None, offset_cap: int = 200,
+                   us_confirmed: bool = False) -> list[dict]:
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     ref = f"https://{host}/{site}"
     rows, seen = [], set()
@@ -555,7 +592,7 @@ def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str,
             if not js:
                 break
             for j in js:
-                row = _workday_row(j, source, company, host, site)
+                row = _workday_row(j, source, company, host, site, us_confirmed)
                 if row and row["source_id"] not in seen:
                     seen.add(row["source_id"])
                     rows.append(row)
@@ -573,7 +610,7 @@ _CNX_US_FACET = "bc33aa3152ec42d4995f4791a106ed09"     # locationCountry = Unite
 def fetch_concentrix() -> list[dict]:
     return _fetch_workday("concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "cnx",
                           "external_global", search_texts=("",),
-                          applied_facets={"locationCountry": [_CNX_US_FACET]}, offset_cap=60)
+                          applied_facets={"locationCountry": [_CNX_US_FACET]}, offset_cap=60, us_confirmed=True)
 
 
 # CVS Health (Workday, tenant cvshealth). The tenant has 8000+ jobs and NO remote/workType facet, so
@@ -935,12 +972,126 @@ def fetch_maximus() -> list[dict]:
     return []
 
 
+# The shared Workday US-country facet id (locationCountry / Location_Country = United States of America).
+_WD_US_FACET = "bc33aa3152ec42d4995f4791a106ed09"
+
+
+# UnitedHealth Group / Optum — Radancy TalentBrew (like TTEC): POST /search-jobs/resultspost with a
+# FacetFilters array (Remote WorkSetting + United States Country1); the response `results` key is an
+# HTML fragment of job tiles (parse a[data-job-id]). Every returned row is US+remote by construction.
+def _talentbrew_row(source: str, company: str, jid: str, title: str, href: str, host: str) -> dict | None:
+    if not title:
+        return None
+    url = (host + href) if (href or "").startswith("/") else (href or "")
+    return _mk_row(source, jid, company, title, "Remote, United States", url)
+
+
+def fetch_unitedhealth() -> list[dict]:
+    from bs4 import BeautifulSoup
+    body = {"ActiveFacetID": "Remote", "CurrentPage": 1, "RecordsPerPage": 100, "SearchType": 5,
+            "SearchResultsModuleName": "Search Results", "IsPagination": "True",
+            "FacetFilters": [
+                {"ID": "Remote", "FacetType": 5, "Count": 686, "Display": "Remote",
+                 "IsApplied": True, "FieldName": "custom_fields.WorkSetting"},
+                {"ID": "United States", "FacetType": 5, "Count": 5043, "Display": "United States",
+                 "IsApplied": True, "FieldName": "custom_fields.Country1"}]}
+    rows, seen = [], set()
+    page = 1
+    while page <= 9:
+        body["CurrentPage"] = page
+        try:
+            r = httpx.post("https://careers.unitedhealthgroup.com/search-jobs/resultspost",
+                           json=body, timeout=40,
+                           headers={"User-Agent": _BROWSER_UA, "Content-Type": "application/json"})
+            html = r.json().get("results") or ""
+        except Exception as e:
+            print(f"[unitedhealth p={page}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        anchors = BeautifulSoup(html, "html.parser").select("a[data-job-id]")
+        new = 0
+        for a in anchors:
+            jid = a.get("data-job-id")
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            new += 1
+            h2 = a.select_one("h2")
+            row = _talentbrew_row("unitedhealth", "UnitedHealth Group", jid,
+                                  h2.get_text(strip=True) if h2 else "", a.get("href"),
+                                  "https://careers.unitedhealthgroup.com")
+            if row:
+                rows.append(row)
+        if not anchors or new == 0:
+            break
+        page += 1
+    return rows
+
+
+# Centene + Cigna — Workday CxS via the generic helper. Neither tenant has a remote/workplace facet
+# (remote is encoded IN the location text, e.g. "Remote-AR" / "Tennessee Work at Home"), so we apply
+# the US-country facet and let _workday_row keep the remote+US rows. Cigna's country facet parameter
+# is `Location_Country` (Centene's is `locationCountry`).
+def fetch_centene() -> list[dict]:
+    return _fetch_workday("centene", "Centene", "centene.wd5.myworkdayjobs.com", "centene",
+                          "Centene_External", search_texts=("",),
+                          applied_facets={"locationCountry": [_WD_US_FACET]}, offset_cap=260, us_confirmed=True)
+
+
+def fetch_cigna() -> list[dict]:
+    return _fetch_workday("cigna", "Cigna", "cigna.wd5.myworkdayjobs.com", "cigna", "cignacareers",
+                          search_texts=("",),
+                          applied_facets={"Location_Country": [_WD_US_FACET]}, offset_cap=360, us_confirmed=True)
+
+
+# Humana — Phenom (like Conduent). POST /widgets with selected_fields.city=["Remote"] (the exact
+# server-side US-remote filter) and page by `from`. isRemote / country come per-row.
+def _humana_row(j: dict) -> dict | None:
+    if (j.get("country") or "") != "United States of America":
+        return None
+    if not (j.get("isRemote") == "Yes" or (j.get("city") or "") == "Remote"):
+        return None
+    loc = j.get("cityStateCountry") or "Remote, United States"
+    return _mk_row("humana", j.get("jobId"), "Humana", j.get("title"), loc,
+                   j.get("applyUrl"), posted_at=_iso_epoch(j.get("postedDate")))
+
+
+def fetch_humana() -> list[dict]:
+    rows, seen, frm = [], set(), 0
+    while frm < 800:
+        try:
+            r = httpx.post("https://careers.humana.com/widgets", timeout=40,
+                           json={"ddoKey": "refineSearch", "from": frm, "jobs": True, "counts": True,
+                                 "all_fields": ["category", "country", "state", "city", "type"],
+                                 "size": 100, "clearAll": False, "pageName": "search-results",
+                                 "selected_fields": {"city": ["Remote"]}},
+                           headers={"User-Agent": _BROWSER_UA, "Content-Type": "application/json",
+                                    "Accept": "application/json",
+                                    "Referer": "https://careers.humana.com/us/en/search-results"})
+            jobs = ((r.json().get("refineSearch") or {}).get("data") or {}).get("jobs") or []
+        except Exception as e:
+            print(f"[humana from={frm}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not jobs:
+            break
+        for j in jobs:
+            jid = j.get("jobId")
+            if jid in seen:
+                continue
+            seen.add(jid)
+            row = _humana_row(j)
+            if row:
+                rows.append(row)
+        frm += 100
+    return rows
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
             "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
             "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
-            "kelly": fetch_kelly, "maximus": fetch_maximus}
+            "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
+            "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

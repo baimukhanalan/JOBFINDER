@@ -123,6 +123,28 @@ def provision_email(email: str, full_name: str = "") -> dict:
     return {"email": email, "ok": True, "created": created, "maildir": maildir}
 
 
+def get_submission_password(email: str) -> str | None:
+    """The mailbox's submission password from `virtual_users.password_plain` — the AUTHORITATIVE
+    store (every provisioned row carries it). `mailbox_passwords.json` is only a best-effort cache
+    that lost entries to an unlocked read-modify-write race, so sending must fall back to the DB
+    (otherwise a candidate whose file entry was dropped can't reply — 'no submission password')."""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return None
+    sql = ("SELECT password_plain FROM virtual_users WHERE email='{e}' "
+           "AND password_plain IS NOT NULL AND password_plain<>'' LIMIT 1;".format(
+               e=_sql_escape(email)))
+    try:
+        dbpass = Path(DBPASS_FILE).read_text().strip()
+        proc = subprocess.run(["mysql", "-N", "-uamasmail", f"-p{dbpass}", "amasmail"],
+                              input=sql, text=True, capture_output=True, timeout=10)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip() or None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="provision just this profile id")

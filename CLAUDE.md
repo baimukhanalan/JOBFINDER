@@ -181,6 +181,18 @@ honest. Real submit is still HUMAN-gated at hire by Maximus's later assessment (
 surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py` (no network).
 
 ## Gotchas
+- **Replying as a candidate: the submission password comes from the DB, not the JSON cache
+  (`mailcrm.send`, 2026-08-28).** Sending a reply authenticates to Postfix submission (587, SASL) AS the
+  candidate mailbox, using its password. That password was read only from `backend/data/
+  mailbox_passwords.json` — a best-effort cache written by `provision_email` with an UNLOCKED
+  read-modify-write (the same race as `register_demo_persona`/`bulk_log`), and `provision_email` only
+  writes it on a REAL insert (`created==1`), never re-writing a dropped entry. Result: ~5089 of ~7913 demo
+  personas had NO cache entry → replying failed with «no submission password for <addr>» even though the
+  mailbox exists and receives mail. Fix: `virtual_users.password_plain` is the AUTHORITATIVE store (every
+  provisioned takhet.com row — all 9375 — carries it, verified to match the SHA512 `password_hash`), so
+  `mailcrm.send` now falls back to `provision_mailboxes.get_submission_password(email)` (a
+  `SELECT password_plain FROM virtual_users`) when the JSON cache misses. Non-destructive (no password
+  reset). Do NOT "fix" this by resetting mailbox passwords — the DB already has the correct plaintext.
 - **A `text/plain` MIME part can contain raw HTML — flatten it before render (`mailcrm._parse_full`, 2026-08-26).**
   Some senders (GoFasti/HeyMilo async-interview "magic link" mails) put a literal `<a href="URL">URL</a>`
   INSIDE the `text/plain` alternative. The open-view (`_msg_card`) renders `plain` via `escape()` then

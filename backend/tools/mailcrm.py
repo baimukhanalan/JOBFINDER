@@ -780,6 +780,15 @@ def send(from_email: str, to: str, subject: str, body: str,
         return {"ok": False, "error": f"unknown candidate mailbox {from_email}"}
     pw = _load(PW_FILE, {}).get(from_email)
     if not pw:
+        # mailbox_passwords.json is a best-effort cache that lost ~5k entries to an unlocked
+        # write race; the authoritative password lives in virtual_users.password_plain. Fall
+        # back to it so a candidate whose cache entry was dropped can still send a reply.
+        try:
+            from backend.tools.provision_mailboxes import get_submission_password
+            pw = get_submission_password(from_email)
+        except Exception:
+            pw = None
+    if not pw:
         return {"ok": False, "error": f"no submission password for {from_email}"}
     if not to:
         return {"ok": False, "error": "no recipient"}

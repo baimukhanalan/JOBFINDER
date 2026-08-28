@@ -886,11 +886,28 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
     offset; the old `fetch_himalayas` `break`'d the WHOLE pagination on the first hiccup (observed collapse
     70→9), so it now RETRIES the offset (3× with backoff) before giving up. Yield still fluctuates (~7-70)
     with feed rotation + rate-limiting of rapid 200-page pagination — that variance is inherent, not a bug.
-  - **Probed but NOT wired (recipes on file, 2026-08-28) — reasons:** **Kelly** (`www.mykelly.com/wp-json/
-    wp/v2/job-listings`, WP REST, ~12) sits behind Akamai bot protection returning **403 to our datacenter
-    IP** — reachable only via a US residential IP / the project proxy pool, which the plain-httpx collector
-    doesn't use; **Maximus** (Avature `maximus.avature.net/4/_portalList`, ~23) needs session cookies + a
-    per-page-load rotating `qtvc` token scraped from HTML — too fragile for an unattended cron; **Foundever**
-    (~5) exposes only an XML sitemap (no JSON); **Liveops** — its Rippling corporate board has ZERO entry
-    roles, and the actual contractor-agent product is a login-gated Salesforce community (un-scrapable). To
-    add Kelly later, route its fetch through `proxy_pool.next_proxy()`.
+  - **Kelly (KellyConnect, WP REST, ~7).** `GET www.mykelly.com/wp-json/wp/v2/job-listings?per_page=100
+    &page=N&_fields=id,link,date,title,acf`. The host is behind Akamai bot protection that **403s our
+    datacenter IP**, so `fetch_kelly` routes through the rotating **proxy pool** (`_pool_proxy_url()` →
+    `proxy_pool.next_proxy()`; the BD-gateway egress passes Akamai — verified live 200). remote + country
+    live in ACF meta (`acf.remote=="1"` AND `acf.country_code=="US"`/`geolocation_country=="United States"`),
+    no server-side filter, so we page all ~30 pages and filter client-side (`_kelly_row`, `html.unescape`
+    the title). **If the pool is empty, Kelly is SKIPPED** (a bare datacenter request just 403s) — so its
+    yield depends on a live proxy pool. It's the slow source (~55s, 30 proxied pages).
+  - **Maximus (Avature, ~21).** NOT Workday (that tenant is dormant/422). Real ATS = the Avature portal
+    (id 4). Two-step, no login/captcha: (1) `GET /careers/Job-Search_US` with a **cookie jar**; the HTML
+    embeds a job-list widget whose `data-props` is **nested by device — use `['desktop']`** — carrying a
+    STABLE `uuid` + a **per-session `qtvc` token** (64-hex, ROTATES every page load — scrape fresh, never
+    hardcode) + `formId` + link configs; (2) `GET /4/_portalList` with the SAME cookies + those params.
+    `_maximus_params` builds the querystring from a **WHITELIST** — sending the context-value keys
+    (`recordIdContextValues`/`personIdContextValue`/`userIdContextValue`) makes it **HTTP 500**. `total`
+    comes back a **STRING** (coerce to int, else the `offset >= total` page guard raises). Remote is not a
+    structured field → `_maximus_row` derives it from the title/classification text (`_MAXIMUS_REMOTE_RE`);
+    the portal is US-only. It's the FLAKIEST source (Cloudflare + the qtvc handshake + occasional
+    `Temporary failure in name resolution`), so `fetch_maximus` RETRIES the whole two-step flow up to 3×
+    (an empty result = a transient failure, since the board always has ~20+ reqs) — do NOT let a transient
+    deactivate its rows. Uses a real-browser UA (`_BROWSER_UA`, shared with Kelly — the bot UA is WAF-rejected).
+  - **Probed but NOT wired (recipes on file, 2026-08-28):** **Foundever** (~5) exposes only an XML sitemap
+    (no JSON); **Liveops** — its Rippling corporate board has ZERO entry roles, and the actual
+    contractor-agent product is a login-gated Salesforce community (un-scrapable). NB the full `--collect`
+    is now ~85s (Kelly's proxied paging), up from the old ~40-60s.

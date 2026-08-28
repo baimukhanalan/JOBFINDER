@@ -229,6 +229,80 @@ def test_title_us():
     assert mh._title_us("Customer Service Representative - Remote") is False
 
 
+# ---- Kelly (WP REST, proxied) ---------------------------------------------------
+
+def test_kelly_us_remote_is_kept():
+    row = mh._kelly_row({
+        "id": 1, "link": "https://www.mykelly.com/job/10277091-x/", "date": "2026-08-20T00:00:00",
+        "title": {"rendered": "Call Center Customer Service Representative"},
+        "acf": {"remote": "1", "country_code": "US", "job_id": "10277091",
+                "_job_location": "San Diego, CA, United States"},
+    })
+    assert row is not None
+    assert row["source"] == "kelly"
+    assert row["source_id"] == "10277091"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+
+
+def test_kelly_onsite_is_dropped():
+    assert mh._kelly_row({
+        "id": 2, "title": {"rendered": "Customer Service Representative"},
+        "acf": {"remote": "0", "country_code": "US", "_job_location": "Troy, MI, United States"},
+    }) is None
+
+
+def test_kelly_non_us_remote_is_dropped():
+    assert mh._kelly_row({
+        "id": 3, "title": {"rendered": "Customer Service Representative"},
+        "acf": {"remote": "1", "country_code": "CA", "geolocation_country": "Canada"},
+    }) is None
+
+
+def test_kelly_senior_is_dropped():
+    assert mh._kelly_row({
+        "id": 4, "title": {"rendered": "Senior Customer Success Manager"},
+        "acf": {"remote": "1", "country_code": "US", "_job_location": "Remote, United States"},
+    }) is None
+
+
+# ---- Maximus (Avature) ----------------------------------------------------------
+
+def _mx(title, classification="Customer Service & Call Center Careers", jid="42174",
+        loc="United States"):
+    return {"id": jid, "fields": {
+        "schemaField_3_293_3": {"stringValue": title},
+        "schemaField_3_481_3": {"stringValue": classification},
+        "jobLocation": {"stringValue": loc, "jsonValue": {"country": {"name": "United States"}}},
+        "postedDate": {"stringValue": "2026-08-25"}}}
+
+
+def test_maximus_remote_csr_is_kept():
+    row = mh._maximus_row(_mx("CSR II Operations (Temporary, Remote Lawrence KS)"),
+                          "https://maximus.avature.net/careers/Job-Application?folderId=42174")
+    assert row is not None
+    assert row["source"] == "maximus"
+    assert row["source_id"] == "42174"
+    assert row["category"] == "customer_support"
+    assert row["apply_url"].endswith("folderId=42174")
+
+
+def test_maximus_onsite_is_dropped():
+    # "On-Site" title, classification has no remote word → not remote → dropped.
+    assert mh._maximus_row(_mx("CSR II Operations (On-Site Lawrence KS)")) is None
+
+
+def test_maximus_remote_from_classification_is_kept():
+    # Remote signalled only in the classification text still counts.
+    row = mh._maximus_row(_mx("Customer Service Representative",
+                              classification="Remote Customer Service & Call Center"))
+    assert row is not None
+
+
+def test_maximus_senior_remote_is_dropped():
+    assert mh._maximus_row(_mx("Senior Manager, Remote Operations")) is None
+
+
 # ---- category: insurance/healthcare "Rep" (not just "Representative") -----------
 
 def test_insurance_rep_categorizes_but_bare_rep_does_not():

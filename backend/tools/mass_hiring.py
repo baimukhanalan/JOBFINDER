@@ -36,6 +36,10 @@ _ENV = Path(__file__).resolve().parents[1] / ".env"
 # httpx's zstd decoder ("cannot use a decompressobj multiple times") and the whole fetch fails.
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; JobFinderMassHire/1.0)",
        "Accept-Encoding": "gzip, deflate"}
+# A real-browser UA for sources fronted by a WAF that rejects the bot UA above (Cloudflare on
+# Maximus/Avature, Akamai on Kelly/mykelly.com).
+_BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
 def _dsn() -> str:
@@ -740,11 +744,203 @@ def fetch_working_solutions() -> list[dict]:
     return rows
 
 
+# Kelly (KellyConnect) — WordPress WP-REST job_listing feed on www.mykelly.com. The whole host sits
+# behind Akamai bot protection that 403s our DATACENTER IP, so route the fetch through the rotating
+# proxy pool (its egress passes, verified live). remote + country live in ACF meta (no server-side
+# filter), so we page all ~30 pages and filter client-side.
+def _kelly_row(j: dict) -> dict | None:
+    acf = j.get("acf") or {}
+    remote = str(acf.get("remote") or "") == "1"
+    us = (acf.get("country_code") or "").upper() == "US" or \
+         (acf.get("geolocation_country") or "") == "United States"
+    if not (remote and us):
+        return None
+    import html
+    title = html.unescape(((j.get("title") or {}).get("rendered")) or acf.get("job_title") or "")
+    loc = acf.get("_job_location") or ""
+    url = acf.get("external_apply_url") or j.get("link") or ""
+    jid = acf.get("job_id") or j.get("id")
+    return _mk_row("kelly", jid, "Kelly", title, f"{loc} (Remote)", url,
+                   posted_at=_iso_epoch(j.get("date")))
+
+
+def _pool_proxy_url() -> str | None:
+    """An httpx proxy URL from the rotating pool (scheme://user:pass@host:port), or None if empty."""
+    try:
+        from backend.tools import proxy_pool
+        p = proxy_pool.next_proxy()
+    except Exception:
+        return None
+    if not p or not p.get("server"):
+        return None
+    server = p["server"]
+    if p.get("username"):
+        from urllib.parse import quote
+        scheme, rest = server.split("://", 1)
+        return f"{scheme}://{quote(p['username'])}:{quote(p.get('password') or '')}@{rest}"
+    return server
+
+
+def fetch_kelly() -> list[dict]:
+    rows = []
+    proxy = _pool_proxy_url()
+    if not proxy:
+        print("[kelly] no proxy in pool — skipping (Akamai 403s the datacenter IP)", file=sys.stderr)
+        return rows
+    try:
+        with httpx.Client(timeout=45, headers={"User-Agent": _BROWSER_UA}, proxy=proxy) as c:
+            page = 1
+            while page <= 35:
+                r = c.get("https://www.mykelly.com/wp-json/wp/v2/job-listings",
+                          params={"per_page": 100, "page": page,
+                                  "_fields": "id,link,date,title,acf"})
+                if r.status_code >= 400:
+                    break
+                arr = r.json()
+                if not isinstance(arr, list) or not arr:
+                    break
+                for j in arr:
+                    row = _kelly_row(j)
+                    if row:
+                        rows.append(row)
+                if len(arr) < 100:
+                    break
+                page += 1
+    except Exception as e:
+        print(f"[kelly] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+# Maximus — Avature template-builder portal (portal id 4). NOT Workday. Two-step, no login/captcha:
+# (1) GET /careers/Job-Search_US with a cookie jar; the HTML embeds a job-list widget whose
+# data-props (nested by device — use the 'desktop' object) carry a STABLE uuid + a PER-SESSION qtvc
+# token + formId + link configs; (2) GET /4/_portalList with the SAME cookies + those params. GOTCHAS:
+# qtvc rotates every page load (scrape fresh, never hardcode); the context-value keys
+# (recordIdContextValues/personIdContextValue/userIdContextValue) make _portalList 500 if sent — so we
+# build the querystring from a WHITELIST, not by lifting the whole object. Remote is not a structured
+# field → derived from the title/classification text; the portal is US-only.
+_MAXIMUS_REMOTE_RE = re.compile(
+    r"remote|work[- ]?at[- ]?home|work[- ]?from[- ]?home|\bwah\b|virtual|telework|telecommut|"
+    r"home[- ]?based", re.I)
+_MAXIMUS_WL = ("uuid", "listType", "searchIndexId", "formId", "qtvc", "searchMode", "layout",
+               "allowFilteringFromUrlParams", "hasToIncludePaginationOptions", "allowListSorting",
+               "fetchJobIdInPeopleLists", "shouldAddBase64FileFields")
+_MAXIMUS_BLOBS = ("firstColumnLinks", "additionalColumnLinks", "links", "conditionalLinkConfig",
+                  "dynamicValueConfigs")
+
+
+def _maximus_params(props: dict) -> dict:
+    import json as _json
+    p = {}
+    for k in _MAXIMUS_WL:
+        v = props.get(k)
+        p[k] = ("true" if v else "false") if isinstance(v, bool) else ("" if v is None else v)
+    for k in _MAXIMUS_BLOBS:
+        v = props.get(k)
+        p[k] = _json.dumps(v if v is not None else {}, separators=(",", ":"))
+    if not p.get("searchMode"):
+        p["searchMode"] = "ResultsAndCount"
+    if not p.get("layout"):
+        p["layout"] = "cards"
+    p.update({"sortDirection": "DESC", "filters": "{}", "token": "", "pageUrlParams": "{}"})
+    return p
+
+
+def _maximus_row(res: dict, apply_url: str | None = None) -> dict | None:
+    f = res.get("fields") or {}
+
+    def sv(key):
+        x = f.get(key)
+        return x.get("stringValue") if isinstance(x, dict) else None
+
+    title = sv("schemaField_3_293_3") or ""
+    classification = sv("schemaField_3_481_3") or ""
+    if not _MAXIMUS_REMOTE_RE.search(f"{title} {classification}"):
+        return None
+    jloc = f.get("jobLocation") if isinstance(f.get("jobLocation"), dict) else {}
+    loc = jloc.get("stringValue") or "Remote"
+    country = (((jloc.get("jsonValue") or {}).get("country") or {}).get("name")) or ""
+    jid = res.get("id") or sv("jobId")
+    loc_str = loc if (country and country.lower() in loc.lower()) else f"{loc}, {country or 'United States'}"
+    url = apply_url or f"https://maximus.avature.net/careers/Job-Application?folderId={jid}"
+    return _mk_row("maximus", jid, "Maximus", title, loc_str, url, posted_at=_iso_epoch(sv("postedDate")))
+
+
+def _maximus_collect() -> list[dict]:
+    import json as _json
+    from bs4 import BeautifulSoup
+    rows = []
+    try:
+        with httpx.Client(timeout=40, headers={"User-Agent": _BROWSER_UA},
+                          follow_redirects=True) as c:
+            r = c.get("https://maximus.avature.net/careers/Job-Search_US")
+            props = None
+            for el in BeautifulSoup(r.text, "html.parser").select("[data-props]"):
+                dp = el.get("data-props") or ""
+                if "qtvc" in dp and "JobList" in dp:
+                    try:
+                        props = _json.loads(dp)
+                    except Exception:
+                        props = None
+                    break
+            if isinstance(props, dict) and "desktop" in props:
+                props = props["desktop"]           # data-props is nested by device
+            if not props or not props.get("qtvc"):
+                print("[maximus] job-list widget / qtvc token not found", file=sys.stderr)
+                return rows
+            base = _maximus_params(props)
+            offset, total = 0, None
+            while offset < 600:
+                rr = c.get("https://maximus.avature.net/4/_portalList",
+                           params={**base, "offset": offset, "recordsPerPage": 50},
+                           headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"})
+                try:
+                    d = rr.json()
+                except Exception:
+                    print(f"[maximus offset={offset}] non-JSON (HTTP {rr.status_code})", file=sys.stderr)
+                    break
+                results = d.get("results") or []
+                if not results:
+                    break
+                t = d.get("total")                 # Avature returns total as a STRING
+                if t is not None:
+                    try:
+                        total = int(t)
+                    except (TypeError, ValueError):
+                        pass
+                links = d.get("additionalLinks") or []
+                for i, res in enumerate(results):
+                    row = _maximus_row(res, links[i] if i < len(links) else None)
+                    if row:
+                        rows.append(row)
+                offset += len(results)
+                if total is not None and offset >= total:
+                    break
+    except Exception as e:
+        print(f"[maximus] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+def fetch_maximus() -> list[dict]:
+    # Avature/Cloudflare + the per-session qtvc handshake make this the flakiest source: a transient
+    # DNS/connect hiccup returns nothing and would deactivate all rows. Retry the whole two-step flow
+    # a few times — maximus always has ~20+ US remote CSR reqs, so an empty result means a transient
+    # failure worth retrying, not a genuinely empty board.
+    for attempt in range(3):
+        rows = _maximus_collect()
+        if rows:
+            return rows
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    return []
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
             "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
-            "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions}
+            "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
+            "kelly": fetch_kelly, "maximus": fetch_maximus}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

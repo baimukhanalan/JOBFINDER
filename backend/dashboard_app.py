@@ -22,6 +22,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response, StreamingResponse)
 
 from backend.applier.profile_validator import validate_profile
+from backend.interviews.routes_operator import router as iv_operator_router
 from backend.profiles import facts as facts_lib
 from backend.profiles import store as profile_store
 from backend.profiles.store import _source_path, load_profiles
@@ -90,6 +91,8 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"], max_age=86400,
 )
+# Operator «Собес» (interview-assign) modal routes, shown inside the /mail inbox.
+app.include_router(iv_operator_router)
 
 
 # profiles.json mtime cache: /draft is hit per page load from the extension, the
@@ -1606,6 +1609,15 @@ def _start_submit_reconciler(interval: int = 150, first_delay: int = 60) -> None
 
 
 _start_submit_reconciler()
+
+
+# Ensure the interview-scheduler tables exist (idempotent). Wrapped so a momentary
+# DB hiccup at import time can never crash app startup — the routes recreate on demand.
+try:
+    from backend.interviews import db as iv_db
+    iv_db.ensure_schema()
+except Exception:
+    logging.getLogger(__name__).warning("interview schema init failed", exc_info=True)
 
 
 @app.post("/unfinished/reconcile")

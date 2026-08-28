@@ -501,6 +501,25 @@ def _kind_tag(kind: str) -> str:
     return f'<span class="tag" style="color:{fg};background:{bg}">{emoji} {escape(label)}</span>'
 
 
+def _iv_sobes(mailbox: str, thread: str, hash: str) -> str:
+    """The «Собес» (interview-assign) control. Imported lazily so a problem in the
+    interviews package can never break inbox rendering (returns "")."""
+    try:
+        from backend.interviews import operator_ui
+        return operator_ui.sobes_button(mailbox or "", thread or "", hash or "")
+    except Exception:
+        return ""
+
+
+def _iv_modal() -> str:
+    """The one-time #ivModal shell, injected into the inbox/thread page. Lazy + safe."""
+    try:
+        from backend.interviews import operator_ui
+        return operator_ui.modal_shell()
+    except Exception:
+        return ""
+
+
 def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
     out = []
     for m in rows:
@@ -510,6 +529,12 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
                 if show_mailbox else "")
         clip = ('<span class="clip" title="есть вложение">📎</span>'
                 if m.get("has_att") else "")
+        # «Собес» control lives INSIDE the row <a> (like the «📄 N» apps-chip); its
+        # onclick stops propagation so tapping it opens the assign modal, not the message.
+        sobes = (_iv_sobes(m.get("mailbox", ""),
+                           m.get("thread") or m.get("thread_key") or "",
+                           m.get("id", ""))
+                 if m.get("kind") == "interview" else "")
         out.append(
             f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}" '
             f'data-mailbox="{escape(m.get("mailbox","") or "", quote=True)}">'
@@ -520,7 +545,7 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
             '<span class="selcheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></button>'
             f'<a class="mrow" href="/mail/message?id={escape(m["id"])}">'
             f'<span class="mbody"><span class="mtop">'
-            f'<span class="msender">{escape(sender)}</span>{_kind_tag(m.get("kind","other"))}{mbox}'
+            f'<span class="msender">{escape(sender)}</span>{_kind_tag(m.get("kind","other"))}{mbox}{sobes}'
             f'{clip}<span class="mdate">{maildate(m.get("date_ts",0))}</span></span>'
             f'<span class="msubj">{escape(m.get("subject","") or "(без темы)")}</span>'
             f'<span class="msnip">{escape(m.get("snippet",""))}</span>'
@@ -638,7 +663,7 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
         f'{r["label"]} <b>{r["count"]}</b></a>' for r in stage_rows)
     funnel = ('<div class="funnel" data-filter-list="maillist">' + chips + '</div>'
               + '<div class="filter-status" role="status" aria-live="polite"></div>')
-    modal = _COMPOSE_MODAL + _filter_modal(stage_rows, keyword_rules, _href(stage))
+    modal = _COMPOSE_MODAL + _filter_modal(stage_rows, keyword_rules, _href(stage)) + _iv_modal()
     fbar = (f'<div class="filterbar">Ящик кандидата: <b>{escape(mailbox_name or mailbox)}</b> '
             f'<a href="/mail">убрать фильтр</a></div>' if mailbox else "")
     empty = '<div class="empty" id="filterempty">Писем нет</div>' if not rows else '<div id="filterempty"></div>'
@@ -772,7 +797,9 @@ def render_thread(t: dict) -> str:
         f'data-subject="{escape(t.get("subject", ""), quote=True)}" '
         f'data-mid="{escape(tgt.get("message_id", ""), quote=True)}"')
     thread_id = next((m.get("id") for m in reversed(msgs) if m.get("id")), "")
+    thread_key = next((m.get("thread") for m in reversed(msgs) if m.get("thread")), "")
     subj = t.get("subject", "")
+    iv_sobes = _iv_sobes(t.get("mailbox", ""), thread_key, thread_id)
     cards = "".join(_msg_card(m, subj) for m in msgs) or '<div class="empty">Пусто</div>'
     last = msgs[-1] if msgs else {}
     fwd_body = (last.get("plain", "") or "")[:4000]
@@ -795,9 +822,10 @@ def render_thread(t: dict) -> str:
         f'<div class="reply-bar"><button type="button" class="reply-btn reply-action primary-btn" {reply_attrs}>'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>Ответить</button>'
         f'<button type="button" class="reply-btn fwd-action" {fwd_attrs} title="Переслать">'
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>Переслать</button></div>'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/></svg>Переслать</button>'
+        f'{iv_sobes}</div>'
         '</div>')
-    return _page("inbox", body, _COMPOSE_MODAL, topbar=False)
+    return _page("inbox", body, _COMPOSE_MODAL + _iv_modal(), topbar=False)
 
 
 def render_candidate_rows(cands: list[dict]) -> str:

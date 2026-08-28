@@ -73,13 +73,18 @@ def tick() -> int:
 
 
 def run_forever(interval: int = 60) -> None:
-    db.ensure_schema()
     logger.info("interview notifier daemon: started (interval=%ss)", interval)
+    schema_ready = False
     while True:
         try:
+            # Attempt schema-ensure inside the loop so a brief DB outage at deploy is
+            # tolerated like any per-tick transient — the daemon must never hard-exit.
+            if not schema_ready:
+                db.ensure_schema()
+                schema_ready = True
             tick()
         except Exception as e:
-            logger.warning("run_forever: tick failed: %s", e)
+            logger.warning("run_forever: cycle failed: %s", e)
         time.sleep(interval)
 
 

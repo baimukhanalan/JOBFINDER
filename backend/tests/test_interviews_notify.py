@@ -7,8 +7,10 @@ roundtrip) use the throwaway `test_iv_%` prefix and skip when CRM_PG_DSN is unse
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 
 from backend.tools import mail_db
@@ -124,6 +126,65 @@ def test_message_builders_are_neutral():
         for banned in ("claude", "anthropic", "gpt", "openai", "llm"):
             assert banned not in low
     assert "60" in r
+
+
+def test_when_renders_in_utc_regardless_of_offset():
+    # a +05:00 aware datetime must display its UTC wall-clock, not the local hour
+    iv = {"mailbox": "x@takhet.com", "company": "Acme",
+          "start_ts": datetime(2026, 8, 31, 15, 0, 0,
+                               tzinfo=timezone(timedelta(hours=5)))}
+    text = notify.assigned_text(iv, "Alan")
+    assert "2026-08-31 10:00 GMT" in text     # 15:00+05 == 10:00 UTC
+    assert "15:00" not in text
+
+
+def test_when_naive_datetime_assumed_utc():
+    iv = {"mailbox": "x@takhet.com", "company": "Acme",
+          "start_ts": datetime(2026, 8, 31, 9, 30, 0)}  # tz-naive
+    assert "2026-08-31 09:30 GMT" in notify.reminder_text(iv, "Alan", 5)
+
+
+_SECRET_TOKEN = "123456789:AAF_super_secret_bot_token_value"
+
+
+def test_send_dm_http_failure_does_not_log_token(monkeypatch, caplog):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "telegram_bot_token", _SECRET_TOKEN)
+
+    class _Resp:
+        status_code = 400
+        text = '{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}'
+
+    monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: _Resp())
+
+    with caplog.at_level(logging.WARNING, logger=notify.logger.name):
+        assert notify.send_dm(555, "hi") is False
+
+    assert caplog.records, "expected a warning to be logged on a failed send"
+    joined = "\n".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_TOKEN not in joined
+    assert "AAF_super_secret" not in joined
+    assert "chat not found" in joined       # the useful, token-free diagnostic
+
+
+def test_send_dm_transport_error_does_not_log_token(monkeypatch, caplog):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "telegram_bot_token", _SECRET_TOKEN)
+
+    def _boom(*a, **k):
+        # httpx errors stringify the request URL, which embeds the token
+        raise httpx.ConnectError(
+            f"connection failed to https://api.telegram.org/bot{_SECRET_TOKEN}/sendMessage")
+
+    monkeypatch.setattr(notify.httpx, "post", _boom)
+
+    with caplog.at_level(logging.WARNING, logger=notify.logger.name):
+        assert notify.send_dm(555, "hi") is False
+
+    joined = "\n".join(r.getMessage() for r in caplog.records)
+    assert _SECRET_TOKEN not in joined
+    assert "AAF_super_secret" not in joined
+    assert "ConnectError" in joined         # only the exception TYPE is logged
 
 
 # ---- live DB (announcement roundtrip) ----------------------------------------------

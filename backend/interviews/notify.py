@@ -9,6 +9,7 @@ failed personal send falls back to the owner chat. The httpx call shape mirrors
 from __future__ import annotations
 
 import logging
+from datetime import timezone
 
 import httpx
 
@@ -20,16 +21,25 @@ logger = logging.getLogger(__name__)
 
 def send_dm(chat_id: int, text: str) -> bool:
     """POST a plain-text message to one chat_id. Returns True on success, False when
-    the bot token is unset or on any error (never raises)."""
+    the bot token is unset or on any error (never raises).
+
+    SECURITY: never log the request URL or the raw exception — the URL embeds the bot
+    token (`.../bot<TOKEN>/sendMessage`) and `httpx.HTTPStatusError.__str__()` includes
+    it. We inspect the response and log only `status_code` + Telegram's error JSON
+    (which carries no token), and on a transport error log only the exception TYPE.
+    """
     if not settings.telegram_bot_token or not chat_id:
         return False
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     try:
-        r = httpx.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
-        r.raise_for_status()
+        resp = httpx.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("send_dm: chat %s failed: %s %s",
+                           chat_id, resp.status_code, resp.text[:300])
+            return False
         return True
     except Exception as e:
-        logger.warning("send_dm: send to %s failed: %s", chat_id, e)
+        logger.warning("send_dm: chat %s transport error: %s", chat_id, type(e).__name__)
         return False
 
 
@@ -65,7 +75,11 @@ def _when(interview: dict) -> str:
     start_ts = interview.get("start_ts")
     if not start_ts:
         return "время не указано"
-    return start_ts.strftime("%Y-%m-%d %H:%M") + " GMT"
+    # psycopg2 returns timestamptz in the DB SESSION timezone (the pool doesn't pin
+    # UTC), so convert to UTC before formatting or the hour won't match the "GMT" label.
+    if start_ts.tzinfo is None:
+        start_ts = start_ts.replace(tzinfo=timezone.utc)
+    return start_ts.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M") + " GMT"
 
 
 def assigned_text(interview: dict, responsible_name: str) -> str:

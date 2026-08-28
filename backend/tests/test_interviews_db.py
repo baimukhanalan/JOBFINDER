@@ -69,6 +69,21 @@ def test_schema_idempotent_and_responsible_roundtrip():
         db.add_responsible("test_iv_lara", "h2", "Lara Duplicate")
 
 
+def test_role_defaults_employee_and_set_role_roundtrip():
+    rid = db.add_responsible("test_iv_role_db", "h", "RoleDB")
+    assert db.get_responsible(rid)["role"] == "employee"  # column default
+
+    admin_rid = db.add_responsible("test_iv_role_admin", "h", "RoleAdmin", role="admin")
+    assert db.get_responsible(admin_rid)["role"] == "admin"
+
+    db.set_role(rid, "admin")
+    assert db.get_responsible(rid)["role"] == "admin"
+    assert db.get_responsible_by_login("test_iv_role_db")["role"] == "admin"
+
+    db.set_role(rid, "employee")
+    assert db.get_responsible(rid)["role"] == "employee"
+
+
 def test_availability_upsert_fills_missing_days():
     rid = db.add_responsible("test_iv_avail", "h", "Avail")
 

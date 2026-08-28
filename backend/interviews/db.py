@@ -32,6 +32,9 @@ def ensure_schema() -> None:
           active           BOOLEAN NOT NULL DEFAULT TRUE,
           created_at       TIMESTAMPTZ DEFAULT now()
         );""")
+        # additive column for the upcoming unified login: 'admin' | 'employee'
+        cur.execute("ALTER TABLE iv_responsibles "
+                    "ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'employee';")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS iv_availability (
           id             SERIAL PRIMARY KEY,
@@ -72,13 +75,14 @@ def ensure_schema() -> None:
 
 
 # ---- responsibles ------------------------------------------------------------------
-def add_responsible(login: str, password_hash: str, name: str, tz: str = "UTC") -> int:
+def add_responsible(login: str, password_hash: str, name: str, tz: str = "UTC",
+                    role: str = "employee") -> int:
     """Insert a new responsible. Raises psycopg2.IntegrityError on a duplicate login."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(
-            "INSERT INTO iv_responsibles (login, password_hash, name, tz) "
-            "VALUES (%s,%s,%s,%s) RETURNING id",
-            (login, password_hash, name, tz))
+            "INSERT INTO iv_responsibles (login, password_hash, name, tz, role) "
+            "VALUES (%s,%s,%s,%s,%s) RETURNING id",
+            (login, password_hash, name, tz, role))
         return cur.fetchone()[0]
 
 
@@ -124,6 +128,13 @@ def set_active(rid: int, active: bool) -> None:
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_responsibles SET active=%s WHERE id=%s",
                     (active, rid))
+
+
+def set_role(rid: int, role: str) -> None:
+    """Set a responsible's role ('admin' | 'employee') for the upcoming unified login."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET role=%s WHERE id=%s",
+                    (role, rid))
 
 
 # ---- availability --------------------------------------------------------------

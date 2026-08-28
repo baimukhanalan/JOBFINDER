@@ -12,6 +12,8 @@ import sys
 
 from backend.interviews import auth, db
 
+ROLES = ("admin", "employee")
+
 
 def hhmm_to_min(hhmm: str) -> int:
     """'HH:MM' -> minutes since midnight, e.g. '09:30' -> 570."""
@@ -19,11 +21,21 @@ def hhmm_to_min(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _check_role(role: str) -> None:
+    if role not in ROLES:
+        print(f"Invalid --role {role}: must be one of {', '.join(ROLES)}",
+              file=sys.stderr)
+        raise SystemExit(1)
+
+
 def cmd_add(args: argparse.Namespace) -> None:
+    _check_role(args.role)
     password = args.password or secrets.token_urlsafe(12)
     password_hash = auth.hash_password(password)
-    rid = db.add_responsible(args.login, password_hash, args.name, tz=args.tz)
-    print(f"Created responsible id={rid} login={args.login} name={args.name} tz={args.tz}")
+    rid = db.add_responsible(args.login, password_hash, args.name, tz=args.tz,
+                             role=args.role)
+    print(f"Created responsible id={rid} login={args.login} name={args.name} "
+          f"tz={args.tz} role={args.role}")
     if not args.password:
         print(f"Generated password: {password}")
 
@@ -36,7 +48,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     for r in roster:
         status = "active" if r.get("active") else "inactive"
         print(f"id={r['id']} login={r['login']} name={r['name']} "
-              f"tz={r['tz']} {status}")
+              f"tz={r['tz']} role={r.get('role')} {status}")
 
 
 def cmd_passwd(args: argparse.Namespace) -> None:
@@ -78,6 +90,16 @@ def cmd_link(args: argparse.Namespace) -> None:
     print(f"Linked {args.login} to telegram chat_id={args.chat_id}")
 
 
+def cmd_setrole(args: argparse.Namespace) -> None:
+    _check_role(args.role)
+    responsible = db.get_responsible_by_login(args.login)
+    if not responsible:
+        print(f"No such responsible: {args.login}", file=sys.stderr)
+        raise SystemExit(1)
+    db.set_role(responsible["id"], args.role)
+    print(f"Set role for {args.login} to {args.role}")
+
+
 def cmd_setavail(args: argparse.Namespace) -> None:
     if not (0 <= args.dow <= 6):
         print(f"Invalid --dow {args.dow}: must be 0-6 (Monday=0 .. Sunday=6)",
@@ -115,6 +137,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--name", required=True)
     p_add.add_argument("--password", default=None)
     p_add.add_argument("--tz", default="UTC")
+    p_add.add_argument("--role", default="employee")
     p_add.set_defaults(func=cmd_add)
 
     p_list = sub.add_parser("list", help="List responsibles.")
@@ -137,6 +160,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_link.add_argument("--login", required=True)
     p_link.add_argument("--chat-id", type=int, required=True, dest="chat_id")
     p_link.set_defaults(func=cmd_link)
+
+    p_setrole = sub.add_parser("setrole", help="Set a responsible's role (admin|employee).")
+    p_setrole.add_argument("--login", required=True)
+    p_setrole.add_argument("--role", required=True)
+    p_setrole.set_defaults(func=cmd_setrole)
 
     p_setavail = sub.add_parser("setavail", help="Set one weekday's availability window.")
     p_setavail.add_argument("--login", required=True)

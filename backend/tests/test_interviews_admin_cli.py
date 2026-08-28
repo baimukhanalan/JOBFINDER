@@ -153,6 +153,46 @@ def test_cli_link_unknown_login_errors():
     assert exc.value.code != 0
 
 
+def test_cli_add_with_admin_role():
+    admin_cli.main(["add", "--login", "test_iv_boss", "--name", "Boss",
+                    "--password", "x", "--role", "admin"])
+    assert db.get_responsible_by_login("test_iv_boss")["role"] == "admin"
+
+
+def test_cli_add_defaults_employee():
+    admin_cli.main(["add", "--login", "test_iv_emp", "--name", "Emp", "--password", "x"])
+    assert db.get_responsible_by_login("test_iv_emp")["role"] == "employee"
+
+
+def test_cli_add_rejects_bad_role():
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["add", "--login", "test_iv_bad", "--name", "Bad",
+                        "--password", "x", "--role", "superuser"])
+    assert exc.value.code != 0
+    # the invalid add must not have created a row
+    assert db.get_responsible_by_login("test_iv_bad") is None
+
+
+def test_cli_setrole():
+    admin_cli.main(["add", "--login", "test_iv_role", "--name", "Role", "--password", "x"])
+    assert db.get_responsible_by_login("test_iv_role")["role"] == "employee"
+
+    admin_cli.main(["setrole", "--login", "test_iv_role", "--role", "admin"])
+    assert db.get_responsible_by_login("test_iv_role")["role"] == "admin"
+
+    # an invalid role is rejected with a non-zero exit and leaves the role unchanged
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["setrole", "--login", "test_iv_role", "--role", "wizard"])
+    assert exc.value.code != 0
+    assert db.get_responsible_by_login("test_iv_role")["role"] == "admin"
+
+
+def test_cli_setrole_unknown_login_errors():
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["setrole", "--login", "test_iv_nope", "--role", "admin"])
+    assert exc.value.code != 0
+
+
 def test_cli_setavail_upserts_single_day_and_preserves_others():
     admin_cli.main(["add", "--login", "test_iv_ivan", "--name", "Ivan", "--password", "x"])
     rid = db.get_responsible_by_login("test_iv_ivan")["id"]

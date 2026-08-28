@@ -693,9 +693,9 @@ def synth_persona(job: dict, gender: str | None = None) -> dict:
 
     `gender` ('male'/'female') comes from the /catalog "Заполнить" M/Ж choice and selects a
     gender-appropriate first name; None (or anything else) rolls a random gender. The chosen
-    gender is returned as cand["gender"] (a cache key for ensure_and_wire) — NOT put into the
-    profile dict, which Profile.from_dict would reject as an unknown key. It is used ONLY to
-    pick the name; a demographic gender field on the form is still human/declined by policy."""
+    gender is returned as cand["gender"] (a cache key for ensure_and_wire) AND stored in
+    cand["profile"]["sex"] so a demographic gender/pronoun field is answered coherently under the
+    persona's own sex (owner policy 2026-08-28) rather than left blocking."""
     country = _country_of(job)
     if gender not in ("male", "female"):
         gender = random.choice(("male", "female"))
@@ -706,5 +706,6 @@ def synth_persona(job: dict, gender: str | None = None) -> dict:
     raw["full_name"] = name                     # force the diverse name in BOTH paths
     _remember_name(name)
     cand = _build_candidate(raw, country, job)
-    cand["gender"] = gender                      # top-level only (not in cand["profile"])
+    cand["gender"] = gender                      # top-level cache key for ensure_and_wire
+    cand["profile"]["sex"] = gender              # persona's assigned sex -> coherent gender/pronoun
     return cand

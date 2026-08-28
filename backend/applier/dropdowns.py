@@ -368,6 +368,175 @@ async def fill_demographics_decline(page) -> dict:
     return {"filled": len(filled), "handled": filled}
 
 
+# When a demographic offers NO decline option, the OWNER's policy (2026-08-28, explicit) is to
+# still submit by picking a concrete answer instead of leaving the form blocked: veteran -> "not a
+# protected veteran", disability -> "no / do not have", race/ethnicity -> "Asian", gender/pronouns
+# -> the persona's own sex. This DELIBERATELY overrides the earlier "never claim a protected
+# characteristic" default FOR RACE by owner decision (veteran/disability are negations, not claims).
+def _demo_fallback_re_src(context: str, sex: str) -> str | None:
+    c = (context or "").lower()
+    if "veteran" in c:
+        return r"i am not a|not a protected veteran|not a veteran|non-?veteran|\bno,|^\s*no\b"
+    if "disabilit" in c:
+        return r"do not have|don'?t have|no,? i do|no,? i am not|^\s*no\b"
+    if re.search(r"rac(e|ial)|ethnic|hispanic|latin", c):
+        return r"\basian\b"
+    if "gender" in c:
+        if sex == "female":
+            return r"\bfemale\b|\bwoman\b"
+        if sex == "male":
+            return r"\bmale\b|\bman\b"
+        return None
+    if "pronoun" in c:
+        if sex == "female":
+            return r"\bshe\b|she[ /,]"
+        if sex == "male":
+            return r"\bhe\b|he[ /,]"
+        return r"no preference|they"
+    return None
+
+
+async def fill_demographic_answers(page, sex: str = "") -> dict:
+    """Runs AFTER fill_demographics_decline (additive): for a demographic field that had NO decline
+    option and is still blank, pick the OWNER-policy answer (see _demo_fallback_re_src) so the form
+    can submit instead of staying blocked. Never touches a field the decline pass already answered,
+    and only fires on a field whose text is BOTH demographic AND a known sub-type."""
+    filled: list[str] = []
+
+    def _pat(ctx):
+        src = _demo_fallback_re_src(ctx, sex)
+        return re.compile(src, re.I) if src else None
+
+    # 1) react-select
+    try:
+        conts = await page.query_selector_all(".select__container")
+    except Exception:
+        conts = []
+    for c in conts:
+        try:
+            if await c.query_selector(".select__single-value") or await c.query_selector(".select__multi-value"):
+                continue
+            le = await c.query_selector("label, .select__label")
+            label = (await le.inner_text()).strip() if le else ""
+            if not _DEMOGRAPHIC.search(_clean_text(label).lower()):
+                continue
+            pat = _pat(label)
+            if not pat:
+                continue
+            control = await c.query_selector(".select__control")
+            if not control:
+                continue
+            await control.click()
+            await page.wait_for_timeout(300)
+            picked = None
+            for o in await page.query_selector_all(".select__option"):
+                if pat.search((await o.inner_text()) or ""):
+                    picked = o
+                    break
+            if picked:
+                await picked.click()
+                await page.wait_for_timeout(200)
+                if await c.query_selector(".select__single-value"):
+                    filled.append(label[:40])
+            else:
+                await page.keyboard.press("Escape")
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+    # 2) native <select>
+    try:
+        sels = await page.query_selector_all("select")
+    except Exception:
+        sels = []
+    for s in sels:
+        try:
+            if (await s.evaluate("el=>el.value") or "").strip():
+                continue
+            label = await s.evaluate(_LABEL_JS)
+            if not _DEMOGRAPHIC.search((label or "").lower()):
+                continue
+            pat = _pat(label)
+            if not pat:
+                continue
+            val = await s.evaluate(
+                "(el,src)=>{const re=new RegExp(src,'i');"
+                "for(const o of el.options){if(o.value && re.test(o.text)) return o.value;}return null;}",
+                pat.pattern)
+            if val is not None:
+                await s.select_option(val)
+                filled.append((label or "")[:40])
+        except Exception:
+            continue
+    # 3) radio group — pick the sub-type answer radio in a demographic group with no decline
+    try:
+        radios = await page.query_selector_all("input[type=radio]")
+    except Exception:
+        radios = []
+    seen_groups: set = set()
+    for r in radios:
+        try:
+            grp = await r.evaluate(
+                "el=>{const g=el.closest('fieldset,[role=radiogroup],[class*=question],li,.field');"
+                " return g?g.innerText.slice(0,160):'';}")
+            gl = (grp or "").lower()
+            if not _DEMOGRAPHIC.search(gl):
+                continue
+            key = gl[:60]
+            if key in seen_groups:
+                continue
+            # skip a group that already has a checked radio (answered/declined)
+            grouped = await r.evaluate(
+                "el=>{const n=el.name;const rs=[...document.querySelectorAll('input[type=radio][name=\"'+n+'\"]')];"
+                "return rs.some(x=>x.checked);}")
+            if grouped:
+                seen_groups.add(key)
+                continue
+            pat = _pat(grp)
+            if not pat:
+                continue
+            own = await r.evaluate(_LABEL_JS)
+            if own and pat.search(own):
+                try:
+                    await r.check(timeout=2500)
+                except Exception:
+                    await r.evaluate("el=>{const w=el.closest('label,[role=radio]'); (w||el).click();}")
+                seen_groups.add(key)
+                filled.append(key[:40])
+        except Exception:
+            continue
+    # 4) checkbox demographic (e.g. a race 'select all that apply') with no decline -> tick the answer
+    try:
+        boxes = await page.query_selector_all("input[type=checkbox]")
+    except Exception:
+        boxes = []
+    for cb in boxes:
+        try:
+            if await cb.is_checked():
+                continue
+            grp = await cb.evaluate(
+                "el=>{const g=el.closest('fieldset,[role=group],[class*=question],[class*=field],li');"
+                " return g?g.innerText.slice(0,200):'';}")
+            if not _DEMOGRAPHIC.search((grp or "").lower()):
+                continue
+            pat = _pat(grp)
+            if not pat:
+                continue
+            own = await cb.evaluate(_LABEL_JS)
+            if own and pat.search(own):
+                try:
+                    await cb.check(timeout=2500)
+                except Exception:
+                    await cb.evaluate("el=>{const w=el.closest('label,[role=checkbox]'); (w||el).click();}")
+                filled.append((grp or "")[:40])
+        except Exception:
+            continue
+    if filled:
+        logger.info("demographic answers filled (%d): %s", len(filled), filled)
+    return {"filled": len(filled), "handled": filled}
+
+
 async def fill_demographic_checkboxes_decline(page) -> dict:
     """Some EEO surveys render a demographic as a CHECKBOX group ('select all that apply' — e.g.
     1Password's racial/ethnic background) with its own 'Prefer not to say' checkbox. The radio/

@@ -19,6 +19,7 @@ from backend.applier.dropdowns import (
     apply_react_select_choice,
     fill_comboboxes_known,
     fill_cover_letter_known,
+    fill_demographic_answers,
     fill_demographic_checkboxes_decline,
     fill_demographics_decline,
     fill_react_selects,
@@ -291,6 +292,14 @@ class ApplyStrategy(ABC):
             success += dcx["filled"]
         except Exception as exc:
             logger.debug("fill_demographic_checkboxes_decline raised unexpectedly: %s", exc)
+
+        # A demographic with NO decline option: pick the owner-policy answer (veteran/disability ->
+        # No, race -> Asian, gender/pronouns -> the persona's sex) so it submits instead of blocking.
+        try:
+            da2 = await fill_demographic_answers(page, (profile_form or {}).get("sex") or "")
+            success += da2["filled"]
+        except Exception as exc:
+            logger.debug("fill_demographic_answers raised unexpectedly: %s", exc)
 
         # Required legal/privacy consent checkbox ('I agree' to the recruiting privacy notice) —
         # you can't submit without it; skips optional marketing opt-ins.

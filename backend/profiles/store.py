@@ -43,6 +43,8 @@ class Profile:
     mailbox: str = ""              # application-mail address indexed by inbox_index.py
     is_sample: bool = False
     is_synthetic: bool = False     # a demo persona invented by synth_persona (never a real roster person)
+    sex: str = ""                  # the persona's assigned sex (male/female) — for coherent gender/
+    #                                pronoun answers on demographic fields; "" = unknown/decline
 
     @classmethod
     def from_dict(cls, d: dict) -> "Profile":
@@ -71,6 +73,7 @@ class Profile:
             "work_authorization": self.work_authorization,
             "needs_sponsorship": self.needs_sponsorship,
             "available_start": self.available_start,
+            "sex": self.sex,
         }
 
     def storage_state_path(self, tenant: str) -> str:

@@ -522,7 +522,8 @@ def _iv_modal() -> str:
         return ""
 
 
-def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
+def render_rows(rows: list[dict], show_mailbox: bool = True,
+                show_sobes: bool = True) -> str:
     out = []
     for m in rows:
         sender = m.get("from_name") or m.get("from_email") or "?"
@@ -533,10 +534,11 @@ def render_rows(rows: list[dict], show_mailbox: bool = True) -> str:
                 if m.get("has_att") else "")
         # «Собес» control lives INSIDE the row <a> (like the «📄 N» apps-chip); its
         # onclick stops propagation so tapping it opens the assign modal, not the message.
+        # show_sobes=False (the read-only responsible cabinet) suppresses the operator control.
         sobes = (_iv_sobes(m.get("mailbox", ""),
                            m.get("thread") or m.get("thread_key") or "",
                            m.get("id", ""), as_span=True)
-                 if m.get("kind") == "interview" else "")
+                 if (show_sobes and m.get("kind") == "interview") else "")
         out.append(
             f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}" '
             f'data-mailbox="{escape(m.get("mailbox","") or "", quote=True)}">'

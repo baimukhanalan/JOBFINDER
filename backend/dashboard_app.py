@@ -907,6 +907,21 @@ def mass_hiring_page(category: str = ""):
                             status_code=502)
 
 
+@app.get("/stats", response_class=HTMLResponse)
+def stats_page(refresh: int = 0):
+    """«Статистика» tab — where applications go, who replies, who interviews, who
+    rejects, organized BY COMPANY. Read-only aggregation over prefill artifacts +
+    mail_index + bulk_log (TTL-cached in backend.tools.stats; ?refresh=1 forces)."""
+    from backend.tools import stats_ui
+    try:
+        return HTMLResponse(stats_ui.render_page(force=bool(refresh)))
+    except Exception as exc:
+        logging.getLogger("dashboard").exception("stats page failed")
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Статистика недоступна: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
 _MH_COLLECTING = {"running": False}
 
 

@@ -24,10 +24,12 @@
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 4 tabs** (Инбокс `/mail`,
-Каталог `/catalog`, Заявки `/apply`, Незавершённые `/unfinished` — was reduced from 6 to 3 on 2026-08-21,
-then the «Незавершённые» tab was added 2026-08-25 for bulk-apply jobs that need a human to finish the
-captcha; `_NAV` in `mailcrm_ui.py`). The general
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 6 tabs** (Инбокс `/mail`,
+Каталог `/catalog`, Заявки `/apply`, Незавершённые `/unfinished`, Mass Hiring `/mass-hiring`,
+Статистика `/stats` — nav was reduced from 6 to 3 on 2026-08-21, then «Незавершённые» was added
+2026-08-25 for bulk-apply jobs that need a human to finish the captcha, «Mass Hiring» 2026-08-26 for the
+human-apply board, and «Статистика» 2026-08-28 for the by-company outcome dashboard; `_NAV` in
+`mailcrm_ui.py`). The general
 Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
 the target of the Заявки cards → `/queue?profile=…`) and `/setup` (onboard a real candidate) still exist
 but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
@@ -181,6 +183,31 @@ honest. Real submit is still HUMAN-gated at hire by Maximus's later assessment (
 surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py` (no network).
 
 ## Gotchas
+- **Stats dashboard `/stats` — outcomes attributed BY COMPANY, keyed on the JOBID (`tools/stats.py` +
+  `tools/stats_ui.py`, 2026-08-28).** The «Статистика» tab shows where we apply / who replies / interviews /
+  rejects, grouped by company so the owner can steer focus. **The unit of account is the jobid (one distinct
+  posting), NOT the persona email.** Why it MUST be jobid: the bulk lane re-attempts a failed job under a
+  FRESH synthetic persona, so ~2× the personas exist as distinct jobs (live: 9569 fill-attempts across 4908
+  distinct jobs — 1999 jobs retried). Counting personas inflated `applied` ~2× and DILUTED every rate
+  (charliehealth read 14.9% instead of the true 24.5% interview rate), and left `applied` (email-based)
+  inconsistent with `submitted`/ATS/region (jobid-based) on the same page. So: a job is counted ONCE, its
+  outcome = the FURTHEST any of its personas got (rank offer>interview>action_needed>rejection>ack>other),
+  `submitted`=`bulk_log.submitted_jobids()`∩jobids, ATS/region from `job_catalog` by jobid — all share the
+  4908 base (asserted in tests). **The mail join:** `uploads/prefill/demo_*/<jobid>/` gives persona email
+  (`persona.json`) + company (`report.json`); a reply in Postgres `mail_index` joins by
+  `mail_index.mailbox` == the persona's address (NOT `.candidate`, a display name → 0 matches). The daily
+  trend is scoped to OUR application mailboxes (a persona whose prefill dir was pruned at 20d by
+  `prefill_retention` but whose mail lingers to 30d in `mail_index` would otherwise leak into the trend
+  only). Two personas' emails span >1 company but 0 have a strong outcome, so that ambiguity is nil in
+  practice. KPI surfaces both «Подано (вакансий)» (4908) and «N попыток с повторами» (9569 — the retry-waste
+  signal). The heavy part is ~19k `persona.json`/`report.json` reads (~1.1s), so the blob is **TTL-cached**
+  (`STATS_TTL`=600s, background-refreshed, lock-guarded single refresher; `?refresh=1` forces). **Charts are
+  inline SVG/CSS only** (funnel · sortable company table · donut for outcome composition · ATS bars · daily
+  sparkbars) — no external chart lib, self-contained. A company literally named **OpenAI** appears in the
+  employer list (a company we applied to) — business DATA, not a stack disclosure; fine despite the
+  brand-grep (the branding rule is about hiding OUR stack, not real employers). Route `GET /stats` in
+  `dashboard_app.py`; only the dashboard restarts for changes (not indexer/copilot). Tests:
+  `test_stats.py` (pure, monkeypatched sources — asserts jobid dedup + base consistency).
 - **Replying as a candidate: the submission password comes from the DB, not the JSON cache
   (`mailcrm.send`, 2026-08-28).** Sending a reply authenticates to Postfix submission (587, SASL) AS the
   candidate mailbox, using its password. That password was read only from `backend/data/

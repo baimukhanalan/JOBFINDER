@@ -1629,13 +1629,23 @@ except Exception:
 
 # In-app admin login + a fail-closed auth gate over every non-allowlisted route
 # (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
-# sits in front for now. Guarded so a broken interviews package can never stop the
-# dashboard from booting.
-try:
-    from backend.interviews import dash_auth
-    dash_auth.install(app)
-except Exception:
-    logging.getLogger(__name__).warning("dashboard admin auth unavailable", exc_info=True)
+# sits in front for now.
+def _install_dash_auth(app):
+    """Install the admin gate. Degrades gracefully (logs a warning) while nginx
+    basic-auth still fronts the dashboard, but becomes FATAL in sole-gate mode
+    (IV_COOKIE_SECURE=1, set exactly when basic-auth is removed): a silent install
+    failure there would boot the entire PII CRM ungated, so re-raise → uvicorn won't
+    start → the CRM never boots without the gate."""
+    try:
+        from backend.interviews import dash_auth
+        dash_auth.install(app)
+    except Exception as e:
+        logging.getLogger(__name__).warning("dashboard admin auth unavailable: %s", e)
+        if os.environ.get("IV_COOKIE_SECURE") == "1":
+            raise
+
+
+_install_dash_auth(app)
 
 
 @app.post("/unfinished/reconcile")

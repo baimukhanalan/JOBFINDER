@@ -104,3 +104,26 @@ def test_extension_endpoint_bypasses_gate():
     r = client.get("/profile_form", follow_redirects=False)
     if r.status_code == 303:
         assert not r.headers.get("location", "").endswith("/login")
+
+
+def test_install_fatal_in_sole_gate_mode(monkeypatch):
+    """The gate-install guard degrades gracefully while basic-auth still fronts the
+    dashboard, but MUST be fatal in sole-gate mode (IV_COOKIE_SECURE=1) so an install
+    failure never boots the PII CRM ungated. DB-free."""
+    from backend.dashboard_app import _install_dash_auth
+    from backend.interviews import dash_auth
+
+    def _boom(_app):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(dash_auth, "install", _boom)
+    dummy_app = object()
+
+    # basic-auth-fronted deploy (signal unset): the failure is swallowed (logs only).
+    monkeypatch.delenv("IV_COOKIE_SECURE", raising=False)
+    _install_dash_auth(dummy_app)  # must NOT raise
+
+    # sole-gate mode: refuse to boot ungated → re-raise.
+    monkeypatch.setenv("IV_COOKIE_SECURE", "1")
+    with pytest.raises(RuntimeError):
+        _install_dash_auth(dummy_app)

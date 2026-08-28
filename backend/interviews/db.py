@@ -59,6 +59,9 @@ def ensure_schema() -> None:
           reminded_5           BOOLEAN DEFAULT FALSE,
           created_at           TIMESTAMPTZ DEFAULT now()
         );""")
+        # additive column for the notifier daemon: one-time "interview assigned" ping
+        cur.execute("ALTER TABLE iv_interviews "
+                    "ADD COLUMN IF NOT EXISTS announced BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_responsible_idx "
                     "ON iv_interviews (responsible_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_mailbox_idx "
@@ -225,3 +228,20 @@ def mark_reminded(interview_id: int, which: str) -> None:
     col = "reminded_60" if str(which) == "60" else "reminded_5"
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(f"UPDATE iv_interviews SET {col}=TRUE WHERE id=%s", (interview_id,))
+
+
+# ---- announcements (notifier daemon) ----------------------------------------------
+def due_announcements() -> list[dict]:
+    """Assigned interviews with a responsible that have not yet been announced — the
+    one-time "interview assigned" notification, regardless of start_ts."""
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT * FROM iv_interviews "
+            "WHERE status='assigned' AND announced=FALSE AND responsible_id IS NOT NULL "
+            "ORDER BY start_ts")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def mark_announced(interview_id: int) -> None:
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_interviews SET announced=TRUE WHERE id=%s", (interview_id,))

@@ -69,6 +69,15 @@ def cmd_reactivate(args: argparse.Namespace) -> None:
     _set_active(args.login, True)
 
 
+def cmd_link(args: argparse.Namespace) -> None:
+    responsible = db.get_responsible_by_login(args.login)
+    if not responsible:
+        print(f"No such responsible: {args.login}", file=sys.stderr)
+        raise SystemExit(1)
+    db.set_telegram_chat(responsible["id"], args.chat_id)
+    print(f"Linked {args.login} to telegram chat_id={args.chat_id}")
+
+
 def cmd_setavail(args: argparse.Namespace) -> None:
     if not (0 <= args.dow <= 6):
         print(f"Invalid --dow {args.dow}: must be 0-6 (Monday=0 .. Sunday=6)",
@@ -123,6 +132,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_react = sub.add_parser("reactivate", help="Reactivate a deactivated responsible.")
     p_react.add_argument("--login", required=True)
     p_react.set_defaults(func=cmd_reactivate)
+
+    p_link = sub.add_parser("link", help="Link a responsible to a Telegram chat_id.")
+    p_link.add_argument("--login", required=True)
+    p_link.add_argument("--chat-id", type=int, required=True, dest="chat_id")
+    p_link.set_defaults(func=cmd_link)
 
     p_setavail = sub.add_parser("setavail", help="Set one weekday's availability window.")
     p_setavail.add_argument("--login", required=True)

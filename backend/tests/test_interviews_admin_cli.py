@@ -140,6 +140,19 @@ def test_cli_deactivate_unknown_login_errors():
     assert exc.value.code != 0
 
 
+def test_cli_link_sets_chat_id():
+    admin_cli.main(["add", "--login", "test_iv_x", "--name", "Xavier", "--password", "x"])
+
+    admin_cli.main(["link", "--login", "test_iv_x", "--chat-id", "12345"])
+    assert db.get_responsible_by_login("test_iv_x")["telegram_chat_id"] == 12345
+
+
+def test_cli_link_unknown_login_errors():
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["link", "--login", "test_iv_nope", "--chat-id", "1"])
+    assert exc.value.code != 0
+
+
 def test_cli_setavail_upserts_single_day_and_preserves_others():
     admin_cli.main(["add", "--login", "test_iv_ivan", "--name", "Ivan", "--password", "x"])
     rid = db.get_responsible_by_login("test_iv_ivan")["id"]

@@ -70,6 +70,18 @@ def assign(mailbox: str, responsible_id: int, start_iso: str, company: str, jobi
     re-check or on the DB's own double-book guard (a race between the check and
     the insert)."""
     start = _parse_start(start_iso)
+
+    # slots.is_free only reasons about whole-hour cells [hour:00, hour:00+60min),
+    # but db.insert_interview books [start, start+60min) using the UNROUNDED
+    # start. A non-hour-aligned start (e.g. 10:45) would pass is_free (checked
+    # against the 10:00-11:00 cell) yet insert 10:45-11:45, which can really
+    # overlap an existing 11:00-12:00 booking — a double-book that slips past
+    # both the is_free check and the DB's exact-start_ts unique guard. The
+    # operator grid only ever submits :00 cell starts, so this is a defensive
+    # guard keeping the checked window and the booked window identical.
+    if start.minute or start.second or start.microsecond:
+        raise SlotConflict("interview start must be aligned to the hour")
+
     d = start.date()
     hour = start.hour
 

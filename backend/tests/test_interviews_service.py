@@ -145,6 +145,75 @@ def test_assign_naive_start_iso_assumed_utc():
         source_message_hash="h1",
     )
     assert row is not None
+    assert row["start_ts"] == start
+
+
+def test_assign_rejects_non_hour_aligned():
+    monday = _next_monday()
+    rid = db.add_responsible("test_iv_align", "h", "Align")
+    db.set_availability(rid, [
+        {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
+    ])
+    start = slots.cell_start_utc(monday, 10)
+
+    # hour-aligned start at a free slot succeeds
+    row = service.assign(
+        mailbox="test_iv_align_ok@takhet.com", responsible_id=rid,
+        start_iso=start.isoformat(), company="Acme", jobid="1", thread_key="t1",
+        source_message_hash="h1",
+    )
+    assert row is not None
+
+    # a :45 start in the SAME hour must be rejected by the alignment guard
+    # (not silently pass is_free and slip a real overlap past the DB guard)
+    quarter_past = (start + timedelta(minutes=45)).isoformat()
+    with pytest.raises(service.SlotConflict):
+        service.assign(
+            mailbox="test_iv_align_45@takhet.com", responsible_id=rid,
+            start_iso=quarter_past, company="Beta", jobid="2", thread_key="t2",
+            source_message_hash="h2",
+        )
+
+    # a :30 start is likewise rejected
+    half_past = (start + timedelta(minutes=30)).isoformat()
+    with pytest.raises(service.SlotConflict):
+        service.assign(
+            mailbox="test_iv_align_30@takhet.com", responsible_id=rid,
+            start_iso=half_past, company="Gamma", jobid="3", thread_key="t3",
+            source_message_hash="h3",
+        )
+
+
+def test_assign_offset_start_iso_converted_and_aligned_to_utc():
+    monday = _next_monday()
+    rid = db.add_responsible("test_iv_offset", "h", "Offset")
+    # 06:00 UTC == dow(monday)=0, so its availability window covers hour=6
+    db.set_availability(rid, [
+        {"dow": 0, "start_min": 0, "end_min": 24 * 60, "enabled": True},
+    ])
+
+    # 11:00+05:00 == 06:00 UTC, hour-aligned -> accepted
+    offset_iso = f"{monday.isoformat()}T11:00:00+05:00"
+    row = service.assign(
+        mailbox="test_iv_offset_ok@takhet.com", responsible_id=rid,
+        start_iso=offset_iso, company="Acme", jobid="1", thread_key="t1",
+        source_message_hash="h1",
+    )
+    assert row is not None
+    expected_start = slots.cell_start_utc(monday, 6)
+    assert row["start_ts"] == expected_start
+    # the DB session's timezone (e.g. Europe/Berlin) is NOT UTC, so a fetched
+    # tz-aware datetime must be normalized to UTC before reading .hour
+    assert row["start_ts"].astimezone(timezone.utc).hour == 6
+
+    # 11:15+05:00 == 06:15 UTC, NOT hour-aligned -> rejected
+    offset_iso_misaligned = f"{monday.isoformat()}T11:15:00+05:00"
+    with pytest.raises(service.SlotConflict):
+        service.assign(
+            mailbox="test_iv_offset_bad@takhet.com", responsible_id=rid,
+            start_iso=offset_iso_misaligned, company="Beta", jobid="2",
+            thread_key="t2", source_message_hash="h2",
+        )
 
 
 def test_mailbox_context_defaults_when_no_match():
@@ -160,7 +229,8 @@ def test_mailbox_context_finds_real_persona():
     found = None
     for pj in matches:
         try:
-            data = _json.loads(open(pj, encoding="utf-8").read())
+            with open(pj, encoding="utf-8") as f:
+                data = _json.load(f)
         except Exception:
             continue
         email = (data.get("profile") or {}).get("email")

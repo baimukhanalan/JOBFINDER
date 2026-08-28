@@ -1105,9 +1105,21 @@ cabinet is a SEPARATE app.
   location is ever removed, the logout/expiry redirect 404s — the clean fix is to change the redirect to
   `/login` (a follow-up; left as an alias to avoid a code churn at deploy). Rate-limit zone in
   `/etc/nginx/conf.d/cabinet-ratelimit.conf`.
-- **NOT YET BUILT (Phase 2/3, planned in the doc):** Telegram bot for responsibles (multi-user `/start`
-  link, set slots, reminders −60/−5 via a daemon), auto-assign, and a **unified real-login page with
-  roles (admin|employee) to replace the operator basic-auth** (owner-requested 2026-08-28). The `active`
-  flag + bcrypt/session foundation for that already exist.
+- **Phase 2 — Telegram NOTIFIER (shipped 2026-08-28; owner: "тг бот как уведомитель и всё" — NO interactive
+  bot).** A standalone daemon `interviews/reminders.py` (pm2 **`jobfinder-alan-ivremind`** →
+  `python -m backend.interviews.reminders`, own process, dashboard untouched) polls `iv_interviews` every
+  60s and sends Telegram via `interviews/notify.py` (reuses `settings.telegram_bot_token`): a one-time
+  **assignment** notice (`iv_interviews.announced` flag) + **reminders at −60 and −5 min** before
+  `start_ts` (`db.due_reminders`/`mark_reminded`). Target = the responsible's `telegram_chat_id` if set,
+  else `settings.telegram_chat_id` (owner/team chat), with owner-fallback on a failed personal send.
+  Register a personal chat: `admin_cli link --login L --chat-id N` (Telegram won't DM a user who hasn't
+  started the bot, so a personal DM needs them to message the bot first; the owner chat needs no setup).
+  Times shown in UTC/GMT (`.astimezone(utc)`). Daemon never hard-exits (per-tick + startup try/except) and
+  never logs the bot token. **Deploy gotcha:** run a one-time `UPDATE iv_interviews SET announced=TRUE`
+  before first start so the pre-existing backlog doesn't announce-burst (done at deploy). No `sg mail`
+  (reads no Maildirs).
+- **NOT YET BUILT (Phase 3 + auth, planned in the doc):** auto-assign (bot picks a free responsible), and a
+  **unified real-login page with roles (admin|employee) to replace the operator basic-auth**
+  (owner-requested 2026-08-28). The `active` flag + bcrypt/session foundation for that already exist.
 - Tests: `backend/tests/test_interviews_*.py` (49→53 pass; live-`jobfinder_crm` DB, `test_iv_%`-prefixed +
   skip if no DSN — run SEQUENTIALLY, concurrent runs share the DB and interfere).

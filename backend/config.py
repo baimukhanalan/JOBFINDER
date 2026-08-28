@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     brightdata_gateway: str = "brd.superproxy.io:33335"
     brightdata_country: str = "us"          # 2-letter target country (blank = any)
     brightdata_pool_size: int = 200         # sessions generated per daily refresh
+    interview_session_secret: str = ""      # itsdangerous secret for the cabinet session cookie
 
     class Config:
         env_file = str(ENV_FILE)

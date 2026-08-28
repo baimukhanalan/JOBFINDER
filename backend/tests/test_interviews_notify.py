@@ -147,8 +147,19 @@ def test_when_naive_datetime_assumed_utc():
 _SECRET_TOKEN = "123456789:AAF_super_secret_bot_token_value"
 
 
+def test_bot_token_prefers_iv_over_main(monkeypatch):
+    from backend.config import settings
+    monkeypatch.setattr(settings, "telegram_bot_token", "MAIN")
+    monkeypatch.setattr(settings, "iv_bot_token", "IVTOK")
+    assert notify._bot_token() == "IVTOK"
+    # dedicated token cleared -> fall back to the project-wide bot token
+    monkeypatch.setattr(settings, "iv_bot_token", "")
+    assert notify._bot_token() == "MAIN"
+
+
 def test_send_dm_http_failure_does_not_log_token(monkeypatch, caplog):
     from backend.config import settings
+    monkeypatch.setattr(settings, "iv_bot_token", "")   # deterministic: use the set main token
     monkeypatch.setattr(settings, "telegram_bot_token", _SECRET_TOKEN)
 
     class _Resp:
@@ -169,6 +180,7 @@ def test_send_dm_http_failure_does_not_log_token(monkeypatch, caplog):
 
 def test_send_dm_transport_error_does_not_log_token(monkeypatch, caplog):
     from backend.config import settings
+    monkeypatch.setattr(settings, "iv_bot_token", "")   # deterministic: use the set main token
     monkeypatch.setattr(settings, "telegram_bot_token", _SECRET_TOKEN)
 
     def _boom(*a, **k):

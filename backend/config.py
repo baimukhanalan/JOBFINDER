@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     brightdata_country: str = "us"          # 2-letter target country (blank = any)
     brightdata_pool_size: int = 200         # sessions generated per daily refresh
     interview_session_secret: str = ""      # itsdangerous secret for the cabinet session cookie
+    iv_bot_token: str = ""                   # dedicated Telegram token for the interview notifier (falls back to telegram_bot_token)
 
     class Config:
         env_file = str(ENV_FILE)

@@ -18,6 +18,19 @@ from backend.interviews import db
 
 logger = logging.getLogger(__name__)
 
+# httpx logs the full request URL at INFO, and that URL embeds the bot token
+# (`.../bot<TOKEN>/sendMessage`). The daemon runs with basicConfig(INFO), so without
+# this the token would leak into the pm2 log — defeating send_dm's own no-URL logging.
+# Pin httpx to WARNING at import so ANY importer (daemon, tests, ad-hoc) is protected.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def _bot_token() -> str:
+    """The interview notifier's Telegram token: its dedicated IV_BOT_TOKEN if set,
+    else the project-wide telegram_bot_token as a fallback. Keeping a separate token
+    isolates the notifier from the main project bot."""
+    return settings.iv_bot_token or settings.telegram_bot_token
+
 
 def send_dm(chat_id: int, text: str) -> bool:
     """POST a plain-text message to one chat_id. Returns True on success, False when
@@ -28,9 +41,10 @@ def send_dm(chat_id: int, text: str) -> bool:
     it. We inspect the response and log only `status_code` + Telegram's error JSON
     (which carries no token), and on a transport error log only the exception TYPE.
     """
-    if not settings.telegram_bot_token or not chat_id:
+    token = _bot_token()
+    if not token or not chat_id:
         return False
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         resp = httpx.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
         if resp.status_code != 200:

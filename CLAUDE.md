@@ -1116,16 +1116,25 @@ cabinet is a SEPARATE app.
 - **Phase 2 — Telegram NOTIFIER (shipped 2026-08-28; owner: "тг бот как уведомитель и всё" — NO interactive
   bot).** A standalone daemon `interviews/reminders.py` (pm2 **`jobfinder-alan-ivremind`** →
   `python -m backend.interviews.reminders`, own process, dashboard untouched) polls `iv_interviews` every
-  60s and sends Telegram via `interviews/notify.py` (reuses `settings.telegram_bot_token`): a one-time
+  60s and sends Telegram via `interviews/notify.py`: a one-time
   **assignment** notice (`iv_interviews.announced` flag) + **reminders at −60 and −5 min** before
   `start_ts` (`db.due_reminders`/`mark_reminded`). Target = the responsible's `telegram_chat_id` if set,
   else `settings.telegram_chat_id` (owner/team chat), with owner-fallback on a failed personal send.
   Register a personal chat: `admin_cli link --login L --chat-id N` (Telegram won't DM a user who hasn't
   started the bot, so a personal DM needs them to message the bot first; the owner chat needs no setup).
-  Times shown in UTC/GMT (`.astimezone(utc)`). Daemon never hard-exits (per-tick + startup try/except) and
-  never logs the bot token. **Deploy gotcha:** run a one-time `UPDATE iv_interviews SET announced=TRUE`
-  before first start so the pre-existing backlog doesn't announce-burst (done at deploy). No `sg mail`
-  (reads no Maildirs).
+  Times shown in UTC/GMT (`.astimezone(utc)`). Daemon never hard-exits (per-tick + startup try/except).
+  **Bot token = its OWN `IV_BOT_TOKEN`** (env, gitignored `.env`), falling back to the project-wide
+  `TELEGRAM_BOT_TOKEN` when unset — `notify._bot_token()` = `settings.iv_bot_token or telegram_bot_token`.
+  Keeping a dedicated token isolates the notifier from the main project bot (a test bot can be pointed at
+  it without touching prod notifications). As of 2026-08-28 it's a dedicated test bot `@crmjobfinderbot`.
+  **Token-leak gotcha (fixed 2026-08-28):** `send_dm` deliberately never logs the request URL (it embeds
+  `bot<TOKEN>`), BUT **httpx's own logger prints the full request URL at INFO**, and the daemon runs with
+  `basicConfig(INFO)` → the token leaked into the pm2 error log (`~/.pm2/logs/jobfinder-alan-ivremind-error.log`
+  had the MAIN bot token; scrubbed at deploy). Fix: `notify.py` pins `logging.getLogger("httpx")` to WARNING
+  at import, so ANY importer (daemon/tests/ad-hoc) is protected. Do NOT lower httpx back to INFO. **Deploy
+  gotcha:** run a one-time `UPDATE iv_interviews SET announced=TRUE` before first start so the pre-existing
+  backlog doesn't announce-burst (done at deploy). No `sg mail` (reads no Maildirs). Restart with
+  `pm2 restart jobfinder-alan-ivremind` after changing the token in `.env` or touching `notify.py`.
 - **Unified login — SHIPPED 2026-08-28 (owner-requested, replaces operator basic-auth).** `iv_responsibles`
   gained a `role` (`admin`|`employee`). The operator dashboard (`jobs.systeam.kz`) now has a real in-app
   **admin** login: `backend/interviews/dash_auth.py` adds a **fail-closed middleware** (`AdminAuthMiddleware`)

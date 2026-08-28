@@ -183,6 +183,22 @@ honest. Real submit is still HUMAN-gated at hire by Maximus's later assessment (
 surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py` (no network).
 
 ## Gotchas
+- **Restart `jobfinder-alan-copilot` too after changing apply code — the single co-pilot is a
+  PERSISTENT process holding old code in memory (incident 2026-08-28).** `jobfinder-alan-copilot` (8102)
+  imports `applier/strategies/base.py`, `services/tailor/choices.py`, `applier/dropdowns.py`, `analyzer.py`
+  ONCE at process start. After ANY change there, `pm2 restart jobfinder-alan-copilot` — NOT just the
+  dashboard. The bulk drain's HEADLESS workers respawn fresh per run (so they pick up new code), but the
+  single co-pilot that serves the `/catalog` one-click fill + «Докрутить» keeps the OLD code running.
+  **Incident:** the co-pilot ran 22h-old code (started 08-27 14:38, fixes committed 08-28 11:07-12:20), so
+  the synthetic-lane review-drop (`base.prefill` zeroing `review_items` for `demo_*`) AND the choice-backing
+  fixes (`_referral_pick` etc. → backed) were INACTIVE — **381 demo jobs sat stuck as `needs_review`** even
+  though the fixes were committed and on disk, and the bulk ledger's `needs_review` ts were all frozen at
+  the last old-code run. It LOOKS like a logic bug (jobs re-park despite the fix) but it's a stale process.
+  **Diagnosis:** run one REAL `/load` fill and read `choice_picks[...].backed` / `review_items` — if a pick
+  that should be backed shows `backed:false`, the process is stale. Verified after restart: the same job
+  (3504 pingidentity) went `review_items:[]`, `"How did you hear about us?" backed:True`,
+  `submitted_click:True` (really clicks Submit). NB a clicked submit still ≠ confirmed from the datacenter
+  IP (the anti-bot ceiling is separate — most become `clicked`, not `confirmed`).
 - **Stats dashboard `/stats` — outcomes attributed BY COMPANY, keyed on the JOBID (`tools/stats.py` +
   `tools/stats_ui.py`, 2026-08-28).** The «Статистика» tab shows where we apply / who replies / interviews /
   rejects, grouped by company so the owner can steer focus. **The unit of account is the jobid (one distinct

@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from backend.applier.browser import BrowserManager
 from backend.applier.strategies.ashby import AshbyStrategy
+from backend.applier.strategies.avature import AvatureStrategy
 from backend.applier.strategies.base import GenericStrategy
 from backend.applier.strategies.greenhouse import GreenhouseStrategy
 from backend.applier.strategies.icims import ICIMSStrategy
@@ -95,7 +96,7 @@ def _url_keywords(url: str, company: str = "") -> str:
 
 
 STRATEGIES = [GreenhouseStrategy, LeverStrategy, AshbyStrategy, WorkableStrategy,
-              WorkdayStrategy, ICIMSStrategy]  # GenericStrategy is the fallback
+              WorkdayStrategy, ICIMSStrategy, AvatureStrategy]  # GenericStrategy is the fallback
 
 
 def _pick_strategy(url: str):

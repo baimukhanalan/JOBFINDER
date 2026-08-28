@@ -142,11 +142,33 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright
 session) → pick ATS strategy → pre-fill every field → screenshot + `report.json`, then **stop**. Per-ATS
-strategies in `applier/strategies/` (greenhouse, lever, ashby, workable, workday, icims) +
+strategies in `applier/strategies/` (greenhouse, lever, ashby, workable, workday, icims, **avature**) +
 `base.GenericStrategy` fallback. `applier/` is imported **live** by the dashboard extension endpoints
 (`analyzer`, `strategies.base.strip_review`, `profile_validator`) and by `copilot.py` — but **nothing
 schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strictly no-fabrication.
 `/queue` still defaults to `profile="michael"`.
+
+**Mass-Hiring auto-apply feasibility (investigated 2026-08-28).** The board's big employers sit on
+account-gated ATSes and almost all gate hiring behind a HUMAN assessment (HireVue/Modern Hire video,
+Versant voice, Amazon VJT, SHL) — so end-to-end "auto-apply to hire" is impossible; the ceiling is
+"auto-fill + submit → a human does the assessment". Submit is reachably automatable only for **Avature**
+(Maximus, cleanest — no captcha/assessment gating submit), **Oracle ORC** (Alorica — guest apply), and
+**Workday** (Centene/Cigna/CVS/Humana — partial, per-tenant reCAPTCHA). iCIMS/Taleo(TTEC,UnitedHealth)/
+Phenom(Conduent)/Amazon/SmartRecruiters(Sutherland)/Kelly/WorkingSolutions are BLOCKED (stacked account +
+live-captcha/WAF + video assessment) — do NOT build. **`strategies/avature.py` (2026-08-28, first PoC):**
+`matches` `avature.net`; `open_form` navigates the board's `Job-Application?folderId=` URL to the real
+`/careers/Register?folderId=` wizard; `super().prefill` fills identity/eligibility/email/résumé, then
+`_fill_avature_gaps` adds what the generic analyzer can't — the two **account password** inputs (net-new;
+the analyzer has no password rule and skips them), label-driven **deterministic Yes/No screeners**
+(ever/currently employed here, contractor, clearance, government, 18+, work-auth, sponsorship — `_SCREENERS`,
+picking only an UNANSWERED select so two similar labels don't collide), the **Country-dependent State**
+select, and Skills. Verified live headless from the datacenter IP: full step-1 fill, `unfilled=[]`, no
+captcha, page_type `application_form` (NOT login_required). **Walking the wizard past step 1 is GATED OFF
+by default** (`advance_wizard = _env_advance()`, env `AVATURE_ADVANCE=1`): advancing transmits the persona
+PII to the employer and the account is created on the final Submit, so a plain fill / co-pilot dry-run is
+side-effect-free at Maximus. `synth_persona` now sets a coherent US **`state`** (`_us_state_full` + a
+bank-city fallback) — was empty, which left the required State blank on every US ATS (Workday/Avature/
+Oracle). Tests: `test_avature.py` (no network).
 
 ## Gotchas
 - **A `text/plain` MIME part can contain raw HTML — flatten it before render (`mailcrm._parse_full`, 2026-08-26).**

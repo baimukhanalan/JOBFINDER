@@ -308,6 +308,35 @@ def _dedup(seq):
     return list(dict.fromkeys(seq))
 _NAMES = {c: {g: _dedup(v) for g, v in b.items()} for c, b in _NAMES.items()}
 _GENERIC_NAMES = {g: _dedup(v) for g, v in _GENERIC_NAMES.items()}
+_US_STATE_BY_CODE = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts",
+    "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi", "MO": "Missouri", "MT": "Montana",
+    "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont",
+    "VA": "Virginia", "WA": "Washington", "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+    "DC": "District of Columbia",
+}
+
+
+def _us_state_full(token: str) -> str:
+    """Resolve a US state code ('TX') or name ('texas') to its full name, else ''."""
+    t = (token or "").strip()
+    if not t:
+        return ""
+    if t.upper() in _US_STATE_BY_CODE:
+        return _US_STATE_BY_CODE[t.upper()]
+    low = t.lower()
+    for full in _US_STATE_BY_CODE.values():
+        if low == full.lower():
+            return full
+    return ""
+
+
 _CITIES = {
     "United States": ["Austin, TX", "Denver, CO", "Columbus, OH", "Seattle, WA"],
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
@@ -544,7 +573,17 @@ def _postal(country: str) -> str:
 def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     job_title = job.get("title", "") if job else (raw.get("headline") or "")
     name = str(raw.get("full_name") or "").strip()
-    city = str(raw.get("city") or (_CITIES.get(country) or [country])[0]).strip().split(",")[0].strip()
+    _city_src = str(raw.get("city") or "").strip() or (_CITIES.get(country) or [country])[0]
+    _cparts = [p.strip() for p in _city_src.split(",")]
+    city = _cparts[0]
+    state = ""
+    if country == "United States":
+        # Keep a COHERENT (city, state): parse a trailing state token, else fall back to a bank
+        # US city that carries its state (many ATS — Workday/Avature/Oracle — require State).
+        state = _us_state_full(_cparts[1]) if len(_cparts) > 1 else ""
+        if not state:
+            _bank = random.choice(_CITIES["United States"]).split(",")
+            city, state = _bank[0].strip(), _us_state_full(_bank[1] if len(_bank) > 1 else "")
     street = str(raw.get("street_address") or "").strip()
     try:
         yoe = int(raw.get("years_experience"))
@@ -587,8 +626,8 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     }
     profile = {
         "id": pid, "full_name": name, "email": email, "phone": phone,
-        "location": loc, "city": city, "street_address": street, "country": country,
-        "zip_code": zipc,
+        "location": loc, "city": city, "state": state, "street_address": street,
+        "country": country, "zip_code": zipc,
         "linkedin_url": f"https://www.linkedin.com/in/{slug}",
         "work_authorization": _citizen(country), "needs_sponsorship": "No",
         "years_experience": yoe, "is_synthetic": True, "is_sample": True, "resume": resume,

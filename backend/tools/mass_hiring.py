@@ -276,12 +276,20 @@ def fetch_himalayas() -> list[dict]:
     free source) until a page repeats/empties."""
     rows, seen, off = [], set(), 0
     while off < 4000:
-        try:
-            r = httpx.get("https://himalayas.app/jobs/api",
-                          params={"limit": 100, "offset": off}, headers=_UA, timeout=30)
-            js = r.json().get("jobs") or []
-        except Exception as e:
-            print(f"[himalayas offset={off}] {type(e).__name__}: {e}", file=sys.stderr)
+        js = None
+        for attempt in range(3):
+            try:
+                r = httpx.get("https://himalayas.app/jobs/api",
+                              params={"limit": 100, "offset": off}, headers=_UA, timeout=30)
+                js = r.json().get("jobs") or []
+                break
+            except Exception as e:
+                # himalayas' API intermittently returns non-JSON (rate-limit/5xx) at a RANDOM offset.
+                # The old code broke the WHOLE pagination on the first hiccup, collapsing the board's
+                # himalayas slice (observed 70→9). Retry this offset with backoff before giving up.
+                print(f"[himalayas offset={off} try={attempt}] {type(e).__name__}: {e}", file=sys.stderr)
+                time.sleep(1.5 * (attempt + 1))
+        if js is None:
             break
         fresh = [j for j in js if j.get("guid") not in seen]
         if not fresh:
@@ -323,40 +331,47 @@ def fetch_remoteok() -> list[dict]:
 
 
 def _amazon_row(j: dict) -> dict | None:
-    """One amazon.jobs result → row or None. Amazon marks a remote job with **city='Virtual'**;
-    `normalized_location` is the COUNTRY (e.g. 'USA', 'GBR', 'ZAF'), so it never contains the word
-    'virtual' — the old `"virtual" in normalized_location` test therefore dropped EVERYTHING. Keep
-    only US-based virtual roles (Amazon's virtual CS is mostly offshore GBR/ZAF language-moderation;
-    the US slice is seasonal)."""
+    """One amazon.jobs result → row or None. A remote posting is marked by **city** starting with
+    'Virtual' — it takes three forms: 'Virtual', 'Virtual Location - <State>', 'Virtual Contact
+    Center-<xx>'. US-eligibility is the **country_code** ('USA'), which is reliable on every row;
+    `normalized_location` is 'USA' OR a state-tagged string like 'Texas, USA' (the state-tagged rows
+    are exactly where the real mass-hiring CS roles live), so it must NOT be exact-matched against
+    'USA'. Re-diagnosed live 2026-08-28 (see fetch_amazon_remote)."""
     city = (j.get("city") or "").strip().lower()
-    nloc = (j.get("normalized_location") or "").strip()
-    text_loc = (j.get("location") or j.get("normalized_location") or "").lower()
-    is_remote = city == "virtual" or "virtual" in text_loc
-    is_us = nloc.upper() in ("USA", "US") or "united states" in nloc.lower()
-    if not (is_remote and is_us):
+    cc = (j.get("country_code") or "").strip().upper()
+    if not (city.startswith("virtual") and cc in ("USA", "US")):
         return None
-    url = "https://www.amazon.jobs" + (j.get("job_path") or "")
-    # Pass a US-naming location string so us_eligible() resolves True.
+    url = j.get("url_next_step") or (("https://www.amazon.jobs" + j["job_path"]) if j.get("job_path") else "")
+    nloc = j.get("normalized_location") or "USA"
     return _mk_row("amazon", j.get("id"), "Amazon", j.get("title"),
-                   f"Virtual, {nloc or 'USA'}", url,
-                   posted_at=_iso_epoch(j.get("updated_time") or j.get("posted_date")))
+                   f"Virtual, {nloc}", url,
+                   posted_at=_iso_epoch(j.get("posted_date") or j.get("updated_time")))
 
 
 def fetch_amazon_remote() -> list[dict]:
-    """Amazon's (small, seasonal) US virtual slice. Pin country=USA, keep the `city='Virtual'`
-    rows. Yields ~0 out of peak season — that is CORRECT (US virtual CS hiring is seasonal), and
-    non-zero when Amazon runs it; the old connector yielded 0 unconditionally due to the
-    normalized_location bug (see _amazon_row)."""
+    """Amazon's US virtual slice. Two bugs fixed 2026-08-28 (either alone suppressed all rows):
+    (1) result_limit was 200 — the API rejects >100 with {"error":...,"hits":0,"jobs":null}, so the
+    connector yielded 0 UNCONDITIONALLY (this is why the board looked 'seasonally empty'); now
+    result_limit=100 and we paginate offset. (2) is_us tested normalized_location EXACTLY == 'USA',
+    dropping every state-tagged remote row ('Texas, USA', 'Arizona, USA') — i.e. the real CS roles;
+    now is_us = country_code and is_remote = city.startswith('virtual'). base_query='virtual' is the
+    keyword that surfaces every remote row (a remote posting's city literally contains 'Virtual', so
+    it is indexed on it); 'work from home' matches only 4-6 rows and MISSES most CS roles."""
     rows, seen = [], set()
-    for q in ("work from home", "customer service", "virtual"):
+    offset = 0
+    while offset < 400:
         try:
             r = httpx.get("https://www.amazon.jobs/en/search.json", headers=_UA, timeout=30,
-                          params={"base_query": q, "country": "USA", "result_limit": 200,
-                                  "sort": "recent"})
-            jobs = r.json().get("jobs") or []
+                          params={"base_query": "virtual", "country": "USA", "result_limit": 100,
+                                  "offset": offset, "sort": "recent"})
+            d = r.json()
+            jobs = d.get("jobs") or []
+            hits = int(d.get("hits") or 0)
         except Exception as e:
-            print(f"[amazon/{q}] {type(e).__name__}: {e}", file=sys.stderr)
-            continue
+            print(f"[amazon offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not jobs:
+            break
         for j in jobs:
             jid = j.get("id")
             if jid in seen:
@@ -365,6 +380,9 @@ def fetch_amazon_remote() -> list[dict]:
             if row:
                 seen.add(jid)
                 rows.append(row)
+        offset += 100
+        if offset >= hits:
+            break
     return rows
 
 
@@ -376,6 +394,41 @@ _REMOTE_RE = re.compile(r"remote|work[- ]?at[- ]?home|work[- ]?from[- ]?home|\bw
 
 def _is_remote(*texts) -> bool:
     return any(_REMOTE_RE.search(t or "") for t in texts)
+
+
+# Some employers signal US in a location by a bare 2-letter state code PREFIX ("RI - Work from
+# home", "TX - Work from home") or a full state name ("Work At Home-Texas") that us_eligible()'s
+# generic USA/remote regex misses. _has_us_state adds that recognition (prefix code OR name) so a
+# state-coded work-from-home row still counts as US. Codes are matched only at the string START to
+# avoid mid-text traps ("OR"/"IN"/"ME" as English words).
+_US_STATE_ABBR = {"AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
+                  "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+                  "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+                  "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"}
+_US_STATE_NAME_RE = re.compile(
+    r"\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|"
+    r"hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|"
+    r"michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|"
+    r"new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|"
+    r"rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|"
+    r"west virginia|wisconsin|wyoming|district of columbia)\b", re.I)
+
+
+def _has_us_state(loc: str) -> bool:
+    l = (loc or "").strip()
+    m = re.match(r"([A-Za-z]{2})\b", l)
+    if m and m.group(1).upper() in _US_STATE_ABBR:
+        return True
+    return bool(_US_STATE_NAME_RE.search(l))
+
+
+def _title_us(title: str) -> bool:
+    """US signal in a job TITLE (used where the listing's location field is unreliable, e.g. TTEC
+    shows a home-office city for a remote req). True on 'USA'/'United States' or a full state name."""
+    t = title or ""
+    if re.search(r"\b(usa|u\.s\.a?\.?|united states)\b", t, re.I):
+        return True
+    return bool(_US_STATE_NAME_RE.search(t))
 
 
 def fetch_conduent() -> list[dict]:
@@ -457,51 +510,241 @@ def fetch_alorica() -> list[dict]:
     return rows
 
 
-def _concentrix_row(j: dict) -> dict | None:
-    """One Concentrix Workday posting → row or None. Keep only the US work-at-home slice
-    (locationsText like 'USA Work at Home'); the bulk of the board is offshore
-    (PHL/CZE/MEX/… Work-at-Home), correctly rejected by us_eligible()."""
+# --- Workday CxS (generic) — Concentrix + CVS Health share the same /wday/cxs/<tenant>/<site>/jobs
+#     shape. A list row carries only `locationsText` (no country/remote field), so US+remote is read
+#     off that string: us_eligible() (USA/remote wording) OR _has_us_state() (state code/name). The
+#     bare board's `total` is unreliable (reads 0), so callers narrow with a facet or searchText and
+#     we paginate until jobPostings is empty (bounded by offset_cap; limit caps at 20/page). ---
+def _workday_row(j: dict, source: str, company: str, host: str, site: str) -> dict | None:
     loc = j.get("locationsText") or ""
-    if not (_is_remote(loc) and us_eligible(loc)):
+    if not (_is_remote(loc) and (us_eligible(loc) or _has_us_state(loc))):
         return None
     ep = j.get("externalPath") or ""
-    jid = ep.rstrip("/").split("_")[-1] or ep.rstrip("/").split("/")[-1]
-    return _mk_row("concentrix", jid or ep, "Concentrix", j.get("title"), loc,
-                   "https://cnx.wd1.myworkdayjobs.com/en-US/external_global" + ep)
+    jid = (j.get("bulletFields") or [None])[0] or ep.rstrip("/").split("_")[-1] or ep
+    row = _mk_row(source, jid, company, j.get("title"), loc,
+                  f"https://{host}/en-US/{site}" + ep)
+    if row:
+        # We already confirmed US above (us_eligible OR a state code/name like "RI - Work from
+        # home", which _mk_row's generic us_eligible() misses) — so force the flag True, else
+        # collect(us_only=True) would drop these state-coded work-from-home rows.
+        row["us_eligible"] = True
+    return row
+
+
+def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str, *,
+                   search_texts=("",), applied_facets=None, offset_cap: int = 200) -> list[dict]:
+    url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
+    ref = f"https://{host}/{site}"
+    rows, seen = [], set()
+    for st in search_texts:
+        offset = 0
+        while offset < offset_cap:
+            try:
+                r = httpx.post(url, json={"appliedFacets": applied_facets or {}, "limit": 20,
+                                          "offset": offset, "searchText": st}, timeout=30,
+                               headers={**_UA, "Content-Type": "application/json",
+                                        "Accept": "application/json", "Referer": ref})
+                js = r.json().get("jobPostings") or []
+            except Exception as e:
+                print(f"[{source} st={st!r} off={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            if not js:
+                break
+            for j in js:
+                row = _workday_row(j, source, company, host, site)
+                if row and row["source_id"] not in seen:
+                    seen.add(row["source_id"])
+                    rows.append(row)
+            offset += 20
+    return rows
+
+
+# Concentrix (Workday, tenant cnx). Apply the US locationCountry facet + EMPTY searchText — this
+# surfaces ALL 35 US rows (the old searchText='work at home' missed US WAH rows whose text lacks the
+# phrase, and the unfaceted `total` reads 0 which broke pagination). `external_global` is Concentrix's
+# PROFESSIONAL tier, so most WAH rows are senior and dropped by categorize (~2 mass-hiring entry).
+_CNX_US_FACET = "bc33aa3152ec42d4995f4791a106ed09"     # locationCountry = United States of America
 
 
 def fetch_concentrix() -> list[dict]:
-    """Concentrix — Workday CxS. Two bugs fixed (2026-08-27): (1) the old
-    searchText='customer service work at home' was too narrow and returned only offshore rows —
-    the broader 'work at home' surfaces the 'USA Work at Home' slice; (2) the response's `total`
-    comes back 0, so the old `offset >= total` exit killed pagination after the first page — now
-    we paginate until jobPostings is empty (bounded by the offset cap)."""
-    rows, offset, limit = [], 0, 20
-    while offset < 400:
-        try:
-            r = httpx.post("https://cnx.wd1.myworkdayjobs.com/wday/cxs/cnx/external_global/jobs",
-                           json={"appliedFacets": {}, "limit": limit, "offset": offset,
-                                 "searchText": "work at home"},
-                           timeout=30, headers={**_UA, "Content-Type": "application/json",
-                                                "Accept": "application/json",
-                                                "Referer": "https://cnx.wd1.myworkdayjobs.com/external_global"})
-            js = r.json().get("jobPostings") or []
-        except Exception as e:
-            print(f"[concentrix offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
-            break
-        if not js:
-            break
-        for j in js:
-            row = _concentrix_row(j)
+    return _fetch_workday("concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "cnx",
+                          "external_global", search_texts=("",),
+                          applied_facets={"locationCountry": [_CNX_US_FACET]}, offset_cap=60)
+
+
+# CVS Health (Workday, tenant cvshealth). The tenant has 8000+ jobs and NO remote/workType facet, so
+# searchText does not hard-filter (it only re-ranks — 'work from home' still returns on-site store
+# pharmacy techs first). Narrow with the jobFamilyGroup facet 'Customer and Member Services' (57
+# rows), then _workday_row keeps the work-from-home / US-state-coded slice (Provider CSR, Service
+# Advocate, Technical Support Rep, …). Bounded to 3 pages.
+_CVS_FAMILY_CMS = "e65dbadf6a50100168ed7e8f60560002"   # jobFamilyGroup = Customer and Member Services
+
+
+def fetch_cvs() -> list[dict]:
+    return _fetch_workday("cvshealth", "CVS Health", "cvshealth.wd1.myworkdayjobs.com", "cvshealth",
+                          "CVS_Health_Careers", search_texts=("",),
+                          applied_facets={"jobFamilyGroup": [_CVS_FAMILY_CMS]}, offset_cap=80)
+
+
+# Teleperformance — custom Umbraco careers API aggregating the underlying iCIMS reqs. node=1780 is
+# the US careers opportunitiesId; workFromHome=True + country='United States' are server-side filters,
+# so every returned row is US work-from-home by construction. pageSize=500 returns the whole US-WFH
+# set in one call.
+def _tp_row(r: dict) -> dict | None:
+    if str(r.get("workFromHome") or "").strip().lower() not in ("yes", "true", "1"):
+        return None
+    if (r.get("country") or "").strip().lower() != "united states":
+        return None
+    loc = r.get("location") or "Remote"
+    return _mk_row("teleperformance", r.get("externalId"), "Teleperformance", r.get("title"),
+                   f"{loc}, United States", r.get("url"),
+                   employment_type=r.get("opportunityType"), posted_at=_iso_epoch(r.get("date")))
+
+
+def fetch_teleperformance() -> list[dict]:
+    rows = []
+    try:
+        r = httpx.get("https://www.tp.com/Umbraco/Api/Careers/GetCareersBase", headers=_UA, timeout=40,
+                      params={"node": 1780, "workFromHome": "True", "country": "United States",
+                              "culture": "en-us", "pageSize": 500, "page": 0})
+        for j in (r.json().get("resultado") or []):
+            row = _tp_row(j)
             if row:
                 rows.append(row)
-        offset += limit
+    except Exception as e:
+        print(f"[teleperformance] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+# TTEC — Radancy TalentBrew. The /search-jobs/results endpoint returns a JSON envelope whose `results`
+# key is an HTML fragment (job tiles). CRITICAL: a tile's location span is the requisition HOME OFFICE
+# (e.g. an offshore 'Pasay, Philippines' row can carry a "…- Remote" title), so remote-ness AND
+# US-eligibility are decided from the TITLE, never the location span.
+_TTEC_REMOTE_RE = re.compile(r"remote|work\s*(from|at)\s*home|\bwah\b|virtual|telecommut", re.I)
+
+
+def _ttec_row(jid: str, title: str, href: str) -> dict | None:
+    t = title or ""
+    if not (_TTEC_REMOTE_RE.search(t) and _title_us(t)):
+        return None
+    url = ("https://www.ttecjobs.com" + href) if (href or "").startswith("/") else (href or "")
+    return _mk_row("ttec", jid, "TTEC", title, "Remote, United States", url)
+
+
+def fetch_ttec() -> list[dict]:
+    from bs4 import BeautifulSoup
+    rows, seen = [], set()
+    for kw in ("remote", "work from home"):
+        page = 1
+        while page <= 5:
+            try:
+                r = httpx.get("https://www.ttecjobs.com/en/search-jobs/results", headers=_UA, timeout=30,
+                              params={"SearchResultsModuleName": "Search Results", "CurrentPage": page,
+                                      "RecordsPerPage": 100, "keywords": kw})
+                html = r.json().get("results") or ""
+            except Exception as e:
+                print(f"[ttec kw={kw!r} p={page}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            anchors = BeautifulSoup(html, "html.parser").select("a[data-job-id]")
+            new = 0
+            for a in anchors:
+                jid = a.get("data-job-id")
+                if not jid or jid in seen:
+                    continue
+                seen.add(jid)
+                new += 1
+                h2 = a.select_one("h2")
+                row = _ttec_row(jid, h2.get_text(strip=True) if h2 else "", a.get("href"))
+                if row:
+                    rows.append(row)
+            if not anchors or new == 0:
+                break
+            page += 1
+    return rows
+
+
+# Sutherland — SmartRecruiters public postings API. location.country is lowercase ISO-2 ('us') and
+# location.remote is a boolean; filter on those (the fullLocation string still names a US city because
+# these are US-homed remote roles). Server-side remote/country params are unreliable, so filter client-side.
+def _smartrecruiters_row(j: dict, source: str, company: str) -> dict | None:
+    loc = j.get("location") or {}
+    if (loc.get("country") or "").lower() != "us" or not loc.get("remote"):
+        return None
+    full = loc.get("fullLocation") or ", ".join(
+        x for x in (loc.get("city"), loc.get("region"), "United States") if x)
+    return _mk_row(source, j.get("id"), company, j.get("name"), full or "United States",
+                   f"https://jobs.smartrecruiters.com/{company}/{j.get('id')}",
+                   posted_at=_iso_epoch(j.get("releasedDate")))
+
+
+def _fetch_smartrecruiters(source: str, company: str) -> list[dict]:
+    rows, offset = [], 0
+    while offset < 1000:
+        try:
+            r = httpx.get(f"https://api.smartrecruiters.com/v1/companies/{company}/postings",
+                          params={"limit": 100, "offset": offset}, headers=_UA, timeout=30)
+            d = r.json()
+            content = d.get("content") or []
+            total = int(d.get("totalFound") or 0)
+        except Exception as e:
+            print(f"[{source} offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not content:
+            break
+        for j in content:
+            row = _smartrecruiters_row(j, source, company)
+            if row:
+                rows.append(row)
+        offset += 100
+        if offset >= total:
+            break
+    return rows
+
+
+def fetch_sutherland() -> list[dict]:
+    return _fetch_smartrecruiters("sutherland", "Sutherland")
+
+
+# Working Solutions — 100%-remote independent-contractor CSR marketplace on an Algolia-backed apply
+# portal. Every posting is US/CA remote work-at-home; keep the US ones. The search key is public but
+# REFERER-restricted (must send Referer: https://apply.workingsolutions.com/, else 403).
+_WS_APP_ID = "UM59DWRPA1"
+_WS_API_KEY = "69a3025b68f9c1f44573c9a8b13d7597"        # public referer-restricted Algolia search key
+
+
+def _ws_row(h: dict) -> dict | None:
+    countries = h.get("country") or []
+    if isinstance(countries, str):
+        countries = [countries]
+    if "United States" not in countries:
+        return None
+    return _mk_row("workingsolutions", h.get("id"), "Working Solutions", h.get("title"),
+                   "Remote, United States", f"https://apply.workingsolutions.com/job/{h.get('id')}")
+
+
+def fetch_working_solutions() -> list[dict]:
+    rows = []
+    try:
+        r = httpx.post("https://UM59DWRPA1-dsn.algolia.net/1/indexes/production_Working%20Solutions_jobs/query",
+                       json={"query": "", "hitsPerPage": 100, "facetFilters": [["country:United States"]]},
+                       timeout=30, headers={"X-Algolia-Application-Id": _WS_APP_ID,
+                                            "X-Algolia-API-Key": _WS_API_KEY,
+                                            "Content-Type": "application/json",
+                                            "Referer": "https://apply.workingsolutions.com/"})
+        for h in (r.json().get("hits") or []):
+            row = _ws_row(h)
+            if row:
+                rows.append(row)
+    except Exception as e:
+        print(f"[workingsolutions] {type(e).__name__}: {e}", file=sys.stderr)
     return rows
 
 
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
-            "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix}
+            "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
+            "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
+            "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

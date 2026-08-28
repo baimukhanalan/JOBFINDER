@@ -830,22 +830,67 @@ schedules a batch run in this deploy.** Tailoring (`services/tailor/`) is strict
   ("work from anywhere", "hire anywhere", …). Full US **state names** count as US in a location; 2-letter
   state codes are deliberately NOT used (", CA"/", DE" collide with Canada/Germany ISO) — those fall to
   the LLM. Tests: `backend/tests/test_regions.py`.
-- **Mass Hiring source connectors: Amazon + Concentrix were silently returning 0 (`tools/mass_hiring.py`,
-  fixed 2026-08-27).** The board (`mass_hiring_jobs`, human-apply remote-US mass-hiring surface, SEPARATE
-  from `job_catalog`) had two dead connectors. **Amazon:** a remote role is marked by **`city='Virtual'`**;
-  `normalized_location` is the COUNTRY (`USA`/`GBR`/`ZAF`), so the old `"virtual" in normalized_location`
-  test matched NOTHING → 0 unconditionally. Fixed in the pure helper `_amazon_row` (remote = `city=='virtual'`,
-  US = `normalized_location∈{USA,US}`). NOTE Amazon's US virtual CS hiring is **seasonal** — the connector
-  correctly yields 0 out of peak season (its virtual roles are mostly offshore GBR/ZAF language moderation)
-  and non-zero when Amazon runs it; **0 is not a bug**. **Concentrix:** two bugs — (1) `searchText='customer
-  service work at home'` was too narrow (only offshore), broadened to `'work at home'` which surfaces the
-  `'USA Work at Home'` slice; (2) the Workday response's `total` comes back **0**, so the old
-  `offset >= total` exit killed pagination after page 1 — now paginate until `jobPostings` is empty. Pure
-  helper `_concentrix_row` keeps only US work-at-home (`_is_remote` + `us_eligible`); the `external_global`
-  Workday board is Concentrix's PROFESSIONAL tier (most US-remote rows are senior/dev, dropped by
-  `categorize`), so yield is small (1 live) — their frontline CSR board isn't publicly on this endpoint
-  (`careers.concentrix.com` doesn't resolve). Also **`categorize`'s healthcare/insurance bucket now matches
-  bare `rep`** (not only `representative`) so "Licensed Health Insurance Rep" (a real high-volume BPO
-  enrollment role) isn't dropped — guarded so bare "Sales Rep"/"Legal Rep" don't leak, `_NOT_MASS` still
-  drops senior. Per-job decisions are pure + unit-tested (`tests/test_mass_hiring.py`, no network); do NOT
-  re-test remote via `normalized_location` for Amazon or re-add the `total`-based exit for Concentrix.
+- **Mass Hiring board connectors — the live catalog of source recipes (`tools/mass_hiring.py`).** The board
+  (`mass_hiring_jobs`, human-apply remote-US mass-hiring surface, SEPARATE from auto-apply `job_catalog`)
+  pulls each source with plain `httpx` (no browser). Every `fetch_X()` → `_mk_row(...)`, and the per-job
+  decision lives in a PURE helper unit-tested with NO network (`tests/test_mass_hiring.py`, 27 tests). The
+  two HARD RULES: `_is_remote`/location must be REMOTE, `categorize()` must return a mass-hiring ENTRY
+  bucket (drops senior/dev via `_NOT_MASS`/`_DEV`). `categorize`'s healthcare/insurance bucket matches bare
+  `rep` (not only `representative`) so "Licensed Health Insurance Rep" survives (guarded so "Sales Rep"/
+  "Legal Rep" don't leak). Live sources + their gotchas:
+  - **Amazon (RE-DIAGNOSED 2026-08-28 — the earlier "0 = seasonal, not a bug" claim was WRONG and masked a
+    real bug).** TWO bugs, EITHER of which zeroed it: (1) `result_limit=200` — the API rejects `>100` with
+    `{"error":...,"hits":0,"jobs":null}`, so `_amazon_row` never even ran → **0 on every query**; (2) `is_us`
+    tested `normalized_location` EXACTLY `=='USA'`, dropping every state-tagged remote row (`'Texas, USA'`)
+    — which is exactly where the CS roles live. Fix (`_amazon_row`/`fetch_amazon_remote`): `result_limit=100`
+    + paginate `offset`; `is_remote = city.lower().startswith("virtual")` (catches `Virtual` /
+    `Virtual Location - <State>` / `Virtual Contact Center-<xx>`); `is_us = country_code=="USA"`;
+    `base_query="virtual"` (a remote posting's city literally contains "Virtual" so it's indexed on it —
+    "work from home" matches only 4-6 rows and misses most). Send `Accept-Encoding: gzip, deflate` (else
+    zstd). Do NOT re-add `result_limit=200` or `normalized_location`-exact US matching.
+  - **Concentrix (Workday, tenant `cnx`, site `external_global`).** Now EMPTY `searchText` + the US
+    `locationCountry` facet (id `bc33aa3152ec42d4995f4791a106ed09`) — the old `searchText="work at home"`
+    missed US WAH rows whose text lacks that phrase, and the unfaceted `total` reads 0. `external_global`
+    is the PROFESSIONAL tier (most WAH rows senior → dropped), so yield is ~1-2. No frontline CSR site is
+    public on this tenant (`external_us` exists but is EMPTY; `careers.concentrix.com` doesn't resolve).
+  - **Teleperformance (custom Umbraco, ~45).** `GET www.tp.com/Umbraco/Api/Careers/GetCareersBase?node=1780
+    &workFromHome=True&country=United%20States&culture=en-us&pageSize=500`. `node=1780` = the US careers
+    opportunitiesId; the two server-side filters mean every `resultado[]` row is US work-from-home by
+    construction (`_tp_row` re-checks `workFromHome`+`country`). Rows are iCIMS reqs (`externalId`, `url`).
+    Use `www.tp.com` (jobs.teleperformance.com/`www.*` subdomains are NXDOMAIN here).
+  - **TTEC (Radancy TalentBrew, ~27).** `GET www.ttecjobs.com/en/search-jobs/results?SearchResultsModuleName=
+    Search Results&CurrentPage=N&RecordsPerPage=100&keywords=remote`. Returns a JSON envelope whose
+    `results` key is an **HTML fragment** — parse with bs4 `a[data-job-id]` (title in `h2`). **CRITICAL: a
+    tile's `.job-location` span is the requisition HOME OFFICE, not the remote flag** — an offshore
+    "Pasay, Philippines" row can carry a "…- Remote" title. So `_ttec_row` decides remote AND US strictly
+    from the TITLE (`_TTEC_REMOTE_RE` + `_title_us`: "USA"/"United States"/a full US state name). Use
+    `www.ttecjobs.com` (careers.ttecjobs.com is NXDOMAIN).
+  - **CVS Health (Workday, tenant `cvshealth`, site `CVS_Health_Careers`, ~5).** 8000+ jobs, NO remote/
+    workType facet, and `searchText` does NOT hard-filter (it only re-ranks — "work from home" still returns
+    on-site store pharmacy techs first), so DON'T paginate the whole tenant. Narrow with the `jobFamilyGroup`
+    facet **"Customer and Member Services"** (id `e65dbadf6a50100168ed7e8f60560002`, 57 rows), then filter
+    WFH+US. CVS marks remote US with a bare 2-letter STATE CODE prefix (`"RI - Work from home"`) that generic
+    `us_eligible()` misses → `_has_us_state()` catches it, and `_workday_row` then FORCES `us_eligible=True`
+    on the row (else `collect(us_only=True)` would drop it).
+  - **Sutherland (SmartRecruiters, ~4).** `GET api.smartrecruiters.com/v1/companies/Sutherland/postings?
+    limit=100&offset=N`. `_smartrecruiters_row` keeps `location.country=="us"` (lowercase ISO-2) AND
+    `location.remote==True` (server-side `remote=`/`country=` params are unreliable → filter client-side).
+    Generic `_fetch_smartrecruiters(source, company)` — add another SmartRecruiters BPO by registering it.
+  - **Working Solutions (Algolia, ~7).** `POST UM59DWRPA1-dsn.algolia.net/1/indexes/production_Working%20
+    Solutions_jobs/query` with the PUBLIC referer-restricted search key (in code) + `Referer:
+    https://apply.workingsolutions.com/` (mandatory, else 403). 100%-remote contractor CSR; keep the US
+    `country` facet. Build `apply_url` from `hits[].id`.
+  - **Shared helpers:** `_fetch_workday`/`_workday_row` (Concentrix + CVS; US+remote via `us_eligible(loc)
+    OR _has_us_state(loc)`), `_fetch_smartrecruiters`/`_smartrecruiters_row`, `_has_us_state`/`_US_STATE_ABBR`/
+    `_title_us`. **himalayas resilience (2026-08-28):** its API intermittently returns non-JSON at a random
+    offset; the old `fetch_himalayas` `break`'d the WHOLE pagination on the first hiccup (observed collapse
+    70→9), so it now RETRIES the offset (3× with backoff) before giving up. Yield still fluctuates (~7-70)
+    with feed rotation + rate-limiting of rapid 200-page pagination — that variance is inherent, not a bug.
+  - **Probed but NOT wired (recipes on file, 2026-08-28) — reasons:** **Kelly** (`www.mykelly.com/wp-json/
+    wp/v2/job-listings`, WP REST, ~12) sits behind Akamai bot protection returning **403 to our datacenter
+    IP** — reachable only via a US residential IP / the project proxy pool, which the plain-httpx collector
+    doesn't use; **Maximus** (Avature `maximus.avature.net/4/_portalList`, ~23) needs session cookies + a
+    per-page-load rotating `qtvc` token scraped from HTML — too fragile for an unattended cron; **Foundever**
+    (~5) exposes only an XML sitemap (no JSON); **Liveops** — its Rippling corporate board has ZERO entry
+    roles, and the actual contractor-agent product is a login-gated Salesforce community (un-scrapable). To
+    add Kelly later, route its fetch through `proxy_pool.next_proxy()`.

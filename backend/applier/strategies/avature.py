@@ -129,6 +129,7 @@ class AvatureStrategy(ApplyStrategy):
 
     async def _fill_avature_gaps(self, page: Page, profile_form: dict) -> None:
         await self._fill_passwords(page)
+        await self._tick_required_checkboxes(page)
         for substr, ans in self._SCREENERS:
             try:
                 await self._select_by_label(page, substr, ans)
@@ -146,12 +147,52 @@ class AvatureStrategy(ApplyStrategy):
                     await self._select_by_label(page, "state/province", state)
             except Exception:
                 pass
-        # Skills is a required self-report multi-select; pick a relevant option (best-effort).
+        # Languages-fluent and Skills are REQUIRED select2 autocomplete widgets (the native
+        # <select> is hidden with 0 options; options load over AJAX on type). English is always
+        # truthful for a US persona; Skills is a light self-report for a CSR role.
         try:
-            await self._pick_first_option(page, "skills",
-                                          prefer=("customer", "service", "communication"))
+            await self._fill_select2(page, "language", ["English"])
         except Exception:
             pass
+        try:
+            # strict (allow_first=False): only pick skills that actually exist in the taxonomy,
+            # never a spurious first result like ".NET Framework" for a CSR persona.
+            await self._fill_select2(page, "skills", ["Communication", "Data Entry"],
+                                     allow_first=False)
+        except Exception:
+            pass
+
+    async def _tick_required_checkboxes(self, page: Page) -> None:
+        """Tick every REQUIRED, currently-unchecked checkbox that is not a marketing opt-in.
+        Avature's 'you agree to the Terms of Service' box is required but its <label> is just
+        '*' (the consent prose is a sibling paragraph), so a text-matched consent filler misses
+        it and the step's Continue is blocked. We never tick a newsletter/marketing box."""
+        try:
+            boxes = page.locator('input[type="checkbox"]')
+            for i in range(await boxes.count()):
+                cb = boxes.nth(i)
+                try:
+                    req = await cb.evaluate(
+                        "e=>e.required||e.getAttribute('aria-required')==='true'")
+                    if not req or await cb.is_checked():
+                        continue
+                    ctx = (await cb.evaluate(
+                        "e=>{const c=e.closest('div,li,fieldset,form');return c?c.innerText:'';}")
+                        or "").lower()
+                    if re.search(r"newsletter|marketing|promotional|subscribe|"
+                                 r"contact you about|talent community|opportunities", ctx):
+                        continue
+                    try:
+                        await cb.check(timeout=2500)
+                    except Exception:
+                        await cb.evaluate(
+                            "e=>{e.checked=true;"
+                            "e.dispatchEvent(new Event('click',{bubbles:true}));"
+                            "e.dispatchEvent(new Event('change',{bubbles:true}));}")
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.debug("avature: checkbox tick raised: %s", exc)
 
     async def _fill_passwords(self, page: Page) -> None:
         """Set BOTH password inputs to one generated password (fill auto-waits for
@@ -201,6 +242,50 @@ class AvatureStrategy(ApplyStrategy):
         await page.wait_for_timeout(200)
         return ok
 
+    async def _fill_select2(self, page: Page, label_substr: str, values,
+                            allow_first: bool = True) -> bool:
+        """Fill a select2 autocomplete field (label contains label_substr): open it, type each
+        value, and click the matching AJAX-loaded result (or the first result). Handles the
+        Avature Languages/Skills widgets whose hidden native <select> has no static options."""
+        found = await page.evaluate(
+            """(lbl)=>{for(const l of document.querySelectorAll('label')){
+                if(!(l.innerText||'').toLowerCase().includes(lbl)) continue;
+                const w=l.closest('div')||l.parentElement;
+                const c=w&&w.querySelector('.select2-container');
+                if(c){c.setAttribute('data-jf2','1');return true;}} return false;}""",
+            label_substr.lower())
+        if not found:
+            return False
+        picked = False
+        for val in values:
+            try:
+                await page.click(".select2-container[data-jf2='1'] .select2-selection", timeout=3000)
+                await page.wait_for_timeout(400)
+                sf = page.locator(".select2-search__field").last
+                await sf.fill(val, timeout=3000)
+                await page.wait_for_timeout(1100)   # AJAX option load
+                opts = page.locator(".select2-results__option[role='option'], .select2-results__option")
+                target = opts.filter(has_text=re.compile(re.escape(val.split()[0]), re.I)).first
+                if not await target.count() and allow_first:
+                    target = opts.filter(has_not_text=re.compile("no results|searching", re.I)).first
+                if await target.count():
+                    await target.click(timeout=3000)
+                    picked = True
+                    await page.wait_for_timeout(300)
+                else:
+                    await page.keyboard.press("Escape")
+            except Exception:
+                try:
+                    await page.keyboard.press("Escape")
+                except Exception:
+                    pass
+        try:
+            await page.eval_on_selector(".select2-container[data-jf2='1']",
+                                        "e=>e.removeAttribute('data-jf2')")
+        except Exception:
+            pass
+        return picked
+
     async def _pick_first_option(self, page: Page, label_substr: str, prefer=()) -> bool:
         """For a required self-report select (e.g. Skills), pick a preferred option if present
         else the first real (non-placeholder) option."""
@@ -248,8 +333,8 @@ class AvatureStrategy(ApplyStrategy):
                     let lab='';const id=el.id;
                     if(id){const l=document.querySelector('label[for="'+id+'"]');if(l)lab=l.innerText.trim();}
                     if(!lab){const l=el.closest('label')||(el.parentElement&&el.parentElement.querySelector('label'));if(l)lab=l.innerText.trim();}
-                    lab=(lab||el.name||'').replace(/\\s*\\*\\s*$/,'').slice(0,80);
-                    if(lab&&!seen.has(lab)){seen.add(lab);out.push(lab);}
+                    lab=(lab||'').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||(el.name||'field');
+                    if(!seen.has(lab)){seen.add(lab);out.push(lab);}
                   } return out;}""")
         except Exception:
             return []
@@ -297,11 +382,56 @@ class AvatureStrategy(ApplyStrategy):
                 await fn(page)
             except Exception:
                 pass
+        await self._tick_required_checkboxes(page)
+        await self._decline_demographics(page)
+        # Voluntary Self-ID selects the shared decline helpers miss on Avature.
+        for substr, ans in (("armed forces", "No"), ("member of armed", "No"),
+                            ("gender", "not to disclose"), ("veteran status", "not")):
+            try:
+                await self._select_by_label(page, substr, ans)
+            except Exception:
+                pass
         try:
             analysis = await analyze_page(page, profile_form, cover_letter, {}, facts or {})
             await fill_form(page, analysis)
         except Exception as exc:
             logger.debug("avature: step fill raised: %s", exc)
+
+    async def _decline_demographics(self, page: Page) -> None:
+        """On an EEO / Voluntary Self-ID step, answer every UNANSWERED required demographic with a
+        decline: pick a 'choose not to disclose / prefer not / decline' RADIO, and tick the
+        'I am not a protected veteran' CHECKBOX — never claiming a protected characteristic."""
+        try:
+            ids = await page.evaluate(
+                """()=>{const out={radios:[],checks:[]};
+                  const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want/i;
+                  const groups={};
+                  for(const r of document.querySelectorAll('input[type=radio]'))
+                    (groups[r.name]=groups[r.name]||[]).push(r);
+                  for(const nm in groups){const rs=groups[nm];
+                    if(rs.some(r=>r.checked))continue;
+                    for(const r of rs){const l=document.querySelector('label[for="'+r.id+'"]');
+                      const t=(l&&l.innerText)||(r.closest('label')||{}).innerText||'';
+                      if(dec.test(t)&&r.id){out.radios.push(r.id);break;}}}
+                  for(const c of document.querySelectorAll('input[type=checkbox]')){
+                    if(c.checked||!c.id)continue;
+                    const l=document.querySelector('label[for="'+c.id+'"]');
+                    const t=(l&&l.innerText)||(c.closest('label')||{}).innerText||'';
+                    if(/not a protected veteran/i.test(t))out.checks.push(c.id);}
+                  return out;}""")
+        except Exception:
+            return
+        for eid in ids.get("radios", []) + ids.get("checks", []):
+            try:
+                await page.locator(f'[id="{eid}"]').check(force=True, timeout=2500)
+            except Exception:
+                try:
+                    await page.evaluate(
+                        """(id)=>{const e=document.getElementById(id);if(e){e.checked=true;"""
+                        """e.dispatchEvent(new Event('click',{bubbles:true}));"""
+                        """e.dispatchEvent(new Event('change',{bubbles:true}));}}""", eid)
+                except Exception:
+                    pass
 
     async def _advance_wizard(self, page, report, profile_form, cover_letter, facts):
         """Walk the multi-step wizard: click Continue while it advances (filling each new

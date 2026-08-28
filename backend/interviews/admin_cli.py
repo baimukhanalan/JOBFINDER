@@ -52,6 +52,23 @@ def cmd_passwd(args: argparse.Namespace) -> None:
         print(f"Generated password: {password}")
 
 
+def _set_active(login: str, active: bool) -> None:
+    responsible = db.get_responsible_by_login(login)
+    if not responsible:
+        print(f"No such responsible: {login}", file=sys.stderr)
+        raise SystemExit(1)
+    db.set_active(responsible["id"], active)
+    print(f"{'Reactivated' if active else 'Deactivated'} responsible {login}")
+
+
+def cmd_deactivate(args: argparse.Namespace) -> None:
+    _set_active(args.login, False)
+
+
+def cmd_reactivate(args: argparse.Namespace) -> None:
+    _set_active(args.login, True)
+
+
 def cmd_setavail(args: argparse.Namespace) -> None:
     if not (0 <= args.dow <= 6):
         print(f"Invalid --dow {args.dow}: must be 0-6 (Monday=0 .. Sunday=6)",
@@ -98,6 +115,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_passwd.add_argument("--login", required=True)
     p_passwd.add_argument("--password", default=None)
     p_passwd.set_defaults(func=cmd_passwd)
+
+    p_deact = sub.add_parser("deactivate", help="Deactivate a responsible (revokes their session).")
+    p_deact.add_argument("--login", required=True)
+    p_deact.set_defaults(func=cmd_deactivate)
+
+    p_react = sub.add_parser("reactivate", help="Reactivate a deactivated responsible.")
+    p_react.add_argument("--login", required=True)
+    p_react.set_defaults(func=cmd_reactivate)
 
     p_setavail = sub.add_parser("setavail", help="Set one weekday's availability window.")
     p_setavail.add_argument("--login", required=True)

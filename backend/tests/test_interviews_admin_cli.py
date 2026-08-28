@@ -123,6 +123,23 @@ def test_cli_passwd_without_password_generates_and_prints(capsys):
     assert auth.verify_password(printed_password, after)
 
 
+def test_cli_deactivate_reactivate():
+    admin_cli.main(["add", "--login", "test_iv_leo", "--name", "Leo", "--password", "x"])
+    assert db.get_responsible_by_login("test_iv_leo")["active"] is True
+
+    admin_cli.main(["deactivate", "--login", "test_iv_leo"])
+    assert db.get_responsible_by_login("test_iv_leo")["active"] is False
+
+    admin_cli.main(["reactivate", "--login", "test_iv_leo"])
+    assert db.get_responsible_by_login("test_iv_leo")["active"] is True
+
+
+def test_cli_deactivate_unknown_login_errors():
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["deactivate", "--login", "test_iv_nope"])
+    assert exc.value.code != 0
+
+
 def test_cli_setavail_upserts_single_day_and_preserves_others():
     admin_cli.main(["add", "--login", "test_iv_ivan", "--name", "Ivan", "--password", "x"])
     rid = db.get_responsible_by_login("test_iv_ivan")["id"]

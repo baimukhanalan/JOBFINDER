@@ -1,4 +1,5 @@
 """Password hashing + signed-cookie session for the interview scheduler cabinet."""
+import logging
 import os
 
 import bcrypt
@@ -7,9 +8,12 @@ from itsdangerous import URLSafeTimedSerializer
 
 from backend.config import settings
 
+log = logging.getLogger(__name__)
+
 COOKIE_NAME = "iv_session"
 _SALT = "iv-session"
 DEFAULT_MAX_AGE = 30 * 24 * 3600  # 30 days, in seconds
+_DEV_SECRET = "dev-insecure-change-me"
 
 
 def hash_password(pw: str) -> str:
@@ -26,11 +30,19 @@ def verify_password(pw: str, h: str) -> bool:
 
 
 def _serializer() -> URLSafeTimedSerializer:
-    secret = (
+    configured = (
         settings.interview_session_secret
         or os.environ.get("INTERVIEW_SESSION_SECRET")
-        or "dev-insecure-change-me"
     )
+    if not configured:
+        # Fail closed in production (nginx/HTTPS deploy sets IV_COOKIE_SECURE=1): an
+        # unconfigured signing secret would make every session cookie forgeable.
+        if os.environ.get("IV_COOKIE_SECURE") == "1":
+            raise RuntimeError("INTERVIEW_SESSION_SECRET must be set in production")
+        log.warning(
+            "INTERVIEW_SESSION_SECRET is not set — using an INSECURE dev secret; "
+            "set it (and IV_COOKIE_SECURE=1) before any real deploy")
+    secret = configured or _DEV_SECRET
     return URLSafeTimedSerializer(secret, salt=_SALT)
 
 
@@ -68,6 +80,8 @@ def current_responsible(request: Request) -> dict:
         responsible = db.get_responsible(rid)
     except Exception:
         raise redirect
-    if not responsible:
+    # Re-check on every request: a deactivated employee's existing cookie must stop
+    # working immediately, not only fail the next login.
+    if not responsible or not responsible.get("active"):
         raise redirect
     return responsible

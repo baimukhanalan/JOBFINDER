@@ -22,7 +22,6 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response, StreamingResponse)
 
 from backend.applier.profile_validator import validate_profile
-from backend.interviews.routes_operator import router as iv_operator_router
 from backend.profiles import facts as facts_lib
 from backend.profiles import store as profile_store
 from backend.profiles.store import _source_path, load_profiles
@@ -91,8 +90,6 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"], max_age=86400,
 )
-# Operator «Собес» (interview-assign) modal routes, shown inside the /mail inbox.
-app.include_router(iv_operator_router)
 
 
 # profiles.json mtime cache: /draft is hit per page load from the extension, the
@@ -1618,6 +1615,16 @@ try:
     iv_db.ensure_schema()
 except Exception:
     logging.getLogger(__name__).warning("interview schema init failed", exc_info=True)
+
+
+# Operator «Собес» (interview-assign) modal routes, shown inside the /mail inbox.
+# Guarded: a broken interviews package must degrade to "no «Собес» button", never
+# stop the whole dashboard from booting.
+try:
+    from backend.interviews.routes_operator import router as iv_operator_router
+    app.include_router(iv_operator_router)
+except Exception:
+    logging.getLogger(__name__).warning("interview operator routes unavailable", exc_info=True)
 
 
 @app.post("/unfinished/reconcile")

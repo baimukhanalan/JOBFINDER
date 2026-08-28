@@ -24,7 +24,8 @@ from backend.tools import mail_db, mailcrm
 
 log = logging.getLogger("cabinet")
 
-app = FastAPI(title="JobFinder cabinet")
+# Internet-facing (nginx /cabinet/). No interactive API docs / schema exposed.
+app = FastAPI(title="JobFinder cabinet", docs_url=None, redoc_url=None, openapi_url=None)
 
 # Secure cookie on the HTTPS deploy (nginx). Off by default so http TestClient works;
 # the deploy sets IV_COOKIE_SECURE=1.

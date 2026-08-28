@@ -1,4 +1,5 @@
 """backend/interviews/auth.py: bcrypt hashing + itsdangerous signed-cookie session."""
+import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
@@ -35,7 +36,7 @@ def test_verify_password_none_hash_returns_false():
 
 
 def test_current_responsible_wired_dependency(monkeypatch):
-    fake_responsible = {"id": 1, "login": "alan", "name": "Alan"}
+    fake_responsible = {"id": 1, "login": "alan", "name": "Alan", "active": True}
     monkeypatch.setattr(db, "get_responsible", lambda rid: fake_responsible if rid == 1 else None)
 
     app = FastAPI()
@@ -57,3 +58,50 @@ def test_current_responsible_wired_dependency(monkeypatch):
     resp = client.get("/whoami", follow_redirects=False)
     assert resp.status_code == 200
     assert resp.json() == fake_responsible
+
+
+def _wired_client(monkeypatch, responsible):
+    """A TestClient whose only route depends on current_responsible, with
+    db.get_responsible stubbed to return `responsible` for rid==1 and a valid cookie set."""
+    monkeypatch.setattr(db, "get_responsible", lambda rid: responsible if rid == 1 else None)
+    app = FastAPI()
+
+    @app.get("/whoami")
+    def whoami(r: dict = Depends(auth.current_responsible)):
+        return r
+
+    client = TestClient(app)
+    client.cookies.set(auth.COOKIE_NAME, auth.make_session(1))
+    return client
+
+
+def test_current_responsible_rejects_inactive(monkeypatch):
+    # A deactivated employee's still-valid cookie must stop working immediately.
+    client = _wired_client(monkeypatch, {"id": 1, "login": "alan", "name": "Alan", "active": False})
+    resp = client.get("/whoami", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/cabinet/login"
+
+    # An active responsible still passes.
+    ok_client = _wired_client(
+        monkeypatch, {"id": 1, "login": "alan", "name": "Alan", "active": True})
+    ok = ok_client.get("/whoami", follow_redirects=False)
+    assert ok.status_code == 200
+    assert ok.json()["login"] == "alan"
+
+
+def test_serializer_fail_closed_in_prod(monkeypatch):
+    # No secret configured (neither settings nor env) AND production flag set -> raise.
+    monkeypatch.setattr(auth.settings, "interview_session_secret", "", raising=False)
+    monkeypatch.delenv("INTERVIEW_SESSION_SECRET", raising=False)
+    monkeypatch.setenv("IV_COOKIE_SECURE", "1")
+    with pytest.raises(RuntimeError):
+        auth._serializer()
+    # ...and it also blocks the higher-level session calls.
+    with pytest.raises(RuntimeError):
+        auth.make_session(1)
+
+    # With a secret configured, no raise (even with the production flag on).
+    monkeypatch.setattr(auth.settings, "interview_session_secret", "a-real-secret", raising=False)
+    token = auth.make_session(7)
+    assert auth.read_session(token) == 7

@@ -115,6 +115,14 @@ def set_password_hash(rid: int, password_hash: str) -> None:
                     (password_hash, rid))
 
 
+def set_active(rid: int, active: bool) -> None:
+    """Deactivate (active=False) or reactivate a responsible. A deactivated employee's
+    existing session cookie stops working on the next request (see auth.current_responsible)."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET active=%s WHERE id=%s",
+                    (active, rid))
+
+
 # ---- availability --------------------------------------------------------------
 def get_availability(rid: int) -> list[dict]:
     """7 rows (dow 0..6), missing days filled with enabled=False, start/end 0."""

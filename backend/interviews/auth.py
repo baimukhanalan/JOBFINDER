@@ -2,8 +2,8 @@
 import os
 
 import bcrypt
-from fastapi import HTTPException
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from fastapi import HTTPException, Request
+from itsdangerous import URLSafeTimedSerializer
 
 from backend.config import settings
 
@@ -17,9 +17,11 @@ def hash_password(pw: str) -> str:
 
 
 def verify_password(pw: str, h: str) -> bool:
+    if not isinstance(h, str) or not h:
+        return False
     try:
         return bcrypt.checkpw(pw.encode(), h.encode())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return False
 
 
@@ -39,8 +41,6 @@ def make_session(rid: int) -> str:
 def read_session(token: str, max_age: int = DEFAULT_MAX_AGE) -> int | None:
     try:
         data = _serializer().loads(token, max_age=max_age)
-    except (BadSignature, SignatureExpired):
-        return None
     except Exception:
         return None
     try:
@@ -49,7 +49,7 @@ def read_session(token: str, max_age: int = DEFAULT_MAX_AGE) -> int | None:
         return None
 
 
-def current_responsible(request):
+def current_responsible(request: Request) -> dict:
     """FastAPI dependency: resolve the logged-in responsible from the session cookie.
 
     Imports backend.interviews.db lazily — that module may not exist yet during

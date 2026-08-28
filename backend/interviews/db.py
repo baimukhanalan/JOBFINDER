@@ -109,6 +109,12 @@ def set_telegram_chat(rid: int, chat_id: int) -> None:
                     (chat_id, rid))
 
 
+def set_password_hash(rid: int, password_hash: str) -> None:
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET password_hash=%s WHERE id=%s",
+                    (password_hash, rid))
+
+
 # ---- availability --------------------------------------------------------------
 def get_availability(rid: int) -> list[dict]:
     """7 rows (dow 0..6), missing days filled with enabled=False, start/end 0."""

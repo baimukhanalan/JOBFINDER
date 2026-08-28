@@ -8,6 +8,8 @@ CRM_PG_DSN is unset / the DB is unreachable, the whole module is skipped.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from backend.tools import mail_db
@@ -63,9 +65,11 @@ def test_cli_add_without_password_generates_and_prints(capsys):
     assert fetched["name"] == "Carl"
 
     out = capsys.readouterr().out
-    assert "test_iv_carl" in out
-    # the generated password must actually verify against what got stored
-    assert fetched["password_hash"] != ""
+    match = re.search(r"Generated password:\s*(\S+)", out)
+    assert match is not None, f"no 'Generated password:' line in output: {out!r}"
+    printed_password = match.group(1)
+    # the PRINTED password must actually verify against what got stored
+    assert auth.verify_password(printed_password, fetched["password_hash"])
 
 
 def test_cli_add_defaults_tz_to_utc():
@@ -109,10 +113,14 @@ def test_cli_passwd_without_password_generates_and_prints(capsys):
 
     admin_cli.main(["passwd", "--login", "test_iv_hank"])
     out = capsys.readouterr().out
-    assert "test_iv_hank" in out
+    match = re.search(r"Generated password:\s*(\S+)", out)
+    assert match is not None, f"no 'Generated password:' line in output: {out!r}"
+    printed_password = match.group(1)
 
     after = db.get_responsible_by_login("test_iv_hank")["password_hash"]
     assert not auth.verify_password("old", after)
+    # the PRINTED password must actually verify against the newly stored hash
+    assert auth.verify_password(printed_password, after)
 
 
 def test_cli_setavail_upserts_single_day_and_preserves_others():
@@ -136,3 +144,35 @@ def test_cli_setavail_upserts_single_day_and_preserves_others():
     assert rows[2]["enabled"] is True
     assert rows[2]["start_min"] == 600
     assert rows[2]["end_min"] == 1080
+
+
+def test_cli_setavail_rejects_out_of_range_dow():
+    admin_cli.main(["add", "--login", "test_iv_judy", "--name", "Judy", "--password", "x"])
+    rid = db.get_responsible_by_login("test_iv_judy")["id"]
+
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["setavail", "--login", "test_iv_judy", "--dow", "7",
+                         "--start", "09:00", "--end", "17:00"])
+    assert exc.value.code != 0
+
+    # must NOT have silently no-op-succeeded: every day still unset
+    rows = db.get_availability(rid)
+    assert all(r["enabled"] is False for r in rows)
+
+
+def test_cli_setavail_rejects_inverted_window():
+    admin_cli.main(["add", "--login", "test_iv_karl", "--name", "Karl", "--password", "x"])
+    rid = db.get_responsible_by_login("test_iv_karl")["id"]
+
+    with pytest.raises(SystemExit) as exc:
+        admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
+                         "--start", "17:00", "--end", "09:00"])
+    assert exc.value.code != 0
+
+    rows = {r["dow"]: r for r in db.get_availability(rid)}
+    assert rows[1]["enabled"] is False  # rejected, never written
+
+    # an EQUAL start/end is also invalid (empty window)
+    with pytest.raises(SystemExit):
+        admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
+                         "--start", "09:00", "--end", "09:00"])

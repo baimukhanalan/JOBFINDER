@@ -11,7 +11,6 @@ import secrets
 import sys
 
 from backend.interviews import auth, db
-from backend.tools import mail_db
 
 
 def hhmm_to_min(hhmm: str) -> int:
@@ -47,23 +46,29 @@ def cmd_passwd(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     password = args.password or secrets.token_urlsafe(12)
     password_hash = auth.hash_password(password)
-    with mail_db._cur(dict_rows=False) as cur:
-        cur.execute("UPDATE iv_responsibles SET password_hash=%s WHERE id=%s",
-                    (password_hash, responsible["id"]))
+    db.set_password_hash(responsible["id"], password_hash)
     print(f"Password updated for {args.login}")
     if not args.password:
         print(f"Generated password: {password}")
 
 
 def cmd_setavail(args: argparse.Namespace) -> None:
+    if not (0 <= args.dow <= 6):
+        print(f"Invalid --dow {args.dow}: must be 0-6 (Monday=0 .. Sunday=6)",
+              file=sys.stderr)
+        raise SystemExit(1)
     responsible = db.get_responsible_by_login(args.login)
     if not responsible:
         print(f"No such responsible: {args.login}", file=sys.stderr)
         raise SystemExit(1)
     rid = responsible["id"]
-    rows = db.get_availability(rid)
     start_min = hhmm_to_min(args.start)
     end_min = hhmm_to_min(args.end)
+    if start_min >= end_min:
+        print(f"Invalid window {args.start}-{args.end}: start must be before end",
+              file=sys.stderr)
+        raise SystemExit(1)
+    rows = db.get_availability(rid)
     for row in rows:
         if row["dow"] == args.dow:
             row["start_min"] = start_min

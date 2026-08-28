@@ -14,6 +14,7 @@ verify its mailbox is in THIS responsible's assigned set; otherwise 404. The sha
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import Depends, FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -24,6 +25,10 @@ from backend.tools import mail_db, mailcrm
 log = logging.getLogger("cabinet")
 
 app = FastAPI(title="JobFinder cabinet")
+
+# Secure cookie on the HTTPS deploy (nginx). Off by default so http TestClient works;
+# the deploy sets IV_COOKIE_SECURE=1.
+_COOKIE_SECURE = os.environ.get("IV_COOKIE_SECURE") == "1"
 
 
 @app.on_event("startup")
@@ -53,7 +58,7 @@ def login_post(login: str = Form(...), password: str = Form(...)):
                             status_code=401)
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session(responsible["id"]),
-                    httponly=True, samesite="lax", path="/")
+                    httponly=True, samesite="lax", path="/", secure=_COOKIE_SECURE)
     return resp
 
 
@@ -125,7 +130,9 @@ def thread(hash: str, responsible: dict = Depends(auth.current_responsible)):
         log.warning("get_row failed: %s", e)
     if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
         return HTMLResponse("<h1>404</h1>", status_code=404)
-    thread = mailcrm.get_thread(hash)
+    # READ-ONLY surface: mark=False so opening a thread never flips the persona's
+    # messages to seen (which would also move them in the OPERATOR's inbox).
+    thread = mailcrm.get_thread(hash, mark=False)
     if not thread:
         return HTMLResponse("<h1>404</h1>", status_code=404)
     return HTMLResponse(cabinet_ui.thread_page(responsible, thread))

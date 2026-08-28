@@ -523,15 +523,24 @@ def _iv_modal() -> str:
 
 
 def render_rows(rows: list[dict], show_mailbox: bool = True,
-                show_sobes: bool = True) -> str:
+                show_sobes: bool = True, read_only: bool = False) -> str:
+    # read_only=True (the responsible cabinet, a user-facing read surface): no operator
+    # affordances — implies show_sobes=False, renders the avatar as a plain non-interactive
+    # element (the `toggleSel` selector JS is operator-only), and drops the decorative 📎
+    # attachment emoji. read_only=False (operator default) stays byte-identical.
+    if read_only:
+        show_sobes = False
     out = []
     for m in rows:
         sender = m.get("from_name") or m.get("from_email") or "?"
         unread = "" if m.get("seen") else " unread"
         mbox = (f'<span class="mbox">{escape((m.get("candidate") or m.get("mailbox") or "")[:22])}</span>'
                 if show_mailbox else "")
-        clip = ('<span class="clip" title="есть вложение">📎</span>'
-                if m.get("has_att") else "")
+        if read_only:
+            clip = ('<span class="clip" title="вложение"></span>' if m.get("has_att") else "")
+        else:
+            clip = ('<span class="clip" title="есть вложение">📎</span>'
+                    if m.get("has_att") else "")
         # «Собес» control lives INSIDE the row <a> (like the «📄 N» apps-chip); its
         # onclick stops propagation so tapping it opens the assign modal, not the message.
         # show_sobes=False (the read-only responsible cabinet) suppresses the operator control.
@@ -539,14 +548,21 @@ def render_rows(rows: list[dict], show_mailbox: bool = True,
                            m.get("thread") or m.get("thread_key") or "",
                            m.get("id", ""), as_span=True)
                  if (show_sobes and m.get("kind") == "interview") else "")
+        if read_only:
+            # plain, non-interactive avatar (no select-toggle button / no toggleSel JS)
+            avatar = (f'<span class="msel msel-ro">'
+                      f'<span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span></span>')
+        else:
+            # avatar doubles as the Gmail-style select toggle; tapping it selects the row,
+            # tapping the body opens the message
+            avatar = (
+                f'<button type="button" class="msel" onclick="toggleSel(this)" aria-label="Выбрать сообщение">'
+                f'<span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
+                '<span class="selcheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></button>')
         out.append(
             f'<div class="mitem{unread}" data-ts="{m.get("date_ts",0)}" data-id="{escape(m["id"])}" '
             f'data-mailbox="{escape(m.get("mailbox","") or "", quote=True)}">'
-            # avatar doubles as the Gmail-style select toggle; tapping it selects the row,
-            # tapping the body opens the message
-            f'<button type="button" class="msel" onclick="toggleSel(this)" aria-label="Выбрать сообщение">'
-            f'<span class="avatar" style="background:{_avatar_color(sender)}">{escape(_initial(sender))}</span>'
-            '<span class="selcheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span></button>'
+            f'{avatar}'
             f'<a class="mrow" href="/mail/message?id={escape(m["id"])}">'
             f'<span class="mbody"><span class="mtop">'
             f'<span class="msender">{escape(sender)}</span>{_kind_tag(m.get("kind","other"))}{mbox}{sobes}'

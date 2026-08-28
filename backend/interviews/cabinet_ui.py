@@ -58,6 +58,9 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .av-day input[type=time]{padding:7px 10px;}
 .av-day.off{opacity:.55;}
 .empty{color:var(--ink-mute);padding:18px 0;}
+/* read-only avatar wrapper in the reused mail rows: not a select toggle */
+.msel-ro{cursor:default;}
+.msel-ro:hover::after{display:none;}
 .tcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
   padding:16px 18px;margin-bottom:12px;}
 .tcard .tmeta{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;
@@ -171,10 +174,11 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
 
 
 def inbox_page(responsible: dict, rows: list[dict]) -> str:
-    # Reuse the operator's row renderer but WITHOUT the «Собес» control (read-only
-    # cabinet). Row links point to the operator route /mail/message; rewrite them to the
-    # cabinet's own guarded /thread so navigation stays inside this app.
-    listing = mailcrm_ui.render_rows(rows, show_mailbox=True, show_sobes=False)
+    # Reuse the operator's row renderer in READ-ONLY mode: no «Собес» control, plain
+    # non-interactive avatar (the operator `toggleSel` JS isn't in this shell), no
+    # decorative 📎. Row links point to the operator route /mail/message; rewrite them to
+    # the cabinet's own guarded /thread so navigation stays inside this app.
+    listing = mailcrm_ui.render_rows(rows, show_mailbox=True, read_only=True)
     listing = listing.replace("/mail/message?id=", "/thread?hash=")
     inner = (f'<div class="maillist">{listing}</div>' if rows
              else '<div class="empty">Писем пока нет.</div>')

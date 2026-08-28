@@ -24,7 +24,7 @@ except Exception:
 
 from backend.interviews import auth, db  # noqa: E402
 from backend.interviews.cabinet_app import app  # noqa: E402
-from backend.tools import mailcrm  # noqa: E402
+from backend.tools import mailcrm, mailcrm_ui  # noqa: E402
 
 client = TestClient(app)
 
@@ -101,14 +101,23 @@ def test_ownership_guard_blocks_foreign_mailbox(monkeypatch):
     _assign(rid, "test_iv_a@takhet.com")
     monkeypatch.setattr(mail_db, "get_row",
                         lambda h: {"mailbox": "test_iv_a@takhet.com", "thread_key": "t"})
-    monkeypatch.setattr(mailcrm, "get_thread", lambda h, *a, **k: {
-        "subject": "Приглашение", "candidate": "Lara", "mailbox": "test_iv_a@takhet.com",
-        "messages": [{"from_name": "Recruiter", "from_email": "r@corp.com",
-                      "date": "Thu, 28 Aug 2026 10:00:00 +0000", "plain": "Здравствуйте"}],
-    })
+
+    captured: dict = {}
+
+    def fake_thread(h, *a, **k):
+        captured["mark"] = k.get("mark", a[0] if a else "MISSING")
+        return {
+            "subject": "Приглашение", "candidate": "Lara", "mailbox": "test_iv_a@takhet.com",
+            "messages": [{"from_name": "Recruiter", "from_email": "r@corp.com",
+                          "date": "Thu, 28 Aug 2026 10:00:00 +0000", "plain": "Здравствуйте"}],
+        }
+
+    monkeypatch.setattr(mailcrm, "get_thread", fake_thread)
     ok = client.get("/thread", params={"hash": "goodhash"})
     assert ok.status_code == 200
     assert "Приглашение" in ok.text
+    # READ-ONLY: opening a thread must NOT mark it seen (would leak into operator inbox).
+    assert captured["mark"] is False
 
 
 def test_inbox_lists_only_assigned(monkeypatch):
@@ -127,3 +136,35 @@ def test_inbox_lists_only_assigned(monkeypatch):
     assert r.status_code == 200
     assert set(called) == db.assigned_mailboxes(rid) == {"test_iv_inbox@takhet.com"}
     assert "test_iv_foreign@takhet.com" not in called
+
+
+_SAMPLE_ROW = [{
+    "id": "abc123", "from_name": "Recruiter", "from_email": "r@corp.com",
+    "seen": False, "candidate": "Lara", "mailbox": "lara@takhet.com",
+    "has_att": True, "kind": "interview", "thread": "th", "subject": "Invite",
+    "snippet": "hi", "date_ts": 1700000000,
+}]
+
+
+def test_cabinet_inbox_render_strips_operator_cruft():
+    ro = mailcrm_ui.render_rows(_SAMPLE_ROW, show_mailbox=True, read_only=True)
+    assert "📎" not in ro                 # no decorative attachment emoji
+    assert "toggleSel(" not in ro         # no operator select-toggle JS
+    # read_only implies show_sobes=False → no operator «Собес» assign control.
+    # (The generic word "Собес" also appears in the neutral kind-tag "Собеседование",
+    #  which is a category label, not the control — so assert the control's own markup.)
+    assert "iv-sobes" not in ro
+    assert "openSobes(" not in ro
+
+
+def test_operator_render_rows_default_keeps_affordances():
+    op = mailcrm_ui.render_rows(_SAMPLE_ROW)
+    assert "📎" in op
+    assert "toggleSel(" in op
+    # the interview «Собес» control is present in the operator path (unless the
+    # interviews package is unavailable, in which case the lazy import returns "")
+    try:
+        from backend.interviews import operator_ui  # noqa: F401
+        assert "iv-sobes" in op
+    except Exception:
+        pass

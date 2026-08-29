@@ -17,6 +17,7 @@ import html
 import urllib.parse
 
 from backend.tools import catalog_db
+from backend.tools import comp_fmt
 from backend.tools import mailcrm_ui
 
 esc = html.escape
@@ -113,6 +114,9 @@ def _card(j: dict) -> str:
         meta_bits.append(f'<span class="cat-dept">{dept}</span>')
     meta = f'<div class="cat-meta">{" · ".join(meta_bits)}</div>' if meta_bits else ""
 
+    comp = comp_fmt.comp_html(j)
+    comp_row = f'<div class="cat-comp">{comp}</div>' if comp else ""
+
     desc_html = j.get("description_html")
     if desc_html:
         desc = desc_html
@@ -151,7 +155,7 @@ def _card(j: dict) -> str:
         '<article class="cat-card">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
         f'<span class="cat-wp {wt_cls}">{esc(wt)}</span></div>'
-        f'{title_html}{meta}'
+        f'{title_html}{meta}{comp_row}'
         f'{fill_row}{desc_det}{qblock}'
         "</article>")
 
@@ -391,6 +395,9 @@ _CAT_CSS = """<style>
 a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-meta{font-size:12.5px;color:var(--ink-mute);margin-bottom:8px}
 .cat-meta span{color:inherit}
+.cat-comp{font-size:13px;color:var(--ink-soft);margin:-2px 0 9px;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+.cat-comp b{font-weight:700;color:var(--ink)}
+.cat-comp .cmp-lbl{font-size:11px;color:var(--ink-mute);font-weight:500}
 .cat-det{margin-top:4px}
 .cat-det>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:8px;color:var(--ink-soft);font-size:13px;font-weight:600;user-select:none;padding:7px 0}
 .cat-det>summary::-webkit-details-marker{display:none}

@@ -146,9 +146,18 @@ def grid_fragment(mailbox: str, monday: date,
 
     ctx_line = ""
     if company or jobid:
+        comp_str = ""
+        if jobid and str(jobid).isdigit():
+            try:
+                from backend.tools import catalog_db, comp_fmt
+                _job = catalog_db.get_job(int(jobid))
+                comp_str = comp_fmt.comp_text(_job) if _job else ""
+            except Exception:
+                comp_str = ""
         ctx_line = ('<div class="iv-ctx">'
                     + escape(company)
                     + (f' · {escape(jobid)}' if jobid else '')
+                    + (f' · {escape(comp_str)}' if comp_str else '')
                     + '</div>')
 
     return (

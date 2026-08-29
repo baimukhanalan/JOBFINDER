@@ -289,6 +289,34 @@ def backfill_comp(limit: int = 0) -> dict:
     return {"rows_processed": len(rows), "with_pay": hit}
 
 
+def backfill_est_comp(limit: int = 0) -> dict:
+    """Fill the RESEARCHED estimated comp (est_base_* + est_total_*) for rows whose
+    est_comp_source IS NULL — the self-heal for jobs collected AFTER the one-time research
+    fleet. INHERIT a sibling of the same (company, role, region) combo when one exists
+    (source 'research'); else use the deterministic role×region median (source 'rule').
+    Stamps every processed row exactly once."""
+    catalog_db.ensure_schema()
+    from backend.applier import est_comp as est_comp_mod
+    rows = catalog_db.rows_missing_est_comp(limit)
+    inherited = estimated = 0
+    for r in rows:
+        sib = catalog_db.est_from_combo_sibling(r.get("company_key"), r.get("role_category"),
+                                                r.get("regions"))
+        if sib and sib.get("est_base_min"):
+            catalog_db.set_est_comp(r["id"], sib["est_base_min"], sib["est_base_max"],
+                                    sib["est_total_min"], sib["est_total_max"],
+                                    sib.get("est_comp_currency") or "USD", "research",
+                                    only_if_null=True)
+            inherited += 1
+        else:
+            e = est_comp_mod.estimate(r.get("role_category"), r.get("regions"))
+            catalog_db.set_est_comp(r["id"], e["est_base_min"], e["est_base_max"],
+                                    e["est_total_min"], e["est_total_max"], "USD", "rule",
+                                    only_if_null=True)
+            estimated += 1
+    return {"rows_processed": len(rows), "inherited": inherited, "estimated": estimated}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="include non-remote jobs too")
@@ -304,6 +332,9 @@ if __name__ == "__main__":
                     help="classify role_category for distinct titles that lack one")
     ap.add_argument("--backfill-comp", action="store_true",
                     help="extract posted pay range for rows whose comp_source IS NULL")
+    ap.add_argument("--backfill-est-comp", action="store_true",
+                    help="fill estimated comp (base+total) for rows whose est_comp_source "
+                         "IS NULL — inherit a sibling combo, else deterministic median")
     ap.add_argument("--no-llm", action="store_true",
                     help="with --backfill-regions, skip the LLM fallback (deterministic only)")
     ap.add_argument("--limit", type=int, default=0,
@@ -322,6 +353,8 @@ if __name__ == "__main__":
         print(backfill_roles(limit=args.limit), flush=True)
     elif args.backfill_comp:
         print(backfill_comp(limit=args.limit), flush=True)
+    elif args.backfill_est_comp:
+        print(backfill_est_comp(limit=args.limit), flush=True)
     else:
         run(remote_only=not args.all, with_questions=not args.no_questions,
             ats_filter=args.ats, limit=args.limit)

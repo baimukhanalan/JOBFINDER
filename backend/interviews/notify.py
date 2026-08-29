@@ -203,6 +203,8 @@ def rich_reminder_text(interview: dict, responsible_name: str, tz: str | None, p
     lines.append(f"Компания: {pack.get('company') or interview.get('company') or '—'}")
     if pack.get("title"):
         lines.append(f"Вакансия: {pack['title']}")
+    if pack.get("comp"):
+        lines.append(f"Зарплата: {pack['comp']}")
     lines.append(f"Время: {_when(interview, tz)}")
     lines.append(f"Ссылка на созвон: {pack['zoom']}" if pack.get("zoom")
                  else "Ссылка на созвон: не найдена автоматически — см. переписку профиля")

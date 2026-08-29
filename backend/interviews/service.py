@@ -236,7 +236,7 @@ def interview_pack(interview: dict) -> dict:
     is interviewing, the tailored résumé path, and the meeting link. All best-effort —
     a missing piece just comes back empty, never an exception."""
     out = {"company": interview.get("company") or "", "title": "",
-           "persona_name": "", "resume_path": None, "zoom": ""}
+           "persona_name": "", "resume_path": None, "zoom": "", "comp": ""}
     try:
         mb = interview.get("mailbox") or ""
         jobid = str(interview.get("jobid") or "")
@@ -260,6 +260,9 @@ def interview_pack(interview: dict) -> dict:
                     out["title"] = job["title"]
                 if job and job.get("company") and not out["company"]:
                     out["company"] = job["company"]
+                if job:
+                    from backend.tools import comp_fmt
+                    out["comp"] = comp_fmt.comp_text(job)
             except Exception:
                 pass
         out["zoom"] = _zoom_from_thread(interview.get("source_message_hash"))

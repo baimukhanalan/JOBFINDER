@@ -113,6 +113,18 @@ def ensure_schema() -> None:
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_max INT")
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_currency TEXT")
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_source TEXT")
+        # est_*: a RESEARCHED APPROXIMATE comp for EVERY job (posted comp exists on only
+        # ~48% of rows). est_base_* = estimated base-salary range; est_total_* = estimated
+        # TOTAL compensation (base + bonus + equity); both annualized USD ints. Researched
+        # per company×role×region combo (a market estimate, NOT the posting's stated pay),
+        # so it is kept DISTINCT from the posted comp_* — /stats' posted median stays honest.
+        # est_comp_source ∈ {research, rule, none}.
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_base_min INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_base_max INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_total_min INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_total_max INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_comp_currency TEXT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_comp_source TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS jc_role ON job_catalog (role_category)")
         # draft: the full pre-generated application fill-packet (tailored résumé dict +
         # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
@@ -129,7 +141,8 @@ _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
             "department", "workplace", "is_remote", "url", "description",
             "description_html", "questions", "q_count", "regions", "region_source",
             "role_category", "role_source", "comp_min", "comp_max", "comp_currency",
-            "comp_source")
+            "comp_source", "est_base_min", "est_base_max", "est_total_min",
+            "est_total_max", "est_comp_currency", "est_comp_source")
 _QI = _UP_COLS.index("questions")
 
 
@@ -163,6 +176,12 @@ def upsert_jobs(rows: list[dict]) -> int:
            "comp_max=COALESCE(job_catalog.comp_max, EXCLUDED.comp_max), "
            "comp_currency=COALESCE(job_catalog.comp_currency, EXCLUDED.comp_currency), "
            "comp_source=COALESCE(job_catalog.comp_source, EXCLUDED.comp_source), "
+           "est_base_min=COALESCE(job_catalog.est_base_min, EXCLUDED.est_base_min), "
+           "est_base_max=COALESCE(job_catalog.est_base_max, EXCLUDED.est_base_max), "
+           "est_total_min=COALESCE(job_catalog.est_total_min, EXCLUDED.est_total_min), "
+           "est_total_max=COALESCE(job_catalog.est_total_max, EXCLUDED.est_total_max), "
+           "est_comp_currency=COALESCE(job_catalog.est_comp_currency, EXCLUDED.est_comp_currency), "
+           "est_comp_source=COALESCE(job_catalog.est_comp_source, EXCLUDED.est_comp_source), "
            "last_seen=now()")
     with _cur(False) as cur:
         cur.executemany(sql, vals)
@@ -171,7 +190,9 @@ def upsert_jobs(rows: list[dict]) -> int:
 
 _LIST_COLS = ("id", "ats", "company_key", "company", "title", "location", "department",
               "workplace", "is_remote", "url", "description", "description_html",
-              "questions", "q_count")
+              "questions", "q_count", "comp_min", "comp_max", "comp_currency",
+              "est_base_min", "est_base_max", "est_total_min", "est_total_max",
+              "est_comp_currency")
 
 
 def list_jobs(company: str | None = None, q: str | None = None, remote_only: bool = True,
@@ -302,6 +323,95 @@ def set_comp(row_id: int, comp_min, comp_max, currency: str, source: str,
         return cur.rowcount
 
 
+def set_est_comp(row_id: int, base_min, base_max, total_min, total_max, currency: str,
+                 source: str, only_if_null: bool = False) -> int:
+    """Set the RESEARCHED estimated comp for one row by id: an approximate base range
+    (est_base_*) + total-comp range (est_total_*, base+bonus+equity), annualized USD.
+    Kept DISTINCT from the POSTED comp_* so /stats' posted median stays honest."""
+    sql = ("UPDATE job_catalog SET est_base_min=%s, est_base_max=%s, est_total_min=%s, "
+           "est_total_max=%s, est_comp_currency=%s, est_comp_source=%s WHERE id=%s")
+    if only_if_null:
+        sql += " AND est_comp_source IS NULL"
+    with _cur(False) as cur:
+        cur.execute(sql, (base_min, base_max, total_min, total_max, currency, source, row_id))
+        return cur.rowcount
+
+
+def set_est_comp_for_combo(company_key, role_category, regions, base_min, base_max,
+                           total_min, total_max, currency: str, source: str,
+                           only_if_null: bool = False) -> int:
+    """Apply one company×role×region research estimate to EVERY job of that combo in a
+    single UPDATE (the fleet researches ~1.5k combos, not ~6k jobs). NULL company_key /
+    role_category are matched with IS NOT DISTINCT FROM; regions is matched by exact array
+    equality (or IS NULL) — the same grouping combos_for_est produced."""
+    # `%s::text[]` so an EMPTY combo (regions=[]) casts cleanly (a bare empty ARRAY[] has
+    # no inferable type); a non-empty list matches by exact array equality.
+    reg_clause = "regions = %s::text[]" if regions is not None else "regions IS NULL"
+    sql = ("UPDATE job_catalog SET est_base_min=%s, est_base_max=%s, est_total_min=%s, "
+           "est_total_max=%s, est_comp_currency=%s, est_comp_source=%s "
+           "WHERE company_key IS NOT DISTINCT FROM %s AND role_category IS NOT DISTINCT FROM %s "
+           "AND " + reg_clause)
+    args = [base_min, base_max, total_min, total_max, currency, source, company_key, role_category]
+    if regions is not None:
+        args.append(regions)
+    if only_if_null:
+        sql += " AND est_comp_source IS NULL"
+    with _cur(False) as cur:
+        cur.execute(sql, tuple(args))
+        return cur.rowcount
+
+
+def rows_missing_est_comp(limit: int = 0) -> list:
+    """Live rows with no researched estimate yet — the est-comp backfill work-list. Carries
+    the combo dims (company/role/regions) a deterministic estimator keys off."""
+    sql = ("SELECT id, company_key, company, role_category, regions, title, location "
+           "FROM job_catalog WHERE est_comp_source IS NULL AND NOT COALESCE(dead, FALSE)")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def est_from_combo_sibling(company_key, role_category, regions) -> dict | None:
+    """The est comp of an EXISTING job in the same (company_key, role_category, regions)
+    combo, so a NEW job of a known combo INHERITS the researched value rather than a
+    generic role×region median. None if no sibling carries an estimate."""
+    reg_clause = "regions = %s::text[]" if regions is not None else "regions IS NULL"
+    sql = ("SELECT est_base_min, est_base_max, est_total_min, est_total_max, est_comp_currency "
+           "FROM job_catalog WHERE company_key IS NOT DISTINCT FROM %s "
+           "AND role_category IS NOT DISTINCT FROM %s AND " + reg_clause +
+           " AND est_comp_source IS NOT NULL AND est_base_min IS NOT NULL LIMIT 1")
+    args = [company_key, role_category]
+    if regions is not None:
+        args.append(regions)
+    with _cur() as cur:
+        cur.execute(sql, tuple(args))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
+def combos_for_est(limit: int = 0) -> list:
+    """Distinct (company_key, company, role_category, regions) combos over LIVE remote jobs
+    + a representative title/location + job count — the unit the research fleet estimates
+    comp for (comp tracks company×role×region, ~1.5k combos vs ~6k jobs)."""
+    sql = ("SELECT company_key, max(company) AS company, role_category, regions, "
+           "count(*)::int AS n, (array_agg(title ORDER BY id))[1] AS sample_title, "
+           "(array_agg(location ORDER BY id) FILTER "
+           "(WHERE location IS NOT NULL AND location <> ''))[1] AS sample_location "
+           "FROM job_catalog WHERE NOT COALESCE(dead, FALSE) AND is_remote=TRUE "
+           "GROUP BY company_key, role_category, regions "
+           # FULLY deterministic order: research-fleet agents each re-query this and take a
+           # stable [offset:offset+n] slice, so the ordering must never shift between calls.
+           "ORDER BY count(*) DESC, company_key NULLS LAST, role_category NULLS LAST, "
+           "regions NULLS LAST")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
 def rows_missing_role(limit: int = 0) -> list:
     """Distinct titles still lacking a role_category (the backfill work-list).
     Role is title-based, so one representative row (+ its department) per title."""
@@ -328,7 +438,9 @@ def rows_missing_comp(limit: int = 0) -> list:
 
 _JOB_COLS = ("id", "ats", "company_key", "company", "external_id", "title", "location",
              "department", "workplace", "is_remote", "url", "description",
-             "questions", "q_count", "regions", "draft", "draft_at")
+             "questions", "q_count", "regions", "draft", "draft_at", "role_category",
+             "comp_min", "comp_max", "comp_currency", "est_base_min", "est_base_max",
+             "est_total_min", "est_total_max", "est_comp_currency")
 
 
 def get_job(job_id: int) -> dict | None:

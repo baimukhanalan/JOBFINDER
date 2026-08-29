@@ -117,7 +117,10 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   a `role_category` (one of 13 functional buckets) + `role_source` classified by
   `applier/role_category.py` (title+department, deterministic, at collect time), and a posted-pay
   range `comp_min`/`comp_max`/`comp_currency` + `comp_source` extracted from the description by
-  `applier/comp_extract.py` — both feed the `/stats` «По ролям» cut (see the stats gotcha);
+  `applier/comp_extract.py` — both feed the `/stats` «По ролям» cut (see the stats gotcha); plus a
+  RESEARCHED estimated comp for EVERY job (`est_base_min/max` base range + `est_total_min/max` total
+  comp = base+bonus+equity, annualized USD, `est_comp_currency`/`est_comp_source`), kept DISTINCT from
+  the posted `comp_*` — see the est-comp gotcha;
   `questions JSONB` per job (GH via API, Ashby/Lever/Workable via `tools/catalog_forms.py` Playwright).
   A `dead BOOLEAN` + `dead_reason` blacklist marks postings confirmed gone at the source (e.g. a GH
   job id that now 404s); `catalog_db.mark_dead()` sets it (reversible) and `list_jobs`/`companies`/
@@ -272,6 +275,28 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   only-if-NULL). NO cron needed — the nightly collect self-heals NULLs. role_category 100% of live rows,
   comp ~48% (many remote-intl postings disclose no pay). The role table + company table share one sort
   JS (`table.st-sort`). Tests: `test_role_category.py`, `test_comp_extract.py`, `test_stats.py::test_role_aggregation`.
+- **Estimated comp for EVERY job (base + total compensation), shown in `/catalog` + the «Собес» (2026-08-29).**
+  Posted pay exists on only ~48% of jobs, so a RESEARCHED estimate covers the rest. `job_catalog` gained
+  `est_base_min/max` (base range) + `est_total_min/max` (total comp = base+bonus+equity, annualized USD) +
+  `est_comp_currency`/`est_comp_source` (`research`|`rule`|`none`), kept SEPARATE from posted `comp_*` so
+  `/stats`' posted-median stays honest. **Data pipeline:** comp tracks company×role×region, so a one-time
+  fleet of ~123 sonnet agents (a `Workflow`) web-researched the **1473 distinct (company_key, role_category,
+  regions) combos** (`catalog_db.combos_for_est`, deterministically ordered so agents take non-overlapping
+  slices) → each combo's estimate applied to ALL its jobs (`set_est_comp_for_combo`, `regions=%s::text[]` for
+  the empty-array combos); **100% of the 6243 live jobs are covered**. **Self-heal for NEW jobs** (no fleet
+  re-run): `catalog_collector --backfill-est-comp` → INHERIT a sibling of the same combo
+  (`catalog_db.est_from_combo_sibling`, source `research`) else the deterministic role×region median
+  (`applier/est_comp.py::estimate` — a table baked from the fleet's medians, source `rule`); the upsert
+  COALESCEs existing-first so a re-collect never clobbers it. **Display** (`tools/comp_fmt.py`,
+  neutral-labelled — no stack disclosure): `comp_html`/`comp_text` show the POSTED range («по вакансии»,
+  authoritative) plus the estimated TOTAL **only when it exceeds the posted ceiling** (adds equity/bonus;
+  a lower estimate is contradictory noise → hidden); jobs with no posted pay show «база · оценка» +
+  «total · оценка». Wired into the `/catalog` card (`catalog_ui._card`, `.cat-comp`), the «Собес» modal
+  context (`operator_ui.grid_fragment` ctx-line, resolves `get_job`), `service.interview_pack['comp']`, and
+  the −60 Telegram reminder (`notify.rich_reminder_text`). `_LIST_COLS`/`_JOB_COLS` now SELECT the comp+est
+  cols so the card and `interview_pack` can read them. Only the dashboard restarts for display changes.
+  Tests: `test_comp_fmt.py` (formatter + `est_comp` estimator). Refresh the `_MED` table in `est_comp.py`
+  from `job_catalog` if the role taxonomy/market shifts; NO nightly fleet needed — the collect self-heals.
 - **Replying as a candidate: the submission password comes from the DB, not the JSON cache
   (`mailcrm.send`, 2026-08-28).** Sending a reply authenticates to Postfix submission (587, SASL) AS the
   candidate mailbox, using its password. That password was read only from `backend/data/

@@ -10,7 +10,7 @@ responsible's OWN timezone (auto-detected from their device; see routes_cabinet 
 """
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from html import escape
 
 from backend.interviews import avail_editor, slots
@@ -145,20 +145,35 @@ def _fmt_local(dt, tz=None) -> str:
 
 def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
     rtz = responsible.get("tz")
-    if interviews:
-        items = []
-        for iv in interviews:
-            mailbox = escape(iv.get("mailbox") or "")
-            company = escape(iv.get("company") or "")
-            when = escape(_fmt_local(iv.get("start_ts"), rtz))
-            h = iv.get("source_message_hash")
-            link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Открыть переписку</a>'
-                    if h else '<a href="/cabinet/inbox">Почта</a>')
-            meta = mailbox + (f' · <b>{company}</b>' if company else "")
-            items.append(
-                f'<li><span class="iv-when">{when}</span>'
+
+    def _item(iv: dict, past: bool = False) -> str:
+        mailbox = escape(iv.get("mailbox") or "")
+        company = escape(iv.get("company") or "")
+        when = escape(_fmt_local(iv.get("start_ts"), rtz))
+        h = iv.get("source_message_hash")
+        link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Открыть переписку</a>'
+                if h else '<a href="/cabinet/inbox">Почта</a>')
+        meta = mailbox + (f' · <b>{company}</b>' if company else "")
+        li_open = '<li style="opacity:.62;">' if past else '<li>'
+        tag = ('<span style="color:var(--ink-mute);font-weight:600;font-size:12px;">'
+               ' · прошло</span>' if past else "")
+        return (f'{li_open}<span class="iv-when">{when}{tag}</span>'
                 f'<span class="iv-meta">{meta}</span>'
                 f'<span>{link}</span></li>')
+
+    # An assigned собес whose slot time has already passed (but that was never cancelled)
+    # is STILL shown — the operator week grid can book an already-passed day of the current
+    # week — so a just-assigned собес never silently vanishes. Upcoming ones (soonest first,
+    # from the DB's ascending order) sit on top; past-but-still-assigned ones follow (most
+    # recent first), clearly marked «прошло».
+    now = datetime.now(timezone.utc)
+    upcoming, past = [], []
+    for iv in interviews:
+        st = iv.get("start_ts")
+        (past if (st is not None and st < now) else upcoming).append(iv)
+
+    if interviews:
+        items = [_item(iv) for iv in upcoming] + [_item(iv, past=True) for iv in reversed(past)]
         block = f'<ul class="iv-list">{"".join(items)}</ul>'
     else:
         block = '<div class="empty">Предстоящих собеседований нет.</div>'

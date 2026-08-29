@@ -231,10 +231,21 @@ def insert_interview(mailbox: str, responsible_id: int | None, start_ts: datetim
 
 
 def interviews_for_responsible(rid: int, upcoming_only: bool = False) -> list[dict]:
+    """Interviews assigned to a responsible, ordered by start_ts.
+
+    `upcoming_only=True` (the cabinet «Мои собеседования» view) returns every
+    ACTIVE (non-cancelled) собес assigned to them — NOT strictly `start_ts > now()`.
+    A собес must stay visible to the interviewer it's assigned to until it is
+    cancelled or reassigned away: the operator week grid spans the whole current
+    Mon–Sun week, so an already-passed day of THIS week is bookable and yields a
+    past start_ts, and a strict future filter silently hid a just-assigned собес
+    (the interviewer's cabinet read empty though a собес was assigned). Only the
+    cabinet dashboard renders past ones distinctly; here we just stop hiding them.
+    `upcoming_only=False` returns ALL rows for the responsible (incl. cancelled)."""
     sql = "SELECT * FROM iv_interviews WHERE responsible_id=%s"
     args: list = [rid]
     if upcoming_only:
-        sql += " AND start_ts > now() AND status <> 'cancelled'"
+        sql += " AND status <> 'cancelled'"
     sql += " ORDER BY start_ts ASC"
     with mail_db._cur() as cur:
         cur.execute(sql, tuple(args))

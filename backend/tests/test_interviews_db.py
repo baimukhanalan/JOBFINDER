@@ -42,6 +42,49 @@ def _future(minutes: int) -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=minutes)
 
 
+def _past(minutes: int) -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=minutes)
+
+
+def test_interviews_for_responsible_shows_assigned_incl_recent_past():
+    """The cabinet dashboard must SHOW every non-cancelled собес assigned to the
+    interviewer — including one whose slot time has already passed. The operator week
+    grid spans the whole CURRENT Mon–Sun week, so already-passed days of this week are
+    bookable and yield a past start_ts; a strict `start_ts > now()` filter then hid a
+    just-assigned собес and the cabinet read "Предстоящих собеседований нет." Only
+    cancelled/reassigned-away собесы must be excluded. Regression for that empty cabinet."""
+    rid = db.add_responsible("test_iv_up", "h", "Up")
+
+    past_start = _past(60 * 24 * 3)   # 3 days ago — a passed day of the current week
+    fut_start = _future(60 * 24 * 2)  # 2 days out
+
+    past_id = db.insert_interview(
+        mailbox="test_iv_up_past@x.com", responsible_id=rid, start_ts=past_start,
+        end_ts=past_start + timedelta(hours=1), company="Acme", jobid="p",
+        thread_key="tpast", source_message_hash="hp",
+    )
+    fut_id = db.insert_interview(
+        mailbox="test_iv_up_fut@x.com", responsible_id=rid, start_ts=fut_start,
+        end_ts=fut_start + timedelta(hours=1), company="Beta", jobid="f",
+        thread_key="tfut", source_message_hash="hf",
+    )
+    cancelled_id = db.insert_interview(
+        mailbox="test_iv_up_cx@x.com", responsible_id=rid,
+        start_ts=fut_start + timedelta(hours=3), end_ts=fut_start + timedelta(hours=4),
+        company="Gamma", jobid="c", thread_key="tcx", source_message_hash="hc",
+    )
+    db.cancel_active_for_thread("test_iv_up_cx@x.com", "tcx")
+
+    ids = {iv["id"] for iv in db.interviews_for_responsible(rid, upcoming_only=True)}
+    assert past_id in ids           # a non-cancelled past-dated assignment stays visible
+    assert fut_id in ids            # a future assignment is visible
+    assert cancelled_id not in ids  # a cancelled / reassigned собес is hidden
+
+    # upcoming_only=False is unchanged — it returns ALL rows incl. the cancelled one
+    all_ids = {iv["id"] for iv in db.interviews_for_responsible(rid, upcoming_only=False)}
+    assert {past_id, fut_id, cancelled_id} <= all_ids
+
+
 def test_schema_idempotent_and_responsible_roundtrip():
     db.ensure_schema()
     db.ensure_schema()  # idempotent — must not raise the second time

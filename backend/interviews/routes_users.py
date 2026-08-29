@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from backend.interviews import auth, db, slots, users_ui
 
@@ -32,13 +32,33 @@ def _render_list(notice=None) -> HTMLResponse:
     since = slots.cell_start_utc(slots.DEFAULT_TZ, monday, 0)
     until = since + timedelta(days=7)
     week_by_id: dict = {}
+    sig = ""
     try:
         for iv in db.interviews_for_week(since, until):
             week_by_id.setdefault(iv["responsible_id"], []).append(iv)
+        sig = db.week_signature(since, until)
     except Exception:
         week_by_id = {}
     return HTMLResponse(users_ui.list_page(users, avail, notice,
-                                           week_by_id=week_by_id, monday=monday))
+                                           week_by_id=week_by_id, monday=monday, week_sig=sig))
+
+
+def _week_window():
+    now_local = slots.to_local(datetime.now(timezone.utc), slots.DEFAULT_TZ)
+    monday = now_local.date() - timedelta(days=now_local.weekday())
+    since = slots.cell_start_utc(slots.DEFAULT_TZ, monday, 0)
+    return since, since + timedelta(days=7)
+
+
+@router.get("/users/signature")
+def users_signature() -> JSONResponse:
+    """A cheap signature of this week's interviews — the /users page polls it and, on a
+    change (a собес assigned/reassigned/cancelled), re-fetches + swaps the cards in place."""
+    try:
+        since, until = _week_window()
+        return JSONResponse({"sig": db.week_signature(since, until)})
+    except Exception:
+        return JSONResponse({"sig": ""})
 
 
 def _render_edit(rid: int, notice=None) -> HTMLResponse:

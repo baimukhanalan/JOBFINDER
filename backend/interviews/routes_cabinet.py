@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import secrets
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from backend.interviews import auth, cabinet_ui, db, notify, slots
@@ -125,4 +125,44 @@ def thread(hash: str, responsible: dict = Depends(auth.current_responsible)):
     thread = mailcrm.get_thread(hash, mark=False)
     if not thread:
         return HTMLResponse("<h1>404</h1>", status_code=404)
-    return HTMLResponse(cabinet_ui.thread_page(responsible, thread))
+    return HTMLResponse(cabinet_ui.thread_page(responsible, thread, hash=hash))
+
+
+@router.post("/reply", response_class=HTMLResponse)
+def reply(hash: str = Form(...), body: str = Form(...),
+          responsible: dict = Depends(auth.current_responsible)):
+    """An interviewer replies to a recruiter FROM the assigned persona's mailbox. Ownership
+    guard identical to /thread: the thread must belong to one of THIS responsible's assigned
+    personas, else 404. from/to/subject are derived server-side from the owned thread — the
+    interviewer only supplies the body, so they cannot spoof sender or recipient."""
+    row = None
+    try:
+        row = mail_db.get_row(hash)
+    except Exception as e:
+        log.warning("reply get_row failed: %s", e)
+    if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
+        return HTMLResponse("<h1>404</h1>", status_code=404)
+
+    thread = mailcrm.get_thread(hash, mark=False) or {}
+    msgs = thread.get("messages") or []
+    persona = row.get("mailbox") or ""
+    # reply TO the latest INBOUND sender (the recruiter); derive subject + in-reply-to.
+    inbound = [m for m in msgs if not m.get("outbound")]
+    target = inbound[-1] if inbound else (msgs[-1] if msgs else {})
+    to = (target.get("from_email") or "").strip()
+    subj = (thread.get("subject") or target.get("subject") or "").strip()
+    if subj and not subj.lower().startswith("re:"):
+        subj = "Re: " + subj
+    mid = target.get("message_id") or ""
+
+    sent = "err"
+    if to and (body or "").strip():
+        try:
+            res = mailcrm.send(from_email=persona, to=to, subject=subj or "Re:",
+                               body=body, in_reply_to=mid)
+            sent = "ok" if res.get("ok") else "err"
+        except Exception as e:
+            log.warning("cabinet reply send failed: %s", e)
+            sent = "err"
+    fresh = mailcrm.get_thread(hash, mark=False) or thread
+    return HTMLResponse(cabinet_ui.thread_page(responsible, fresh, hash=hash, sent=sent))

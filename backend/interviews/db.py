@@ -252,6 +252,19 @@ def interviews_for_week(since, until) -> list[dict]:
         return [dict(r) for r in cur.fetchall()]
 
 
+def week_signature(since, until) -> str:
+    """A cheap change-signature of this week's interviews for the /users auto-refresh: count
+    of non-cancelled interviews in the window + the latest created_at (epoch). Changes on any
+    assign / reassign / cancel, so a polling tab knows when to refresh."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(
+            "SELECT count(*), COALESCE(EXTRACT(EPOCH FROM max(created_at))::bigint, 0) "
+            "FROM iv_interviews WHERE status <> 'cancelled' AND responsible_id IS NOT NULL "
+            "AND start_ts >= %s AND start_ts < %s", (since, until))
+        n, mx = cur.fetchone()
+    return f"{n}:{mx}"
+
+
 def assigned_mailboxes(rid: int) -> set:
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("SELECT DISTINCT mailbox FROM iv_interviews "

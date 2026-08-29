@@ -1246,11 +1246,15 @@ tz-parametrised (80 pass).
   app (`cabinet_app.py` on 8103, pm2 `jobfinder-alan-cabinet`, `cabinet.systeam.kz`); now ONE domain
   (`jobs.systeam.kz`), ONE role-gated login. Employee views live in **`interviews/routes_cabinet.py`**
   (`APIRouter(prefix="/cabinet")`, `include_router`'d guarded into `dashboard_app`): `/cabinet` (upcoming
-  interviews), `/cabinet/availability` (GET+POST), `/cabinet/inbox`, `/cabinet/thread`. The employee logs
-  in at the SAME `/login` (`dash_auth`) and lands on `/cabinet`; sees ONLY the mail of their assigned
-  personas (read-only; reuses `mailcrm.list_messages`/`get_thread` with `mark=False`) + their upcoming
-  interviews. **Ownership guard lives in `/cabinet/thread`** (`mail_db.get_row(hash).mailbox in
-  assigned_mailboxes(rid)` else 404; `mailcrm` reads UNCHANGED). **ISOLATION is now a WHITELIST at the
+  interviews), `/cabinet/availability` (GET+POST), `/cabinet/inbox`, `/cabinet/thread`, `/cabinet/reply`
+  (POST). The employee logs in at the SAME `/login` (`dash_auth`) and lands on `/cabinet`; sees ONLY the
+  mail of their assigned personas + their upcoming interviews. **Ownership guard lives in
+  `/cabinet/thread` AND `/cabinet/reply`** (`mail_db.get_row(hash).mailbox in assigned_mailboxes(rid)` else
+  404; `mailcrm` reads UNCHANGED). **Interviewers can REPLY (added 2026-08-30):** the thread view shows a
+  reply box (`cabinet_ui.thread_page`, gated on `hash`); `POST /cabinet/reply` re-checks ownership then
+  `mailcrm.send`s FROM the persona mailbox TO the recruiter — from/to/subject/in-reply-to are derived
+  SERVER-SIDE from the owned thread (latest inbound sender), the interviewer only types the body, so they
+  can't spoof sender/recipient. Reading a thread is still `mark=False` (never flips seen). **ISOLATION is now a WHITELIST at the
   gate:** `dash_auth.AdminAuthMiddleware` lets an `employee` session reach ONLY `/cabinet/*`
   (`_employee_allowed`) — every other route on this PII dashboard → 303 `/cabinet`; an `admin` gets full
   access (and may view `/cabinet`); no session → `/login`; `/login` POST redirects by role
@@ -1279,7 +1283,14 @@ tz-parametrised (80 pass).
   who's loaded and keep the balance when assigning (the owner's workflow: `/users` open in one window to see
   everyone's week, the «Собес» assign in another). `routes_users._render_list` fetches the current week
   (Mon–Sun in the team default tz) once via `db.interviews_for_week(since, until)` and groups by
-  responsible_id. Tests: `test_users_calendar.py`. ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
+  responsible_id. Tests: `test_users_calendar.py`. **The calendar is COLLAPSIBLE (2026-08-30):** click the
+  «Собесы на неделе: N» head (`uCalToggle`) to expand/collapse the grid. **`/users` AUTO-REFRESHES
+  (2026-08-30):** a JS poll of `GET /users/signature` (a cheap `db.week_signature` = count + max(created_at)
+  of the week's non-cancelled interviews) swaps just the `#u-list` cards from a fresh `/users` fetch when a
+  собес is assigned/reassigned/cancelled elsewhere — so a second admin tab checking load updates itself
+  (`/users/signature` is registered BEFORE `/users/{rid}` so it isn't caught by the int path param). A
+  visible **«Выход»** button was added to the `/users` header (logout is also in the shell drawer/rail).
+  ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
   gates it (no separate check needed). POST handlers re-render the page with a banner (a generated password
   is shown once, inline — never in a URL/redirect/log). **Deletion (added 2026-08-29):** a responsible with
   interview HISTORY is DEACTIVATED (the `iv_interviews` FK has no ON DELETE, so history is preserved), but one

@@ -49,6 +49,11 @@ _CSS = """
 /* weekly load calendar */
 .u-cal-head{margin-top:11px;font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .u-cal-head b{font-family:var(--ff-mono);color:var(--ink)}
+.u-cal-tog{cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:7px}
+.u-cal-tog:hover{color:var(--ink)}
+.u-cal-chev{transition:transform .15s;color:var(--ink-mute);font-size:11px}
+.u-cal-collapsed .u-cal-chev{transform:rotate(-90deg)}
+.u-logout{flex:0 0 auto}
 .u-cal-empty{margin-top:4px;font-size:12.5px;color:var(--ink-mute)}
 .u-cal{margin-top:7px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .u-cal-day{min-width:0;display:flex;flex-direction:column;gap:4px;padding:6px 5px;border-radius:var(--r-sm);background:var(--panel-2);min-height:54px}
@@ -163,12 +168,14 @@ def _week_calendar(interviews: list[dict], tz, monday) -> str:
                  if items else "<span class='u-slot-none'>—</span>")
         cols.append(f"<div class='u-cal-day{' has' if items else ''}'>"
                     f"<span class='u-cal-dn'>{_DOW[d]}</span>{inner}</div>")
-    return (f"<div class='u-cal-head'>Собесы на неделе: <b>{total}</b></div>"
+    # the head toggles the grid open/closed (expand to see every собес, collapse for tidiness)
+    return (f"<div class='u-cal-head u-cal-tog' onclick='uCalToggle(this)' role='button' tabindex='0'>"
+            f"Собесы на неделе: <b>{total}</b><span class='u-cal-chev' aria-hidden='true'>▾</span></div>"
             f"<div class='u-cal'>{''.join(cols)}</div>")
 
 
 def list_page(users: list[dict], avail_by_id: dict, notice=None,
-              week_by_id: dict | None = None, monday=None) -> str:
+              week_by_id: dict | None = None, monday=None, week_sig: str = "") -> str:
     week_by_id = week_by_id or {}
     cards = []
     for u in users:
@@ -188,14 +195,15 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
             f"<div class='u-av'><span class='k'>Доступность ({escape(slots.tz_label(u.get('tz')))}):</span>{av}</div>"
             f"{week_html}"
             "</div>")
-    listing = ("<div class='u-list'>" + "".join(cards) + "</div>") if cards else (
-        "<div class='u-empty'>Пока нет пользователей — добавьте первого выше.</div>")
+    listing = ("<div class='u-list' id='u-list'>" + "".join(cards) + "</div>") if cards else (
+        "<div class='u-empty' id='u-list'>Пока нет пользователей — добавьте первого выше.</div>")
 
     body = (
         _CSS +
         "<div class='u-wrap'>"
         "<div class='u-top'><h1 class='u-h1'>Пользователи"
-        f"<b>{len(users)}</b></h1></div>"
+        f"<b>{len(users)}</b></h1>"
+        "<a class='hbtn u-logout' href='/logout'>Выход</a></div>"
         "<p class='u-lead'>Ответственные, которым можно назначать интервью по кнопке «Собес». "
         "Они входят в кабинет и видят почту персоны только после назначения. "
         "Чтобы человека можно было назначить — задайте ему доступность.</p>"
@@ -213,8 +221,45 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "</form></div>"
 
         + listing +
-        "</div>")
+        "</div>"
+        + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))
     return mailcrm_ui._page("users", body)
+
+
+_USERS_JS = """
+<script>
+// collapse/expand an interviewer's weekly calendar (click the «Собесы на неделе» head)
+function uCalToggle(head){
+  var cal=head.nextElementSibling;
+  if(!cal||!cal.classList.contains('u-cal')) return;
+  if(cal.hasAttribute('hidden')){cal.removeAttribute('hidden');head.classList.remove('u-cal-collapsed');}
+  else{cal.setAttribute('hidden','');head.classList.add('u-cal-collapsed');}
+}
+document.addEventListener('keydown',function(e){
+  if((e.key==='Enter'||e.key===' ')&&e.target&&e.target.classList&&e.target.classList.contains('u-cal-tog')){
+    e.preventDefault(); uCalToggle(e.target);
+  }
+});
+// Auto-refresh the interviewer cards (+ their weekly calendars) when a собес is assigned/
+// reassigned/cancelled elsewhere — so a second admin tab checking load updates itself.
+// Poll a cheap signature; on change, fetch /users and swap just the #u-list cards.
+(function(){
+  var sig="__SIG__", busy=false;
+  setInterval(function(){
+    if(busy||document.hidden) return; busy=true;
+    fetch('/users/signature').then(function(r){return r.ok?r.json():null;}).then(function(j){
+      if(!j||!j.sig||j.sig===sig){ busy=false; return; }
+      return fetch('/users').then(function(r){return r.text();}).then(function(html){
+        var doc=new DOMParser().parseFromString(html,'text/html');
+        var fresh=doc.getElementById('u-list'), cur=document.getElementById('u-list');
+        if(fresh&&cur) cur.innerHTML=fresh.innerHTML;
+        sig=j.sig; busy=false;
+      });
+    }).catch(function(){busy=false;});
+  }, 20000);
+})();
+</script>
+"""
 
 
 def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0) -> str:

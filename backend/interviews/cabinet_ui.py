@@ -88,6 +88,12 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .back-link{display:inline-block;margin-bottom:14px;color:var(--ink-soft);font-weight:600;}
 .tsubj{font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0 0 4px;}
 .tbox{color:var(--ink-mute);font-size:12px;margin-bottom:16px;}
+.cab-reply{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+  padding:16px 18px;display:flex;flex-direction:column;gap:10px;}
+.cab-reply-h{font-weight:700;color:var(--ink);font-size:14px;}
+.cab-reply textarea{width:100%;resize:vertical;min-height:96px;font:inherit;padding:10px 12px;
+  border:1px solid var(--line-strong);border-radius:var(--r-sm);}
+.cab-reply button{align-self:flex-start;}
 """
 
 
@@ -235,15 +241,35 @@ def _thread_card(m: dict) -> str:
         f'<div class="body">{body}</div></div>')
 
 
-def thread_page(responsible: dict, thread: dict) -> str:
+def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None) -> str:
     subj = thread.get("subject") or "(без темы)"
     mailbox = thread.get("mailbox") or ""
     candidate = thread.get("candidate") or ""
     msgs = thread.get("messages") or []
     cards = "".join(_thread_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
     box = escape(candidate) + (f' &lt;{escape(mailbox)}&gt;' if mailbox else "")
+
+    sent_banner = ""
+    if sent == "ok":
+        sent_banner = '<div class="note">Ответ отправлен рекрутёру.</div>'
+    elif sent == "err":
+        sent_banner = '<div class="err">Не удалось отправить ответ. Попробуйте ещё раз.</div>'
+
+    # Reply is sent server-side FROM the profile mailbox to the recruiter (derived from the
+    # thread) — the interviewer only types the body; they can't spoof the from/to. The
+    # /cabinet/reply route re-checks that this thread belongs to one of their assigned personas.
+    reply_form = ""
+    if hash:
+        reply_form = (
+            '<form method="post" action="/cabinet/reply" class="cab-reply">'
+            f'<input type="hidden" name="hash" value="{escape(hash, quote=True)}">'
+            '<div class="cab-reply-h">Ответить рекрутёру (от имени профиля)</div>'
+            '<textarea name="body" rows="4" placeholder="Текст ответа…" required></textarea>'
+            '<button class="primary" type="submit">Отправить ответ</button>'
+            '</form>')
+
     body = (_topbar(responsible, "inbox") +
             '<a class="back-link" href="/cabinet/inbox">← К списку</a>'
             f'<h1 class="tsubj">{escape(subj)}</h1>'
-            f'<div class="tbox">Ящик: {box}</div>' + cards)
+            f'<div class="tbox">Ящик: {box}</div>' + sent_banner + cards + reply_form)
     return _doc(body, subj)

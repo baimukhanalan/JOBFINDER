@@ -40,20 +40,20 @@ _CSS = """
 .mh-head h1{font-size:26px;font-weight:700;margin:0;letter-spacing:-.02em;}
 .mh-sub{color:var(--ink-soft);font-size:14px;margin:2px 0 0;}
 .mh-meta{margin-left:auto;text-align:right;color:var(--ink-soft);font-size:13px;line-height:1.5;}
-.mh-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--card);
+.mh-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);
   color:var(--ink);border-radius:9px;padding:8px 13px;font:inherit;font-weight:600;font-size:13px;cursor:pointer;}
-.mh-refresh:hover{background:var(--hover);}
+.mh-refresh:hover{background:var(--panel-2);}
 .mh-chips{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 18px;}
 .mh-chip{border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600;
-  color:var(--ink-soft);text-decoration:none;background:var(--card);white-space:nowrap;}
+  color:var(--ink-soft);text-decoration:none;background:var(--panel);white-space:nowrap;}
 .mh-chip.on{background:var(--accent,#2f6fed);border-color:var(--accent,#2f6fed);color:#fff;}
-.mh-card{border:1px solid var(--line);border-radius:14px;background:var(--card);margin-bottom:12px;overflow:hidden;}
+.mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
 .mh-score{flex:0 0 auto;width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;
   font-weight:700;font-size:17px;font-variant-numeric:tabular-nums;}
 .mh-score.hi{background:#0f7b3e;color:#fff;}.mh-score.mid{background:#e6f0ff;color:#1a4fb0;}
-.mh-score.lo{background:var(--hover);color:var(--ink-soft);}
+.mh-score.lo{background:var(--panel-2);color:var(--ink-soft);}
 .mh-cinfo{min-width:0;flex:1 1 auto;}
 .mh-cname{font-weight:700;font-size:16px;letter-spacing:-.01em;}
 .mh-cstats{color:var(--ink-soft);font-size:13px;margin-top:2px;}

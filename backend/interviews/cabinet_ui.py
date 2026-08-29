@@ -86,9 +86,9 @@ def _doc(body: str, title: str = "Кабинет") -> str:
 
 def _topbar(responsible: dict, active: str) -> str:
     name = escape(responsible.get("name") or responsible.get("login") or "")
-    nav = (f'<a class="{"active" if active=="home" else ""}" href="/">Мои собеседования</a>'
-           f'<a class="{"active" if active=="availability" else ""}" href="/availability">Расписание</a>'
-           f'<a class="{"active" if active=="inbox" else ""}" href="/inbox">Почта</a>'
+    nav = (f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Мои собеседования</a>'
+           f'<a class="{"active" if active=="availability" else ""}" href="/cabinet/availability">Расписание</a>'
+           f'<a class="{"active" if active=="inbox" else ""}" href="/cabinet/inbox">Почта</a>'
            f'<a href="/logout">Выход</a>')
     return (f'<div class="cab-top"><div class="brand">JF</div>'
             f'<span class="who">{name}</span>'
@@ -128,8 +128,8 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
             company = escape(iv.get("company") or "")
             when = escape(_fmt_gmt(iv.get("start_ts")))
             h = iv.get("source_message_hash")
-            link = (f'<a href="/thread?hash={escape(str(h))}">Открыть переписку</a>'
-                    if h else '<a href="/inbox">Почта</a>')
+            link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Открыть переписку</a>'
+                    if h else '<a href="/cabinet/inbox">Почта</a>')
             meta = mailbox + (f' · <b>{company}</b>' if company else "")
             items.append(
                 f'<li><span class="iv-when">{when}</span>'
@@ -166,7 +166,7 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;">'
             'Время указывается по GMT.</p>'
-            '<form method="post" action="/availability">'
+            '<form method="post" action="/cabinet/availability">'
             f'<div class="av-grid">{"".join(day_html)}</div>'
             '<button class="primary" type="submit" style="margin-top:18px;">Сохранить</button>'
             '</form>')
@@ -179,7 +179,7 @@ def inbox_page(responsible: dict, rows: list[dict]) -> str:
     # decorative 📎. Row links point to the operator route /mail/message; rewrite them to
     # the cabinet's own guarded /thread so navigation stays inside this app.
     listing = mailcrm_ui.render_rows(rows, show_mailbox=True, read_only=True)
-    listing = listing.replace("/mail/message?id=", "/thread?hash=")
+    listing = listing.replace("/mail/message?id=", "/cabinet/thread?hash=")
     inner = (f'<div class="maillist">{listing}</div>' if rows
              else '<div class="empty">Писем пока нет.</div>')
     body = (_topbar(responsible, "inbox") +
@@ -209,7 +209,7 @@ def thread_page(responsible: dict, thread: dict) -> str:
     cards = "".join(_thread_card(m) for m in msgs) or '<div class="empty">Пусто</div>'
     box = escape(candidate) + (f' &lt;{escape(mailbox)}&gt;' if mailbox else "")
     body = (_topbar(responsible, "inbox") +
-            '<a class="back-link" href="/inbox">← К списку</a>'
+            '<a class="back-link" href="/cabinet/inbox">← К списку</a>'
             f'<h1 class="tsubj">{escape(subj)}</h1>'
             f'<div class="tbox">Ящик: {box}</div>' + cards)
     return _doc(body, subj)

@@ -50,7 +50,7 @@ def test_current_responsible_wired_dependency(monkeypatch):
     # No cookie -> redirected to the login page, never reaching the handler.
     resp = client.get("/whoami", follow_redirects=False)
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/cabinet/login"
+    assert resp.headers["location"] == "/login"
 
     # Valid session cookie -> handler runs and returns the resolved responsible.
     token = auth.make_session(1)
@@ -80,7 +80,7 @@ def test_current_responsible_rejects_inactive(monkeypatch):
     client = _wired_client(monkeypatch, {"id": 1, "login": "alan", "name": "Alan", "active": False})
     resp = client.get("/whoami", follow_redirects=False)
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/cabinet/login"
+    assert resp.headers["location"] == "/login"
 
     # An active responsible still passes.
     ok_client = _wired_client(
@@ -105,3 +105,21 @@ def test_serializer_fail_closed_in_prod(monkeypatch):
     monkeypatch.setattr(auth.settings, "interview_session_secret", "a-real-secret", raising=False)
     token = auth.make_session(7)
     assert auth.read_session(token) == 7
+
+
+def test_dash_auth_employee_whitelist_and_home():
+    """Security core of the merged dashboard: an employee may reach ONLY /cabinet/*;
+    everything else on the PII dashboard is blocked. Roles route to their home."""
+    from backend.interviews import dash_auth
+
+    # employee whitelist: only the cabinet surface is allowed
+    for p in ("/cabinet", "/cabinet/inbox", "/cabinet/availability", "/cabinet/thread"):
+        assert dash_auth._employee_allowed(p) is True
+    for p in ("/mail", "/users", "/catalog", "/stats", "/", "/queue", "/setup",
+              "/cabinetXYZ", "/mail/interview/grid"):
+        assert dash_auth._employee_allowed(p) is False
+
+    # role home: admins own the dashboard root, employees are confined to the cabinet
+    assert dash_auth._home_for({"role": "admin"}) == "/"
+    assert dash_auth._home_for({"role": "employee"}) == "/cabinet"
+    assert dash_auth._home_for({}) == "/cabinet"  # default = least privilege

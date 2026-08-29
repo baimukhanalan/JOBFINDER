@@ -69,7 +69,7 @@ def current_responsible(request: Request) -> dict:
     """
     from backend.interviews import db
 
-    redirect = HTTPException(status_code=303, headers={"Location": "/cabinet/login"})
+    redirect = HTTPException(status_code=303, headers={"Location": "/login"})
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         raise redirect

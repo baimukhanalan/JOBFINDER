@@ -64,7 +64,7 @@ def _assign(rid: int, mailbox: str, days: int = 2):
 def test_login_required_redirects():
     r = client.get("/", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/cabinet/login"
+    assert r.headers["location"] == "/login"
 
 
 def test_login_sets_cookie_and_dashboard_loads():

@@ -1637,6 +1637,15 @@ except Exception:
     logging.getLogger(__name__).warning("interview users routes unavailable", exc_info=True)
 
 
+# Responsible cabinet, merged into this dashboard under /cabinet (2026-08-29): one
+# domain, one login. Employees (role='employee') are confined here by the auth gate.
+try:
+    from backend.interviews.routes_cabinet import router as iv_cabinet_router
+    app.include_router(iv_cabinet_router)
+except Exception:
+    logging.getLogger(__name__).warning("interview cabinet routes unavailable", exc_info=True)
+
+
 # In-app admin login + a fail-closed auth gate over every non-allowlisted route
 # (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
 # sits in front for now.

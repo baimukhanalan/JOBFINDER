@@ -83,48 +83,83 @@ def login_page(error: str = "") -> str:
 
 
 # ---- auth resolution ---------------------------------------------------------------
-def _admin_from_request(request: Request) -> dict | None:
-    """Resolve an ACTIVE admin responsible from the session cookie, or None.
+def _responsible_from_request(request: Request) -> dict | None:
+    """Resolve the ACTIVE responsible (any role) from the session cookie, or None.
 
     Never raises — any failure (bad cookie, DB down, …) resolves to None so the caller
-    fails closed.
+    fails closed to /login.
     """
     try:
         rid = auth.read_session(request.cookies.get(auth.COOKIE_NAME, ""))
         if rid is None:
             return None
         resp = db.get_responsible(rid)
-        if resp and resp.get("role") == "admin" and resp.get("active"):
+        if resp and resp.get("active"):
             return resp
     except Exception:
         return None
     return None
 
 
+def _admin_from_request(request: Request) -> dict | None:
+    """The active responsible ONLY if role=='admin', else None (kept for callers that
+    specifically need an admin)."""
+    resp = _responsible_from_request(request)
+    return resp if (resp and resp.get("role") == "admin") else None
+
+
+def _home_for(resp: dict) -> str:
+    """Where a freshly-authenticated / misrouted session belongs: admins own the whole
+    operator dashboard (/), employees are confined to their cabinet (/cabinet)."""
+    return "/" if resp.get("role") == "admin" else "/cabinet"
+
+
+def _employee_allowed(path: str) -> bool:
+    """The employee WHITELIST: an employee may reach ONLY their own cabinet surface.
+    Everything else on this PII dashboard is blocked at the door (redirected to /cabinet),
+    so isolation rests on this single positive check, not on every operator route
+    remembering to exclude employees. /logout is already in ALLOWLIST (open to all)."""
+    return path == "/cabinet" or path.startswith("/cabinet/")
+
+
 class AdminAuthMiddleware(BaseHTTPMiddleware):
+    """Fail-closed role gate over the merged dashboard:
+      * ALLOWLIST paths (login/logout/favicon + self-authenticating extension endpoints)
+        pass without a session.
+      * no valid session            -> 303 /login
+      * role=='admin'  (+active)    -> full access
+      * role=='employee' (+active)  -> ONLY /cabinet/* (whitelist), else 303 /cabinet
+    """
     async def dispatch(self, request, call_next):
         if request.url.path in ALLOWLIST:
             return await call_next(request)
-        # Resolve the admin OUTSIDE the call_next path so a downstream handler error is
-        # never masked as a login redirect; any auth failure -> fail closed to /login.
+        # Resolve OUTSIDE call_next so a downstream handler error is never masked as a
+        # login redirect; any auth failure -> fail closed to /login.
         try:
-            ok = _admin_from_request(request) is not None
+            resp = _responsible_from_request(request)
         except Exception:
-            ok = False
-        if not ok:
+            resp = None
+        if resp is None:
             return RedirectResponse("/login", status_code=303)
-        return await call_next(request)
+        if resp.get("role") == "admin":
+            return await call_next(request)
+        # employee: confined to the cabinet whitelist
+        if _employee_allowed(request.url.path):
+            return await call_next(request)
+        return RedirectResponse("/cabinet", status_code=303)
 
 
 # ---- install -----------------------------------------------------------------------
 def install(app) -> None:
-    """Add the fail-closed gate + the /login, /logout routes to the operator dashboard."""
+    """Add the fail-closed role gate + the SHARED /login, /logout routes. One login for
+    both roles; the post-login redirect and the middleware route each role to its home."""
     app.add_middleware(AdminAuthMiddleware)
 
     @app.get("/login", response_class=HTMLResponse)
     def login_get(request: Request):
-        if _admin_from_request(request) is not None:
-            return RedirectResponse("/", status_code=303)
+        resp = _responsible_from_request(request)
+        if resp is not None:
+            return RedirectResponse(_home_for(resp), status_code=303)
         return HTMLResponse(login_page())
 
     @app.post("/login")
@@ -134,15 +169,15 @@ def install(app) -> None:
             row = db.get_responsible_by_login(login)
         except Exception as e:
             log.warning("dash_auth login lookup failed: %s", e)
-        if (row and row.get("active") and row.get("role") == "admin"
+        if (row and row.get("active")
                 and auth.verify_password(password, row.get("password_hash") or "")):
-            resp = RedirectResponse("/", status_code=303)
+            resp = RedirectResponse(_home_for(row), status_code=303)
             resp.set_cookie(auth.COOKIE_NAME, auth.make_session(row["id"]),
                             httponly=True, samesite="lax", path="/",
                             secure=_COOKIE_SECURE)
             return resp
-        # Generic message for every failure (wrong login / wrong password / not-admin /
-        # inactive) — no user enumeration.
+        # Generic message for every failure (wrong login / wrong password / inactive) —
+        # no user enumeration.
         return HTMLResponse(login_page("Неверный логин или пароль"), status_code=200)
 
     @app.get("/logout")

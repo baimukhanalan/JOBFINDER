@@ -1103,19 +1103,27 @@ cabinet is a SEPARATE app.
   `GET /mail/interview/status`) are `include_router`'d into `dashboard_app.py` **inside a try/except**
   (a broken interviews import degrades to "no button", never crashes the CRM) alongside a guarded
   `ensure_schema()` call at startup. **Only the dashboard restarts for operator-side changes.**
-- **Employee cabinet — SEPARATE app `interviews/cabinet_app.py` on 127.0.0.1:8103, pm2
-  `jobfinder-alan-cabinet`, nginx `cabinet.systeam.kz` (own SSL, `auth_basic off`, `limit_req` on
-  `/login`).** Own bcrypt+signed-cookie login (`interviews/auth.py`, `itsdangerous`), NOT the operator
-  basic-auth. Employee logs in → edits weekly availability (GMT) → sees ONLY the mail of their assigned
+- **Employee cabinet — MERGED into the operator dashboard under `/cabinet` (2026-08-29).** Was a SEPARATE
+  app (`cabinet_app.py` on 8103, pm2 `jobfinder-alan-cabinet`, `cabinet.systeam.kz`); now ONE domain
+  (`jobs.systeam.kz`), ONE role-gated login. Employee views live in **`interviews/routes_cabinet.py`**
+  (`APIRouter(prefix="/cabinet")`, `include_router`'d guarded into `dashboard_app`): `/cabinet` (upcoming
+  interviews), `/cabinet/availability` (GET+POST), `/cabinet/inbox`, `/cabinet/thread`. The employee logs
+  in at the SAME `/login` (`dash_auth`) and lands on `/cabinet`; sees ONLY the mail of their assigned
   personas (read-only; reuses `mailcrm.list_messages`/`get_thread` with `mark=False`) + their upcoming
-  interviews. **Ownership guard lives in the `/thread` route** (`mail_db.get_row(hash).mailbox in
-  assigned_mailboxes(rid)` else 404; `mailcrm` reads UNCHANGED). `current_responsible` re-checks `active`
-  every request (deactivation revokes access immediately). Launch MUST export **`IV_COOKIE_SECURE=1`**
-  (read via `os.environ`, not settings) → Secure cookie; and **`INTERVIEW_SESSION_SECRET`** must be set
-  (in `.env`) — `auth._serializer()` FAILS CLOSED (raises) in prod (`IV_COOKIE_SECURE=1`) if it's absent,
-  because the isolation guarantee rests on it (else the cookie is forgeable). pm2 launch:
-  `cd /home/projects/jobfinder && sg mail -c 'IV_COOKIE_SECURE=1 /usr/bin/python3 -m uvicorn
-  backend.interviews.cabinet_app:app --host 127.0.0.1 --port 8103'` (needs `mail` group to read Maildirs).
+  interviews. **Ownership guard lives in `/cabinet/thread`** (`mail_db.get_row(hash).mailbox in
+  assigned_mailboxes(rid)` else 404; `mailcrm` reads UNCHANGED). **ISOLATION is now a WHITELIST at the
+  gate:** `dash_auth.AdminAuthMiddleware` lets an `employee` session reach ONLY `/cabinet/*`
+  (`_employee_allowed`) — every other route on this PII dashboard → 303 `/cabinet`; an `admin` gets full
+  access (and may view `/cabinet`); no session → `/login`; `/login` POST redirects by role
+  (`_home_for`: admin→`/`, employee→`/cabinet`). `current_responsible` re-checks `active` every request
+  (deactivation revokes immediately). Verified E2E (forged both roles: employee blocked from
+  `/mail`,`/users`,`/catalog`,`/stats`,`/`; ownership 404 on a non-assigned thread) + `test_interviews_*`
+  (74 pass, incl. `_employee_allowed`/`_home_for` unit test). `INTERVIEW_SESSION_SECRET` (`.env`) +
+  `IV_COOKIE_SECURE=1` (dash pm2 launch) still gate the signed Secure cookie (fail-closed). **RETIRED:**
+  pm2 `jobfinder-alan-cabinet` (`pm2 delete`d), port 8103, and `cabinet_app.py` (kept only as the
+  reference impl + `test_interviews_cabinet.py` target — do NOT deploy). The `cabinet.systeam.kz` vhost now
+  **301-redirects to `https://jobs.systeam.kz/cabinet`** (SSL kept; a `.bak-merge-*` of the pre-change
+  vhost sits next to it in `sites-available`).
 - **Manage responsibles — operator UI + CLI.** UI (added 2026-08-29): the **«Пользователи» `/users`
   tab** on the dashboard (`interviews/users_ui.py` + `routes_users.py`, `include_router`'d guarded in
   `dashboard_app.py` like the operator routes) — list/create/reset-password/set-role/link-telegram/
@@ -1127,12 +1135,12 @@ cabinet is a SEPARATE app.
   `iv_interviews`). Only the dashboard restarts for changes. CLI still works: `python -m
   backend.interviews.admin_cli {add|list|passwd|setavail|deactivate|reactivate|link|setrole}` (run via
   `sg mail`). Cabinet docs are disabled (`docs_url=None`).
-- **Gotcha — nginx `/cabinet/login` alias:** the cabinet is root-mounted on its subdomain, but
-  `auth.current_responsible` redirects logged-out users to `/cabinet/login`; the `cabinet.systeam.kz`
-  vhost has `location = /cabinet/login { proxy_pass …:8103/login; }` so that redirect lands. If that
-  location is ever removed, the logout/expiry redirect 404s — the clean fix is to change the redirect to
-  `/login` (a follow-up; left as an alias to avoid a code churn at deploy). Rate-limit zone in
-  `/etc/nginx/conf.d/cabinet-ratelimit.conf`.
+- **Gotcha — obsolete after the merge:** the old `/cabinet/login` nginx alias is gone —
+  `auth.current_responsible` now redirects logged-out users to the unified `/login` (same app), and
+  `cabinet.systeam.kz` is a blanket 301 to `jobs.systeam.kz/cabinet`, so there is no per-path proxy to keep
+  in sync. The leftover `limit_req` zone in `/etc/nginx/conf.d/cabinet-ratelimit.conf` is now unused
+  (harmless; the merged `/login` sits behind the operator vhost). When editing nginx, keep the
+  `00-default-drop` `default_server` block intact (see Security Rules).
 - **Phase 2 — Telegram NOTIFIER (shipped 2026-08-28; owner: "тг бот как уведомитель и всё" — NO interactive
   bot).** A standalone daemon `interviews/reminders.py` (pm2 **`jobfinder-alan-ivremind`** →
   `python -m backend.interviews.reminders`, own process, dashboard untouched) polls `iv_interviews` every
@@ -1157,13 +1165,17 @@ cabinet is a SEPARATE app.
   `pm2 restart jobfinder-alan-ivremind` after changing the token in `.env` or touching `notify.py`.
 - **Unified login — SHIPPED 2026-08-28 (owner-requested, replaces operator basic-auth).** `iv_responsibles`
   gained a `role` (`admin`|`employee`). The operator dashboard (`jobs.systeam.kz`) now has a real in-app
-  **admin** login: `backend/interviews/dash_auth.py` adds a **fail-closed middleware** (`AdminAuthMiddleware`)
-  that redirects any non-allowlisted request without a valid `role=='admin'`+`active` session to `/login`,
-  plus `GET/POST /login` + `/logout`; installed via `_install_dash_auth(app)` in `dashboard_app.py` (guarded,
-  but **FATAL when `IV_COOKIE_SECURE=1`** so a broken gate can't boot the CRM ungated). Allowlist = the six
-  `X-Assist-Token` extension endpoints + `/login` `/logout` `/favicon.ico` (EXACT-match, so `/drafts` stays
-  gated). Employees keep using `cabinet.systeam.kz` (`role='employee'`). See the Deploy nginx note above for
-  the basic-auth move + rollback. Manage: `admin_cli {add --role|setrole|passwd} …`.
+  **admin** login: `backend/interviews/dash_auth.py` adds a **fail-closed role middleware**
+  (`AdminAuthMiddleware`). Since the 2026-08-29 cabinet merge it routes BY ROLE (not admin-or-bust): no
+  session → `/login`; `admin` → full access; `employee` → ONLY `/cabinet/*` (whitelist `_employee_allowed`),
+  else 303 `/cabinet`. Plus `GET/POST /login` + `/logout` (one login for both roles; POST redirects by role
+  via `_home_for`); installed via `_install_dash_auth(app)` in `dashboard_app.py` (guarded, but **FATAL when
+  `IV_COOKIE_SECURE=1`** so a broken gate can't boot the CRM ungated). Allowlist = the six `X-Assist-Token`
+  extension endpoints + `/login` `/logout` `/favicon.ico` (EXACT-match, so `/drafts` stays gated).
+  **Employees now use the SAME `jobs.systeam.kz` (role `employee` → `/cabinet`)** — the separate
+  `cabinet.systeam.kz`/8103 is retired (see the Employee-cabinet bullet above). See the Deploy nginx note
+  for the basic-auth move + rollback. Manage: the «Пользователи» `/users` tab, or `admin_cli
+  {add --role|setrole|passwd} …`.
 - **NOT YET BUILT (Phase 3, deferred by owner 2026-08-28 "пока не надо"):** auto-assign — the bot picks a
   free responsible for an unassigned interview and books it (optional recruiter auto-reply must stay
   human-gated). Foundation (`slots`/`service.assign`) is ready.

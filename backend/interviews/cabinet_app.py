@@ -1,7 +1,15 @@
-"""Responsible cabinet — a SEPARATE small FastAPI app (own port 8103, own cookie
-login). An employee ("ответственный") logs in, edits weekly GMT availability, sees
-their upcoming interviews, and reads (READ-ONLY) the mail of ONLY the personas assigned
-to them. It is NOT wired into the live operator dashboard.
+"""Responsible cabinet — RETIRED as a standalone app on 2026-08-29.
+
+The cabinet was MERGED into the operator dashboard under `/cabinet`
+(`backend.interviews.routes_cabinet`, mounted on `backend.dashboard_app`), so there is
+now one domain (`jobs.systeam.kz`) and one role-gated login. The pm2 `jobfinder-alan-
+cabinet` process (port 8103) and the `cabinet.systeam.kz` vhost are retired (the vhost
+301-redirects to `jobs.systeam.kz/cabinet`). This module is KEPT only as the reference
+implementation + the target of `tests/test_interviews_cabinet.py`; do NOT deploy it.
+
+Historical: a SEPARATE small FastAPI app (own port 8103, own cookie login). An employee
+("ответственный") logs in, edits weekly GMT availability, sees their upcoming
+interviews, and reads (READ-ONLY) the mail of ONLY the personas assigned to them.
 
 Served at root; nginx prefixes `/cabinet/`. Run from the repo root:
     uvicorn backend.interviews.cabinet_app:app --host 127.0.0.1 --port 8103

@@ -10,12 +10,13 @@ Availability is in each responsible's own timezone (iv_responsibles.tz).
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 
-from backend.interviews import auth, db, users_ui
+from backend.interviews import auth, db, slots, users_ui
 
 router = APIRouter()
 
@@ -23,7 +24,21 @@ router = APIRouter()
 def _render_list(notice=None) -> HTMLResponse:
     users = db.list_responsibles(active_only=False)
     avail = {u["id"]: db.get_availability(u["id"]) for u in users}
-    return HTMLResponse(users_ui.list_page(users, avail, notice))
+    # This week's booked interviews per responsible — the weekly load view, so the operator
+    # can balance who gets the next собес. Week = Mon–Sun in the team default zone; each
+    # interview is shown on each card in THAT interviewer's own timezone.
+    now_local = slots.to_local(datetime.now(timezone.utc), slots.DEFAULT_TZ)
+    monday = now_local.date() - timedelta(days=now_local.weekday())
+    since = slots.cell_start_utc(slots.DEFAULT_TZ, monday, 0)
+    until = since + timedelta(days=7)
+    week_by_id: dict = {}
+    try:
+        for iv in db.interviews_for_week(since, until):
+            week_by_id.setdefault(iv["responsible_id"], []).append(iv)
+    except Exception:
+        week_by_id = {}
+    return HTMLResponse(users_ui.list_page(users, avail, notice,
+                                           week_by_id=week_by_id, monday=monday))
 
 
 def _render_edit(rid: int, notice=None) -> HTMLResponse:

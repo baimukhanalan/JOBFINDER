@@ -234,6 +234,17 @@ def interviews_for_responsible(rid: int, upcoming_only: bool = False) -> list[di
         return [dict(r) for r in cur.fetchall()]
 
 
+def interviews_for_week(since, until) -> list[dict]:
+    """Non-cancelled interviews with start_ts in [since, until) across ALL responsibles —
+    the per-interviewer weekly load view on /users. Caller groups by responsible_id."""
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT id, responsible_id, mailbox, company, jobid, start_ts, end_ts "
+            "FROM iv_interviews WHERE status <> 'cancelled' AND responsible_id IS NOT NULL "
+            "AND start_ts >= %s AND start_ts < %s ORDER BY start_ts", (since, until))
+        return [dict(r) for r in cur.fetchall()]
+
+
 def assigned_mailboxes(rid: int) -> set:
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("SELECT DISTINCT mailbox FROM iv_interviews "

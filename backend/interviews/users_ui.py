@@ -46,6 +46,18 @@ _CSS = """
 .u-av{margin-top:9px;font-size:13px;color:var(--ink-soft);line-height:1.55}
 .u-av .k{color:var(--ink-mute);font-weight:600;margin-right:5px}
 .u-av .none{color:var(--danger);font-weight:600}
+/* weekly load calendar */
+.u-cal-head{margin-top:11px;font-size:12.5px;color:var(--ink-soft);font-weight:600}
+.u-cal-head b{font-family:var(--ff-mono);color:var(--ink)}
+.u-cal-empty{margin-top:4px;font-size:12.5px;color:var(--ink-mute)}
+.u-cal{margin-top:7px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.u-cal-day{min-width:0;display:flex;flex-direction:column;gap:4px;padding:6px 5px;border-radius:var(--r-sm);background:var(--panel-2);min-height:54px}
+.u-cal-day.has{background:var(--accent-soft)}
+.u-cal-dn{font-size:11px;font-weight:700;color:var(--ink-mute);text-align:center}
+.u-slot{display:block;font-family:var(--ff-mono);font-size:11px;font-weight:700;color:var(--accent-deep,var(--accent));line-height:1.2;text-align:center;overflow:hidden}
+.u-slot i{display:block;font-style:normal;font-family:var(--ff);font-weight:500;font-size:10.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-slot-none{text-align:center;color:var(--ink-mute);font-size:12px}
+@media(max-width:760px){.u-cal{grid-auto-flow:column;grid-auto-columns:minmax(58px,1fr);grid-template-columns:none;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}}
 .u-empty{padding:26px 8px;text-align:center;color:var(--ink-mute)}
 /* edit page */
 .u-back{display:inline-flex;align-items:center;gap:6px;color:var(--accent);font-size:13.5px;font-weight:600;margin:0 0 12px}
@@ -118,12 +130,46 @@ def _note(notice) -> str:
     return f'<div class="u-note" style="{style}">{text}</div>'
 
 
-def list_page(users: list[dict], avail_by_id: dict, notice=None) -> str:
+def _week_calendar(interviews: list[dict], tz, monday) -> str:
+    """A compact 7-day (Пн–Вс) mini-calendar of THIS week's booked собесы for one
+    interviewer, in THEIR timezone — the weekly-load view for balancing assignments.
+    Empty week → a muted note."""
+    by_day: dict[int, list] = {d: [] for d in range(7)}
+    for iv in interviews:
+        st = iv.get("start_ts")
+        if not st:
+            continue
+        try:
+            loc = slots.to_local(st, tz)
+        except Exception:
+            continue
+        who = (iv.get("company") or "").strip() or (iv.get("mailbox") or "").split("@")[0] or "собес"
+        by_day[loc.weekday()].append((loc.strftime("%H:%M"), who))
+    total = sum(len(v) for v in by_day.values())
+    if not total:
+        return ("<div class='u-cal-head'>Собесы на неделе: <b>0</b></div>"
+                "<div class='u-cal-empty'>на этой неделе собесов нет</div>")
+    cols = []
+    for d in range(7):
+        items = sorted(by_day[d])
+        inner = ("".join(f"<span class='u-slot'>{escape(t)} <i>{escape(w[:16])}</i></span>"
+                         for t, w in items)
+                 if items else "<span class='u-slot-none'>—</span>")
+        cols.append(f"<div class='u-cal-day{' has' if items else ''}'>"
+                    f"<span class='u-cal-dn'>{_DOW[d]}</span>{inner}</div>")
+    return (f"<div class='u-cal-head'>Собесы на неделе: <b>{total}</b></div>"
+            f"<div class='u-cal'>{''.join(cols)}</div>")
+
+
+def list_page(users: list[dict], avail_by_id: dict, notice=None,
+              week_by_id: dict | None = None, monday=None) -> str:
+    week_by_id = week_by_id or {}
     cards = []
     for u in users:
         av = _avail_summary(avail_by_id.get(u["id"], []))
         tg = ('<span class="u-tag" style="color:#1e40af;background:#dbeafe">TG ✓</span>'
               if u.get("telegram_chat_id") else "")
+        week_html = _week_calendar(week_by_id.get(u["id"], []), u.get("tz"), monday)
         cards.append(
             f"<div class='u-user{'' if u.get('active') else ' off'}'>"
             "<div class='u-utop'>"
@@ -134,6 +180,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None) -> str:
             f"<a class='hbtn' href='/users/{u['id']}'>Настроить</a>"
             "</div>"
             f"<div class='u-av'><span class='k'>Доступность ({escape(slots.tz_label(u.get('tz')))}):</span>{av}</div>"
+            f"{week_html}"
             "</div>")
     listing = ("<div class='u-list'>" + "".join(cards) + "</div>") if cards else (
         "<div class='u-empty'>Пока нет пользователей — добавьте первого выше.</div>")

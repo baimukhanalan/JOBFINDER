@@ -1262,7 +1262,14 @@ tz-parametrised (80 pass).
   responsive cards (NOT a wide table, which was unusable on a phone) and both screens use the shared shell
   tokens (`var(--panel)/--line/--accent/--ff`) + components (`.hbtn`/`button.primary`/`.ghost`) so it
   matches the other tabs; the availability editor stacks per-day (big tap-target time inputs), notes the
-  night/24h window rule, and has a «Скопировать Пн на все дни» quick-fill. Screenshot-verified at 390px/1100px. ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
+  night/24h window rule, and has a «Скопировать Пн на все дни» quick-fill. Screenshot-verified at 390px/1100px.
+  **Weekly-load calendar per interviewer (added 2026-08-29):** each `/users` card now shows a compact 7-day
+  (Пн–Вс) mini-calendar of THIS week's booked собесы (`users_ui._week_calendar`) + a «Собесы на неделе: N»
+  count, each interview shown in THAT interviewer's own tz (`slots.to_local`) — so the operator can eyeball
+  who's loaded and keep the balance when assigning (the owner's workflow: `/users` open in one window to see
+  everyone's week, the «Собес» assign in another). `routes_users._render_list` fetches the current week
+  (Mon–Sun in the team default tz) once via `db.interviews_for_week(since, until)` and groups by
+  responsible_id. Tests: `test_users_calendar.py`. ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
   gates it (no separate check needed). POST handlers re-render the page with a banner (a generated password
   is shown once, inline — never in a URL/redirect/log). **Deletion (added 2026-08-29):** a responsible with
   interview HISTORY is DEACTIVATED (the `iv_interviews` FK has no ON DELETE, so history is preserved), but one

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import timezone
 from html import escape
 
-from backend.interviews import slots
+from backend.interviews import avail_editor, slots
 from backend.tools import mailcrm_ui
 
 _WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг",
@@ -181,23 +181,6 @@ def _tg_card(responsible: dict) -> str:
 
 def availability_page(responsible: dict, rows: list[dict], saved: bool = False) -> str:
     note = '<div class="note">Расписание сохранено.</div>' if saved else ""
-    by_dow = {r["dow"]: r for r in rows}
-    day_html = []
-    for d in range(7):
-        r = by_dow.get(d, {"dow": d, "start_min": 0, "end_min": 0, "enabled": False})
-        enabled = bool(r.get("enabled"))
-        smin = r.get("start_min") or 540      # display default 09:00 for a never-set day
-        emin = r.get("end_min") or 1020       # display default 17:00
-        st = f"{smin // 60:02d}:{smin % 60:02d}"
-        en = f"{emin // 60:02d}:{emin % 60:02d}"
-        chk = " checked" if enabled else ""
-        off = "" if enabled else " off"
-        day_html.append(
-            f'<div class="av-day{off}" data-dow="{d}">'
-            f'<span class="dow">{_WEEKDAYS[d]}</span>'
-            f'<label class="tog"><input type="checkbox" name="enabled_{d}"{chk}> рабочий</label>'
-            f'<span class="times">с <input type="time" name="start_{d}" value="{st}"> '
-            f'до <input type="time" name="end_{d}" value="{en}"></span></div>')
     import json as _json
     rtz = responsible.get("tz") or slots.DEFAULT_TZ
     # auto-adopt the device timezone: if the browser's zone differs from the stored one,
@@ -209,13 +192,18 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
         "location.reload();}).catch(function(){});}})();</script>")
     body = (_topbar(responsible, "availability") +
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
-            '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;">'
-            f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>).</p>'
+            '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
+            f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>). '
+            'Можно добавить <b>несколько промежутков</b> в один день (напр. 06:30–14:00 и 18:00–01:00). '
+            'День без промежутков — выходной. Конец раньше начала — ночное окно через полночь.</p>'
             + _tg_card(responsible) +
+            f'<style>{avail_editor.CSS}</style>'
             '<form method="post" action="/cabinet/availability">'
-            f'<div class="av-grid">{"".join(day_html)}</div>'
-            '<button class="primary" type="submit" style="margin-top:18px;">Сохранить</button>'
-            '</form>' + tz_js)
+            + avail_editor.render_days(rows) +
+            '<div class="avd-actions">'
+            '<button class="primary" type="submit">Сохранить</button>'
+            '<button class="ghost" type="button" onclick="avdCopyMon()">Скопировать Пн на все дни</button>'
+            '</div></form>' + avail_editor.JS + tz_js)
     return _doc(body, "Расписание")
 
 

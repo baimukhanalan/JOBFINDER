@@ -71,18 +71,22 @@ def availability_utc_intervals(
       * start <  end -> a same-day window [start, end);
       * start >  end -> an overnight window, continuous from local `start` to local
                         `end` the NEXT day.
-    Only `enabled` rows produce intervals. Pass a ±1 day pad around the range you care
-    about so an overnight window that starts the day before is included.
+    A weekday may carry SEVERAL windows (e.g. 06:30–14:00 AND 18:00–01:00) — EVERY enabled
+    row for that weekday produces its own interval. Only `enabled` rows produce intervals.
+    Pass a ±1 day pad around the range you care about so an overnight window that starts the
+    day before is included.
     """
     tz = zone(resp_tz)
-    by_dow = {r["dow"]: r for r in avail_rows if r.get("enabled")}
+    rows_by_dow: dict[int, list[dict]] = {}
+    for r in avail_rows:
+        if r.get("enabled", True):
+            rows_by_dow.setdefault(int(r["dow"]), []).append(r)
     out: list[tuple[datetime, datetime]] = []
     d = day_from
     while d <= day_to:
-        row = by_dow.get(d.weekday())
-        if row is not None:
+        base = datetime(d.year, d.month, d.day, 0, 0, tzinfo=tz)  # local midnight
+        for row in rows_by_dow.get(d.weekday(), ()):
             s, e = int(row["start_min"]), int(row["end_min"])
-            base = datetime(d.year, d.month, d.day, 0, 0, tzinfo=tz)  # local midnight
             if s == e:
                 st, en = base, base + timedelta(days=1)
             elif s < e:

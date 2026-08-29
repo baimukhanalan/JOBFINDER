@@ -112,16 +112,11 @@ def cmd_setavail(args: argparse.Namespace) -> None:
     rid = responsible["id"]
     start_min = hhmm_to_min(args.start)
     end_min = hhmm_to_min(args.end)
-    if start_min >= end_min:
-        print(f"Invalid window {args.start}-{args.end}: start must be before end",
-              file=sys.stderr)
-        raise SystemExit(1)
-    rows = db.get_availability(rid)
-    for row in rows:
-        if row["dow"] == args.dow:
-            row["start_min"] = start_min
-            row["end_min"] = end_min
-            row["enabled"] = True
+    # end<start (overnight) and start==end (24h) are BOTH valid windows — never reject them.
+    # A weekday can hold several windows now; this CLI REPLACES the given day's windows with
+    # this one (use the UI to add multiple per day). Other days are kept.
+    rows = [r for r in db.get_availability(rid) if int(r["dow"]) != args.dow]
+    rows.append({"dow": args.dow, "start_min": start_min, "end_min": end_min, "enabled": True})
     db.set_availability(rid, rows)
     print(f"Availability set for {args.login}: dow={args.dow} "
           f"{args.start}-{args.end}")

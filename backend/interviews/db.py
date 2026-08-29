@@ -46,9 +46,14 @@ def ensure_schema() -> None:
           dow            SMALLINT NOT NULL,
           start_min      INT NOT NULL,
           end_min        INT NOT NULL,
-          enabled        BOOLEAN NOT NULL DEFAULT TRUE,
-          UNIQUE (responsible_id, dow)
+          enabled        BOOLEAN NOT NULL DEFAULT TRUE
         );""")
+        # Availability is now MULTIPLE windows per weekday, so the old one-window-per-day
+        # UNIQUE(responsible_id, dow) is dropped; a plain index serves the per-responsible read.
+        cur.execute("ALTER TABLE iv_availability "
+                    "DROP CONSTRAINT IF EXISTS iv_availability_responsible_id_dow_key")
+        cur.execute("CREATE INDEX IF NOT EXISTS iv_avail_resp_dow "
+                    "ON iv_availability (responsible_id, dow)")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS iv_interviews (
           id                   SERIAL PRIMARY KEY,
@@ -183,26 +188,28 @@ def delete_responsible(rid: int) -> None:
 
 # ---- availability --------------------------------------------------------------
 def get_availability(rid: int) -> list[dict]:
-    """7 rows (dow 0..6), missing days filled with enabled=False, start/end 0."""
+    """A responsible's availability WINDOWS (0..N per weekday), ordered by (dow, start). A
+    weekday can hold several (e.g. 06:30–14:00 AND 18:00–01:00); a weekday with none is a day
+    off. Returns only the STORED windows (not the old one-per-dow padded-to-7 shape)."""
     with mail_db._cur() as cur:
         cur.execute("SELECT dow, start_min, end_min, enabled FROM iv_availability "
-                    "WHERE responsible_id=%s", (rid,))
-        by_dow = {r["dow"]: dict(r) for r in cur.fetchall()}
-    return [by_dow.get(d, {"dow": d, "start_min": 0, "end_min": 0, "enabled": False})
-            for d in range(DOW_COUNT)]
+                    "WHERE responsible_id=%s ORDER BY dow, start_min", (rid,))
+        return [dict(r) for r in cur.fetchall()]
 
 
 def set_availability(rid: int, rows: list[dict]) -> None:
-    """UPSERT each {dow,start_min,end_min,enabled} row on (responsible_id,dow)."""
+    """REPLACE a responsible's ENTIRE weekly availability with `rows` (each = {dow, start_min,
+    end_min, enabled?}), supporting MULTIPLE windows per weekday. Delete-all + insert in one
+    transaction so removed windows/days actually clear. Only enabled windows are stored."""
     with mail_db._cur(dict_rows=False) as cur:
-        for row in rows:
+        cur.execute("DELETE FROM iv_availability WHERE responsible_id=%s", (rid,))
+        for row in rows or []:
+            if not row.get("enabled", True):
+                continue
             cur.execute(
                 "INSERT INTO iv_availability (responsible_id, dow, start_min, end_min, enabled) "
-                "VALUES (%s,%s,%s,%s,%s) "
-                "ON CONFLICT (responsible_id, dow) DO UPDATE SET "
-                "start_min=EXCLUDED.start_min, end_min=EXCLUDED.end_min, "
-                "enabled=EXCLUDED.enabled",
-                (rid, row["dow"], row["start_min"], row["end_min"], row["enabled"]))
+                "VALUES (%s,%s,%s,%s,TRUE)",
+                (rid, int(row["dow"]), int(row["start_min"]), int(row["end_min"])))
 
 
 # ---- interviews ------------------------------------------------------------------

@@ -82,14 +82,16 @@ def _hhmm_to_min(s: str) -> int:
 async def availability_post(request: Request,
                             responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     form = await request.form()
+    # MULTIPLE windows per weekday: each is a start_<d>/end_<d> input PAIR (getlist + zip);
+    # a blank window is skipped, a day with no windows is off. overnight/24h stay valid.
     rows = []
     for d in range(7):
-        rows.append({
-            "dow": d,
-            "start_min": _hhmm_to_min(form.get(f"start_{d}", "")),
-            "end_min": _hhmm_to_min(form.get(f"end_{d}", "")),
-            "enabled": form.get(f"enabled_{d}") is not None,
-        })
+        starts, ends = form.getlist(f"start_{d}"), form.getlist(f"end_{d}")
+        for s, e in zip(starts, ends):
+            if not s or not e:
+                continue
+            rows.append({"dow": d, "start_min": _hhmm_to_min(s),
+                         "end_min": _hhmm_to_min(e), "enabled": True})
     db.set_availability(responsible["id"], rows)
     rows = db.get_availability(responsible["id"])
     return HTMLResponse(cabinet_ui.availability_page(responsible, rows, saved=True))

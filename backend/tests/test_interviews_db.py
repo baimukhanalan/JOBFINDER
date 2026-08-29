@@ -84,34 +84,35 @@ def test_role_defaults_employee_and_set_role_roundtrip():
     assert db.get_responsible(rid)["role"] == "employee"
 
 
-def test_availability_upsert_fills_missing_days():
+def test_availability_multiple_windows_and_replace_all():
     rid = db.add_responsible("test_iv_avail", "h", "Avail")
 
-    rows = db.get_availability(rid)
-    assert len(rows) == 7
-    assert {r["dow"] for r in rows} == set(range(7))
-    assert all(r["enabled"] is False for r in rows)  # nothing set yet
+    # a fresh responsible has NO windows (raw list, not the old padded-to-7 shape)
+    assert db.get_availability(rid) == []
 
+    # set: Monday TWO windows (incl. an overnight 18:00–01:00) + Wednesday one
     db.set_availability(rid, [
-        {"dow": 0, "start_min": 540, "end_min": 1020, "enabled": True},
-        {"dow": 2, "start_min": 600, "end_min": 900, "enabled": True},
+        {"dow": 0, "start_min": 390, "end_min": 840, "enabled": True},    # 06:30–14:00
+        {"dow": 0, "start_min": 1080, "end_min": 60, "enabled": True},    # 18:00–01:00 overnight
+        {"dow": 2, "start_min": 540, "end_min": 1020, "enabled": True},   # 09:00–17:00
     ])
-    rows = {r["dow"]: r for r in db.get_availability(rid)}
-    assert len(rows) == 7
-    assert rows[0]["enabled"] is True
-    assert rows[0]["start_min"] == 540
-    assert rows[0]["end_min"] == 1020
-    assert rows[2]["enabled"] is True
-    assert rows[1]["enabled"] is False  # untouched day still filled False
+    av = db.get_availability(rid)
+    assert len(av) == 3
+    mon = [r for r in av if r["dow"] == 0]
+    assert len(mon) == 2
+    assert {(r["start_min"], r["end_min"]) for r in mon} == {(390, 840), (1080, 60)}
+    assert [r for r in av if r["dow"] == 1] == []       # Tuesday is a day off (no rows)
 
-    # UPSERT: re-setting dow=0 updates in place, doesn't duplicate
-    db.set_availability(rid, [{"dow": 0, "start_min": 600, "end_min": 1080, "enabled": False}])
-    rows = {r["dow"]: r for r in db.get_availability(rid)}
-    assert len(rows) == 7
-    assert rows[0]["start_min"] == 600
-    assert rows[0]["end_min"] == 1080
-    assert rows[0]["enabled"] is False
-    assert rows[2]["enabled"] is True  # untouched by the second call
+    # set is REPLACE-ALL: a new set clears every prior window/day
+    db.set_availability(rid, [{"dow": 4, "start_min": 600, "end_min": 900, "enabled": True}])
+    av2 = db.get_availability(rid)
+    assert len(av2) == 1 and av2[0]["dow"] == 4
+
+    # a disabled window is not stored; an empty set clears everything
+    db.set_availability(rid, [{"dow": 1, "start_min": 540, "end_min": 600, "enabled": False}])
+    assert db.get_availability(rid) == []
+    db.set_availability(rid, [])
+    assert db.get_availability(rid) == []
 
 
 def test_insert_interview_double_book_raises():

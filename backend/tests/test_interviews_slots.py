@@ -54,6 +54,20 @@ def test_intervals_skip_disabled():
     assert slots.availability_utc_intervals(av, "Asia/Almaty", _monday(), _monday()) == []
 
 
+def test_intervals_multiple_windows_same_day():
+    # a weekday can carry SEVERAL windows — each produces its own interval
+    av = [
+        {"dow": 0, "start_min": 6 * 60 + 30, "end_min": 14 * 60, "enabled": True},  # 06:30–14:00
+        {"dow": 0, "start_min": 18 * 60, "end_min": 60, "enabled": True},           # 18:00–01:00 overnight
+    ]
+    iv = slots.availability_utc_intervals(av, "Asia/Almaty", _monday(), _monday())
+    assert len(iv) == 2
+    # 06:30 Almaty = 01:30 UTC, 14:00 = 09:00 UTC
+    assert (_utc(2026, 8, 31, 1, 30), _utc(2026, 8, 31, 9)) in iv
+    # 18:00 Almaty Mon = 13:00 UTC Mon; 01:00 Almaty Tue = 20:00 UTC Mon
+    assert (_utc(2026, 8, 31, 13), _utc(2026, 8, 31, 20)) in iv
+
+
 def test_is_free_membership_and_booking():
     iv = [(_utc(2026, 8, 31, 4), _utc(2026, 8, 31, 12))]
     assert slots.is_free(iv, [], _utc(2026, 8, 31, 4))       # first hour

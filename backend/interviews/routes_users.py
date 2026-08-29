@@ -156,15 +156,16 @@ async def users_availability(rid: int, request: Request):
         except Exception:
             return None
 
+    # MULTIPLE windows per weekday: each window is a start_<d>/end_<d> input PAIR, read with
+    # getlist and zipped. A blank/incomplete window is skipped; a day with no windows is off.
+    # overnight (end<start) and 24h (start==end) windows stay valid — never rejected.
     rows = []
     for d in range(7):
-        enabled = form.get(f"en_{d}") is not None
-        start = _to_min(form.get(f"start_{d}", ""))
-        end = _to_min(form.get(f"end_{d}", ""))
-        # overnight (end < start, crosses midnight) and start==end (a full 24h window)
-        # are both valid — only reject an enabled day with unparseable times.
-        if enabled and (start is None or end is None):
-            return _render_edit(rid, ("err", f"{users_ui._DOW[d]}: укажите время начала и конца."))
-        rows.append({"dow": d, "start_min": start or 0, "end_min": end or 0, "enabled": enabled})
+        starts, ends = form.getlist(f"start_{d}"), form.getlist(f"end_{d}")
+        for s, e in zip(starts, ends):
+            sm, em = _to_min(s), _to_min(e)
+            if sm is None or em is None:
+                continue
+            rows.append({"dow": d, "start_min": sm, "end_min": em, "enabled": True})
     db.set_availability(rid, rows)
     return _render_edit(rid, ("ok", "Доступность сохранена."))

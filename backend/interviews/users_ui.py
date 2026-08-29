@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from html import escape
 
-from backend.interviews import slots
+from backend.interviews import avail_editor, slots
 from backend.tools import mailcrm_ui
 
 _DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -114,10 +114,16 @@ def _fmt_window(r: dict) -> str:
 
 
 def _avail_summary(av: list[dict]) -> str:
-    days = [f"{_DOW[r['dow']]} {_fmt_window(r)}" for r in av if r.get("enabled")]
-    if not days:
+    # a weekday can have SEVERAL windows now — group them so a day reads
+    # "Пн 06:30–14:00, 18:00–01:00" rather than repeating the day name.
+    by_dow: dict[int, list[str]] = {}
+    for r in av:
+        if r.get("enabled", True):
+            by_dow.setdefault(int(r["dow"]), []).append(_fmt_window(r))
+    if not by_dow:
         return "<span class='none'>нет окон → нельзя назначить</span>"
-    return " · ".join(escape(d) for d in days)
+    parts = [f"{_DOW[d]} {', '.join(by_dow[d])}" for d in sorted(by_dow)]
+    return " · ".join(escape(p) for p in parts)
 
 
 def _note(notice) -> str:
@@ -216,23 +222,6 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
     role = u.get("role")
     active = u.get("active")
 
-    av_by_dow = {r["dow"]: r for r in availability}
-    day_rows = []
-    for d in range(7):
-        r = av_by_dow.get(d, {"enabled": False, "start_min": 540, "end_min": 1080})
-        en = "checked" if r.get("enabled") else ""
-        start = _min_to_hhmm(r.get("start_min") if r.get("start_min") is not None else 540)
-        end = _min_to_hhmm(r.get("end_min") if r.get("end_min") is not None else 1080)
-        day_rows.append(
-            "<div class='u-day'>"
-            f"<label class='u-daychk' title='{_DOW_FULL[d]}'>"
-            f"<input type='checkbox' name='en_{d}' {en}> {_DOW[d]}</label>"
-            "<span class='u-times'>"
-            f"<input type='time' name='start_{d}' value='{start}' aria-label='{_DOW_FULL[d]} начало'>"
-            "<span class='sep'>–</span>"
-            f"<input type='time' name='end_{d}' value='{end}' aria-label='{_DOW_FULL[d]} конец'>"
-            "</span></div>")
-
     role_other = "employee" if role == "admin" else "admin"
     role_other_lbl = "интервьюер" if role == "admin" else "админ"
     toggle_lbl = "Отключить" if active else "Включить"
@@ -273,13 +262,15 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         f"<h3>Доступность ({escape(slots.tz_label(u.get('tz')))}) — когда его можно назначить</h3>"
         f"<p class='u-chint'>Время местное, по его поясу (<b>{escape(slots.tz_label(u.get('tz')))}</b>). "
         "Определяется автоматически, когда он заходит в кабинет со своего устройства.</p>"
+        f"<style>{avail_editor.CSS}</style>"
         f"<form method='post' action='/users/{rid}/availability'>"
-        f"<div class='u-days'>{''.join(day_rows)}</div>"
-        "<p class='u-hint'>Конец <b>раньше</b> начала — ночное окно через полночь "
-        "(напр. 19:00–01:30 для часов США). Одинаковое время начала и конца — доступен <b>24 ч</b>.</p>"
-        "<div class='u-actions'>"
+        + avail_editor.render_days(availability) +
+        "<p class='u-hint'>Можно добавить <b>несколько промежутков</b> в день (напр. 06:30–14:00 и "
+        "18:00–01:00). День без промежутков — выходной. Конец раньше начала — ночное окно через "
+        "полночь; одинаковое время начала и конца — доступен <b>24 ч</b>.</p>"
+        "<div class='avd-actions'>"
         "<button class='primary' type='submit'>Сохранить доступность</button>"
-        "<button class='ghost' type='button' onclick='uCopyMon(this)'>Скопировать Пн на все дни</button>"
+        "<button class='ghost' type='button' onclick='avdCopyMon()'>Скопировать Пн на все дни</button>"
         "</div>"
         "</form></div>"
 
@@ -314,9 +305,5 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         + del_block +
         "</div>"
 
-        "<script>function uCopyMon(b){var f=b.closest('form');"
-        "function v(n){var e=f.querySelector('[name=\"'+n+'\"]');return e?e:null;}"
-        "var s=v('start_0'),e=v('end_0'),c=v('en_0');if(!s)return;"
-        "for(var d=1;d<7;d++){var sd=v('start_'+d),ed=v('end_'+d),cd=v('en_'+d);"
-        "if(sd)sd.value=s.value;if(ed)ed.value=e.value;if(cd&&c)cd.checked=c.checked;}}</script>")
+        + avail_editor.JS)
     return mailcrm_ui._page("users", body)

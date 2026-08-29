@@ -1199,14 +1199,24 @@ routes+modal on the live dashboard; the employee cabinet is merged under `/cabin
 tz-parametrised (80 pass).
 - **Data (Postgres `jobfinder_crm`, via the `mail_db` pool, `interviews/db.py::ensure_schema`, IF NOT
   EXISTS):** `iv_responsibles` (login, bcrypt `password_hash`, name, tz='UTC', telegram_chat_id, `active`),
-  `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled; UNIQUE per dow —
-  **an enabled window may be same-day (`start<end`), OVERNIGHT/crossing-midnight (`end<start`, e.g. a KZ
-  responsible free 19:00–01:30 Almaty for US hours), or a full 24h day (`start==end`); `slots.is_free` covers
-  all three incl. the overnight WRAP onto the next weekday's early hours, and `slots.HOUR_START/END` is the
-  full 0–24 so night slots are visible/bookable in the «Собес» grid. Do NOT re-add an `end<=start`
-  rejection in `routes_users`/cabinet or an `end>start` filter in `users_ui._avail_summary` — that silently
-  drops night windows (incident 2026-08-29: Alan's 7 night windows saved fine but vanished from `/users` +
-  were unbookable). Tests: `test_interviews_slots.py` overnight/24h/wrap cases**),
+  `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled).
+  **MULTIPLE windows per weekday (added 2026-08-30):** a day can hold several windows (e.g. 06:30–14:00 AND
+  18:00–01:00) — the old `UNIQUE (responsible_id, dow)` was DROPPED (`ensure_schema` `DROP CONSTRAINT IF
+  EXISTS iv_availability_responsible_id_dow_key` + a plain `(responsible_id, dow)` index). `db.get_availability`
+  now returns the RAW window rows (0..N per dow, ordered — NOT the old padded-to-7-with-enabled=False shape);
+  `db.set_availability` is REPLACE-ALL (delete-all + insert in one txn, only enabled windows stored), so
+  removed windows/days actually clear. `slots.availability_utc_intervals` iterates EVERY enabled row for a
+  weekday (was `{dow: row}` which silently kept only the last), so multiple windows → multiple intervals; a
+  weekday with zero rows is a day off. **Each window is independently same-day (`start<end`), OVERNIGHT
+  (`end<start`, e.g. 19:00–01:30 Almaty for US hours) or 24h (`start==end`)**; `slots.is_free` covers all
+  three incl. the overnight WRAP onto the next weekday, and `slots.HOUR_START/END` is the full 0–24 so night
+  slots are visible/bookable in the «Собес» grid. Do NOT re-add an `end<=start` rejection in `routes_users`/
+  cabinet/`admin_cli` or an `end>start` filter in `users_ui._avail_summary` — that silently drops night
+  windows (incident 2026-08-29). **Editor:** a SHARED `interviews/avail_editor.py` (render_days + CSS + JS,
+  add/remove windows, «Скопировать Пн») powers BOTH the operator `/users` edit page and the interviewer
+  cabinet; form encoding is repeated `start_<dow>`/`end_<dow>` input PAIRS read with `form.getlist` + zip (no
+  index bookkeeping on add/remove). Tests: `test_interviews_slots.py` (multi-window + overnight/24h/wrap),
+  `test_interviews_db.py::test_availability_multiple_windows_and_replace_all`),
   `iv_interviews` (mailbox=persona addr = the visibility key, thread_key, company, jobid, responsible_id,
   start_ts UTC, status assigned|done|cancelled, reminded_60/5; partial-UNIQUE `(responsible_id,start_ts)
   WHERE status<>'cancelled'` = double-book guard). Persona↔responsible link is DERIVED

@@ -278,16 +278,62 @@ def counts() -> dict:
     return {"unread": unread, "mailboxes": mboxes}
 
 
+# --- Funnel STAGE = a candidate's FURTHEST inbound outcome ----------------------
+# `kind` is a PER-MESSAGE label, but the funnel is PER-CANDIDATE: a candidate belongs to
+# exactly ONE stage — the furthest any of its INBOUND mail reached — mirroring the best-of
+# ranking in tools/stats.py (offer > interview > action_needed > rejection > ack > other).
+# Counting a candidate under a stage merely because SOME message has that kind kept a
+# progressed candidate in an earlier bucket forever (e.g. an old "action_needed" message
+# left a candidate under «Действие» even after an interview/offer arrived). The ranking is
+# best-of, so 'action_needed' outranks 'rejection'/'ack' — only an interview/offer supersedes
+# it (a deliberate choice matching stats.py; a later rejection does not "un-progress" a lead).
+_STAGE_RANK = ("offer", "interview", "action_needed", "rejection", "ack", "other")
+
+
+def furthest_stage(kinds) -> str:
+    """The funnel stage for a candidate given the set of its INBOUND message kinds: the
+    furthest (highest-ranked) kind present, else 'other'. Pure — the single source of the
+    ranking, unit-tested and mirrored by the _FURTHEST_STAGE_SQL below."""
+    present = set(kinds or ())
+    for k in _STAGE_RANK:
+        if k in present:
+            return k
+    return "other"
+
+
+# SQL evaluating the same ranking over a GROUP BY mailbox. Outbound messages are ignored
+# (a reply we sent is not an inbound outcome). A mailbox with inbound-but-unranked mail is
+# 'other'; a mailbox with NO inbound mail is NULL (it belongs only to the 'sent' bucket).
+_FURTHEST_STAGE_SQL = """
+        CASE
+          WHEN bool_or(kind='offer'         AND NOT outbound) THEN 'offer'
+          WHEN bool_or(kind='interview'     AND NOT outbound) THEN 'interview'
+          WHEN bool_or(kind='action_needed' AND NOT outbound) THEN 'action_needed'
+          WHEN bool_or(kind='rejection'     AND NOT outbound) THEN 'rejection'
+          WHEN bool_or(kind='ack'           AND NOT outbound) THEN 'ack'
+          WHEN bool_or(NOT outbound)                          THEN 'other'
+          ELSE NULL
+        END"""
+
+
+def _furthest_stage_counts(cur) -> dict:
+    """{stage: number of DISTINCT candidate mailboxes whose FURTHEST inbound kind is that
+    stage}. Pure read; the caller supplies a plain (non-dict) cursor."""
+    cur.execute(f"""
+        SELECT stage, COUNT(*) FROM (
+            SELECT mailbox, {_FURTHEST_STAGE_SQL} AS stage
+              FROM mail_index GROUP BY mailbox
+        ) f WHERE stage IS NOT NULL GROUP BY stage""")
+    return {k: n for k, n in cur.fetchall()}
+
+
 def stage_counts() -> dict:
-    """DISTINCT-CANDIDATE totals for the inbox funnel — the same metric as the Candidates
-    funnel (`kind_counts`), so the two screens show the SAME number per stage. Counting
-    messages (COUNT(*)) here made the inbox show a bigger number than Candidates for the
-    identical stage (a candidate with 3 interview mails counted as 3), which read as a
-    'conflict in the numbers'. Outbound is its own 'sent' stage."""
+    """DISTINCT-CANDIDATE totals for the inbox funnel, one bucket per FURTHEST inbound stage
+    (see furthest_stage) — so a candidate appears under exactly the stage its mail actually
+    reached and a progressed candidate LEAVES 'action_needed'. 'sent' = has an outbound
+    message; 'all' = has any mail (both overlap the per-stage buckets, which are disjoint)."""
     with _cur(dict_rows=False) as cur:
-        cur.execute("SELECT kind, COUNT(DISTINCT mailbox) FROM mail_index "
-                    "WHERE NOT outbound GROUP BY kind")
-        out = {k: n for k, n in cur.fetchall()}
+        out = _furthest_stage_counts(cur)
         cur.execute("SELECT COUNT(DISTINCT mailbox) FROM mail_index WHERE outbound=TRUE")
         out["sent"] = cur.fetchone()[0]
         cur.execute("SELECT COUNT(DISTINCT mailbox) FROM mail_index")
@@ -319,18 +365,24 @@ def unread_by_mailbox() -> dict:
 
 
 def kind_counts() -> dict:
-    """{kind: number of DISTINCT candidate mailboxes that have a message of that kind}
-    — powers the funnel buttons on the candidates page."""
+    """{stage: number of DISTINCT candidate mailboxes whose FURTHEST inbound kind is that
+    stage} — powers the funnel buttons on the candidates page. Furthest-based (see
+    stage_counts) so a progressed candidate is counted only under its latest stage."""
     with _cur(dict_rows=False) as cur:
-        cur.execute("SELECT kind, COUNT(DISTINCT mailbox) FROM mail_index "
-                    "WHERE NOT outbound GROUP BY kind")
-        return {k: n for k, n in cur.fetchall()}
+        return _furthest_stage_counts(cur)
 
 
 def mailboxes_with_kind(kind: str) -> set:
-    """Candidate emails that have at least one INBOUND message of this kind."""
+    """Candidate emails whose FURTHEST inbound outcome is `kind` (see furthest_stage) — a
+    candidate that has progressed PAST `kind` is excluded, so the roster funnel agrees with
+    the grouped inbox's stage filter (an old lower-kind message no longer keeps a progressed
+    candidate in that bucket)."""
     with _cur(dict_rows=False) as cur:
-        cur.execute("SELECT DISTINCT mailbox FROM mail_index WHERE kind=%s AND NOT outbound", (kind,))
+        cur.execute(f"""
+            SELECT mailbox FROM (
+                SELECT mailbox, {_FURTHEST_STAGE_SQL} AS stage
+                  FROM mail_index GROUP BY mailbox
+            ) f WHERE stage = %s""", (kind,))
         return {r[0] for r in cur.fetchall()}
 
 
@@ -366,8 +418,12 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
     elif stage == "priority":
         having = ("HAVING COUNT(*) FILTER (WHERE kind='interview' AND NOT outbound) > 0 "
                   "OR COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) > 0")
-    elif stage in ("interview", "offer", "rejection", "action_needed", "ack", "other"):
-        having = "HAVING COUNT(*) FILTER (WHERE kind=%s AND NOT outbound) > 0"
+    elif stage in _STAGE_RANK:
+        # FURTHEST-outcome membership: a candidate is in a single-kind bucket only when that
+        # kind is the furthest inbound stage it reached — so a progressed candidate leaves the
+        # earlier bucket (e.g. no longer under 'action_needed' once an interview/offer landed).
+        # Mirrors furthest_stage() / stage_counts() exactly.
+        having = f"HAVING ({_FURTHEST_STAGE_SQL}) = %s"
         hargs = [stage]
 
     agg_sql = f"""
@@ -408,12 +464,12 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
         iv = {r["mailbox"]: dict(r) for r in cur.fetchall()}
 
     def _furthest(g) -> str:
-        if g["n_offer"]:     return "offer"
-        if g["n_interview"]: return "interview"
-        if g["n_action"]:    return "action_needed"
-        if g["n_rejection"]: return "rejection"
-        if g["n_ack"]:       return "ack"
-        return "other"
+        # Same ranking as furthest_stage()/_FURTHEST_STAGE_SQL, from the group's per-kind
+        # inbound counts, so the badge on each row matches the stage FILTER it appears under.
+        present = {k for k, col in (("offer", "n_offer"), ("interview", "n_interview"),
+                                    ("action_needed", "n_action"), ("rejection", "n_rejection"),
+                                    ("ack", "n_ack")) if g[col]}
+        return furthest_stage(present)
 
     for g in groups:
         lm = last.get(g["mailbox"], {})

@@ -34,8 +34,9 @@ from backend.tools.mailcrm_ui import (
 PAGE = 40
 
 # Funnel chips: (stage key, label). The empty key is «Все» (its count lives under 'all'
-# in stage_counts). Order mirrors the existing mail funnel. 'action_needed' has no
-# distinct count in stage_counts(), so its chip simply shows no number.
+# in stage_counts). Order mirrors the existing mail funnel. Each single-kind chip counts
+# candidates whose FURTHEST inbound stage is that kind (mail_db.stage_counts, furthest-based),
+# so a progressed candidate is counted only once under its latest stage.
 _FUNNEL = [
     ("", "Все"),
     ("sent", "Отправленные"),

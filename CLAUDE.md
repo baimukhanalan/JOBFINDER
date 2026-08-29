@@ -353,8 +353,12 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   newest-activity first. A card EXPANDS INLINE to its messages (`GET /mail/candidates/thread?mailbox=`),
   each message OPENS INLINE (`GET /mail/candidates/message?id=`), and an inline **«Собес»** (only when the
   persona has an interview; reuses `mailcrm_ui._iv_sobes` + the shared `openSobes` assign modal) books
-  without leaving the page. Tabs **«Приоритетные»** (`?tab=priority` = has an inbound interview OR
-  action_needed) / **«Все письма»**, a stage funnel + search, and offset pagination
+  without leaving the page. Header is just **«Все письма»** (the «Приоритетные» tab was REMOVED
+  2026-08-29 by owner; the `?tab=priority` filter still exists route-side but nothing sets it). Filters
+  are the **desktop inline funnel** + a **mobile «Фильтры» button → modal** (`#cgFilterModal`, shared
+  `.modal`/`.fm-stage` chrome — funnel is `display:none` ≤760px) + search; compose is a floating
+  **«Написать» FAB** on mobile (shared `.fab-compose`) and a header button on desktop (`.cg-compose-desk`),
+  both opening the shared `openCompose()` modal. Offset pagination
   (`GET /mail/candidates/more?tab=&stage=&q=&offset=`, `PAGE=40`, IntersectionObserver on `#grpmore`).
   `/mail` (the old flat `render_inbox`) is KEPT but dropped from nav — a fallback, not deleted; the old
   `/mail/candidates/more` (which returned `render_candidate_rows`) was REPOINTED to return grouped cards.

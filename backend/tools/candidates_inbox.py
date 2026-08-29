@@ -333,6 +333,11 @@ _CG_CSS = """
 .cg-msg.unread .cg-msg-from,.cg-msg.unread .cg-msg-subj{color:var(--ink);font-weight:700;}
 .cg-msg.unread .cg-msg-date{color:var(--accent);}
 .cg-msg-body{margin-top:8px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm);padding:2px 14px;}
+/* When a message is open, hide its collapsed preview line so the full message card doesn't
+   read as a duplicate of the row above it (Gmail-style: preview is replaced by the message). */
+.cg-msg.open .cg-msg-top,.cg-msg.open .cg-msg-line{display:none;}
+.cg-msg.open .cg-msg-body{margin-top:0;}
+.cg-msg.open{background:transparent;}
 .cg-msg-err{padding:14px;color:var(--danger);font-size:13px;}
 @media(max-width:760px){
   .cg-toolbar{margin-bottom:12px;}

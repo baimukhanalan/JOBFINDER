@@ -13,6 +13,11 @@ _SRC_LABEL = {"conduent": "Conduent", "alorica": "Alorica", "concentrix": "Conce
               "amazon": "Amazon", "himalayas": "Himalayas", "remotive": "Remotive",
               "remoteok": "RemoteOK"}
 
+# Neutral RU labels for the employer-segment heuristic (no stack disclosure).
+_SEG_LABEL = {"staffing": "Кадровые / аутсорсинг", "government": "Госсектор",
+              "education": "Образование", "healthcare": "Здравоохранение",
+              "nonprofit": "НКО", "general": "Крупный работодатель"}
+
 
 def _esc(s) -> str:
     return html.escape(str(s or ""))
@@ -69,8 +74,20 @@ details[open] .mh-caret{transform:rotate(90deg);}
 .mh-jloc{color:var(--ink-soft);font-size:12.5px;}
 .mh-apply{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--accent,#2f6fed);text-decoration:none;white-space:nowrap;}
 .mh-empty{text-align:center;color:var(--ink-soft);padding:60px 20px;}
+.mh-emp{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:18px;overflow:hidden;}
+.mh-emp-sum{display:flex;align-items:center;gap:10px;padding:13px 16px;cursor:pointer;list-style:none;}
+.mh-emp-sum::-webkit-details-marker{display:none;}
+.mh-emp-t{font-weight:700;font-size:15px;letter-spacing:-.01em;}
+.mh-emp-c{color:var(--ink-soft);font-size:12.5px;margin-left:auto;}
+.mh-emp-list{border-top:1px solid var(--line);}
+.mh-emp-row{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:10px 16px;border-top:1px solid var(--line);}
+.mh-emp-row:first-child{border-top:none;}
+.mh-emp-n{font-weight:600;font-size:13.5px;color:var(--ink);}
+.mh-emp-seg{font-size:11px;font-weight:600;color:var(--ink-soft);border:1px solid var(--line);border-radius:6px;padding:1px 6px;}
+.mh-emp-s{color:var(--ink-soft);font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums;}
+.mh-emp-note{color:var(--ink-soft);font-size:12px;padding:10px 16px 13px;border-top:1px solid var(--line);}
 @media(max-width:760px){.mh-meta{margin-left:0;text-align:left;width:100%;}
-  .mh-job{padding-left:16px;}.mh-apply{margin-left:0;}}
+  .mh-job{padding-left:16px;}.mh-apply{margin-left:0;}.mh-emp-s{margin-left:0;}}
 </style>
 """
 
@@ -107,6 +124,40 @@ def _company_card(c: dict, category: str | None) -> str:
         f'<div class="mh-jobs">{"".join(_job_row(j) for j in js)}</div></details>')
 
 
+def _everify_panel(limit: int = 40) -> str:
+    """Compact reference panel of large US employers (10k+ workforce) ranked by hiring-site
+    count — a mass-hiring SIGNAL, not job postings. Reads ONLY the cached file (no network on
+    render) and is fully guarded: any error yields an empty string so the board never breaks."""
+    try:
+        from backend.tools import everify_employers
+        data = everify_employers.load_cached()
+        emps = (data.get("employers") or [])[:limit]
+        if not emps:
+            return ""
+        rows = []
+        for e in emps:
+            seg = _SEG_LABEL.get(e.get("segment") or "general", "Крупный работодатель")
+            states = list(e.get("states") or [])[:5]
+            extra = e.get("additional_state_count") or 0
+            geo = ", ".join(states) + (f" +{extra}" if extra else "")
+            sites = int(e.get("hiring_sites") or 0)
+            rows.append(
+                f'<div class="mh-emp-row"><span class="mh-emp-n">{_esc(e.get("name"))}</span>'
+                f'<span class="mh-emp-seg">{_esc(seg)}</span>'
+                f'<span class="mh-emp-s">{sites:,} площадок найма'
+                + (f' · {_esc(geo)}' if geo else '') + '</span></div>')
+        total = int(data.get("count") or len(emps))
+        return (
+            f'<details class="mh-emp"><summary class="mh-emp-sum">'
+            f'<span class="mh-emp-t">Крупные работодатели США (10 000+ сотрудников)</span>'
+            f'<span class="mh-emp-c">{total} компаний · по числу площадок найма</span></summary>'
+            f'<div class="mh-emp-list">{"".join(rows)}</div>'
+            f'<div class="mh-emp-note">Справочный список крупнейших работодателей США — '
+            f'сигнал масс-хайринга для ручного поиска вакансий (не автоподача).</div></details>')
+    except Exception:
+        return ""
+
+
 def render_page(category: str | None = None) -> str:
     st = mass_hiring.stats()
     cos = mass_hiring.companies(category=category or None, limit=200)
@@ -132,5 +183,6 @@ def render_page(category: str | None = None) -> str:
         f'<form method="post" action="/mass-hiring/collect" style="margin-top:8px">'
         f'<button class="mh-refresh" type="submit">↻ Обновить</button></form></div></div>'
         f'<div class="mh-chips">{"".join(chips)}</div>'
+        f'{_everify_panel()}'
         f'{body}</div>')
     return mailcrm_ui._page("masshiring", head)

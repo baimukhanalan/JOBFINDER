@@ -1206,6 +1206,25 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     **Foundever** (~5) only an XML sitemap; **Liveops** — Rippling board has 0 entry roles, contractor
     product is login-gated Salesforce. NB the full `--collect` is now ~130s (Kelly's proxied paging + the
     Workday/insurer pagination).
+  - **Large-employer E-Verify REFERENCE source (`tools/everify_employers.py`, added 2026-08-30).**
+    Cherry-picked (self-contained port) from the `codex/company-discovery-phase1-*` branch — NOT the whole
+    discovery system (rejected: duplicates catalog_collector/ats_boards, collides with this board). It
+    yields EMPLOYERS, not jobs, so it NEVER feeds `mass_hiring_jobs`; it is a mass-hiring SIGNAL only. A
+    keyless public E-Verify mirror (`h1btrack.com/e-verify/employers/`, plain `httpx` — reachable from this
+    datacenter IP, NO proxy needed, verified live) lists US employers with a 10,000+ workforce ranked by
+    number of active hiring sites; `parse_everify_employer_page` (a stdlib `HTMLParser`) + the pure
+    `classify_employer` heuristic (segment: staffing/government/education/healthcare/nonprofit/general +
+    entity-risk flags) build the ranked list. **Wiring (SAFE/additive):** (1) a small COLLAPSIBLE
+    «Крупные работодатели США (10 000+ сотрудников)» reference panel on `/mass-hiring`
+    (`mass_hiring_ui._everify_panel`, reads ONLY the cache — NO network on page render, wrapped so any
+    error → panel omitted, board never breaks); (2) the cache
+    (`backend/data/everify_employers.json`, gitignored runtime cache, public non-PII) is refreshed by a
+    GUARDED + stale-gated (weekly) hook at the TAIL of `mass_hiring.collect()` — it runs AFTER all job
+    sources, writes only the separate cache file, and `try/except`s so it can NEVER reduce or break job
+    yield. Manual: `python -m backend.tools.everify_employers --refresh [--limit N]` / `--show`.
+    `fetch_large_everify_employers` degrades to `[]` on any network/parse failure (never raises). Seeded
+    live at deploy (~300 employers). Only the dashboard restarts for panel display changes. Tests:
+    `test_everify_employers.py` (parser + segmentation + graceful-degrade + stale-gated cache, no network).
 
 ## Interview Scheduler & Responsible Cabinet (`backend/interviews/`, added 2026-08-28)
 Assign an incoming interview (a `kind=interview` mail) into a free time-slot of a "responsible"

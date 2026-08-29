@@ -1113,6 +1113,15 @@ def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:
         n = upsert_jobs(rows)
         stale = deactivate_stale(name, run_start)
         out[name] = {"collected": n, "deactivated": stale}
+    # Refresh the large-employer reference panel (E-Verify 10k+ signal) AFTER all job sources.
+    # Fully guarded + stale-gated (weekly): a failure here can NEVER affect job collection, and
+    # this writes only a SEPARATE cache file (backend/data/everify_employers.json), never the
+    # mass_hiring_jobs table. See backend/tools/everify_employers.py.
+    try:
+        from backend.tools import everify_employers
+        out["_everify_reference"] = everify_employers.maybe_refresh_cache()
+    except Exception:
+        pass
     return out
 
 

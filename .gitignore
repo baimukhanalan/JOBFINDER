@@ -13,6 +13,8 @@ backend/data/profiles.real.json
 backend/data/proxies.json
 backend/data/proxies.txt
 backend/data/proxies_raw.txt
+# Runtime cache — rebuilt by `mass_hiring.collect()` / `everify_employers --refresh` (public data)
+backend/data/everify_employers.json
 backend/data/facts/*
 !backend/data/facts/sample.json
 backend/data/etalons/*

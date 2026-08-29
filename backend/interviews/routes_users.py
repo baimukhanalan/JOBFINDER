@@ -121,8 +121,10 @@ async def users_availability(rid: int, request: Request):
         enabled = form.get(f"en_{d}") is not None
         start = _to_min(form.get(f"start_{d}", ""))
         end = _to_min(form.get(f"end_{d}", ""))
-        if enabled and (start is None or end is None or end <= start):
-            return _render_edit(rid, ("err", f"{users_ui._DOW[d]}: время конца должно быть больше начала."))
+        # overnight (end < start, crosses midnight) and start==end (a full 24h window)
+        # are both valid — only reject an enabled day with unparseable times.
+        if enabled and (start is None or end is None):
+            return _render_edit(rid, ("err", f"{users_ui._DOW[d]}: укажите время начала и конца."))
         rows.append({"dow": d, "start_min": start or 0, "end_min": end or 0, "enabled": enabled})
     db.set_availability(rid, rows)
     return _render_edit(rid, ("ok", "Доступность сохранена."))

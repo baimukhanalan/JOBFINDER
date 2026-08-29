@@ -1111,7 +1111,14 @@ Spec/plan: `docs/superpowers/{specs,plans}/2026-08-28-interview-scheduler.*`. Al
 cabinet is a SEPARATE app.
 - **Data (Postgres `jobfinder_crm`, via the `mail_db` pool, `interviews/db.py::ensure_schema`, IF NOT
   EXISTS):** `iv_responsibles` (login, bcrypt `password_hash`, name, tz='UTC', telegram_chat_id, `active`),
-  `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled; UNIQUE per dow),
+  `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled; UNIQUE per dow —
+  **an enabled window may be same-day (`start<end`), OVERNIGHT/crossing-midnight (`end<start`, e.g. a KZ
+  responsible free 19:00–01:30 GMT for US hours), or a full 24h day (`start==end`); `slots.is_free` covers
+  all three incl. the overnight WRAP onto the next weekday's early hours, and `slots.HOUR_START/END` is the
+  full 0–24 so night slots are visible/bookable in the «Собес» grid. Do NOT re-add an `end<=start`
+  rejection in `routes_users`/cabinet or an `end>start` filter in `users_ui._avail_summary` — that silently
+  drops night windows (incident 2026-08-29: Alan's 7 night windows saved fine but vanished from `/users` +
+  were unbookable). Tests: `test_interviews_slots.py` overnight/24h/wrap cases**),
   `iv_interviews` (mailbox=persona addr = the visibility key, thread_key, company, jobid, responsible_id,
   start_ts UTC, status assigned|done|cancelled, reminded_60/5; partial-UNIQUE `(responsible_id,start_ts)
   WHERE status<>'cancelled'` = double-book guard). Persona↔responsible link is DERIVED

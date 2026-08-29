@@ -46,6 +46,15 @@ def _next_monday() -> date:
     return this_monday + timedelta(days=7)
 
 
+def _data_free_at(body: str, start_iso: str) -> list:
+    """Parse the JSON `data-free` of the grid cell whose `data-start` is start_iso.
+    Targets a SPECIFIC cell (not just the first free one) so the assertion is robust
+    to the full 0–24 grid and to other real responsibles free in earlier cells."""
+    m = re.search(re.escape(f'data-start="{start_iso}"') + r'\s+data-free="([^"]*)"', body)
+    assert m, f"no free cell at {start_iso}"
+    return json.loads(html.unescape(m.group(1)))
+
+
 @pytest.fixture()
 def seeded():
     db.ensure_schema()
@@ -74,15 +83,14 @@ def test_grid_route_renders_cells(seeded):
                    params={"mailbox": MAILBOX, "monday": monday.isoformat()})
     assert r.status_code == 200
     body = r.text
-    # a free green cell for this responsible at an in-window hour (e.g. Monday 09:00)
+    # a free green cell for this responsible at an in-window hour (Monday 09:00)
     assert "iv-free" in body
-    # data-free is a JSON array now — parse one back and assert this responsible is in it
-    m = re.search(r'data-free="([^"]*)"', body)
-    assert m
-    parsed = json.loads(html.unescape(m.group(1)))
-    assert {"id": rid, "name": "Оператор Тест"} in parsed
+    start_iso = f"{monday.isoformat()}T09:00:00+00:00"
     # the 09:00 UTC start for Monday must appear as a bookable cell start
-    assert f'data-start="{monday.isoformat()}T09:00:00+00:00"' in body
+    assert f'data-start="{start_iso}"' in body
+    # data-free is a JSON array now — parse THIS cell's list and assert we're in it
+    parsed = _data_free_at(body, start_iso)
+    assert {"id": rid, "name": "Оператор Тест"} in parsed
 
 
 def test_assign_route_books(seeded):
@@ -158,10 +166,8 @@ def test_grid_data_free_json_roundtrips_name_with_comma():
                                    "enabled": True}])
         monday = _next_monday()
         frag = operator_ui.grid_fragment(MAILBOX, monday)
-        # pull the first free cell's data-free attribute, unescape + JSON-parse it
-        m = re.search(r'data-free="([^"]*)"', frag)
-        assert m, "no free cell rendered"
-        parsed = json.loads(html.unescape(m.group(1)))
+        # target THIS user's known free cell (Monday 09:00), unescape + JSON-parse it
+        parsed = _data_free_at(frag, f"{monday.isoformat()}T09:00:00+00:00")
         assert {"id": rid, "name": "Ivanov, A.: Sr"} in parsed
     finally:
         _cleanup()

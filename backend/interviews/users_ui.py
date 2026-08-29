@@ -50,9 +50,18 @@ def _role_tag(role: str) -> str:
     return '<span class="u-tag" style="color:#3730a3;background:#e0e7ff">интервьюер</span>'
 
 
+def _fmt_window(r: dict) -> str:
+    """A weekday window as text. start==end is a full 24h window; end<start is an
+    overnight window that crosses midnight (both are valid, so neither is hidden)."""
+    s, e = int(r.get("start_min") or 0), int(r.get("end_min") or 0)
+    if s == e:
+        return "24 ч"
+    label = f"{_min_to_hhmm(s)}–{_min_to_hhmm(e)}"
+    return label + " (ночн.)" if e < s else label
+
+
 def _avail_summary(av: list[dict]) -> str:
-    days = [f"{_DOW[r['dow']]} {_min_to_hhmm(r['start_min'])}–{_min_to_hhmm(r['end_min'])}"
-            for r in av if r.get("enabled") and int(r.get("end_min", 0)) > int(r.get("start_min", 0))]
+    days = [f"{_DOW[r['dow']]} {_fmt_window(r)}" for r in av if r.get("enabled")]
     if not days:
         return "<span style='color:#dc2626'>нет окон → нельзя назначить</span>"
     return " · ".join(escape(d) for d in days)

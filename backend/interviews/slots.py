@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 
 UTC = ZoneInfo("UTC")
 
-HOUR_START = 8
-HOUR_END = 20
+HOUR_START = 0
+HOUR_END = 24
 DURATION_MIN = 60
 
 
@@ -30,23 +30,54 @@ def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datet
     return a_start < b_end and b_start < a_end
 
 
+def _covers_same_day(start_min: int, end_min: int, a: int, b: int) -> bool:
+    """Does a weekday window's OWN-DAY part cover the cell [a, b) (minutes-in-day)?
+    Three window kinds are supported so every day/night/all-day window works:
+      * start == end  -> a full 24h window (covers the whole day, no wrap);
+      * start <  end  -> an ordinary same-day window [start, end);
+      * start >  end  -> an overnight window; its own-day part is [start, 24:00)
+                         (the [0, end) tail belongs to the NEXT day — see _covers_wrap).
+    """
+    if start_min == end_min:
+        return True
+    if start_min < end_min:
+        return start_min <= a and b <= end_min
+    return start_min <= a  # overnight forward part; b <= 1440 always for a day cell
+
+
+def _covers_wrap(prev_start_min: int, prev_end_min: int, a: int, b: int) -> bool:
+    """Does the PREVIOUS weekday's overnight window wrap into this day's early cell
+    [a, b)? Only an overnight window (start > end) wraps, covering [0, end) here."""
+    if prev_start_min <= prev_end_min:  # normal or 24h -> no spill into the next day
+        return False
+    return b <= prev_end_min  # a >= 0 always; cell must fit inside [0, prev_end)
+
+
 def is_free(
     avail_rows: list[dict],
     booked: list[tuple[datetime, datetime]],
     d: date,
     hour: int,
 ) -> bool:
-    """True when the responsible's weekday row covers this hour's cell AND no
-    booked interval overlaps [cell_start_utc, cell_start_utc + DURATION_MIN).
+    """True when the responsible's availability covers this hour's cell AND no
+    booked interval overlaps it. Availability may be an overnight window (end <=
+    start), so a cell can be covered by THIS weekday's window or by the PREVIOUS
+    weekday's overnight window wrapping past midnight.
     """
     dow = d.weekday()
-    cell_start_min = hour * 60
-    cell_end_min = cell_start_min + DURATION_MIN
+    a = hour * 60
+    b = a + DURATION_MIN
 
-    row = next((r for r in avail_rows if r.get("dow") == dow), None)
-    if row is None or not row.get("enabled"):
-        return False
-    if not (row["start_min"] <= cell_start_min and cell_end_min <= row["end_min"]):
+    def _row(x):
+        r = next((r for r in avail_rows if r.get("dow") == x), None)
+        return r if (r and r.get("enabled")) else None
+
+    today = _row(dow)
+    covered = bool(today and _covers_same_day(today["start_min"], today["end_min"], a, b))
+    if not covered:
+        prev = _row((dow - 1) % 7)
+        covered = bool(prev and _covers_wrap(prev["start_min"], prev["end_min"], a, b))
+    if not covered:
         return False
 
     cell_start = cell_start_utc(d, hour)

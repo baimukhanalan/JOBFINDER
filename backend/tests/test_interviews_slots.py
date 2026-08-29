@@ -77,3 +77,46 @@ def test_free_grid_lists_only_free_responsibles():
 
     tuesday = monday + timedelta(days=1)
     assert grid[f"{tuesday.isoformat()}:09"] == []  # no availability row for this dow
+
+
+def test_is_free_overnight_window_forward_and_wrap():
+    mon = _monday()
+    tue = mon + timedelta(days=1)
+    # Monday 21:00 -> 02:00 GMT (overnight: end_min < start_min)
+    avail = [{"dow": mon.weekday(), "start_min": 21 * 60, "end_min": 2 * 60, "enabled": True}]
+    # forward part, on Monday itself
+    assert slots.is_free(avail, [], mon, 21)          # opens the window
+    assert slots.is_free(avail, [], mon, 23)          # 23:00-24:00 within [21:00, 24:00)
+    assert not slots.is_free(avail, [], mon, 20)      # before it opens
+    assert not slots.is_free(avail, [], mon, 1)       # Monday early AM is NOT Monday's window
+    # wrap part lands on Tuesday, via MONDAY's row
+    assert slots.is_free(avail, [], tue, 0)           # 00:00-01:00 within wrap [0, 02:00)
+    assert slots.is_free(avail, [], tue, 1)           # 01:00-02:00 within wrap
+    assert not slots.is_free(avail, [], tue, 2)       # 02:00-03:00 past the close
+    assert not slots.is_free(avail, [], tue, 9)       # Tuesday has no own window
+
+
+def test_is_free_24h_window_does_not_wrap():
+    mon = _monday()
+    tue = mon + timedelta(days=1)
+    avail = [{"dow": mon.weekday(), "start_min": 0, "end_min": 0, "enabled": True}]  # start==end => 24h
+    assert slots.is_free(avail, [], mon, 0)
+    assert slots.is_free(avail, [], mon, 12)
+    assert slots.is_free(avail, [], mon, 23)
+    assert not slots.is_free(avail, [], tue, 0)       # a full-day window does not bleed into next day
+
+
+def test_is_free_disabled_zero_window_never_free():
+    mon = _monday()
+    avail = [{"dow": mon.weekday(), "start_min": 0, "end_min": 0, "enabled": False}]
+    assert not slots.is_free(avail, [], mon, 12)
+
+
+def test_overnight_wrap_respects_booking():
+    mon = _monday()
+    tue = mon + timedelta(days=1)
+    avail = [{"dow": mon.weekday(), "start_min": 22 * 60, "end_min": 3 * 60, "enabled": True}]
+    cs = slots.cell_start_utc(tue, 1)
+    booked = [(cs, cs + timedelta(minutes=slots.DURATION_MIN))]
+    assert not slots.is_free(avail, booked, tue, 1)   # wrapped cell, but booked
+    assert slots.is_free(avail, booked, tue, 2)       # neighbouring wrapped cell still free

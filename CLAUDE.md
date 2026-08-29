@@ -1157,7 +1157,11 @@ cabinet is a SEPARATE app.
   `dashboard_app.py` like the operator routes) — list/create/reset-password/set-role/link-telegram/
   toggle-active, plus a **weekly availability editor** (GMT, per weekday) so a freshly-created interviewer
   is immediately assignable in the «Собес» grid (verified E2E: new user + availability → shows as free in
-  `service.grid_for_week`). ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
+  `service.grid_for_week`). **UI is card-based + mobile-first (reworked 2026-08-29)** — the users list is
+  responsive cards (NOT a wide table, which was unusable on a phone) and both screens use the shared shell
+  tokens (`var(--panel)/--line/--accent/--ff`) + components (`.hbtn`/`button.primary`/`.ghost`) so it
+  matches the other tabs; the availability editor stacks per-day (big tap-target time inputs), notes the
+  night/24h window rule, and has a «Скопировать Пн на все дни» quick-fill. Screenshot-verified at 390px/1100px. ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
   gates it (no separate check needed). POST handlers re-render the page with a banner (a generated password
   is shown once, inline — never in a URL/redirect/log); accounts are DEACTIVATED, never hard-deleted (FK to
   `iv_interviews`). Only the dashboard restarts for changes. CLI still works: `python -m

@@ -25,8 +25,7 @@ main{max-width:900px;margin:0 auto;padding:22px 18px;}
 @media(max-width:600px){main{padding:14px 12px;}}
 .cab-top{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:22px;
   padding-bottom:14px;border-bottom:1px solid var(--line);}
-.cab-top .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);
-  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;}
+.cab-top .brand{width:36px;height:36px;border-radius:9px;background:var(--accent);overflow:hidden;padding:0;}
 .cab-top .who{font-weight:700;color:var(--ink);font-size:15px;}
 .cab-nav{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;}
 .cab-nav a{padding:8px 14px;border-radius:var(--r-full);font-weight:600;font-size:13px;
@@ -40,9 +39,7 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
   margin-bottom:16px;font-weight:600;font-size:13px;}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;}
 .login-wrap{max-width:360px;margin:8vh auto 0;}
-.login-wrap .brand{width:44px;height:44px;border-radius:11px;background:var(--accent);
-  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;
-  font-size:19px;margin:0 auto 18px;}
+.login-wrap .brand{width:56px;height:56px;border-radius:14px;background:var(--accent);overflow:hidden;padding:0;margin:0 auto 18px;}
 .login-wrap .card{padding:24px;}
 .login-wrap label{margin-top:14px;}
 .login-wrap input{width:100%;}
@@ -101,9 +98,10 @@ def _doc(body: str, title: str = "Кабинет") -> str:
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        + mailcrm_ui._HEAD_PWA +
         f"<title>{escape(title)}</title>" + mailcrm_ui._FONTS +
         f"<style>{mailcrm_ui._CSS}{_CAB_CSS}</style></head>"
-        f"<body><main>{body}</main></body></html>")
+        f"<body><main>{body}</main>" + mailcrm_ui._SW_REG + "</body></html>")
 
 
 def _topbar(responsible: dict, active: str) -> str:
@@ -112,7 +110,7 @@ def _topbar(responsible: dict, active: str) -> str:
            f'<a class="{"active" if active=="availability" else ""}" href="/cabinet/availability">Расписание</a>'
            f'<a class="{"active" if active=="inbox" else ""}" href="/cabinet/inbox">Почта</a>'
            f'<a href="/logout">Выход</a>')
-    return (f'<div class="cab-top"><div class="brand">JF</div>'
+    return (f'<div class="cab-top"><div class="brand">{mailcrm_ui._LOGO_IMG}</div>'
             f'<span class="who">{name}</span>'
             f'<nav class="cab-nav">{nav}</nav></div>')
 
@@ -121,7 +119,7 @@ def _topbar(responsible: dict, active: str) -> str:
 def login_page(error: str = "") -> str:
     err = f'<div class="err">{escape(error)}</div>' if error else ""
     body = (
-        '<div class="login-wrap"><div class="brand">JF</div>'
+        '<div class="login-wrap"><div class="brand">' + mailcrm_ui._LOGO_IMG + '</div>'
         f'{err}'
         '<div class="card"><form method="post" action="/login">'
         '<label>Логин</label>'

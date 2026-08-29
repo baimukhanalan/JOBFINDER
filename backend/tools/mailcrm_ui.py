@@ -137,7 +137,9 @@ body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);bac
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
 .layout{display:flex;min-height:100vh;}
 .sidebar{width:var(--sidebar-w);background:#fff;border-right:1px solid var(--line);padding:16px 0;display:flex;flex-direction:column;align-items:center;position:sticky;top:0;height:100vh;gap:6px;}
-.sidebar .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;margin-bottom:6px;}
+.sidebar .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;margin-bottom:6px;overflow:hidden;padding:0;}
+.jf-logo{width:100%;height:100%;object-fit:cover;display:block;}
+.gm-ava,.gm-drawer-head .brand{overflow:hidden;padding:0;}
 .sidebar .nav a{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-mute);padding:9px 6px;border-radius:var(--r-sm);font-size:9.5px;width:52px;text-align:center;}
 .sidebar .nav a.active{color:var(--accent);background:var(--accent-soft);}
 .sidebar .nav a:hover{color:var(--ink);text-decoration:none;}
@@ -478,6 +480,25 @@ _SEARCH_CTX = {
 }
 
 
+# The brand mark — the JF logo (a blue square, rounded by its container). Replaces the old
+# "JF" text badge everywhere the brand appears (rail, mobile pill, drawer).
+_LOGO_IMG = "<img src='/static/logo.svg' alt='JobFinder' class='jf-logo'>"
+
+# PWA install (manifest + icons + theme) + a service worker registration. Injected into
+# every page's <head> / end-of-body; the assets are on the dash_auth public allowlist.
+_HEAD_PWA = (
+    "<link rel='manifest' href='/static/manifest.webmanifest'>"
+    "<meta name='theme-color' content='#1b46c2'>"
+    "<meta name='apple-mobile-web-app-capable' content='yes'>"
+    "<meta name='apple-mobile-web-app-status-bar-style' content='default'>"
+    "<meta name='apple-mobile-web-app-title' content='JobFinder'>"
+    "<link rel='apple-touch-icon' href='/static/apple-touch-icon.png'>"
+    "<link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png'>"
+    "<link rel='icon' href='/static/logo.svg' type='image/svg+xml'>")
+_SW_REG = ("<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){"
+           "navigator.serviceWorker.register('/sw.js').catch(function(){});});}</script>")
+
+
 def _nav_links(active: str) -> str:
     return "".join(
         f'<a class="{"active" if active == key else ""}" href="{href}">{svg}<span>{label}</span></a>'
@@ -487,7 +508,7 @@ def _nav_links(active: str) -> str:
 def _sidebar(active: str) -> str:
     """Desktop left rail. Hidden ≤760px, where _topbar + _drawer take over. The
     footer marks this as the admin portal and carries the logout control."""
-    return (f'<aside class="sidebar"><div class="brand">JF</div>'
+    return (f'<aside class="sidebar"><div class="brand">{_LOGO_IMG}</div>'
             f'<div class="nav">{_nav_links(active)}</div>'
             '<div class="side-foot"><span class="side-role">Админ</span>'
             f'<a class="side-logout" href="/logout" title="Выйти из админки">{_IC_LOGOUT}'
@@ -509,14 +530,14 @@ def _topbar(active: str) -> str:
         lbl = next((l for _h, k, l, _s in _NAV if k == active), "")
         mid = f'<span class="gm-title">{lbl}</span>'
     return (f'<div class="gm-topbar"><div class="gm-pill">{burger}{mid}'
-            '<span class="gm-ava">JF</span></div></div>')
+            f'<span class="gm-ava">{_LOGO_IMG}</span></div></div>')
 
 
 def _drawer(active: str) -> str:
     """Slide-out menu behind the ☰ — the same 3 nav tabs. Mobile only."""
     return ('<div class="gm-scrim" onclick="gmDrawer(false)"></div>'
             '<aside class="gm-drawer"><div class="gm-drawer-head">'
-            '<span class="brand">JF</span><b>JobFinder</b>'
+            f'<span class="brand">{_LOGO_IMG}</span><b>JobFinder</b>'
             '<span class="gm-drawer-role">Админ</span></div>'
             f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav>'
             '<div class="gm-drawer-foot">'
@@ -531,11 +552,12 @@ def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        + _HEAD_PWA +
         "<title>JobFinder — почта кандидатов</title>" + _FONTS +
         f"<style>{_CSS}</style></head><body{'' if topbar else ' class=full-view'}>"
         f"{chrome}"
         f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}"
-        + _JS + "</body></html>")
+        + _JS + _SW_REG + "</body></html>")
 
 
 def _kind_tag(kind: str) -> str:

@@ -1,0 +1,16 @@
+{
+  "name": "JobFinder",
+  "short_name": "JobFinder",
+  "description": "JobFinder — кандидаты, вакансии, собеседования",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#1b46c2",
+  "theme_color": "#1b46c2",
+  "icons": [
+    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

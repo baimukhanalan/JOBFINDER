@@ -18,6 +18,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response, StreamingResponse)
 
@@ -90,6 +91,25 @@ app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"], max_age=86400,
 )
+
+# ---- static assets + PWA (installable app) ----------------------------------------
+# /static/* (logo, icons, manifest, sw.js) + a root /sw.js (a service worker must be at
+# the origin root to control scope "/") + /favicon.ico. These are on the dash_auth
+# public-asset allowlist so they load without a session (installable from /login too).
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(_STATIC_DIR / "sw.js", media_type="application/javascript",
+                        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(_STATIC_DIR / "favicon-32.png", media_type="image/png")
 
 
 # profiles.json mtime cache: /draft is hit per page load from the extension, the

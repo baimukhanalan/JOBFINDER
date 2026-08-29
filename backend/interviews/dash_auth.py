@@ -41,9 +41,8 @@ _COOKIE_SECURE = os.environ.get("IV_COOKIE_SECURE") == "1"
 # ---- style (standalone login page) -------------------------------------------------
 _LOGIN_CSS = """
 .login-wrap{max-width:360px;margin:10vh auto 0;}
-.login-wrap .brand{width:44px;height:44px;border-radius:11px;background:var(--accent);
-  color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;
-  font-size:19px;margin:0 auto 18px;}
+.login-wrap .brand{width:56px;height:56px;border-radius:14px;background:var(--accent);
+  overflow:hidden;padding:0;margin:0 auto 18px;}
 .login-wrap h1{font-size:20px;font-weight:600;text-align:center;letter-spacing:-.02em;
   margin:0 0 16px;color:var(--ink);}
 .login-wrap .card{background:var(--panel);border:1px solid var(--line);
@@ -61,15 +60,16 @@ def _doc(body: str, title: str = "Вход") -> str:
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        + mailcrm_ui._HEAD_PWA +
         f"<title>{escape(title)}</title>" + mailcrm_ui._FONTS +
         f"<style>{mailcrm_ui._CSS}{_LOGIN_CSS}</style></head>"
-        f"<body><main>{body}</main></body></html>")
+        f"<body><main>{body}</main>" + mailcrm_ui._SW_REG + "</body></html>")
 
 
 def login_page(error: str = "") -> str:
     err = f'<div class="err">{escape(error)}</div>' if error else ""
     body = (
-        '<div class="login-wrap"><div class="brand">JF</div>'
+        '<div class="login-wrap"><div class="brand">' + mailcrm_ui._LOGO_IMG + '</div>'
         '<h1>Вход</h1>'
         f'{err}'
         '<div class="card"><form method="post" action="/login">'
@@ -114,6 +114,13 @@ def _home_for(resp: dict) -> str:
     return "/" if resp.get("role") == "admin" else "/cabinet"
 
 
+def _public_asset(path: str) -> bool:
+    """PWA + static assets that must load WITHOUT a session (manifest, service worker,
+    icons/logo) — so the app is installable and its chrome renders even on /login."""
+    return (path.startswith("/static/") or path == "/sw.js"
+            or path == "/manifest.webmanifest")
+
+
 def _employee_allowed(path: str) -> bool:
     """The employee WHITELIST: an employee may reach ONLY their own cabinet surface.
     Everything else on this PII dashboard is blocked at the door (redirected to /cabinet),
@@ -131,7 +138,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
       * role=='employee' (+active)  -> ONLY /cabinet/* (whitelist), else 303 /cabinet
     """
     async def dispatch(self, request, call_next):
-        if request.url.path in ALLOWLIST:
+        if request.url.path in ALLOWLIST or _public_asset(request.url.path):
             return await call_next(request)
         # Resolve OUTSIDE call_next so a downstream handler error is never masked as a
         # login redirect; any auth failure -> fail closed to /login.

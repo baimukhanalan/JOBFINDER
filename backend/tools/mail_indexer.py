@@ -156,7 +156,12 @@ def watch():
     def add_tree(root):
         if not os.path.isdir(root):
             return
-        for dirpath, _dirs, _files in os.walk(root):
+        for dirpath, dirs, _files in os.walk(root):
+            # Never watch hidden Maildir subfolders (.Trash/.Sent/.Drafts/.Junk). Their leaf
+            # dir is literally named "cur"/"new", so an event there would otherwise be treated
+            # as inbox mail — and moving a thread into .Trash/cur would RE-INDEX the file we
+            # just deleted. Prune hidden dirs from the walk so they're never watched.
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
             add(dirpath)
 
     add_tree(DOMAIN_ROOT)
@@ -176,12 +181,16 @@ def watch():
             full = os.path.join(base, name)
             is_dir = bool(mask & IN_ISDIR)
             if is_dir and (mask & (IN_CREATE | IN_MOVED_TO)):
-                add_tree(full)                  # new mailbox / new|cur dir -> watch it
+                if not name.startswith("."):    # skip .Trash/.Sent/... (deleted/sent copies)
+                    add_tree(full)              # new mailbox / new|cur dir -> watch it
                 continue
             if is_dir:
                 continue
-            # file event: only act inside a new/ or cur/ leaf dir
-            if os.path.basename(base) not in ("new", "cur"):
+            # file event: only act inside a REAL mailbox new/ or cur/ leaf — NOT a hidden
+            # Maildir subfolder like .Trash/cur or .Sent/cur (whose basename is also "cur"),
+            # which hold deleted/sent copies. Reject when the parent dir is a hidden folder.
+            if os.path.basename(base) not in ("new", "cur") or \
+                    os.path.basename(os.path.dirname(base)).startswith("."):
                 continue
             if mask & (IN_CREATE | IN_MOVED_TO):
                 index_file(full)                # new mail file -> index instantly

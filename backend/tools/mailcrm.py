@@ -436,6 +436,13 @@ def _health_fallback(where: str, exc: Exception | None = None) -> None:
 def build_index_row(path: str, seen: int) -> dict | None:
     """Parse one Maildir file into the mail_index row shape (used by the indexer
     and the retention job). Returns None for a file outside any candidate mailbox."""
+    # Never index a message inside a hidden Maildir subfolder (.Trash / .Sent / .Drafts /
+    # .Junk) — those hold deleted/sent/archived copies, not inbox mail. delete_thread moves
+    # a thread into .Trash/cur, and re-indexing it there would resurrect a just-deleted
+    # thread. (The inotify watcher also excludes these dirs; this is a defensive backstop so
+    # any path-based caller is safe.)
+    if any(p.startswith(".") and len(p) > 1 for p in os.path.dirname(path).split(os.sep)):
+        return None
     box = _mailbox_of(path)
     if not box:
         return None

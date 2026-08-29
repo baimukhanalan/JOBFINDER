@@ -183,6 +183,16 @@ class DeleteThreadTests(unittest.TestCase):
             self.assertEqual(len(list((root / ".Trash" / "cur").iterdir())), 2)
             self.assertEqual(len(deleted), 2)
 
+    def test_trashed_message_is_never_reindexed(self):
+        # delete_thread moves a thread into .Trash/cur; build_index_row MUST return None for
+        # any file inside a hidden Maildir subfolder, else the inotify watcher (whose .Trash/cur
+        # leaf is literally named "cur") would resurrect a just-deleted thread. Guard fires
+        # before opening the file, so the path need not exist.
+        for hidden in (".Trash", ".Sent", ".Drafts", ".Junk"):
+            p = f"/var/mail/vhosts/takhet.com/dinara.baibekova/{hidden}/cur/1:2,ST"
+            self.assertIsNone(mailcrm.build_index_row(p, 1),
+                              f"{hidden} message must not be indexed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,7 +42,10 @@ and a headful "co-pilot" Chromium watched over noVNC. Nav lives in
 hidden and `_topbar`+`_drawer` render a **Gmail-style search pill** (☰ opens a slide-out menu with
 the 3 tabs · a context-aware search box whose route/placeholder come from `_SEARCH_CTX` · a
 decorative JF avatar). The per-screen inline search toolbars (`.toolbar`/`.cat-search`) are hidden on
-mobile since the pill covers search there.
+mobile since the pill covers search there. Both `_sidebar` (footer, pinned bottom) and `_drawer` (head
+badge + footer) carry an **«Админ» marker + a `/logout` control** (`_IC_LOGOUT`), so every admin page
+reads as the admin portal and can sign out (added 2026-08-29; `/logout` is a GET route on the
+dash_auth allowlist).
 
 Stack: Python 3.12 · FastAPI · Playwright · **psycopg2 / Postgres `jobfinder_crm`** · Dovecot+Postfix
 Maildir · aiogram (Telegram) · python-jobspy. Résumé tailoring + answer drafting use the **local Sumrak

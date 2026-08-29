@@ -337,6 +337,17 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-drawer-nav a span{flex:1;}
 .gm-drawer-nav a.active{background:var(--accent-soft);color:var(--accent-deep);}
 .gm-drawer-nav a:hover{background:var(--panel-2);text-decoration:none;}
+.gm-drawer-role{margin-left:auto;font-size:10.5px;font-weight:700;color:#b45309;background:#fef3c7;padding:2px 9px;border-radius:var(--r-full);}
+.gm-drawer-foot{margin-top:auto;padding:10px 12px;border-top:1px solid var(--line);}
+.gm-logout{display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:var(--r-full);color:var(--danger);font-weight:600;font-size:15px;}
+.gm-logout svg{width:22px;height:22px;flex:0 0 auto;}
+.gm-logout:hover{background:#fce8e6;text-decoration:none;}
+/* desktop sidebar footer: admin marker + logout, pinned to the bottom of the rail */
+.side-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0 2px;width:100%;}
+.side-role{font-size:8px;font-weight:700;letter-spacing:.06em;color:var(--ink-mute);text-transform:uppercase;}
+.side-logout{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-mute);padding:8px 6px;border-radius:var(--r-sm);font-size:9.5px;width:52px;text-align:center;}
+.side-logout svg{width:20px;height:20px;}
+.side-logout:hover{color:var(--danger);background:#fce8e6;text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
 /* Mobile: the search pill hides on scroll down and reveals on scroll up (Gmail). It is FIXED
    (position:sticky is unreliable under the global overflow-x:hidden); the tabs scroll in flow
@@ -426,6 +437,7 @@ _IC_UNFINISHED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 _IC_MASS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>'
 _IC_STATS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>'
 _IC_USERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+_IC_LOGOUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>'
 _NAV = [
     ("/mail", "inbox", "Инбокс", _IC_INBOX),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
@@ -451,9 +463,13 @@ def _nav_links(active: str) -> str:
 
 
 def _sidebar(active: str) -> str:
-    """Desktop left rail. Hidden ≤760px, where _topbar + _drawer take over."""
+    """Desktop left rail. Hidden ≤760px, where _topbar + _drawer take over. The
+    footer marks this as the admin portal and carries the logout control."""
     return (f'<aside class="sidebar"><div class="brand">JF</div>'
-            f'<div class="nav">{_nav_links(active)}</div></aside>')
+            f'<div class="nav">{_nav_links(active)}</div>'
+            '<div class="side-foot"><span class="side-role">Админ</span>'
+            f'<a class="side-logout" href="/logout" title="Выйти из админки">{_IC_LOGOUT}'
+            '<span>Выход</span></a></div></aside>')
 
 
 def _topbar(active: str) -> str:
@@ -478,8 +494,12 @@ def _drawer(active: str) -> str:
     """Slide-out menu behind the ☰ — the same 3 nav tabs. Mobile only."""
     return ('<div class="gm-scrim" onclick="gmDrawer(false)"></div>'
             '<aside class="gm-drawer"><div class="gm-drawer-head">'
-            '<span class="brand">JF</span><b>JobFinder</b></div>'
-            f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav></aside>')
+            '<span class="brand">JF</span><b>JobFinder</b>'
+            '<span class="gm-drawer-role">Админ</span></div>'
+            f'<nav class="gm-drawer-nav">{_nav_links(active)}</nav>'
+            '<div class="gm-drawer-foot">'
+            f'<a class="gm-logout" href="/logout">{_IC_LOGOUT}<span>Выйти из админки</span></a>'
+            '</div></aside>')
 
 
 def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:

@@ -1,6 +1,6 @@
 from backend.tools.employer_domain_verifier import (
     RequestLimiter, _country_compatible_domain, _meaningful_domain_overlap,
-    audit_search_domains, verify_record,
+    audit_search_domains, discover_search_domains, verify_record,
 )
 
 
@@ -61,6 +61,18 @@ def test_us_employer_rejects_foreign_country_domain_but_allows_genericized_cc_tl
     assert not _country_compatible_domain(row, "sodexo.fi")
     assert _country_compatible_domain(row, "example.com")
     assert _country_compatible_domain(row, "startup.ai")
+
+
+def test_legacy_search_entrypoint_delegates_to_provisional_tier(monkeypatch):
+    from backend.tools import employer_provisional_domain
+    captured = {}
+    monkeypatch.setattr(
+        employer_provisional_domain, "run",
+        lambda **kwargs: captured.update(kwargs) or {"accepted": 2, "updated": 2})
+    result = discover_search_domains(limit=17, workers=3, min_interval=0.7)
+    assert result == {"accepted": 2, "updated": 2}
+    assert captured == {"limit": 17, "workers": 3,
+                        "min_interval": 0.7, "dry_run": False}
 
 
 def test_audit_requires_structured_link_and_official_site(monkeypatch):

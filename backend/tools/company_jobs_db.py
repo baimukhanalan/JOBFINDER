@@ -565,7 +565,9 @@ def list_company_targets(status: str = "novel", limit: int = 100,
             "AND s.source=lower(c.ats) AND s.source_board_id=c.ats_slug "
             "ORDER BY s.started_at DESC LIMIT 1) last_scan ON TRUE "
             "JOIN company_employer_master m ON m.company_id=c.id "
-            "WHERE c.status=%s AND m.in_target_population AND m.domain_verified "
+            "WHERE c.status=%s AND m.in_target_population AND (m.domain_verified OR ("
+            "m.qualification_evidence#>>'{provisional_domain,status}'='accepted' "
+            "AND lower(COALESCE(c.domain,''))=lower(COALESCE(m.candidate_domain,'')))) "
             "AND lower(c.ats)=ANY(%s) AND c.ats_slug IS NOT NULL AND c.ats_slug <> '') "
             "SELECT id,canonical_name,domain,careers_url,ats,ats_slug,ats_url,last_scanned_at "
             "FROM boards WHERE rn=1 "
@@ -580,7 +582,9 @@ def get_company_target(company_id: int,
         cur.execute("""
           SELECT c.id,c.canonical_name,c.domain,c.careers_url,c.ats,c.ats_slug,c.ats_url
           FROM company_discovery c JOIN company_employer_master m ON m.company_id=c.id
-          WHERE c.id=%s AND m.in_target_population AND m.domain_verified
+          WHERE c.id=%s AND m.in_target_population AND (m.domain_verified OR (
+            m.qualification_evidence#>>'{provisional_domain,status}'='accepted'
+            AND lower(COALESCE(c.domain,''))=lower(COALESCE(m.candidate_domain,''))))
             AND lower(c.ats)=ANY(%s)
         """, (int(company_id), list(supported_ats)))
         row = cur.fetchone()

@@ -35,6 +35,7 @@ from backend.tools.company_jobs import (
     collect_pending_questions_parallel,
 )
 from backend.tools import company_discovery_db as company_db
+from backend.tools.custom_board_recovery import recover_custom_boards
 from backend.tools.employer_careers import enrich_verified_careers
 from backend.tools.employer_domain_verifier import verify_domains
 from backend.tools.employer_hiring_cohort import refresh_hiring_cohort
@@ -211,6 +212,9 @@ def _default_runners() -> dict[str, Runner]:
         # Retry only boards whose latest scan is incomplete.  The updater's
         # checkpoint applies exponential backoff to this bounded delta instead
         # of repeating the full jobs stage.
+        custom = recover_custom_boards(
+            limit=int(config["limit"]), workers=int(config["workers"]), apply=True)
+        remaining_limit = max(0, int(config["limit"]) - int(custom.get("selected") or 0))
         with company_db._cur() as cur:
             cur.execute("""
               WITH latest AS (
@@ -225,9 +229,10 @@ def _default_runners() -> dict[str, Runner]:
               WHERE m.in_target_population AND m.domain_verified
                 AND l.scan_complete=FALSE AND lower(c.ats)=l.source
                 AND c.ats_slug=l.source_board_id
+                AND l.source<>'custom'
               ORDER BY (l.source='custom') DESC,l.started_at,l.company_id
               LIMIT %s
-            """, (int(config["limit"]),))
+            """, (remaining_limit,))
             targets = [dict(row) for row in cur.fetchall()]
         sources = Counter(str(row.get("source") or "") for row in targets)
         results: list[dict[str, Any]] = []
@@ -241,7 +246,15 @@ def _default_runners() -> dict[str, Runner]:
                 except Exception as exc:
                     results.append({"companies_selected": 1, "companies_failed": 1,
                                     "errors": [str(exc)]})
-        return {**_sum_metrics(results), "recovery_selected": len(targets),
+        collected = _sum_metrics(results)
+        collected["companies_incomplete"] = int(collected.get("companies_incomplete") or 0) \
+            + int(custom.get("incomplete") or 0)
+        collected["companies_failed"] = int(collected.get("companies_failed") or 0)
+        collected["companies_locked"] = int(collected.get("companies_locked") or 0)
+        collected["errors"].extend(custom.get("errors") or [])
+        return {**collected,
+                "recovery_selected": len(targets) + int(custom.get("selected") or 0),
+                "custom_recovery": custom,
                 "selected_by_ats": dict(sorted(sources.items()))}
 
     def questions(config: Mapping[str, Any]) -> dict[str, Any]:

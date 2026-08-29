@@ -132,84 +132,9 @@ def verify_domains(*, limit: int = 2000, workers: int = 4,
 
 def discover_search_domains(*, limit: int = 100, workers: int = 4,
                             min_interval: float = 0.5) -> dict:
-    """Discover official sites from search, then verify them against E-Verify identity."""
-    rows = master_db.list_search_candidates(limit=limit)
-    limiter = RequestLimiter(min_interval)
-    verified = []
-    attempts: list[tuple[int, dict]] = []
-    errors = 0
-
-    def work(row: dict):
-        attempted_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        record = {**row, "canonical_name": row.get("canonical_name")
-                  or company_db.normalize_company_name(row.get("brand_name"))}
-        with httpx.Client(timeout=httpx.Timeout(15.0), headers={"User-Agent": USER_AGENT}) as client:
-            candidates = search_candidates(record, client, limiter, max_results=3)
-            if not candidates:
-                # Empty search HTML is ambiguous: no result, throttling and provider
-                # markup changes are indistinguishable here, so keep it retryable.
-                return (None, {"attempted_at": attempted_at,
-                               "result": "transient_or_empty_search"})
-            for candidate in candidates:
-                accepted = verify_candidate(record, candidate, client, limiter)
-                if not accepted:
-                    continue
-                domain = accepted["domain"]
-                if not _country_compatible_domain(row, domain):
-                    continue
-                overlap = _meaningful_domain_overlap(row, domain)
-                homepage_score = float(
-                    accepted["evidence"].get("homepage_name_similarity") or 0
-                )
-                if overlap <= 0:
-                    continue
-                enriched = enrich_company(
-                    {"domain": domain, "legal_name": row.get("legal_name"),
-                     "trade_name": row.get("trade_name")}, client,
-                    before_request=limiter.wait)
-                return ({
-                    "company_id": row["company_id"], "domain": domain,
-                    "careers_url": enriched.get("careers_url") or None,
-                    "ats": enriched.get("ats") or None,
-                    "ats_slug": enriched.get("ats_slug") or None,
-                    "ats_url": enriched.get("ats_url") or None,
-                    "careers_confidence": enriched.get("careers_confidence"),
-                    "identity_confidence": accepted["domain_confidence"],
-                    "domain_evidence": [{
-                        "class": "official_site_identity", "discovered_via": "public_search",
-                        "url": accepted["candidate_url"],
-                        "homepage_name_similarity": accepted["evidence"].get(
-                            "homepage_name_similarity"),
-                        "meaningful_domain_overlap": round(overlap, 4),
-                        "verified_at": attempted_at,
-                    }],
-                    "provenance": {"result": "domain_verified", "method": "search+official_site",
-                                   "candidate_url": accepted["candidate_url"],
-                                   "homepage_name_similarity": accepted["evidence"].get(
-                                       "homepage_name_similarity")},
-                }, {"attempted_at": attempted_at, "result": "verified", "domain": domain})
-        return (None, {"attempted_at": attempted_at, "result": "no_verified_domain"})
-
-    with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 4))) as pool:
-        futures = {pool.submit(work, row): row for row in rows}
-        for future in as_completed(futures):
-            row = futures[future]
-            try:
-                result, attempt = future.result()
-            except Exception as exc:
-                errors += 1
-                attempt = {"attempted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                           "result": "transient_error", "error": str(exc)[:160]}
-                result = None
-            if result:
-                verified.append(result)
-            # Provider/network failures remain retryable; completed no-match attempts persist.
-            if attempt.get("result") not in {"transient_error", "transient_or_empty_search"}:
-                attempts.append((int(row["company_id"]), attempt))
-    updated = master_db.save_verified_domains(verified)
-    attempted = master_db.record_search_attempts(attempts)
-    return {"selected": len(rows), "verified": len(verified), "updated": updated,
-            "attempted": attempted, "errors": errors}
+    """Compatibility entrypoint for candidate-only provisional search domains."""
+    from backend.tools.employer_provisional_domain import run
+    return run(limit=limit, workers=workers, min_interval=min_interval, dry_run=False)
 
 
 def audit_search_domains() -> dict:

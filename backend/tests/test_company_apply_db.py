@@ -82,6 +82,12 @@ def test_enqueue_enforces_all_safety_gates_and_catalog_exclusion(monkeypatch):
     assert "j.status='active'" in sql
     assert "j.remote_type='remote'" in sql
     assert "j.questions_status='success'" in sql
+    assert "JOIN company_employer_master m" in sql
+    assert "m.domain_verified" in sql
+    assert "m.identity_status='verified'" in sql
+    assert "m.monitoring_status='monitoring'" in sql
+    assert "m.hiring_cohort_status='verified_hiring'" in sql
+    assert "m.is_monitoring_representative" in sql
     assert "j.apply_url ~* '^https://'" in sql
     assert "j.last_seen_at >=" in sql
     assert "NOT EXISTS" in sql and "FROM job_catalog old" in sql
@@ -108,6 +114,9 @@ def test_claim_uses_profile_lease_and_skip_locked_and_returns_joined_data(monkey
     assert "FOR UPDATE OF a SKIP LOCKED" in sql
     assert "company_remote_job_questions" in sql
     assert "current_revalidation_hash" in sql
+    assert "JOIN company_employer_master m" in sql
+    assert "m.domain_verified" in sql
+    assert "m.hiring_cohort_status='verified_hiring'" in sql
     assert result["state"] == "claimed"
     assert result["company_name"] == "Acme"
 

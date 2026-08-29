@@ -242,7 +242,9 @@ def test_target_selection_is_supported_and_oldest_scan_first(monkeypatch):
     assert rows[0]["ats_slug"] == " RawSlug "
     sql, args = cursor.calls[0]
     assert "lower(c.ats)=ANY(%s)" in sql
-    assert "m.domain_verified" in sql
+    assert "m.domain_verified OR" in sql
+    assert "provisional_domain,status" in sql
+    assert "lower(COALESCE(c.domain,''))=lower(COALESCE(m.candidate_domain,''))" in sql
     assert "PARTITION BY lower(c.ats),c.ats_slug" in sql
     assert "m.monitoring_status IN ('qualified','monitoring')" not in sql
     assert "ORDER BY last_scanned_at ASC NULLS FIRST" in sql

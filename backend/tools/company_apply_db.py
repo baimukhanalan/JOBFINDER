@@ -245,8 +245,13 @@ def enqueue_eligible(profile_id: str, *, freshness_days: int = 7,
         md5(lower(regexp_replace(split_part(btrim(j.apply_url),'#',1),'/+$',''))),
         {_HASH_SQL}
       FROM company_remote_jobs j
+      JOIN company_employer_master m ON m.company_id=j.company_id
       WHERE j.status='active' AND j.remote_type='remote'
         AND j.questions_status='success' AND j.apply_url ~* '^https://'
+        AND m.in_target_population AND m.domain_verified
+        AND m.identity_status='verified' AND m.monitoring_status='monitoring'
+        AND m.hiring_cohort_status='verified_hiring'
+        AND m.is_monitoring_representative
         AND j.last_seen_at >= now() - (%s * interval '1 day')
         AND NOT EXISTS (
           SELECT 1 FROM job_catalog old
@@ -343,8 +348,13 @@ def claim_next(profile_id: str, worker_id: str, *, lease_seconds: int = 900,
           FROM company_remote_applications a
           JOIN company_remote_jobs j ON j.id=a.job_id
           JOIN company_discovery d ON d.id=j.company_id
+          JOIN company_employer_master m ON m.company_id=j.company_id
           WHERE a.profile_id=%s AND a.state=ANY(%s) AND j.status='active'
             AND j.remote_type='remote' AND j.questions_status='success'
+            AND m.in_target_population AND m.domain_verified
+            AND m.identity_status='verified' AND m.monitoring_status='monitoring'
+            AND m.hiring_cohort_status='verified_hiring'
+            AND m.is_monitoring_representative
             AND a.revalidation_hash={_HASH_SQL}
             {batch_clause}
           ORDER BY a.priority DESC,a.queued_at,a.id

@@ -57,6 +57,16 @@ def _clink(tab: str, stage: str, q: str) -> str:
     return "/mail/candidates?" + urlencode(params)
 
 
+def _iv_assigned(mailbox: str, thread: str, name: str) -> str:
+    """Lazy «Назначено · <name>» control (operator_ui.assigned_button). Returns "" on any
+    import failure so a degraded interviews package never breaks the card."""
+    try:
+        from backend.interviews import operator_ui
+        return operator_ui.assigned_button(mailbox, thread, "", name, as_span=True)
+    except Exception:
+        return ""
+
+
 # --------------------------------------------------------------- group cards
 def _group_card(g: dict) -> str:
     """One candidate card (collapsed). The header toggles the card open (cgToggle);
@@ -81,10 +91,15 @@ def _group_card(g: dict) -> str:
     n_msg = g.get("msg_count", 0)
     count_chip = f'<span class="cg-count" title="писем в переписке">{n_msg}</span>' if n_msg else ""
 
-    # «Собес» assign control — only when the candidate actually has an interview mail. It
-    # stops its own click propagation, so tapping it opens the assign modal, not the card.
+    # Interview control (stops its own click propagation → opens the modal, not the card):
+    # «Назначено · <name>» once a booking exists (edit / reassign / cancel via the modal),
+    # else «Собес» when the candidate has an interview mail, else nothing.
     sobes = ""
-    if g.get("iv_hash"):
+    asg = g.get("assigned")
+    if asg:
+        sobes = _iv_assigned(mailbox, asg.get("thread_key", "") or "",
+                             asg.get("responsible_name") or "")
+    elif g.get("iv_hash"):
         sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
                           as_span=True)
 

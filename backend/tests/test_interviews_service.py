@@ -216,6 +216,50 @@ def test_assign_offset_start_iso_converted_and_aligned_to_utc():
         )
 
 
+def test_assign_reassigns_and_cancels_prior_booking():
+    monday = _next_monday()
+    r1 = db.add_responsible("test_iv_re1", "h", "Re One")
+    r2 = db.add_responsible("test_iv_re2", "h", "Re Two")
+    for rid in (r1, r2):
+        db.set_availability(rid, [{"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True}])
+    mailbox = "test_iv_reassign@takhet.com"
+    s1 = slots.cell_start_utc("UTC", monday, 10)
+    s2 = slots.cell_start_utc("UTC", monday, 12)
+
+    service.assign(mailbox=mailbox, responsible_id=r1, start_iso=s1.isoformat(),
+                   company="Acme", jobid="1", thread_key="thr", source_message_hash="h1")
+    assert db.active_interview_for_thread(mailbox, "thr")["responsible_id"] == r1
+
+    # reassign to r2 at a different slot on the SAME thread — replaces the prior booking
+    service.assign(mailbox=mailbox, responsible_id=r2, start_iso=s2.isoformat(),
+                   company="Acme", jobid="1", thread_key="thr", source_message_hash="h1")
+
+    active = db.active_interview_for_thread(mailbox, "thr")
+    assert active["responsible_id"] == r2
+    assert active["start_ts"].astimezone(timezone.utc).hour == 12
+    # exactly ONE active interview remains for the thread (the old one is cancelled)
+    with mail_db._cur(dict_rows=False) as c:
+        c.execute("SELECT count(*) FROM iv_interviews WHERE mailbox=%s AND thread_key=%s "
+                  "AND status<>'cancelled'", (mailbox, "thr"))
+        assert c.fetchone()[0] == 1
+    assert db.assignments_for_mailboxes([mailbox])[mailbox]["responsible_name"] == "Re Two"
+
+
+def test_cancel_clears_assignment():
+    monday = _next_monday()
+    rid = db.add_responsible("test_iv_cancel", "h", "Cancel")
+    db.set_availability(rid, [{"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True}])
+    mailbox = "test_iv_cancel_cand@takhet.com"
+    s = slots.cell_start_utc("UTC", monday, 14)
+    service.assign(mailbox=mailbox, responsible_id=rid, start_iso=s.isoformat(),
+                   company="Acme", jobid="1", thread_key="tc", source_message_hash="h")
+    assert db.active_interview_for_thread(mailbox, "tc") is not None
+
+    assert service.cancel(mailbox, "tc") == 1
+    assert db.active_interview_for_thread(mailbox, "tc") is None
+    assert db.assignments_for_mailboxes([mailbox]) == {}
+
+
 def test_mailbox_context_defaults_when_no_match():
     ctx = service.mailbox_context("no-such-mailbox-ever@takhet.com")
     assert ctx == {"company": "", "jobid": ""}

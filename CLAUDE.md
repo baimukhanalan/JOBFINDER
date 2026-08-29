@@ -1174,9 +1174,22 @@ tz-parametrised (80 pass).
   orta-style week grid of ALL responsibles' free slots (`interviews/operator_ui.py`); click a free cell →
   pick a free responsible → «Назначить». Routes `interviews/routes_operator.py`
   (`GET /mail/interview/grid`, `POST /mail/interview/assign` → 409 on `SlotConflict` / 400 on bad start,
-  `GET /mail/interview/status`) are `include_router`'d into `dashboard_app.py` **inside a try/except**
-  (a broken interviews import degrades to "no button", never crashes the CRM) alongside a guarded
-  `ensure_schema()` call at startup. **Only the dashboard restarts for operator-side changes.**
+  `POST /mail/interview/cancel`, `GET /mail/interview/status`) are `include_router`'d into `dashboard_app.py`
+  **inside a try/except** (a broken interviews import degrades to "no button", never crashes the CRM)
+  alongside a guarded `ensure_schema()` call at startup. **Only the dashboard restarts for operator-side
+  changes.** **Assigned state + edit/reassign/cancel (2026-08-29):** once booked, the control flips to a
+  green **«Назначено · <ФИО>»** (`operator_ui.assigned_button` / `.iv-assigned`) that opens the SAME modal
+  in EDIT mode — `openSobes` calls `ivSyncStatus()` which reads `/mail/interview/status` (now the ACTIVE,
+  non-cancelled booking) and shows a top «Назначено: <name> · <local time>» banner + an **«Отменить
+  назначение»** button (`ivCancel` → `POST /mail/interview/cancel` → `service.cancel` →
+  `db.cancel_active_for_thread`). Picking a new cell/responsible **REASSIGNS**: `service.assign` inserts the
+  new booking then cancels the prior active one for the thread (`db.cancel_active_for_thread(...,
+  exclude_id=new)` — done AFTER a successful insert so a failed reassign never loses the old). The modal
+  live-updates the triggering control (`window._ivTrigger` → «Собес» ↔ «Назначено», no reload). On the
+  candidate cards, `dashboard._attach_iv_assignments` batch-badges via `db.assignments_for_mailboxes`
+  (latest active interview per mailbox, guarded). Tests: `test_interviews_db.py` (active/cancel/exclude/
+  assignments), `test_interviews_service.py` (reassign replaces + cancel clears), `test_candidates_inbox.py`
+  (assigned vs sobes render).
 - **Employee cabinet — MERGED into the operator dashboard under `/cabinet` (2026-08-29).** Was a SEPARATE
   app (`cabinet_app.py` on 8103, pm2 `jobfinder-alan-cabinet`, `cabinet.systeam.kz`); now ONE domain
   (`jobs.systeam.kz`), ONE role-gated login. Employee views live in **`interviews/routes_cabinet.py`**

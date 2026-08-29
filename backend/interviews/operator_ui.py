@@ -43,8 +43,10 @@ def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес"
     normalized-subject thread key) and the whole attribute is HTML-escaped, so a
     subject with quotes/angle-brackets can neither break the JS nor inject markup."""
     args = ",".join(json.dumps(x or "") for x in (mailbox, thread, hash))
+    # remember the clicked element as window._ivTrigger so the modal can live-update THIS
+    # control's label/colour after an assign/reassign/cancel (no page reload).
     onclick = escape(
-        f"event.stopPropagation();event.preventDefault();openSobes({args})",
+        f"event.stopPropagation();event.preventDefault();window._ivTrigger=this;openSobes({args})",
         quote=True,
     )
     if as_span:
@@ -52,6 +54,24 @@ def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес"
                 f'title="Назначить собеседование">{escape(label)}</span>')
     return (f'<button type="button" class="iv-sobes" onclick="{onclick}" '
             f'title="Назначить собеседование">{escape(label)}</button>')
+
+
+def assigned_button(mailbox: str, thread: str, hash: str, name: str = "",
+                    as_span: bool = False) -> str:
+    """The «Назначено · <name>» control shown once an interview is booked. Opens the SAME
+    modal as «Собес» (`openSobes`), which detects the existing booking and switches to edit
+    mode (current assignment banner + reassign + «Отменить назначение»)."""
+    args = ",".join(json.dumps(x or "") for x in (mailbox, thread, hash))
+    onclick = escape(
+        f"event.stopPropagation();event.preventDefault();window._ivTrigger=this;openSobes({args})",
+        quote=True,
+    )
+    label = "Назначено" + (f" · {name}" if name else "")
+    if as_span:
+        return (f'<span class="iv-assigned" role="button" tabindex="0" onclick="{onclick}" '
+                f'title="Изменить назначение">{escape(label)}</span>')
+    return (f'<button type="button" class="iv-assigned" onclick="{onclick}" '
+            f'title="Изменить назначение">{escape(label)}</button>')
 
 
 def grid_fragment(mailbox: str, monday: date,
@@ -185,6 +205,14 @@ _IV_STYLE = """<style>
 .iv-loading{font-size:13px;color:var(--ink-mute);padding:16px 0}
 .iv-sobes{display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft);color:var(--accent);border:1px solid transparent;border-radius:var(--r-full);padding:2px 10px;font-size:12px;font-weight:700;cursor:pointer;line-height:1.6}
 .iv-sobes:hover{border-color:var(--accent)}
+.iv-assigned{display:inline-flex;align-items:center;gap:5px;background:#e7f6ec;color:#188038;border:1px solid #bcdfc4;border-radius:var(--r-full);padding:2px 10px;font-size:12px;font-weight:700;cursor:pointer;line-height:1.6}
+.iv-assigned:hover{border-color:#188038}
+.iv-current{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#e7f6ec;border:1px solid #bcdfc4;border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.iv-current[hidden]{display:none}
+.iv-current-text{font-size:13px;font-weight:700;color:#188038}
+.iv-cancel-btn{background:var(--panel);border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer}
+.iv-cancel-btn:hover{background:#fdeceb}
+.iv-cancel-btn:disabled{opacity:.6;cursor:default}
 @media(max-width:760px){
   .iv-modal{padding:0;align-items:flex-end}
   .iv-modal-panel{width:100%;max-height:94vh;border-radius:18px 18px 0 0;border-bottom:0}
@@ -220,11 +248,55 @@ _IV_SCRIPT = """<script>
     window._ivState={mailbox:mailbox||'',thread:thread||'',hash:hash||''};
     var m=el('ivModal'); if(!m) return;
     m.removeAttribute('hidden'); document.body.style.overflow='hidden';
-    ivToast(''); ivLoadWeek('');
+    ivToast(''); ivSyncStatus(); ivLoadWeek('');
   };
   window.closeSobes=function(){
     var m=el('ivModal'); if(!m) return;
     m.setAttribute('hidden',''); document.body.style.overflow='';
+  };
+  function ivFmtLocal(iso){
+    if(!iso) return '';
+    try{ return new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+    catch(e){ return iso; }
+  }
+  // Live-update the control that opened the modal (window._ivTrigger) after assign/cancel,
+  // so the card flips «Собес» ↔ «Назначено · <name>» without a page reload.
+  function ivSetTrigger(assigned, name){
+    var t=window._ivTrigger; if(!t) return;
+    if(assigned){ t.className='iv-assigned'; t.textContent='Назначено'+(name? ' · '+name : ''); }
+    else { t.className='iv-sobes'; t.textContent='Собес'; }
+  }
+  // Read the current booking for this thread and reflect it: the modal title, the top
+  // «Назначено: …» banner (+ its «Отменить» button), and the triggering control's label.
+  function ivSyncStatus(){
+    var cur=el('ivCurrent'), title=el('ivModalTitle');
+    var url='/mail/interview/status?mailbox='+encodeURIComponent(window._ivState.mailbox||'')
+      +'&thread='+encodeURIComponent(window._ivState.thread||'');
+    fetch(url).then(function(r){return r.json();}).then(function(j){
+      if(j && j.assigned){
+        if(title) title.textContent='Изменить назначение';
+        var txt=el('ivCurrentText');
+        if(txt) txt.textContent='Назначено: '+(j.responsible||'—')+(j.start_ts? ' · '+ivFmtLocal(j.start_ts) : '');
+        if(cur) cur.removeAttribute('hidden');
+        ivSetTrigger(true, j.responsible||'');
+      } else {
+        if(title) title.textContent='Назначить собеседование';
+        if(cur) cur.setAttribute('hidden','');
+        ivSetTrigger(false,'');
+      }
+    }).catch(function(){});
+  }
+  window.ivCancel=function(){
+    if(!window._ivState.mailbox) return;
+    if(!confirm('Отменить назначение собеседования?')) return;
+    var fd=new FormData();
+    fd.append('mailbox', window._ivState.mailbox||'');
+    fd.append('thread_key', window._ivState.thread||'');
+    var b=el('ivCancelBtn'); if(b) b.disabled=true;
+    fetch('/mail/interview/cancel',{method:'POST',body:fd}).then(function(r){
+      if(r.ok){ ivToast('Назначение отменено'); ivSyncStatus(); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
+      else { ivToast('Не удалось отменить'); }
+    }).catch(function(){ ivToast('Ошибка сети'); }).then(function(){ if(b) b.disabled=false; });
   };
   function ivPickCell(cell){
     var prev=document.querySelector('.iv-cell.iv-sel'); if(prev) prev.classList.remove('iv-sel');
@@ -253,7 +325,7 @@ _IV_SCRIPT = """<script>
     fd.append('source_message_hash', window._ivState.hash||'');
     var btn=el('ivAssignBtn'); if(btn) btn.disabled=true;
     fetch('/mail/interview/assign',{method:'POST',body:fd}).then(function(r){
-      if(r.ok){ ivToast('Собеседование назначено ✓'); ivHideAssign(); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
+      if(r.ok){ ivToast('Собеседование назначено ✓'); ivHideAssign(); ivSyncStatus(); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
       else if(r.status===409){ ivToast('Этот слот уже занят — выберите другой'); ivLoadWeek(window._ivCurMonday||'', window._ivCtx); }
       else { ivToast('Не удалось назначить'); }
     }).catch(function(){ ivToast('Ошибка сети'); })
@@ -284,9 +356,13 @@ def modal_shell() -> str:
         '<div class="iv-modal" id="ivModal" hidden>'
         '<div class="iv-modal-backdrop" onclick="closeSobes()"></div>'
         '<div class="iv-modal-panel" role="dialog" aria-modal="true" aria-label="Назначить собеседование">'
-        '<div class="iv-modal-head"><span class="iv-modal-title">Назначить собеседование</span>'
+        '<div class="iv-modal-head"><span class="iv-modal-title" id="ivModalTitle">Назначить собеседование</span>'
         '<button type="button" class="iv-modal-x" onclick="closeSobes()" aria-label="Закрыть">&#10005;</button></div>'
         '<div class="iv-modal-body">'
+        '<div class="iv-current" id="ivCurrent" hidden>'
+        '<span class="iv-current-text" id="ivCurrentText"></span>'
+        '<button type="button" class="iv-cancel-btn" id="ivCancelBtn" onclick="ivCancel()">Отменить назначение</button>'
+        '</div>'
         '<div id="ivGrid"><div class="iv-loading">Загрузка…</div></div>'
         '<div class="iv-assign" id="ivAssign" hidden>'
         '<span class="iv-when" id="ivWhen"></span>'

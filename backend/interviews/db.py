@@ -249,6 +249,60 @@ def interview_for_thread(mailbox: str, thread_key: str) -> dict | None:
         return dict(row) if row else None
 
 
+def active_interview_for_thread(mailbox: str, thread_key: str) -> dict | None:
+    """The latest NON-cancelled interview for (mailbox, thread_key), or None — the current
+    booking a «Назначено» control edits (a cancelled one must read back as unassigned)."""
+    with mail_db._cur() as cur:
+        cur.execute("SELECT * FROM iv_interviews WHERE mailbox=%s AND thread_key=%s "
+                    "AND status <> 'cancelled' ORDER BY created_at DESC LIMIT 1",
+                    (mailbox, thread_key))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def cancel_active_for_thread(mailbox: str, thread_key: str, exclude_id: int | None = None) -> int:
+    """Cancel every non-cancelled interview for (mailbox, thread_key) — optionally keeping
+    `exclude_id` (the just-inserted replacement). Returns the number cancelled. Used by the
+    explicit «Отменить» and by reassign (assign inserts the new booking, then cancels the old)."""
+    sql = ("UPDATE iv_interviews SET status='cancelled' "
+           "WHERE mailbox=%s AND thread_key=%s AND status <> 'cancelled'")
+    args: list = [mailbox, thread_key]
+    if exclude_id is not None:
+        sql += " AND id <> %s"
+        args.append(exclude_id)
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(sql, tuple(args))
+        return cur.rowcount
+
+
+def assignments_for_mailboxes(mailboxes) -> dict:
+    """{mailbox: {"id","responsible_id","responsible_name","start_ts","thread_key"}} — the
+    latest NON-cancelled interview each persona mailbox has, for badging «Назначено · <name>»
+    on the candidate cards. One row-query + one names-query; missing/empty input → {}."""
+    mbs = [m for m in (mailboxes or []) if m]
+    if not mbs:
+        return {}
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT DISTINCT ON (mailbox) mailbox, id, responsible_id, start_ts, thread_key "
+            "FROM iv_interviews WHERE mailbox = ANY(%s) AND status <> 'cancelled' "
+            "ORDER BY mailbox, created_at DESC", (mbs,))
+        rows = [dict(r) for r in cur.fetchall()]
+    rids = list({r["responsible_id"] for r in rows if r.get("responsible_id")})
+    names: dict = {}
+    if rids:
+        with mail_db._cur() as cur:
+            cur.execute("SELECT id, name FROM iv_responsibles WHERE id = ANY(%s)", (rids,))
+            names = {r["id"]: r["name"] for r in cur.fetchall()}
+    return {r["mailbox"]: {
+        "id": r["id"],
+        "responsible_id": r.get("responsible_id"),
+        "responsible_name": names.get(r.get("responsible_id")),
+        "start_ts": r.get("start_ts"),
+        "thread_key": r.get("thread_key") or "",
+    } for r in rows}
+
+
 def booked_intervals(rid: int, since: datetime, until: datetime) -> list[tuple]:
     """(start_ts, end_ts) pairs of this responsible's non-cancelled interviews that
     overlap [since, until)."""

@@ -119,6 +119,12 @@ def assign(mailbox: str, responsible_id: int, start_iso: str, company: str, jobi
             f"slot already booked for responsible {responsible_id} at {start.isoformat()}"
         ) from exc
 
+    # Reassign semantics: this booking REPLACES any prior one for the same thread. Cancel the
+    # old active interview(s), keeping the one just inserted (a first assignment cancels
+    # nothing). Done AFTER a successful insert, so a failed assign never loses the old booking.
+    if thread_key:
+        db.cancel_active_for_thread(mailbox, thread_key, exclude_id=interview_id)
+
     row = db.interview_for_thread(mailbox, thread_key) if thread_key else None
     if row is not None and row.get("id") == interview_id:
         return row
@@ -134,6 +140,12 @@ def assign(mailbox: str, responsible_id: int, start_iso: str, company: str, jobi
         "source_message_hash": source_message_hash,
         "status": "assigned",
     }
+
+
+def cancel(mailbox: str, thread_key: str) -> int:
+    """Cancel the active interview(s) for a thread — the «Отменить назначение» action.
+    Returns how many were cancelled (0 if there was nothing to cancel)."""
+    return db.cancel_active_for_thread(mailbox, thread_key)
 
 
 def mailbox_context(mailbox: str) -> dict:

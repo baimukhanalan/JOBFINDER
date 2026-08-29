@@ -71,9 +71,18 @@ def interview_assign(
     return HTMLResponse('<div class="iv-ok">Назначено</div>')
 
 
+@router.post("/mail/interview/cancel")
+def interview_cancel(mailbox: str = Form(...), thread_key: str = Form("")) -> HTMLResponse:
+    """«Отменить назначение» — cancel the active interview(s) for this thread. Idempotent
+    (cancelling nothing still returns OK), so a double-tap can't error."""
+    service.cancel(mailbox, thread_key)
+    return HTMLResponse('<div class="iv-ok">Отменено</div>')
+
+
 @router.get("/mail/interview/status")
 def interview_status(mailbox: str, thread: str) -> JSONResponse:
-    row = db.interview_for_thread(mailbox, thread)
+    # the ACTIVE booking (a cancelled one must read back as unassigned so «Назначено» reverts)
+    row = db.active_interview_for_thread(mailbox, thread)
     if not row:
         return JSONResponse({"assigned": False, "responsible": None, "start_ts": None})
     resp = None

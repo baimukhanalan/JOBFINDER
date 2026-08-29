@@ -1848,11 +1848,27 @@ def _eff_stage(tab: str, stage: str) -> str:
     return "priority" if (tab or "") == "priority" else ""
 
 
+def _attach_iv_assignments(groups) -> None:
+    """Best-effort: badge each candidate group with its active interview assignment so the
+    card shows «Назначено · <name>» instead of «Собес». Guarded — a degraded interviews
+    package just leaves the cards on «Собес», never breaking the inbox."""
+    if not groups:
+        return
+    try:
+        from backend.interviews import db as iv_db
+        asg = iv_db.assignments_for_mailboxes([g.get("mailbox") for g in groups])
+        for g in groups:
+            g["assigned"] = asg.get(g.get("mailbox"))
+    except Exception:
+        pass
+
+
 @app.get("/mail/candidates", response_class=HTMLResponse)
 def mail_candidates(tab: str = "all", stage: str = "", q: str = ""):
     from backend.tools import mailcrm, candidates_inbox
     eff = _eff_stage(tab, stage)
     groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=0)
+    _attach_iv_assignments(groups)
     try:
         scounts = mailcrm.stage_counts()
     except Exception:
@@ -1868,6 +1884,7 @@ def mail_candidates_more(tab: str = "all", stage: str = "", q: str = "", offset:
     from backend.tools import mailcrm, candidates_inbox
     eff = _eff_stage(tab, stage)
     groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=int(offset))
+    _attach_iv_assignments(groups)
     return HTMLResponse(candidates_inbox.render_groups(groups))
 
 

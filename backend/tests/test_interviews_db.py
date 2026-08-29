@@ -248,3 +248,66 @@ def test_delete_responsible_with_interviews_is_blocked():
     # the failed delete rolled back; the responsible is still there
     assert db.get_responsible(rid) is not None
     assert db.interview_count(rid) == 1
+
+
+def test_active_interview_and_cancel_active_for_thread():
+    rid = db.add_responsible("test_iv_ca", "h", "CA")
+    start = _future(60 * 24)
+    iid = db.insert_interview(
+        mailbox="test_iv_ca@x.com", responsible_id=rid, start_ts=start,
+        end_ts=start + timedelta(hours=1), company="Acme", jobid="c1",
+        thread_key="thca", source_message_hash="hca",
+    )
+    active = db.active_interview_for_thread("test_iv_ca@x.com", "thca")
+    assert active is not None and active["id"] == iid
+
+    assert db.cancel_active_for_thread("test_iv_ca@x.com", "thca") == 1
+    # nothing active now, but the row still exists (cancelled → history kept)
+    assert db.active_interview_for_thread("test_iv_ca@x.com", "thca") is None
+    assert db.interview_for_thread("test_iv_ca@x.com", "thca") is not None
+    # idempotent: cancelling again cancels 0
+    assert db.cancel_active_for_thread("test_iv_ca@x.com", "thca") == 0
+
+
+def test_cancel_active_for_thread_excludes_id():
+    rid = db.add_responsible("test_iv_cx", "h", "CX")
+    start = _future(60 * 24 * 2)
+    keep = db.insert_interview(
+        mailbox="test_iv_cx@x.com", responsible_id=rid, start_ts=start,
+        end_ts=start + timedelta(hours=1), company="A", jobid="1",
+        thread_key="tcx", source_message_hash="h1",
+    )
+    # a second (older) booking on the same thread that should be cancelled, keeping `keep`
+    other = db.insert_interview(
+        mailbox="test_iv_cx@x.com", responsible_id=rid, start_ts=start + timedelta(hours=3),
+        end_ts=start + timedelta(hours=4), company="A", jobid="1",
+        thread_key="tcx", source_message_hash="h2",
+    )
+    assert db.cancel_active_for_thread("test_iv_cx@x.com", "tcx", exclude_id=keep) == 1
+    active = db.active_interview_for_thread("test_iv_cx@x.com", "tcx")
+    assert active is not None and active["id"] == keep
+    assert other != keep
+
+
+def test_assignments_for_mailboxes_latest_active_only():
+    rid = db.add_responsible("test_iv_asg", "h", "Asg Person")
+    start = _future(60 * 24 * 4)
+    db.insert_interview(
+        mailbox="test_iv_asgA@x.com", responsible_id=rid, start_ts=start,
+        end_ts=start + timedelta(hours=1), company="Acme", jobid="a1",
+        thread_key="tA", source_message_hash="hA",
+    )
+    db.insert_interview(
+        mailbox="test_iv_asgB@x.com", responsible_id=rid, start_ts=start + timedelta(hours=2),
+        end_ts=start + timedelta(hours=3), company="Beta", jobid="b1",
+        thread_key="tB", source_message_hash="hB",
+    )
+    db.cancel_active_for_thread("test_iv_asgB@x.com", "tB")  # cancelled → must not appear
+
+    m = db.assignments_for_mailboxes(
+        ["test_iv_asgA@x.com", "test_iv_asgB@x.com", "test_iv_none@x.com"])
+    assert m["test_iv_asgA@x.com"]["responsible_name"] == "Asg Person"
+    assert m["test_iv_asgA@x.com"]["thread_key"] == "tA"
+    assert "test_iv_asgB@x.com" not in m      # its only interview is cancelled
+    assert "test_iv_none@x.com" not in m      # never assigned
+    assert db.assignments_for_mailboxes([]) == {}

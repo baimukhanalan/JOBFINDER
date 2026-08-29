@@ -85,6 +85,22 @@ def test_sobes_control_absent_without_iv_hash():
     assert "iv-sobes" not in without_iv
 
 
+def test_group_card_shows_assigned_when_present():
+    out = ci.render_groups([_g(mailbox="x@takhet.com", iv_hash="H1", iv_thread="T1",
+                               assigned={"thread_key": "T1", "responsible_name": "Иван Петров"})])
+    assert "iv-assigned" in out
+    assert "Назначено" in out
+    assert "Иван Петров" in out
+    # the assigned control replaces «Собес» (still opens the modal, but as edit mode)
+    assert "iv-sobes" not in out
+
+
+def test_group_card_shows_sobes_when_interview_but_not_assigned():
+    out = ci.render_groups([_g(iv_hash="H1", iv_thread="T1")])  # no 'assigned' key
+    assert "iv-sobes" in out
+    assert "iv-assigned" not in out
+
+
 def test_unread_badge_only_when_positive():
     seven = ci.render_groups([_g(unread=7)])
     none = ci.render_groups([_g(unread=0)])

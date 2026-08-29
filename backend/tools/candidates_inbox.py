@@ -369,6 +369,22 @@ _CG_JS = """
   };
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') window.cgFilters(false); });
 
+  // Collapse the «Написать» FAB to its icon (and hide the mobile top pill) on scroll-down,
+  // restore on scroll-up — the Gmail behaviour the shared inbox handler wires only for the
+  // #maillist page, so this screen (own #grouplist) needs its own null-safe copy.
+  (function(){
+    var fab = document.querySelector('.fab-compose');
+    var pill = document.querySelector('.gm-topbar');
+    var lastY = window.scrollY;
+    window.addEventListener('scroll', function(){
+      var y = window.scrollY, dy = y - lastY;
+      if(Math.abs(dy) <= 6) return;      // ignore momentum-scroll jitter (±1px)
+      lastY = y;
+      if(dy > 0 && y > 90){ if(fab) fab.classList.add('collapsed'); if(pill) pill.classList.add('hide'); }
+      else if(dy < 0){ if(fab) fab.classList.remove('collapsed'); if(pill) pill.classList.remove('hide'); }
+    }, {passive:true});
+  })();
+
   // Re-bind reply/forward controls inside a just-injected message body. The page-level
   // wiring only ran over markup present at parse time, so dynamically loaded cards need this.
   function cgWireReply(root){

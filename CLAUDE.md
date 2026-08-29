@@ -358,7 +358,9 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   are the **desktop inline funnel** + a **mobile «Фильтры» button → modal** (`#cgFilterModal`, shared
   `.modal`/`.fm-stage` chrome — funnel is `display:none` ≤760px) + search; compose is a floating
   **«Написать» FAB** on mobile (shared `.fab-compose`) and a header button on desktop (`.cg-compose-desk`),
-  both opening the shared `openCompose()` modal. Offset pagination
+  both opening the shared `openCompose()` modal. The FAB's collapse-to-icon on scroll-down (+ pill hide) is
+  wired by the module's OWN scroll handler in `_CG_JS` — the shared inbox one binds only on the `#maillist`
+  page (and dereferences `.page-head`, absent here), so it never ran on this screen. Offset pagination
   (`GET /mail/candidates/more?tab=&stage=&q=&offset=`, `PAGE=40`, IntersectionObserver on `#grpmore`).
   `/mail` (the old flat `render_inbox`) is KEPT but dropped from nav — a fallback, not deleted; the old
   `/mail/candidates/more` (which returned `render_candidate_rows`) was REPOINTED to return grouped cards.

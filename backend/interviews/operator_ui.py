@@ -23,7 +23,7 @@ from datetime import date, timedelta
 from html import escape
 from urllib.parse import quote
 
-from backend.interviews import service
+from backend.interviews import service, slots
 
 _DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
@@ -100,13 +100,15 @@ def grid_fragment(mailbox: str, monday: date,
             free = cells.get(f"{diso}:{hour:02d}", [])
             if free:
                 d = date.fromisoformat(diso)
-                start_iso = f"{diso}T{hour:02d}:00:00+00:00"
+                # the grid axis is LOCAL (Almaty) date+hour; the booking start_ts is
+                # the corresponding UTC instant (whole-hour +5 offset).
+                start_iso = slots.cell_start_utc(d, hour).isoformat()
                 # JSON payload (not "id:name,..."): a responsible name may contain a comma
                 # or colon ("Ivanov, A."), which a delimiter-split would corrupt.
                 data_free = escape(
                     json.dumps([{"id": r["id"], "name": r["name"]} for r in free]),
                     quote=True)
-                lbl = f"{d.day:02d}.{d.month:02d} {hour:02d}:00 GMT"
+                lbl = f"{d.day:02d}.{d.month:02d} {hour:02d}:00 по Алматы"
                 body.append(
                     '<button type="button" class="iv-cell iv-free" '
                     f'data-start="{escape(start_iso, quote=True)}" '
@@ -135,7 +137,7 @@ def grid_fragment(mailbox: str, monday: date,
         f'<input type="hidden" id="ivJobid" value="{escape(jobid, quote=True)}">'
         + ctx_line
         + '<div class="iv-grid">' + "".join(header) + "".join(body) + '</div>'
-        + '<p class="iv-note">Время по GMT. Зелёная ячейка — свободный час; '
+        + '<p class="iv-note">Время по Алматы. Зелёная ячейка — свободный час; '
           'число — сколько ответственных свободно.</p>'
     )
 

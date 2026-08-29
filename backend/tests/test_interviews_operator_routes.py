@@ -26,7 +26,7 @@ except Exception:
 from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.dashboard_app import app  # noqa: E402
-from backend.interviews import auth, db, operator_ui, service  # noqa: E402
+from backend.interviews import auth, db, operator_ui, service, slots  # noqa: E402
 
 client = TestClient(app)
 
@@ -83,10 +83,10 @@ def test_grid_route_renders_cells(seeded):
                    params={"mailbox": MAILBOX, "monday": monday.isoformat()})
     assert r.status_code == 200
     body = r.text
-    # a free green cell for this responsible at an in-window hour (Monday 09:00)
+    # a free green cell for this responsible at an in-window LOCAL hour (Monday 09:00
+    # Almaty); the cell's data-start is the corresponding UTC instant (09:00-5h)
     assert "iv-free" in body
-    start_iso = f"{monday.isoformat()}T09:00:00+00:00"
-    # the 09:00 UTC start for Monday must appear as a bookable cell start
+    start_iso = slots.cell_start_utc(monday, 9).isoformat()
     assert f'data-start="{start_iso}"' in body
     # data-free is a JSON array now — parse THIS cell's list and assert we're in it
     parsed = _data_free_at(body, start_iso)
@@ -166,8 +166,8 @@ def test_grid_data_free_json_roundtrips_name_with_comma():
                                    "enabled": True}])
         monday = _next_monday()
         frag = operator_ui.grid_fragment(MAILBOX, monday)
-        # target THIS user's known free cell (Monday 09:00), unescape + JSON-parse it
-        parsed = _data_free_at(frag, f"{monday.isoformat()}T09:00:00+00:00")
+        # target THIS user's known free cell (Monday 09:00 Almaty), unescape + JSON-parse
+        parsed = _data_free_at(frag, slots.cell_start_utc(monday, 9).isoformat())
         assert {"id": rid, "name": "Ivanov, A.: Sr"} in parsed
     finally:
         _cleanup()

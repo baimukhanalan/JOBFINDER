@@ -10,13 +10,22 @@ def _monday():
     return d
 
 
-def test_cell_start_utc_is_utc():
+def test_cell_start_utc_is_utc_and_local_offset():
     d = _monday()
-    dt = slots.cell_start_utc(d, 9)
+    dt = slots.cell_start_utc(d, 9)  # 09:00 Almaty (UTC+5)
     assert dt.tzinfo is not None
-    assert dt.utcoffset() == timedelta(0)
+    assert dt.utcoffset() == timedelta(0)  # the returned instant is UTC
+    # 09:00 Almaty == 04:00 UTC (Kazakhstan is a single UTC+5 zone, no DST)
     assert (dt.year, dt.month, dt.day) == (d.year, d.month, d.day)
-    assert dt.hour == 9 and dt.minute == 0
+    assert dt.hour == 4 and dt.minute == 0
+
+
+def test_to_local_round_trips_almaty():
+    d = _monday()
+    utc = slots.cell_start_utc(d, 16)          # 16:00 Almaty -> UTC
+    assert utc.hour == 11                       # 16 - 5
+    local = slots.to_local(utc)
+    assert local.hour == 16 and local.date() == d
 
 
 def test_overlaps():

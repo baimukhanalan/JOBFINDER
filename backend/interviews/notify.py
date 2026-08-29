@@ -14,6 +14,7 @@ from datetime import timezone
 import httpx
 
 from backend.config import settings
+from backend.interviews import slots
 from backend.interviews import db
 
 logger = logging.getLogger(__name__)
@@ -90,10 +91,10 @@ def _when(interview: dict) -> str:
     if not start_ts:
         return "время не указано"
     # psycopg2 returns timestamptz in the DB SESSION timezone (the pool doesn't pin
-    # UTC), so convert to UTC before formatting or the hour won't match the "GMT" label.
+    # UTC), so pin UTC before converting to Almaty local for display.
     if start_ts.tzinfo is None:
         start_ts = start_ts.replace(tzinfo=timezone.utc)
-    return start_ts.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M") + " GMT"
+    return slots.to_local(start_ts).strftime("%Y-%m-%d %H:%M") + " по Алматы"
 
 
 def assigned_text(interview: dict, responsible_name: str) -> str:

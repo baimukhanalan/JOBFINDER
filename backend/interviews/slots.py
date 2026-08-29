@@ -1,7 +1,12 @@
 """Pure, stdlib-only slot/grid/conflict logic for the interview scheduler.
 
-No DB, no network, no other project imports — every time here is GMT/UTC.
-Weekday convention is Python's `date.weekday()` (0=Mon..6=Sun).
+No DB, no network, no other project imports. **Wall-clock times (availability
+windows, the grid axis, the `date`+`hour` passed to `is_free`) are LOCAL time —
+Almaty (UTC+5, single Kazakhstan zone) — because the whole team is there and thinks
+in local time.** Absolute instants (booking `start_ts`, the `booked` intervals) stay
+tz-aware UTC. `cell_start_utc` is the one bridge: it takes a LOCAL date+hour and
+returns the UTC instant. Weekday convention is Python's `date.weekday()` (0=Mon..6=Sun),
+applied to the LOCAL date.
 """
 from __future__ import annotations
 
@@ -9,10 +14,18 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 UTC = ZoneInfo("UTC")
+LOCAL_TZ = ZoneInfo("Asia/Almaty")  # UTC+5, no DST — the team's single timezone
 
 HOUR_START = 0
 HOUR_END = 24
 DURATION_MIN = 60
+
+
+def to_local(dt: datetime) -> datetime:
+    """A UTC/aware instant as LOCAL (Almaty) wall-clock time."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(LOCAL_TZ)
 
 
 def week_dates(monday: date) -> list[date]:
@@ -21,8 +34,9 @@ def week_dates(monday: date) -> list[date]:
 
 
 def cell_start_utc(d: date, hour: int) -> datetime:
-    """The tz-aware UTC datetime for the grid cell on date `d` at `hour`:00 GMT."""
-    return datetime(d.year, d.month, d.day, hour, 0, tzinfo=UTC)
+    """The tz-aware UTC instant for the grid cell on LOCAL (Almaty) date `d` at
+    `hour`:00 local time. This is where local wall-clock crosses into UTC."""
+    return datetime(d.year, d.month, d.day, hour, 0, tzinfo=LOCAL_TZ).astimezone(UTC)
 
 
 def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:

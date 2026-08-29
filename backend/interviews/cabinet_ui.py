@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import timezone
 from html import escape
 
+from backend.interviews import slots
 from backend.tools import mailcrm_ui
 
 _WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг",
@@ -115,7 +116,7 @@ def _fmt_gmt(dt) -> str:
     if not dt:
         return "—"
     try:
-        return dt.astimezone(timezone.utc).strftime("%d.%m.%Y %H:%M") + " GMT"
+        return slots.to_local(dt).strftime("%d.%m.%Y %H:%M") + " по Алматы"
     except Exception:
         return str(dt)
 
@@ -165,7 +166,7 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
     body = (_topbar(responsible, "availability") +
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;">'
-            'Время указывается по GMT.</p>'
+            'Время указывается по Алматы.</p>'
             '<form method="post" action="/cabinet/availability">'
             f'<div class="av-grid">{"".join(day_html)}</div>'
             '<button class="primary" type="submit" style="margin-top:18px;">Сохранить</button>'

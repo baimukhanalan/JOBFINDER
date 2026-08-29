@@ -131,7 +131,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None) -> str:
             f"<span class='u-spacer'></span>"
             f"<a class='hbtn' href='/users/{u['id']}'>Настроить</a>"
             "</div>"
-            f"<div class='u-av'><span class='k'>Доступность (GMT):</span>{av}</div>"
+            f"<div class='u-av'><span class='k'>Доступность (по Алматы):</span>{av}</div>"
             "</div>")
     listing = ("<div class='u-list'>" + "".join(cards) + "</div>") if cards else (
         "<div class='u-empty'>Пока нет пользователей — добавьте первого выше.</div>")
@@ -204,8 +204,8 @@ def edit_page(u: dict, availability: list[dict], notice=None) -> str:
 
         # availability — full width, its own card
         "<div class='u-card'>"
-        "<h3>Доступность (GMT) — когда его можно назначить</h3>"
-        "<p class='u-chint'>Отметьте дни и часы. Все времена по GMT.</p>"
+        "<h3>Доступность (по Алматы) — когда его можно назначить</h3>"
+        "<p class='u-chint'>Отметьте дни и часы. Время местное, по Алматы.</p>"
         f"<form method='post' action='/users/{rid}/availability'>"
         f"<div class='u-days'>{''.join(day_rows)}</div>"
         "<p class='u-hint'>Конец <b>раньше</b> начала — ночное окно через полночь "

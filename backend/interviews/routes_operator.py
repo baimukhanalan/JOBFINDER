@@ -15,13 +15,14 @@ from html import escape
 from fastapi import APIRouter, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from backend.interviews import db, operator_ui, service
+from backend.interviews import db, operator_ui, service, slots
 
 router = APIRouter()
 
 
 def _current_monday() -> date:
-    today = datetime.now(timezone.utc).date()
+    # the grid axis is LOCAL (Almaty) time, so "this week" is the local week
+    today = slots.to_local(datetime.now(timezone.utc)).date()
     return today - timedelta(days=today.weekday())
 
 

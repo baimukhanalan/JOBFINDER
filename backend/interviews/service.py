@@ -82,8 +82,12 @@ def assign(mailbox: str, responsible_id: int, start_iso: str, company: str, jobi
     if start.minute or start.second or start.microsecond:
         raise SlotConflict("interview start must be aligned to the hour")
 
-    d = start.date()
-    hour = start.hour
+    # is_free reasons in LOCAL (Almaty) wall-clock, so map the UTC start to its
+    # local date+hour for the availability check (the booked-overlap check inside
+    # is_free re-derives the UTC instant via cell_start_utc).
+    local = slots.to_local(start)
+    d = local.date()
+    hour = local.hour
 
     avail = db.get_availability(responsible_id)
     booked = db.booked_intervals(responsible_id, start - timedelta(days=1), start + timedelta(days=1))

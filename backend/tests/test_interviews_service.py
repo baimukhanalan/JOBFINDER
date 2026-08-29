@@ -200,7 +200,8 @@ def test_assign_offset_start_iso_converted_and_aligned_to_utc():
         source_message_hash="h1",
     )
     assert row is not None
-    expected_start = slots.cell_start_utc(monday, 6)
+    # 06:00 UTC is 11:00 Almaty local; cell_start_utc takes a LOCAL hour now
+    expected_start = slots.cell_start_utc(monday, 11)
     assert row["start_ts"] == expected_start
     # the DB session's timezone (e.g. Europe/Berlin) is NOT UTC, so a fetched
     # tz-aware datetime must be normalized to UTC before reading .hour

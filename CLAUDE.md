@@ -295,6 +295,23 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   `test_mailcrm_body.py::test_plain_part_containing_html_is_flattened` / `_plain_email_address_is_not_treated_as_html`.
   NB: this is `_parse_full` (open-view/`get_message`), NOT `build_index_row` (the indexer's path already uses
   `_message_text`), so only the dashboard needs a restart for it.
+- **`_linkify` must reproduce the URL byte-for-byte — a `<URL>` wrapper was killing scheduling links
+  (`mailcrm_ui._linkify`, 2026-08-29).** Owner reported «много сломанных ссылок» — clicking a
+  self-scheduling / Calendly / Zoom link in a candidate email landed on "We can't find that
+  self-scheduling link." NOT expiry — OUR render bug, distinct from the `_parse_full` flatten above.
+  `_msg_card` does `_linkify(escape(plain))`; plain-text bodies commonly wrap a URL in angle brackets
+  `<https://…>` (an RFC-3986 convention) or end a sentence right after it (`…<URL>.`). `escape()` turns
+  `<`→`&lt;` and `>`→`&gt;`, and the old regex `https?://[^\s<]+` had **no literal `<` left to stop at**,
+  so it swallowed the trailing `&gt;` (and any `&quot;` from `"URL"`, plus trailing punctuation) INTO
+  the href → the browser decoded `&gt;`→`>` and navigated to `…/token>`, a dead link. The `_PLAIN_HTML_RE`
+  flatten does NOT catch this (`<https://…>` is not an HTML tag, correctly). Fix: `_URL_RE` is now
+  `https?://(?:&amp;|[^\s<&])+` — it consumes a real query `&` (as the `&amp;` entity, which the browser
+  decodes back) but **STOPS at any other bare `&`** (i.e. `&gt;`/`&quot;`/`&#x27;`), and `_linkify` peels
+  trailing `.,!?` + an unbalanced `)` OUT of the link. Do NOT revert to `[^\s<]+`, and keep the invariant
+  that `_linkify` only ever receives `escape()`d text (its one caller). Scope: ~50 of ~2467 plain-path
+  URL emails rendered a broken href (8 of them scheduling/Zoom). Only the dashboard restarts (the open/
+  thread view re-parses from disk). Tests: `test_mailcrm_linkify.py` (real-shape Greenhouse-schedule/
+  Calendly/gem/Zoom URLs, entity + query-string preservation, end-to-end via `_msg_card`).
 - **`no_button` on a "fully-filled" GH/Ashby job = a DEAD posting, not a detection bug (2026-08-26).**
   ~11% of bulk GH/Ashby applies failed with `submit_reason=no_button` on forms that looked complete
   (`unfilled=[]`). Live-DOM investigation proved these are postings **GONE at the ATS by bulk-run time**

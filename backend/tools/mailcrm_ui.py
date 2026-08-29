@@ -70,13 +70,37 @@ def _fulldate(ts: int) -> str:
 
 
 import re as _re
-_URL_RE = _re.compile(r'(https?://[^\s<]+)')
+# _linkify runs on html.escape()'d text, so the body a URL sits in has had every '<'→'&lt;',
+# '>'→'&gt;', '"'→'&quot;', "'"→'&#x27;' and every literal '&'→'&amp;'. A URL is therefore
+# `https://` + a run of either the entity '&amp;' (a real '&' in a query string — KEEP it, the
+# browser decodes it back to '&') OR any char that is not whitespace, '<' or a bare '&'. Stopping
+# at a bare '&' ends the match at the '&gt;'/'&quot;'/'&#x27;' that a '<URL>' / '"URL"' wrapper
+# produces. The old greedy `[^\s<]+` had no literal '<' left after escaping, so it swallowed that
+# trailing entity INTO the href → the browser navigated to '…/token>' and the self-scheduling /
+# Calendly / Zoom link died ("We can't find that self-scheduling link"). See test_mailcrm_linkify.
+_URL_RE = _re.compile(r'https?://(?:&amp;|[^\s<&])+')
+# Sentence punctuation an email writer puts right after a URL — never part of it. Excludes ';'/':'
+# on purpose (';' ends the '&amp;' entity → peeling it would corrupt a query ending in a real '&').
+_URL_TRAIL = ".,!?"
 
 
 def _linkify(text: str) -> str:
-    """Make http(s) URLs clickable in ALREADY-ESCAPED plain text (URLs carry no chars that
-    escape() alters except &, which stays valid in an href)."""
-    return _URL_RE.sub(r'<a href="\1" target="_blank" rel="noopener">\1</a>', text)
+    """Make http(s) URLs clickable in ALREADY-ESCAPED plain text, reproducing the sender's URL
+    byte-for-byte in the href. A real '&' (escaped to '&amp;') stays inside the link; a trailing
+    '&gt;' (from a '<URL>' wrapper), '&quot;' (from '"URL"') or sentence punctuation is left
+    OUTSIDE it, so a scheduling / meeting token never gets a stray '>' / '.' appended."""
+    def _repl(m: "_re.Match") -> str:
+        url = m.group(0)
+        trail = ""
+        while url:
+            if url[-1] in _URL_TRAIL:
+                trail, url = url[-1] + trail, url[:-1]
+            elif url[-1] == ")" and "(" not in url:      # unbalanced ')' from '(URL)'
+                trail, url = url[-1] + trail, url[:-1]
+            else:
+                break
+        return f'<a href="{url}" target="_blank" rel="noopener">{url}</a>{trail}'
+    return _URL_RE.sub(_repl, text)
 
 
 _BULLET = {"*", "•", "-", "·", "◦", "▪", "‣", "*"}

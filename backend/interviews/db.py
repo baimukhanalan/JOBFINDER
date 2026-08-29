@@ -35,6 +35,10 @@ def ensure_schema() -> None:
         # additive column for the upcoming unified login: 'admin' | 'employee'
         cur.execute("ALTER TABLE iv_responsibles "
                     "ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'employee';")
+        # one-time code for self-service Telegram linking (deep-link t.me/<bot>?start=<code>);
+        # the notifier maps a /start <code> back to this responsible and stores their chat_id.
+        cur.execute("ALTER TABLE iv_responsibles "
+                    "ADD COLUMN IF NOT EXISTS tg_link_code TEXT;")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS iv_availability (
           id             SERIAL PRIMARY KEY,
@@ -127,6 +131,21 @@ def set_tz(rid: int, tz: str) -> None:
     and the zone their times are shown/reminded in). Auto-detected from their browser."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_responsibles SET tz=%s WHERE id=%s", (tz, rid))
+
+
+def set_tg_link_code(rid: int, code: str) -> None:
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET tg_link_code=%s WHERE id=%s", (code, rid))
+
+
+def link_telegram_by_code(code: str, chat_id: int) -> dict | None:
+    """A responsible pressed Start on the bot with `/start <code>`: bind their chat_id
+    and clear the one-time code. Returns the linked row, or None if the code is unknown."""
+    with mail_db._cur() as cur:
+        cur.execute("UPDATE iv_responsibles SET telegram_chat_id=%s, tg_link_code=NULL "
+                    "WHERE tg_link_code=%s RETURNING *", (chat_id, code))
+        row = cur.fetchone()
+        return dict(row) if row else None
 
 
 def set_active(rid: int, active: bool) -> None:

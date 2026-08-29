@@ -8,7 +8,10 @@ lookup used to prefill the booking form from the mail CRM's prefill artifacts.
 """
 from __future__ import annotations
 
+import glob
 import json
+import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -171,3 +174,83 @@ def mailbox_context(mailbox: str) -> dict:
         return {"company": company, "jobid": jobid}
     except Exception:
         return {"company": "", "jobid": ""}
+
+
+# ---- rich -60min interview notification pack --------------------------------------
+_MEETING_RE = re.compile(
+    r'https?://\S*?(?:zoom\.us/(?:j|my|w|s|meeting)/\S+|meet\.google\.com/[a-z0-9-]+'
+    r'|teams\.microsoft\.com/l/meetup-join/\S+|teams\.live\.com/meet/\S+'
+    r'|whereby\.com/\S+|meet\.jit\.si/\S+|\S*\.zoom\.us/j/\S+)', re.I)
+
+
+def _persona_dir_for_mailbox(mailbox: str):
+    """(dir, full_name) of the synthetic persona whose email == this interview mailbox."""
+    mb = (mailbox or "").lower()
+    if not mb:
+        return None, ""
+    for pj in glob.glob(os.path.join(str(PREFILL_ROOT), "demo_*", "*", "persona.json")):
+        try:
+            j = json.load(open(pj))
+        except Exception:
+            continue
+        email = ((j.get("profile") or {}).get("email") or j.get("email") or "").lower()
+        if email == mb:
+            name = (j.get("profile") or {}).get("full_name") or j.get("full_name") or ""
+            return os.path.dirname(pj), name
+    return None, ""
+
+
+def _zoom_from_thread(source_hash: str) -> str:
+    """Best-effort meeting link scraped from the interview's mail thread (the recruiter
+    usually emails a Zoom/Meet/Teams link). Newest message first. Never raises."""
+    if not source_hash:
+        return ""
+    try:
+        from backend.tools import mailcrm
+        th = mailcrm.get_thread(source_hash, mark=False) or {}
+        msgs = th.get("messages") or []
+        for m in reversed(msgs):
+            body = " ".join(str(m.get(k) or "") for k in ("plain", "html", "snippet", "subject"))
+            hit = _MEETING_RE.search(body)
+            if hit:
+                return hit.group(0).rstrip('.,)"\'>]')
+    except Exception:
+        pass
+    return ""
+
+
+def interview_pack(interview: dict) -> dict:
+    """Gather everything the -60min reminder needs: company, role title, which persona
+    is interviewing, the tailored résumé path, and the meeting link. All best-effort —
+    a missing piece just comes back empty, never an exception."""
+    out = {"company": interview.get("company") or "", "title": "",
+           "persona_name": "", "resume_path": None, "zoom": ""}
+    try:
+        mb = interview.get("mailbox") or ""
+        jobid = str(interview.get("jobid") or "")
+        d, name = _persona_dir_for_mailbox(mb)
+        out["persona_name"] = name
+        if d:
+            rp = os.path.join(d, "resume.pdf")
+            if os.path.exists(rp):
+                out["resume_path"] = rp
+            try:
+                rj = json.load(open(os.path.join(d, "report.json")))
+                out["title"] = rj.get("job_title") or rj.get("title") or ""
+                out["company"] = out["company"] or rj.get("company") or ""
+            except Exception:
+                pass
+        if jobid.isdigit():
+            try:
+                from backend.tools import catalog_db
+                job = catalog_db.get_job(int(jobid))
+                if job and job.get("title"):
+                    out["title"] = job["title"]
+                if job and job.get("company") and not out["company"]:
+                    out["company"] = job["company"]
+            except Exception:
+                pass
+        out["zoom"] = _zoom_from_thread(interview.get("source_message_hash"))
+    except Exception:
+        pass
+    return out

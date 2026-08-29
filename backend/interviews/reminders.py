@@ -46,6 +46,11 @@ def tick() -> int:
     """One notifier pass. Gather due announcements + reminders, send + mark each.
     Each send+mark is wrapped so one bad row can't stop the tick. Returns the number
     of (interview, kind) pairs attempted."""
+    try:
+        notify.poll_updates()  # process self-service Telegram linking (/start <code>)
+    except Exception as e:
+        logger.warning("tick: poll_updates failed: %s", e)
+
     now = datetime.now(timezone.utc)
     announcements = db.due_announcements()
     due60 = db.due_reminders(now, 60)
@@ -57,6 +62,20 @@ def tick() -> int:
             name, tz = _responsible_meta(iv)
             if kind == "assigned":
                 text = notify.assigned_text(iv, name, tz)
+            elif kind == "60":
+                # the -60 reminder is the RICH one: company · role · persona · Zoom link,
+                # plus the tailored résumé PDF as an attachment.
+                from backend.interviews import service
+                pack = service.interview_pack(iv)
+                text = notify.rich_reminder_text(iv, name, tz, pack)
+                notify.notify_responsible(iv, text)
+                if pack.get("resume_path"):
+                    chat = notify.target_chat(iv)
+                    if chat:
+                        notify.send_document(chat, pack["resume_path"],
+                                             caption=f"Резюме — {pack.get('persona_name') or ''}")
+                db.mark_reminded(iv["id"], kind)
+                continue
             else:
                 text = notify.reminder_text(iv, name, int(kind), tz)
             notify.notify_responsible(iv, text)

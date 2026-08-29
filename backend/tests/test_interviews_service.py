@@ -243,3 +243,11 @@ def test_mailbox_context_finds_real_persona():
     pj, email = found
     ctx = service.mailbox_context(email)
     assert ctx["jobid"] == pj.split("/")[-2]
+
+
+def test_meeting_regex_matches_links_not_noise():
+    from backend.interviews.service import _MEETING_RE
+    assert _MEETING_RE.search("Join https://zoom.us/j/8899001122?pwd=abc please")
+    assert _MEETING_RE.search("Meet at https://meet.google.com/abc-defg-hij tomorrow")
+    assert _MEETING_RE.search("Teams: https://teams.microsoft.com/l/meetup-join/xyz here")
+    assert not _MEETING_RE.search("Visit https://example.com/careers for info")

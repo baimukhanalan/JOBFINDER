@@ -14,11 +14,12 @@ otherwise 404. The shared `mailcrm.get_thread` is left unchanged — the guard l
 from __future__ import annotations
 
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
-from backend.interviews import auth, cabinet_ui, db, slots
+from backend.interviews import auth, cabinet_ui, db, notify, slots
 from backend.tools import mail_db, mailcrm
 
 log = logging.getLogger("cabinet")
@@ -36,6 +37,25 @@ def dashboard(responsible: dict = Depends(auth.current_responsible)) -> HTMLResp
 def availability_get(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     rows = db.get_availability(responsible["id"])
     return HTMLResponse(cabinet_ui.availability_page(responsible, rows))
+
+
+@router.post("/tg/connect")
+def tg_connect(responsible: dict = Depends(auth.current_responsible)):
+    """Start self-service Telegram linking: mint a one-time code and redirect to the
+    bot's deep link. When the interviewer presses Start there, the notifier's
+    poll_updates binds their chat_id (see notify.poll_updates)."""
+    code = secrets.token_urlsafe(8)
+    db.set_tg_link_code(responsible["id"], code)
+    uname = notify.bot_username()
+    if not uname:
+        return RedirectResponse("/cabinet/availability?tgerr=1", status_code=303)
+    return RedirectResponse(f"https://t.me/{uname}?start={code}", status_code=303)
+
+
+@router.post("/tg/unlink")
+def tg_unlink(responsible: dict = Depends(auth.current_responsible)):
+    db.set_telegram_chat(responsible["id"], None)
+    return RedirectResponse("/cabinet/availability", status_code=303)
 
 
 @router.post("/tz", response_class=HTMLResponse)

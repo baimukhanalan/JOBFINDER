@@ -70,6 +70,10 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
   .av-day .times input[type=time]{flex:1;min-width:0;text-align:center;}
 }
 .empty{color:var(--ink-mute);padding:18px 0;}
+.tg-card{margin-bottom:18px;}
+.tg-h{font-weight:700;margin-bottom:6px;}
+.tg-sub{color:var(--ink-soft);font-size:13px;line-height:1.5;margin-bottom:12px;}
+.tg-act{display:flex;align-items:center;flex-wrap:wrap;gap:8px;}
 /* read-only avatar wrapper in the reused mail rows: not a select toggle */
 .msel-ro{cursor:default;}
 .msel-ro:hover::after{display:none;}
@@ -157,6 +161,24 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
     return _doc(body, "Мои собеседования")
 
 
+def _tg_card(responsible: dict) -> str:
+    if responsible.get("telegram_chat_id"):
+        inner = ('<span style="color:#166534;font-weight:700;">✓ Telegram подключён</span>'
+                 '<form method="post" action="/cabinet/tg/unlink" style="display:inline;margin-left:12px;">'
+                 '<button class="ghost" type="submit">Отвязать</button></form>')
+        sub = "Напоминания о собеседованиях приходят в ваш личный Telegram."
+    else:
+        inner = ('<form method="post" action="/cabinet/tg/connect" style="margin:0;">'
+                 '<button class="primary" type="submit">Подключить Telegram</button></form>')
+        sub = ("Нажмите — откроется бот, нажмите в нём «Старт». После этого за час и за 5 минут "
+               "до собеседования сюда придёт напоминание со ссылкой на созвон, вакансией, "
+               "профилем кандидата и его резюме.")
+    return ('<div class="card tg-card">'
+            '<div class="tg-h">Уведомления в Telegram</div>'
+            f'<div class="tg-sub">{sub}</div>'
+            f'<div class="tg-act">{inner}</div></div>')
+
+
 def availability_page(responsible: dict, rows: list[dict], saved: bool = False) -> str:
     note = '<div class="note">Расписание сохранено.</div>' if saved else ""
     by_dow = {r["dow"]: r for r in rows}
@@ -189,6 +211,7 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;">'
             f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>).</p>'
+            + _tg_card(responsible) +
             '<form method="post" action="/cabinet/availability">'
             f'<div class="av-grid">{"".join(day_html)}</div>'
             '<button class="primary" type="submit" style="margin-top:18px;">Сохранить</button>'

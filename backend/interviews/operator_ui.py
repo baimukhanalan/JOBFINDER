@@ -164,9 +164,10 @@ _IV_STYLE = """<style>
 .iv-wk-label{font-size:13px;font-weight:700;color:var(--ink)}
 .iv-ctx{font-size:12px;color:var(--ink-mute);margin:0 0 10px}
 .iv-grid{display:grid;grid-template-columns:44px repeat(7,1fr);gap:3px;min-width:520px}
-.iv-hcell{text-align:center;font-size:11px;font-weight:700;color:var(--ink-mute);padding:4px 0;display:flex;flex-direction:column;gap:1px;align-items:center}
+.iv-hcell{text-align:center;font-size:11px;font-weight:700;color:var(--ink-mute);padding:4px 0;display:flex;flex-direction:column;gap:1px;align-items:center;position:sticky;top:0;z-index:2;background:var(--panel)}
+.iv-hcell.iv-corner{left:0;z-index:3}
 .iv-hcell .iv-dd{font-family:var(--ff-mono,monospace);font-weight:500;font-size:10px;color:var(--ink-mute)}
-.iv-hourcell{font-family:var(--ff-mono,monospace);font-size:10px;color:var(--ink-mute);display:flex;align-items:center;justify-content:flex-end;padding-right:5px}
+.iv-hourcell{font-family:var(--ff-mono,monospace);font-size:10px;color:var(--ink-mute);display:flex;align-items:center;justify-content:flex-end;padding-right:5px;position:sticky;left:0;z-index:1;background:var(--panel)}
 .iv-cell{border:1px solid var(--line);border-radius:6px;min-height:30px;font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
 .iv-cell.iv-free{background:#e7f6ec;border-color:#bcdfc4;color:#188038}
 .iv-cell.iv-free:hover{background:#d3efdc;border-color:#188038}

@@ -97,6 +97,7 @@ def test_tick_sends_and_marks_idempotent(monkeypatch):
 
     monkeypatch.setattr(db, "mark_announced", fake_mark_announced)
     monkeypatch.setattr(db, "mark_reminded", fake_mark_reminded)
+    monkeypatch.setattr(notify, "poll_updates", lambda: 0)  # no Telegram network in tests
     monkeypatch.setattr(notify, "notify_responsible",
                         lambda iv, text: (sends.append((iv["id"], text)), True)[1])
 
@@ -251,3 +252,15 @@ def test_reminder_uses_responsible_timezone():
           "start_ts": datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)}
     t = notify.reminder_text(iv, "Sam", 60, "America/New_York")
     assert "2026-08-31 09:00 (New York)" in t
+
+
+def test_rich_reminder_text_has_all_fields():
+    iv = {"mailbox": "charles.morin6978@takhet.com", "company": "Acme", "responsible_id": 1,
+          "start_ts": datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)}  # 13:00 UTC == 09:00 NY
+    pack = {"company": "Acme Corp", "title": "Sales Manager", "persona_name": "Charles Morin",
+            "resume_path": "/x/resume.pdf", "zoom": "https://zoom.us/j/123"}
+    t = notify.rich_reminder_text(iv, "Sam", "America/New_York", pack)
+    for s in ("Charles Morin", "Acme Corp", "Sales Manager", "https://zoom.us/j/123", "09:00 (New York)"):
+        assert s in t, s
+    # no-link fallback line
+    assert "не найдена" in notify.rich_reminder_text(iv, "Sam", None, {**pack, "zoom": ""})

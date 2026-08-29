@@ -1199,8 +1199,19 @@ tz-parametrised (80 pass).
   **assignment** notice (`iv_interviews.announced` flag) + **reminders at −60 and −5 min** before
   `start_ts` (`db.due_reminders`/`mark_reminded`). Target = the responsible's `telegram_chat_id` if set,
   else `settings.telegram_chat_id` (owner/team chat), with owner-fallback on a failed personal send.
-  Register a personal chat: `admin_cli link --login L --chat-id N` (Telegram won't DM a user who hasn't
-  started the bot, so a personal DM needs them to message the bot first; the owner chat needs no setup).
+  **SELF-SERVICE linking (2026-08-29):** the interviewer connects their OWN Telegram from the cabinet —
+  `/cabinet/availability` has a «Подключить Telegram» button → `POST /cabinet/tg/connect` mints a one-time
+  `iv_responsibles.tg_link_code` and 303-redirects to `https://t.me/<bot>?start=<code>`. The notifier's
+  **`notify.poll_updates()`** (called each tick; `getUpdates` with a PERSISTED offset in `logs/iv_tg_offset`
+  so a restart never re-processes) sees the `/start <code>`, and `db.link_telegram_by_code` binds the
+  pressing user's `chat_id`. This is the ONLY way to reach a personal chat — **a bot cannot DM by @username**,
+  the user must press Start. Admin CLI `link --chat-id N` and the «Пользователи» UI still work.
+  **RICH −60 reminder (2026-08-29):** the −60min message is now a packet — `service.interview_pack(iv)`
+  gathers company · role title (jobid→`job_catalog`, else persona `report.json`) · which synthetic persona
+  is up (ФИО from `uploads/prefill/demo_*/<jobid>/persona.json` by mailbox) · the Zoom/Meet/Teams link
+  (best-effort scraped from the interview mail thread, `_MEETING_RE` over `mailcrm.get_thread`), and the
+  tailored **résumé PDF is sent as a `sendDocument`** (`notify.send_document`) to the same chat. Built in
+  `notify.rich_reminder_text` + the `kind=="60"` branch of `reminders.tick`. The −5 stays a short text.
   Times shown in each responsible's OWN zone (`slots.to_local(ts, resp.tz)`). Daemon never hard-exits (per-tick + startup try/except).
   **Bot token = its OWN `IV_BOT_TOKEN`** (env, gitignored `.env`), falling back to the project-wide
   `TELEGRAM_BOT_TOKEN` when unset — `notify._bot_token()` = `settings.iv_bot_token or telegram_bot_token`.

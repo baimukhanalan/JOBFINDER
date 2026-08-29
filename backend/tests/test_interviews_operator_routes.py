@@ -55,11 +55,17 @@ def _data_free_at(body: str, start_iso: str) -> list:
     return json.loads(html.unescape(m.group(1)))
 
 
+def _entry(parsed: list, rid: int) -> dict | None:
+    """The data-free entry for `rid` (entries are {id,name,local,tz})."""
+    return next((e for e in parsed if e.get("id") == rid), None)
+
+
 @pytest.fixture()
 def seeded():
     db.ensure_schema()
     _cleanup()
-    rid = db.add_responsible("test_iv_op", "h", "Оператор Тест")
+    # member (and the admin viewer) both in Almaty here
+    rid = db.add_responsible("test_iv_op", "h", "Оператор Тест", tz="Asia/Almaty")
     # available Mon..Fri 09:00–17:00 (540..1020 min)
     db.set_availability(rid, [
         {"dow": d, "start_min": 540, "end_min": 1020, "enabled": True}
@@ -80,17 +86,19 @@ def test_grid_route_renders_cells(seeded):
     rid = seeded
     monday = _next_monday()
     r = client.get("/mail/interview/grid",
-                   params={"mailbox": MAILBOX, "monday": monday.isoformat()})
+                   params={"mailbox": MAILBOX, "monday": monday.isoformat(),
+                           "tz": "Asia/Almaty"})
     assert r.status_code == 200
     body = r.text
-    # a free green cell for this responsible at an in-window LOCAL hour (Monday 09:00
-    # Almaty); the cell's data-start is the corresponding UTC instant (09:00-5h)
+    # a free green cell at an in-window LOCAL hour (Monday 09:00 Almaty); the cell's
+    # data-start is the corresponding UTC instant
     assert "iv-free" in body
-    start_iso = slots.cell_start_utc(monday, 9).isoformat()
+    start_iso = slots.cell_start_utc("Asia/Almaty", monday, 9).isoformat()
     assert f'data-start="{start_iso}"' in body
-    # data-free is a JSON array now — parse THIS cell's list and assert we're in it
+    # data-free entries are {id,name,local,tz}; the member is in this cell at their own 09:00
     parsed = _data_free_at(body, start_iso)
-    assert {"id": rid, "name": "Оператор Тест"} in parsed
+    e = _entry(parsed, rid)
+    assert e is not None and e["name"] == "Оператор Тест" and e["local"] == "09:00"
 
 
 def test_assign_route_books(seeded):
@@ -161,14 +169,15 @@ def test_grid_data_free_json_roundtrips_name_with_comma():
     db.ensure_schema()
     _cleanup()
     try:
-        rid = db.add_responsible("test_iv_comma", "h", "Ivanov, A.: Sr")
+        rid = db.add_responsible("test_iv_comma", "h", "Ivanov, A.: Sr", tz="Asia/Almaty")
         db.set_availability(rid, [{"dow": 0, "start_min": 540, "end_min": 1020,
                                    "enabled": True}])
         monday = _next_monday()
-        frag = operator_ui.grid_fragment(MAILBOX, monday)
+        frag = operator_ui.grid_fragment(MAILBOX, monday, viewer_tz="Asia/Almaty")
         # target THIS user's known free cell (Monday 09:00 Almaty), unescape + JSON-parse
-        parsed = _data_free_at(frag, slots.cell_start_utc(monday, 9).isoformat())
-        assert {"id": rid, "name": "Ivanov, A.: Sr"} in parsed
+        parsed = _data_free_at(frag, slots.cell_start_utc("Asia/Almaty", monday, 9).isoformat())
+        e = _entry(parsed, rid)
+        assert e is not None and e["name"] == "Ivanov, A.: Sr"
     finally:
         _cleanup()
 

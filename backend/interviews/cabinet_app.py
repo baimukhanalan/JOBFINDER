@@ -8,7 +8,7 @@ cabinet` process (port 8103) and the `cabinet.systeam.kz` vhost are retired (the
 implementation + the target of `tests/test_interviews_cabinet.py`; do NOT deploy it.
 
 Historical: a SEPARATE small FastAPI app (own port 8103, own cookie login). An employee
-("ответственный") logs in, edits weekly GMT availability, sees their upcoming
+("ответственный") logs in, edits weekly availability in their OWN timezone, sees their upcoming
 interviews, and reads (READ-ONLY) the mail of ONLY the personas assigned to them.
 
 Served at root; nginx prefixes `/cabinet/`. Run from the repo root:

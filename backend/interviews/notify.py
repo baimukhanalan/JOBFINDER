@@ -86,32 +86,34 @@ def _persona(interview: dict) -> str:
     return mailbox.split("@", 1)[0] if mailbox else "—"
 
 
-def _when(interview: dict) -> str:
+def _when(interview: dict, tz: str | None = None) -> str:
     start_ts = interview.get("start_ts")
     if not start_ts:
         return "время не указано"
     # psycopg2 returns timestamptz in the DB SESSION timezone (the pool doesn't pin
-    # UTC), so pin UTC before converting to Almaty local for display.
+    # UTC), so pin UTC before converting to the responsible's own zone for display.
     if start_ts.tzinfo is None:
         start_ts = start_ts.replace(tzinfo=timezone.utc)
-    return slots.to_local(start_ts).strftime("%Y-%m-%d %H:%M") + " по Алматы"
+    z = tz or slots.DEFAULT_TZ
+    return slots.to_local(start_ts, z).strftime("%Y-%m-%d %H:%M") + f" ({slots.tz_label(z)})"
 
 
-def assigned_text(interview: dict, responsible_name: str) -> str:
+def assigned_text(interview: dict, responsible_name: str, tz: str | None = None) -> str:
     return (
         "📅 Назначено собеседование\n"
         f"Ответственный: {responsible_name}\n"
         f"Кандидат: {_persona(interview)}\n"
         f"Компания: {interview.get('company') or '—'}\n"
-        f"Время: {_when(interview)}"
+        f"Время: {_when(interview, tz)}"
     )
 
 
-def reminder_text(interview: dict, responsible_name: str, minutes: int) -> str:
+def reminder_text(interview: dict, responsible_name: str, minutes: int,
+                  tz: str | None = None) -> str:
     return (
         f"⏰ Напоминание: собеседование через {minutes} мин\n"
         f"Ответственный: {responsible_name}\n"
         f"Кандидат: {_persona(interview)}\n"
         f"Компания: {interview.get('company') or '—'}\n"
-        f"Время: {_when(interview)}"
+        f"Время: {_when(interview, tz)}"
     )

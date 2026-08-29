@@ -3,12 +3,14 @@ assign «Собес» to). ADMIN-ONLY: every /users route is non-allowlisted, so
 dashboard AdminAuthMiddleware already gates it. Renders inside the shared dashboard
 shell (mailcrm_ui._page, active='users') and uses its design tokens (var(--panel)/
 --line/--accent/--ink*/--r) so it matches the other tabs and works on a phone
-(cards instead of a wide table, stacked forms, full-width inputs). All times GMT/UTC.
+(cards instead of a wide table, stacked forms, full-width inputs). Each member's availability is
+shown/labelled in THAT member's own timezone (iv_responsibles.tz).
 """
 from __future__ import annotations
 
 from html import escape
 
+from backend.interviews import slots
 from backend.tools import mailcrm_ui
 
 _DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -131,7 +133,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None) -> str:
             f"<span class='u-spacer'></span>"
             f"<a class='hbtn' href='/users/{u['id']}'>Настроить</a>"
             "</div>"
-            f"<div class='u-av'><span class='k'>Доступность (по Алматы):</span>{av}</div>"
+            f"<div class='u-av'><span class='k'>Доступность ({escape(slots.tz_label(u.get('tz')))}):</span>{av}</div>"
             "</div>")
     listing = ("<div class='u-list'>" + "".join(cards) + "</div>") if cards else (
         "<div class='u-empty'>Пока нет пользователей — добавьте первого выше.</div>")
@@ -204,8 +206,9 @@ def edit_page(u: dict, availability: list[dict], notice=None) -> str:
 
         # availability — full width, its own card
         "<div class='u-card'>"
-        "<h3>Доступность (по Алматы) — когда его можно назначить</h3>"
-        "<p class='u-chint'>Отметьте дни и часы. Время местное, по Алматы.</p>"
+        f"<h3>Доступность ({escape(slots.tz_label(u.get('tz')))}) — когда его можно назначить</h3>"
+        f"<p class='u-chint'>Время местное, по его поясу (<b>{escape(slots.tz_label(u.get('tz')))}</b>). "
+        "Определяется автоматически, когда он заходит в кабинет со своего устройства.</p>"
         f"<form method='post' action='/users/{rid}/availability'>"
         f"<div class='u-days'>{''.join(day_rows)}</div>"
         "<p class='u-hint'>Конец <b>раньше</b> начала — ночное окно через полночь "

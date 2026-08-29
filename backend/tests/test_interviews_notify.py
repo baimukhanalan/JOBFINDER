@@ -121,7 +121,7 @@ def test_message_builders_are_neutral():
         assert "Alan" in text
         assert "jane.doe7" in text          # persona local-part
         assert "Acme" in text
-        assert "2026-08-30 19:30 по Алматы" in text   # 14:30 UTC == 19:30 Almaty (+5)
+        assert "2026-08-30 19:30 (Almaty)" in text   # 14:30 UTC == 19:30 Almaty (+5)
         low = text.lower()
         for banned in ("claude", "anthropic", "gpt", "openai", "llm"):
             assert banned not in low
@@ -134,14 +134,14 @@ def test_when_renders_in_local_almaty_regardless_of_input_offset():
           "start_ts": datetime(2026, 8, 31, 15, 0, 0,
                                tzinfo=timezone(timedelta(hours=5)))}
     text = notify.assigned_text(iv, "Alan")
-    assert "2026-08-31 15:00 по Алматы" in text   # Almaty local, not the 10:00 UTC hour
+    assert "2026-08-31 15:00 (Almaty)" in text   # Almaty local, not the 10:00 UTC hour
     assert "10:00" not in text
 
 
 def test_when_naive_datetime_assumed_utc_shown_in_almaty():
     iv = {"mailbox": "x@takhet.com", "company": "Acme",
           "start_ts": datetime(2026, 8, 31, 9, 30, 0)}  # tz-naive -> assumed UTC
-    assert "2026-08-31 14:30 по Алматы" in notify.reminder_text(iv, "Alan", 5)  # 09:30 UTC +5
+    assert "2026-08-31 14:30 (Almaty)" in notify.reminder_text(iv, "Alan", 5)  # 09:30 UTC +5
 
 
 _SECRET_TOKEN = "123456789:AAF_super_secret_bot_token_value"
@@ -243,3 +243,11 @@ def test_mark_announced(_clean_test_iv_rows):
     assert iid in {r["id"] for r in db.due_announcements()}
     db.mark_announced(iid)
     assert iid not in {r["id"] for r in db.due_announcements()}
+
+
+def test_reminder_uses_responsible_timezone():
+    # 13:00 UTC == 09:00 New York (EDT); the reminder shows the responsible's own zone
+    iv = {"mailbox": "x@takhet.com", "company": "Acme",
+          "start_ts": datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)}
+    t = notify.reminder_text(iv, "Sam", 60, "America/New_York")
+    assert "2026-08-31 09:00 (New York)" in t

@@ -5,7 +5,8 @@ operator dashboard). Deliberately does NOT reuse `mailcrm_ui._page`/`_sidebar`/`
 `show_sobes=False`) so the scoped inbox rows look native without the operator «Собес»
 control.
 
-All text is neutral Russian — no stack names, no decorative emoji. Times are GMT.
+All text is neutral Russian — no stack names, no decorative emoji. Times are shown in the
+responsible's OWN timezone (auto-detected from their device; see routes_cabinet POST /cabinet/tz).
 """
 from __future__ import annotations
 
@@ -112,22 +113,24 @@ def login_page(error: str = "") -> str:
     return _doc(body, "Вход в кабинет")
 
 
-def _fmt_gmt(dt) -> str:
+def _fmt_local(dt, tz=None) -> str:
     if not dt:
         return "—"
     try:
-        return slots.to_local(dt).strftime("%d.%m.%Y %H:%M") + " по Алматы"
+        z = tz or slots.DEFAULT_TZ
+        return slots.to_local(dt, z).strftime("%d.%m.%Y %H:%M") + f" ({slots.tz_label(z)})"
     except Exception:
         return str(dt)
 
 
 def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
+    rtz = responsible.get("tz")
     if interviews:
         items = []
         for iv in interviews:
             mailbox = escape(iv.get("mailbox") or "")
             company = escape(iv.get("company") or "")
-            when = escape(_fmt_gmt(iv.get("start_ts")))
+            when = escape(_fmt_local(iv.get("start_ts"), rtz))
             h = iv.get("source_message_hash")
             link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Открыть переписку</a>'
                     if h else '<a href="/cabinet/inbox">Почта</a>')
@@ -163,14 +166,23 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
             f'<label class="tog"><input type="checkbox" name="enabled_{d}"{chk}> рабочий</label>'
             f'<span class="times">с <input type="time" name="start_{d}" value="{st}"> '
             f'до <input type="time" name="end_{d}" value="{en}"></span></div>')
+    import json as _json
+    rtz = responsible.get("tz") or slots.DEFAULT_TZ
+    # auto-adopt the device timezone: if the browser's zone differs from the stored one,
+    # update it and reload so the schedule is shown/anchored to where the person is now.
+    tz_js = (
+        "<script>(function(){var b;try{b=Intl.DateTimeFormat().resolvedOptions().timeZone;}"
+        "catch(e){return;}var cur=" + _json.dumps(rtz) + ";if(b&&b!==cur){var f=new FormData();"
+        "f.append('tz',b);fetch('/cabinet/tz',{method:'POST',body:f}).then(function(){"
+        "location.reload();}).catch(function(){});}})();</script>")
     body = (_topbar(responsible, "availability") +
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;">'
-            'Время указывается по Алматы.</p>'
+            f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>).</p>'
             '<form method="post" action="/cabinet/availability">'
             f'<div class="av-grid">{"".join(day_html)}</div>'
             '<button class="primary" type="submit" style="margin-top:18px;">Сохранить</button>'
-            '</form>')
+            '</form>' + tz_js)
     return _doc(body, "Расписание")
 
 

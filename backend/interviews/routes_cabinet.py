@@ -18,7 +18,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
-from backend.interviews import auth, cabinet_ui, db
+from backend.interviews import auth, cabinet_ui, db, slots
 from backend.tools import mail_db, mailcrm
 
 log = logging.getLogger("cabinet")
@@ -36,6 +36,18 @@ def dashboard(responsible: dict = Depends(auth.current_responsible)) -> HTMLResp
 def availability_get(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     rows = db.get_availability(responsible["id"])
     return HTMLResponse(cabinet_ui.availability_page(responsible, rows))
+
+
+@router.post("/tz", response_class=HTMLResponse)
+async def set_tz(request: Request,
+                 responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Adopt the responsible's device timezone (auto-detected in the cabinet). Only a
+    real IANA name is accepted (slots.zone falls back to the default on garbage)."""
+    form = await request.form()
+    tz = (form.get("tz") or "").strip()
+    if tz and slots.zone(tz).key == tz and tz != responsible.get("tz"):
+        db.set_tz(responsible["id"], tz)
+    return HTMLResponse("ok")
 
 
 def _hhmm_to_min(s: str) -> int:

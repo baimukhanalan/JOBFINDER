@@ -14,7 +14,8 @@ Three surfaces:
     company/jobid are prefilled from ``service.mailbox_context``.
 
 Renders only — no DB writes here; booking goes through ``routes_operator`` → ``service``.
-Neutral Russian text, GMT/UTC throughout, no decorative emoji, no stack names.
+Neutral Russian text, no decorative emoji, no stack names. The grid axis is the OPERATOR's
+timezone (sent as ?tz=); each free cell also carries every free member's OWN local time.
 """
 from __future__ import annotations
 
@@ -54,7 +55,8 @@ def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес"
 
 
 def grid_fragment(mailbox: str, monday: date,
-                  company: str | None = None, jobid: str | None = None) -> str:
+                  company: str | None = None, jobid: str | None = None,
+                  viewer_tz: str | None = None) -> str:
     """Server-rendered week grid starting at `monday` (a date). Free cells are green
     buttons carrying `data-free` (a JSON `[{"id","name"},...]` array) + `data-start`
     (the hour's UTC ISO start); none-free cells are gray+disabled. Includes prev/next-
@@ -64,10 +66,11 @@ def grid_fragment(mailbox: str, monday: date,
     already supplied by the caller, then threaded through the prev/next-week fetch URLs
     and the hidden assign-form fields — so subsequent week nav never re-globs the ~19k
     prefill persona.json files (they're invariant across weeks)."""
-    grid = service.grid_for_week(monday)
+    grid = service.grid_for_week(monday, viewer_tz)
     cells = grid["cells"]
     hours = grid["hours"]
     dates = grid["dates"]  # 7 iso date strings, Mon..Sun
+    viewer_label = grid["viewer_label"]  # e.g. "Almaty" / "New York" — the operator's zone
     if company is None and jobid is None:
         ctx = service.mailbox_context(mailbox)
         company = ctx.get("company", "") or ""
@@ -100,15 +103,17 @@ def grid_fragment(mailbox: str, monday: date,
             free = cells.get(f"{diso}:{hour:02d}", [])
             if free:
                 d = date.fromisoformat(diso)
-                # the grid axis is LOCAL (Almaty) date+hour; the booking start_ts is
-                # the corresponding UTC instant (whole-hour +5 offset).
-                start_iso = slots.cell_start_utc(d, hour).isoformat()
+                # the grid axis is the VIEWER's (operator's) local date+hour; the booking
+                # start_ts is the corresponding UTC instant.
+                start_iso = slots.cell_start_utc(viewer_tz, d, hour).isoformat()
                 # JSON payload (not "id:name,..."): a responsible name may contain a comma
-                # or colon ("Ivanov, A."), which a delimiter-split would corrupt.
+                # or colon ("Ivanov, A."). Each entry carries the member's OWN local time
+                # + zone so the operator sees what time it is for that person.
                 data_free = escape(
-                    json.dumps([{"id": r["id"], "name": r["name"]} for r in free]),
+                    json.dumps([{"id": r["id"], "name": r["name"],
+                                 "local": r["local"], "tz": r["tz"]} for r in free]),
                     quote=True)
-                lbl = f"{d.day:02d}.{d.month:02d} {hour:02d}:00 по Алматы"
+                lbl = f"{d.day:02d}.{d.month:02d} {hour:02d}:00 по {viewer_label}"
                 body.append(
                     '<button type="button" class="iv-cell iv-free" '
                     f'data-start="{escape(start_iso, quote=True)}" '
@@ -137,8 +142,9 @@ def grid_fragment(mailbox: str, monday: date,
         f'<input type="hidden" id="ivJobid" value="{escape(jobid, quote=True)}">'
         + ctx_line
         + '<div class="iv-grid">' + "".join(header) + "".join(body) + '</div>'
-        + '<p class="iv-note">Время по Алматы. Зелёная ячейка — свободный час; '
-          'число — сколько ответственных свободно.</p>'
+        + f'<p class="iv-note">Ось — по <b>{escape(viewer_label)}</b> (вашему устройству). '
+          'Зелёная ячейка — свободный час; число — сколько человек свободно. При выборе '
+          'ячейки видно местное время каждого участника.</p>'
     )
 
 
@@ -199,8 +205,9 @@ _IV_SCRIPT = """<script>
   function ivLoadWeek(monday, ctx){
     var g=el('ivGrid'); if(!g) return;
     g.innerHTML='<div class="iv-loading">Загрузка…</div>'; ivHideAssign();
+    var vtz=''; try{ vtz=Intl.DateTimeFormat().resolvedOptions().timeZone||''; }catch(e){}
     var url='/mail/interview/grid?mailbox='+encodeURIComponent(window._ivState.mailbox||'')
-      +'&monday='+encodeURIComponent(monday||'')+(ctx||'');
+      +'&monday='+encodeURIComponent(monday||'')+'&tz='+encodeURIComponent(vtz)+(ctx||'');
     fetch(url).then(function(r){return r.text();}).then(function(html){
       g.innerHTML='<div class="iv-grid-scroll">'+html+'</div>';
       var nav=g.querySelector('[data-cur-monday]');
@@ -226,7 +233,9 @@ _IV_SCRIPT = """<script>
     var free=[]; try{ free=JSON.parse(cell.getAttribute('data-free')||'[]'); }catch(e){ free=[]; }
     var sel=el('ivResp'); if(!sel) return; sel.innerHTML='';
     free.forEach(function(r){ if(!r) return;
-      var o=document.createElement('option'); o.value=r.id; o.textContent=r.name; sel.appendChild(o); });
+      var o=document.createElement('option'); o.value=r.id;
+      o.textContent=r.name+(r.local? '  ·  '+r.local+(r.tz? ' ('+r.tz+')':'') : '');
+      sel.appendChild(o); });
     var w=el('ivWhen'); if(w) w.textContent=cell.getAttribute('data-label')||window._ivStart;
     var a=el('ivAssign'); if(a) a.removeAttribute('hidden'); ivToast('');
   }

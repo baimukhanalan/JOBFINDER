@@ -5,7 +5,7 @@ ADMIN-ONLY: none of these paths is on the dashboard's auth allowlist, so the
 AdminAuthMiddleware redirects any non-admin request to /login before it reaches here.
 POST handlers do the action then re-render the list/edit page with a result banner
 (so a generated password is shown inline, never placed in a URL/redirect/log).
-All times GMT/UTC.
+Availability is in each responsible's own timezone (iv_responsibles.tz).
 """
 from __future__ import annotations
 
@@ -47,7 +47,9 @@ def users_add(name: str = Form(...), login: str = Form(...),
         return _render_list(("err", "Имя и логин обязательны."))
     pw = password.strip() or secrets.token_urlsafe(9)
     try:
-        db.add_responsible(login, auth.hash_password(pw), name, role=role)
+        # default to the team home zone; it auto-updates to their device zone on first
+        # cabinet login (POST /cabinet/tz)
+        db.add_responsible(login, auth.hash_password(pw), name, role=role, tz="Asia/Almaty")
     except Exception as e:
         return _render_list(("err", f"Не удалось создать (логин, возможно, занят): {escape(str(e))}"))
     return _render_list(("pw",

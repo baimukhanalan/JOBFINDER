@@ -5,7 +5,8 @@ Mounted on the dashboard app (`app.include_router(router)`). Endpoints:
   * POST /mail/interview/assign → book a slot via `service.assign` (409 on conflict).
   * GET  /mail/interview/status → {assigned, responsible, start_ts} for a thread.
 
-All time is GMT/UTC. This module owns no schema (see `backend.interviews.db`).
+The grid is drawn in the operator's timezone (?tz=); booking start_ts is UTC. This module owns
+no schema (see `backend.interviews.db`).
 """
 from __future__ import annotations
 
@@ -20,28 +21,30 @@ from backend.interviews import db, operator_ui, service, slots
 router = APIRouter()
 
 
-def _current_monday() -> date:
-    # the grid axis is LOCAL (Almaty) time, so "this week" is the local week
-    today = slots.to_local(datetime.now(timezone.utc)).date()
+def _current_monday(tz: str | None = None) -> date:
+    # the grid axis is the VIEWER's local time, so "this week" is their local week
+    today = slots.to_local(datetime.now(timezone.utc), tz).date()
     return today - timedelta(days=today.weekday())
 
 
-def _monday_of(monday: str) -> date:
+def _monday_of(monday: str, tz: str | None = None) -> date:
     """Parse `monday` (ISO date), snap to that week's Monday; default = current week."""
     try:
-        d = date.fromisoformat(monday) if monday else _current_monday()
+        d = date.fromisoformat(monday) if monday else _current_monday(tz)
     except ValueError:
-        d = _current_monday()
+        d = _current_monday(tz)
     return d - timedelta(days=d.weekday())
 
 
 @router.get("/mail/interview/grid")
 def interview_grid(mailbox: str, monday: str = "", company: str | None = None,
-                   jobid: str | None = None) -> HTMLResponse:
+                   jobid: str | None = None, tz: str = "") -> HTMLResponse:
     # company/jobid absent on the FIRST render (resolved once via mailbox_context);
     # present on prev/next-week nav so grid_fragment skips the ~19k-file prefill glob.
+    # tz = the operator's browser timezone (the grid axis); "" -> team default.
     return HTMLResponse(
-        operator_ui.grid_fragment(mailbox, _monday_of(monday), company, jobid))
+        operator_ui.grid_fragment(mailbox, _monday_of(monday, tz), company, jobid,
+                                  viewer_tz=tz or None))
 
 
 @router.post("/mail/interview/assign")

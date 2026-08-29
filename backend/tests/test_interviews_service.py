@@ -42,29 +42,29 @@ def _next_monday() -> date:
 
 def test_grid_marks_free_cells():
     monday = _next_monday()
-    rid = db.add_responsible("test_iv_grid", "h", "Grid")
-    # dow=monday.weekday() == 0, available 09:00-17:00 UTC
+    # member and viewer both in Almaty here (the cross-tz case is in test_interviews_slots)
+    rid = db.add_responsible("test_iv_grid", "h", "Grid", tz="Asia/Almaty")
     db.set_availability(rid, [
-        {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
+        {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},  # 09:00-17:00 local
     ])
 
-    grid = service.grid_for_week(monday)
+    grid = service.grid_for_week(monday, "Asia/Almaty")
 
     assert grid["hours"] == list(range(slots.HOUR_START, slots.HOUR_END))
     assert grid["dates"] == [d.isoformat() for d in slots.week_dates(monday)]
     assert {"id": rid, "name": "Grid"} in grid["responsibles"]
 
-    free_key = f"{monday.isoformat()}:10"
-    assert {"id": rid, "name": "Grid"} in grid["cells"][free_key]
+    def ids(key):
+        return [e["id"] for e in grid["cells"][key]]
 
-    # 08:00 is outside the 09:00-17:00 window -> not free
-    busy_key = f"{monday.isoformat()}:08"
-    assert {"id": rid, "name": "Grid"} not in grid["cells"][busy_key]
-
-    # Tuesday has no availability row set to enabled -> not free
+    assert rid in ids(f"{monday.isoformat()}:10")       # 10:00 Almaty is in the window
+    assert rid not in ids(f"{monday.isoformat()}:08")   # 08:00 is before it opens
     tuesday = monday + timedelta(days=1)
-    tue_key = f"{tuesday.isoformat()}:10"
-    assert {"id": rid, "name": "Grid"} not in grid["cells"][tue_key]
+    assert rid not in ids(f"{tuesday.isoformat()}:10")  # no enabled row for Tuesday
+
+    # the entry carries the member's OWN local time + tz label
+    entry = next(e for e in grid["cells"][f"{monday.isoformat()}:10"] if e["id"] == rid)
+    assert entry["name"] == "Grid" and entry["local"] == "10:00" and entry["tz"] == "Almaty"
 
 
 def test_assign_books_and_links_mailbox():
@@ -73,7 +73,7 @@ def test_assign_books_and_links_mailbox():
     db.set_availability(rid, [
         {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
     ])
-    start = slots.cell_start_utc(monday, 10)
+    start = slots.cell_start_utc("UTC", monday, 10)
     mailbox = "test_iv_candidate@takhet.com"
 
     row = service.assign(
@@ -98,7 +98,7 @@ def test_assign_conflict_raises():
     db.set_availability(rid, [
         {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
     ])
-    start = slots.cell_start_utc(monday, 11)
+    start = slots.cell_start_utc("UTC", monday, 11)
 
     service.assign(
         mailbox="test_iv_first@takhet.com", responsible_id=rid,
@@ -120,7 +120,7 @@ def test_assign_outside_availability_raises_conflict():
     db.set_availability(rid, [
         {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
     ])
-    start = slots.cell_start_utc(monday, 8)  # before the 09:00 window opens
+    start = slots.cell_start_utc("UTC", monday, 8)  # before the 09:00 window opens
 
     with pytest.raises(service.SlotConflict):
         service.assign(
@@ -136,7 +136,7 @@ def test_assign_naive_start_iso_assumed_utc():
     db.set_availability(rid, [
         {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
     ])
-    start = slots.cell_start_utc(monday, 12)
+    start = slots.cell_start_utc("UTC", monday, 12)
     naive_iso = start.replace(tzinfo=None).isoformat()
 
     row = service.assign(
@@ -154,7 +154,7 @@ def test_assign_rejects_non_hour_aligned():
     db.set_availability(rid, [
         {"dow": 0, "start_min": 9 * 60, "end_min": 17 * 60, "enabled": True},
     ])
-    start = slots.cell_start_utc(monday, 10)
+    start = slots.cell_start_utc("UTC", monday, 10)
 
     # hour-aligned start at a free slot succeeds
     row = service.assign(
@@ -164,8 +164,8 @@ def test_assign_rejects_non_hour_aligned():
     )
     assert row is not None
 
-    # a :45 start in the SAME hour must be rejected by the alignment guard
-    # (not silently pass is_free and slip a real overlap past the DB guard)
+    # a :45 / :30 start in the SAME hour overlaps the booked [10:00,11:00) and
+    # is rejected by is_free_at's exact-window overlap check
     quarter_past = (start + timedelta(minutes=45)).isoformat()
     with pytest.raises(service.SlotConflict):
         service.assign(
@@ -200,19 +200,18 @@ def test_assign_offset_start_iso_converted_and_aligned_to_utc():
         source_message_hash="h1",
     )
     assert row is not None
-    # 06:00 UTC is 11:00 Almaty local; cell_start_utc takes a LOCAL hour now
-    expected_start = slots.cell_start_utc(monday, 11)
+    expected_start = slots.cell_start_utc("UTC", monday, 6)  # 11:00+05 == 06:00 UTC
     assert row["start_ts"] == expected_start
     # the DB session's timezone (e.g. Europe/Berlin) is NOT UTC, so a fetched
     # tz-aware datetime must be normalized to UTC before reading .hour
     assert row["start_ts"].astimezone(timezone.utc).hour == 6
 
-    # 11:15+05:00 == 06:15 UTC, NOT hour-aligned -> rejected
-    offset_iso_misaligned = f"{monday.isoformat()}T11:15:00+05:00"
+    # a SUB-MINUTE start (seconds) is rejected (whole-minute alignment guard)
+    offset_iso_seconds = f"{monday.isoformat()}T11:00:30+05:00"
     with pytest.raises(service.SlotConflict):
         service.assign(
             mailbox="test_iv_offset_bad@takhet.com", responsible_id=rid,
-            start_iso=offset_iso_misaligned, company="Beta", jobid="2",
+            start_iso=offset_iso_seconds, company="Beta", jobid="2",
             thread_key="t2", source_message_hash="h2",
         )
 

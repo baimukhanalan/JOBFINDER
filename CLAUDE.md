@@ -1109,19 +1109,24 @@ Assign an incoming interview (a `kind=interview` mail) into a free time-slot of 
 (ответственный — the human who attends the interview as the persona), modelled on **orta.study**'s
 lesson-slot assignment. **Visibility == assignment** (orta pattern): a responsible sees a persona's mail
 ONLY because an `iv_interviews` row links them (`responsible_id`); before that the row is invisible.
-Spec/plan: `docs/superpowers/{specs,plans}/2026-08-28-interview-scheduler.*`. **All USER-FACING times are
-LOCAL — Almaty (UTC+5, `slots.LOCAL_TZ`) — because the whole team is there (reworked 2026-08-29 from the
-GMT MVP: the users enter/read local time, KZ is a single UTC+5 zone with no DST).** The split: weekly
-availability windows + the «Собес» grid axis + the `date`/`hour` passed to `slots.is_free` are LOCAL
-wall-clock; absolute instants (`iv_interviews.start_ts`, the `booked` intervals) stay tz-aware UTC.
-`slots.cell_start_utc(local_date, local_hour)` is the ONE bridge (local→UTC), and `slots.to_local(utc)`
-converts back for display (`service.assign` maps the booked UTC start back to a local date/hour before
-`is_free`; `notify`/`cabinet_ui` format `start_ts` via `to_local` + «по Алматы»). **No availability
-migration was needed** — the stored numbers were already the users' Almaty wall-clock (they'd been
-mislabeled «GMT»), so redefining the column's meaning as local made them correct as-is. `iv_responsibles.tz`
-exists but is still unused (single-zone team → hardcoded Almaty; per-user tz is a future option). Isolated
-package — the operator side is additive routes+modal on the live dashboard; the employee cabinet is merged
-under `/cabinet`.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-08-28-interview-scheduler.*`. **PER-PERSON timezones
+(reworked 2026-08-29, was GMT then Almaty-only): everyone sees times in THEIR OWN device zone.** Each
+responsible has an IANA `iv_responsibles.tz` (auto-detected from their browser — the cabinet POSTs
+`Intl…timeZone` to `/cabinet/tz`, `slots.zone()` validates it), and their weekly availability is
+wall-clock in THAT zone. The «Собес» grid is drawn on the OPERATOR's own zone (the client sends `?tz=` to
+`/mail/interview/grid`), and each free cell ALSO shows every free member's OWN local time — so the admin
+books in their time but sees the member's real time. Reminders/cabinet show a start_ts in the
+responsible's zone; `/users` shows each member's availability labelled with THEIR zone. **The bridge is
+absolute UTC intervals** (`slots.availability_utc_intervals` materialises a responsible's weekly windows
+into UTC intervals per date; `slots.is_free(intervals, booked, utc_start)` is a pure membership+overlap
+test) — robust to any offset (incl. :30/:45), DST, and overnight/24h windows. `cell_start_utc(tz,d,hour)`
+and `to_local(utc,tz)` are the only wall-clock↔UTC conversions; `iv_interviews.start_ts`/`booked` stay
+tz-aware UTC. **Migration:** existing rows were set `tz='Asia/Almaty'` (they'd been entered as Almaty
+local) + new users default to it until their first cabinet login auto-detects. **KZ has no DST but
+`Asia/Almaty` via `zoneinfo` handles zones that do.** Isolated package — the operator side is additive
+routes+modal on the live dashboard; the employee cabinet is merged under `/cabinet`. Tests:
+`test_interviews_slots.py` (intervals/cross-tz/free_grid), `_service`/`_operator_routes`/`_notify` all
+tz-parametrised (80 pass).
 - **Data (Postgres `jobfinder_crm`, via the `mail_db` pool, `interviews/db.py::ensure_schema`, IF NOT
   EXISTS):** `iv_responsibles` (login, bcrypt `password_hash`, name, tz='UTC', telegram_chat_id, `active`),
   `iv_availability` (responsible_id, dow 0=Mon..6=Sun, start_min/end_min GMT, enabled; UNIQUE per dow —
@@ -1168,7 +1173,7 @@ under `/cabinet`.
 - **Manage responsibles — operator UI + CLI.** UI (added 2026-08-29): the **«Пользователи» `/users`
   tab** on the dashboard (`interviews/users_ui.py` + `routes_users.py`, `include_router`'d guarded in
   `dashboard_app.py` like the operator routes) — list/create/reset-password/set-role/link-telegram/
-  toggle-active, plus a **weekly availability editor** (local Almaty time, per weekday) so a freshly-created interviewer
+  toggle-active, plus a **weekly availability editor** (the member's OWN timezone, auto-detected, per weekday) so a freshly-created interviewer
   is immediately assignable in the «Собес» grid (verified E2E: new user + availability → shows as free in
   `service.grid_for_week`). **UI is card-based + mobile-first (reworked 2026-08-29)** — the users list is
   responsive cards (NOT a wide table, which was unusable on a phone) and both screens use the shared shell
@@ -1195,7 +1200,7 @@ under `/cabinet`.
   else `settings.telegram_chat_id` (owner/team chat), with owner-fallback on a failed personal send.
   Register a personal chat: `admin_cli link --login L --chat-id N` (Telegram won't DM a user who hasn't
   started the bot, so a personal DM needs them to message the bot first; the owner chat needs no setup).
-  Times shown in Almaty local (`slots.to_local`, «по Алматы»). Daemon never hard-exits (per-tick + startup try/except).
+  Times shown in each responsible's OWN zone (`slots.to_local(ts, resp.tz)`). Daemon never hard-exits (per-tick + startup try/except).
   **Bot token = its OWN `IV_BOT_TOKEN`** (env, gitignored `.env`), falling back to the project-wide
   `TELEGRAM_BOT_TOKEN` when unset — `notify._bot_token()` = `settings.iv_bot_token or telegram_bot_token`.
   Keeping a dedicated token isolates the notifier from the main project bot (a test bot can be pointed at

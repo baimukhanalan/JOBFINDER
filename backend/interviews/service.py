@@ -23,27 +23,35 @@ class SlotConflict(Exception):
     """Raised when the requested responsible/slot is not actually free to book."""
 
 
-def grid_for_week(monday) -> dict:
-    """The operator's week grid of free slots starting at `monday`.
+def grid_for_week(monday, viewer_tz: str | None = None) -> dict:
+    """The operator's week grid of free slots starting at `monday`, drawn on the
+    VIEWER's (operator's) timezone axis. Each free entry also carries the member's OWN
+    local time for that slot.
 
-    {"cells": {"YYYY-MM-DD:HH": [{"id","name"}, ...]}, "responsibles": [{"id","name"}],
-     "hours": [8..19], "dates": ["YYYY-MM-DD", ...]}
+    {"cells": {"YYYY-MM-DD:HH": [{"id","name","local","tz"}, ...]},
+     "responsibles": [{"id","name"}], "hours": [0..23], "dates": [...],
+     "viewer_tz": "Asia/Almaty", "viewer_label": "Almaty"}
     """
+    viewer_tz = viewer_tz or slots.DEFAULT_TZ
     responsibles = db.list_responsibles(active_only=True)
     names_by_id = {r["id"]: r["name"] for r in responsibles}
 
-    since = slots.cell_start_utc(monday, 0)
+    since = slots.cell_start_utc(viewer_tz, monday, 0)
     until = since + timedelta(days=7)
 
     per_resp = {}
     for r in responsibles:
         rid = r["id"]
-        per_resp[rid] = (db.get_availability(rid), db.booked_intervals(rid, since, until))
+        rtz = r.get("tz") or slots.DEFAULT_TZ
+        # pad the booked window ±1 day so a cross-tz slot near a week edge is caught
+        booked = db.booked_intervals(rid, since - timedelta(days=1), until + timedelta(days=1))
+        per_resp[rid] = (db.get_availability(rid), rtz, booked)
 
-    raw_cells = slots.free_grid(per_resp, monday)
+    raw_cells = slots.free_grid(per_resp, monday, viewer_tz)
     cells = {
-        key: [{"id": rid, "name": names_by_id.get(rid, "")} for rid in ids]
-        for key, ids in raw_cells.items()
+        key: [{"id": e["id"], "name": names_by_id.get(e["id"], ""),
+               "local": e["local"], "tz": slots.tz_label(e["tz"])} for e in entries]
+        for key, entries in raw_cells.items()
     }
 
     return {
@@ -51,6 +59,8 @@ def grid_for_week(monday) -> dict:
         "responsibles": [{"id": r["id"], "name": r["name"]} for r in responsibles],
         "hours": list(range(slots.HOUR_START, slots.HOUR_END)),
         "dates": [d.isoformat() for d in slots.week_dates(monday)],
+        "viewer_tz": viewer_tz,
+        "viewer_label": slots.tz_label(viewer_tz),
     }
 
 
@@ -79,19 +89,18 @@ def assign(mailbox: str, responsible_id: int, start_iso: str, company: str, jobi
     # both the is_free check and the DB's exact-start_ts unique guard. The
     # operator grid only ever submits :00 cell starts, so this is a defensive
     # guard keeping the checked window and the booked window identical.
-    if start.minute or start.second or start.microsecond:
-        raise SlotConflict("interview start must be aligned to the hour")
+    if start.second or start.microsecond:
+        raise SlotConflict("interview start must be aligned to whole minutes")
 
-    # is_free reasons in LOCAL (Almaty) wall-clock, so map the UTC start to its
-    # local date+hour for the availability check (the booked-overlap check inside
-    # is_free re-derives the UTC instant via cell_start_utc).
-    local = slots.to_local(start)
-    d = local.date()
-    hour = local.hour
-
+    # is_free_at checks the EXACT [start, start+dur) window against the responsible's
+    # availability (materialised in THEIR own timezone) + their bookings — so any
+    # grid-submitted cell start (whole-hour in the operator's tz, whatever UTC minute
+    # that lands on) is handled, and an overlapping booking can never slip through.
+    resp = db.get_responsible(responsible_id)
+    resp_tz = (resp or {}).get("tz") or slots.DEFAULT_TZ
     avail = db.get_availability(responsible_id)
     booked = db.booked_intervals(responsible_id, start - timedelta(days=1), start + timedelta(days=1))
-    if not slots.is_free(avail, booked, d, hour):
+    if not slots.is_free_at(avail, resp_tz, booked, start):
         raise SlotConflict(
             f"responsible {responsible_id} is not free at {start.isoformat()}")
 

@@ -33,12 +33,13 @@ def plan(announcements: list, due60: list, due5: list) -> list[tuple[dict, str]]
     return pairs
 
 
-def _responsible_name(interview: dict) -> str:
+def _responsible_meta(interview: dict) -> tuple[str, str | None]:
+    """(name, tz) for the interview's responsible — times are shown in THEIR zone."""
     rid = interview.get("responsible_id")
     if rid is None:
-        return "—"
-    resp = db.get_responsible(rid)
-    return (resp or {}).get("name") or "—"
+        return "—", None
+    resp = db.get_responsible(rid) or {}
+    return (resp.get("name") or "—"), resp.get("tz")
 
 
 def tick() -> int:
@@ -53,11 +54,11 @@ def tick() -> int:
     pairs = plan(announcements, due60, due5)
     for iv, kind in pairs:
         try:
-            name = _responsible_name(iv)
+            name, tz = _responsible_meta(iv)
             if kind == "assigned":
-                text = notify.assigned_text(iv, name)
+                text = notify.assigned_text(iv, name, tz)
             else:
-                text = notify.reminder_text(iv, name, int(kind))
+                text = notify.reminder_text(iv, name, int(kind), tz)
             notify.notify_responsible(iv, text)
             # Mark after the send ATTEMPT (not conditional on success) so a permanently
             # bad personal chat_id doesn't re-fire every tick; the owner fallback makes

@@ -1,31 +1,40 @@
 """Pure, stdlib-only slot/grid/conflict logic for the interview scheduler.
 
-No DB, no network, no other project imports. **Wall-clock times (availability
-windows, the grid axis, the `date`+`hour` passed to `is_free`) are LOCAL time —
-Almaty (UTC+5, single Kazakhstan zone) — because the whole team is there and thinks
-in local time.** Absolute instants (booking `start_ts`, the `booked` intervals) stay
-tz-aware UTC. `cell_start_utc` is the one bridge: it takes a LOCAL date+hour and
-returns the UTC instant. Weekday convention is Python's `date.weekday()` (0=Mon..6=Sun),
-applied to the LOCAL date.
+**Timezone model (per-person).** Each responsible carries their OWN IANA timezone
+(`iv_responsibles.tz`, auto-detected from their browser). Their weekly availability
+is wall-clock in THAT timezone. The operator's «Собес» grid is drawn in the OPERATOR's
+own timezone. Everything absolute (booking `start_ts`, `booked` intervals) is tz-aware
+UTC. Conversions here are done by MATERIALISING each responsible's weekly availability
+into absolute UTC intervals for the relevant dates — robust to any offset (incl. :30/:45
+zones), to DST where it exists, and to overnight / 24h windows.
+
+No DB, no network, no other project imports. `date.weekday()` is 0=Mon..6=Sun.
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 UTC = ZoneInfo("UTC")
-LOCAL_TZ = ZoneInfo("Asia/Almaty")  # UTC+5, no DST — the team's single timezone
+DEFAULT_TZ = "Asia/Almaty"  # the team's home zone; the fallback for a missing/bad tz
 
 HOUR_START = 0
 HOUR_END = 24
 DURATION_MIN = 60
 
 
-def to_local(dt: datetime) -> datetime:
-    """A UTC/aware instant as LOCAL (Almaty) wall-clock time."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(LOCAL_TZ)
+def zone(name: str | None) -> ZoneInfo:
+    """A ZoneInfo for an IANA name, falling back to DEFAULT_TZ on anything invalid
+    (a stale/garbage tz must never crash scheduling)."""
+    try:
+        return ZoneInfo(name) if name else ZoneInfo(DEFAULT_TZ)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo(DEFAULT_TZ)
+
+
+def tz_label(name: str | None) -> str:
+    """A short human label for a tz — the city part ('Asia/Almaty' -> 'Almaty')."""
+    return (name or DEFAULT_TZ).split("/")[-1].replace("_", " ")
 
 
 def week_dates(monday: date) -> list[date]:
@@ -33,10 +42,16 @@ def week_dates(monday: date) -> list[date]:
     return [monday + timedelta(days=i) for i in range(7)]
 
 
-def cell_start_utc(d: date, hour: int) -> datetime:
-    """The tz-aware UTC instant for the grid cell on LOCAL (Almaty) date `d` at
-    `hour`:00 local time. This is where local wall-clock crosses into UTC."""
-    return datetime(d.year, d.month, d.day, hour, 0, tzinfo=LOCAL_TZ).astimezone(UTC)
+def cell_start_utc(tz: str | None, d: date, hour: int) -> datetime:
+    """The UTC instant for a grid cell at LOCAL date `d`, `hour`:00 in timezone `tz`."""
+    return datetime(d.year, d.month, d.day, hour, 0, tzinfo=zone(tz)).astimezone(UTC)
+
+
+def to_local(dt: datetime, tz: str | None = DEFAULT_TZ) -> datetime:
+    """A UTC/aware instant as wall-clock in timezone `tz`."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(zone(tz))
 
 
 def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
@@ -44,78 +59,101 @@ def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datet
     return a_start < b_end and b_start < a_end
 
 
-def _covers_same_day(start_min: int, end_min: int, a: int, b: int) -> bool:
-    """Does a weekday window's OWN-DAY part cover the cell [a, b) (minutes-in-day)?
-    Three window kinds are supported so every day/night/all-day window works:
-      * start == end  -> a full 24h window (covers the whole day, no wrap);
-      * start <  end  -> an ordinary same-day window [start, end);
-      * start >  end  -> an overnight window; its own-day part is [start, 24:00)
-                         (the [0, end) tail belongs to the NEXT day — see _covers_wrap).
+def availability_utc_intervals(
+    avail_rows: list[dict],
+    resp_tz: str | None,
+    day_from: date,
+    day_to: date,
+) -> list[tuple[datetime, datetime]]:
+    """Materialise a responsible's weekly availability into absolute UTC intervals for
+    each LOCAL (resp_tz) date in [day_from, day_to]. Window kinds per weekday row:
+      * start == end -> a full 24h local day;
+      * start <  end -> a same-day window [start, end);
+      * start >  end -> an overnight window, continuous from local `start` to local
+                        `end` the NEXT day.
+    Only `enabled` rows produce intervals. Pass a ±1 day pad around the range you care
+    about so an overnight window that starts the day before is included.
     """
-    if start_min == end_min:
-        return True
-    if start_min < end_min:
-        return start_min <= a and b <= end_min
-    return start_min <= a  # overnight forward part; b <= 1440 always for a day cell
-
-
-def _covers_wrap(prev_start_min: int, prev_end_min: int, a: int, b: int) -> bool:
-    """Does the PREVIOUS weekday's overnight window wrap into this day's early cell
-    [a, b)? Only an overnight window (start > end) wraps, covering [0, end) here."""
-    if prev_start_min <= prev_end_min:  # normal or 24h -> no spill into the next day
-        return False
-    return b <= prev_end_min  # a >= 0 always; cell must fit inside [0, prev_end)
+    tz = zone(resp_tz)
+    by_dow = {r["dow"]: r for r in avail_rows if r.get("enabled")}
+    out: list[tuple[datetime, datetime]] = []
+    d = day_from
+    while d <= day_to:
+        row = by_dow.get(d.weekday())
+        if row is not None:
+            s, e = int(row["start_min"]), int(row["end_min"])
+            base = datetime(d.year, d.month, d.day, 0, 0, tzinfo=tz)  # local midnight
+            if s == e:
+                st, en = base, base + timedelta(days=1)
+            elif s < e:
+                st, en = base + timedelta(minutes=s), base + timedelta(minutes=e)
+            else:
+                st, en = base + timedelta(minutes=s), base + timedelta(days=1, minutes=e)
+            out.append((st.astimezone(UTC), en.astimezone(UTC)))
+        d += timedelta(days=1)
+    return out
 
 
 def is_free(
-    avail_rows: list[dict],
+    intervals_utc: list[tuple[datetime, datetime]],
     booked: list[tuple[datetime, datetime]],
-    d: date,
-    hour: int,
+    utc_start: datetime,
+    dur: int = DURATION_MIN,
 ) -> bool:
-    """True when the responsible's availability covers this hour's cell AND no
-    booked interval overlaps it. Availability may be an overnight window (end <=
-    start), so a cell can be covered by THIS weekday's window or by the PREVIOUS
-    weekday's overnight window wrapping past midnight.
-    """
-    dow = d.weekday()
-    a = hour * 60
-    b = a + DURATION_MIN
-
-    def _row(x):
-        r = next((r for r in avail_rows if r.get("dow") == x), None)
-        return r if (r and r.get("enabled")) else None
-
-    today = _row(dow)
-    covered = bool(today and _covers_same_day(today["start_min"], today["end_min"], a, b))
-    if not covered:
-        prev = _row((dow - 1) % 7)
-        covered = bool(prev and _covers_wrap(prev["start_min"], prev["end_min"], a, b))
-    if not covered:
+    """True when [utc_start, utc_start+dur) fits ENTIRELY inside some availability
+    interval AND overlaps no booked interval. All times tz-aware UTC."""
+    cell_end = utc_start + timedelta(minutes=dur)
+    if not any(s <= utc_start and cell_end <= e for s, e in intervals_utc):
         return False
-
-    cell_start = cell_start_utc(d, hour)
-    cell_end = cell_start + timedelta(minutes=DURATION_MIN)
     for b_start, b_end in booked:
-        if overlaps(cell_start, cell_end, b_start, b_end):
+        if overlaps(utc_start, cell_end, b_start, b_end):
             return False
     return True
 
 
+def is_free_at(
+    avail_rows: list[dict],
+    resp_tz: str | None,
+    booked: list[tuple[datetime, datetime]],
+    utc_start: datetime,
+    dur: int = DURATION_MIN,
+) -> bool:
+    """Convenience single-slot check for one responsible: materialise the ±1 day of
+    availability around `utc_start` (in resp-local dates) and test membership."""
+    local_day = to_local(utc_start, resp_tz).date()
+    intervals = availability_utc_intervals(
+        avail_rows, resp_tz, local_day - timedelta(days=1), local_day + timedelta(days=1))
+    return is_free(intervals, booked, utc_start, dur)
+
+
 def free_grid(
-    per_resp: dict[int, tuple[list[dict], list[tuple[datetime, datetime]]]],
+    per_resp: dict[int, tuple[list[dict], str, list[tuple[datetime, datetime]]]],
     monday: date,
-) -> dict[str, list[int]]:
-    """{"YYYY-MM-DD:HH": [sorted free responsible ids]} for every cell of the
-    7-day x HOUR_START..HOUR_END-1 grid starting at `monday`.
-    """
-    grid: dict[str, list[int]] = {}
+    viewer_tz: str | None,
+) -> dict[str, list[dict]]:
+    """{"YYYY-MM-DD:HH": [{id, tz, local}...]} over the 7-day x HOUR_START..HOUR_END-1
+    grid whose axis is `viewer_tz` local dates/hours starting at `monday`. `per_resp`
+    maps id -> (avail_rows, resp_tz, booked_utc). Each free entry carries the
+    responsible's OWN local "HH:MM" for that slot (so the operator sees the member's
+    real time). Caller decorates with names."""
+    # materialise each responsible's availability once, padded to cover the viewer week
+    span_start = cell_start_utc(viewer_tz, monday, 0)
+    span_end = span_start + timedelta(days=7)
+    intervals: dict[int, list[tuple[datetime, datetime]]] = {}
+    for rid, (avail, rtz, _booked) in per_resp.items():
+        lo = to_local(span_start, rtz).date() - timedelta(days=1)
+        hi = to_local(span_end, rtz).date() + timedelta(days=1)
+        intervals[rid] = availability_utc_intervals(avail, rtz, lo, hi)
+
+    grid: dict[str, list[dict]] = {}
     for d in week_dates(monday):
         for hour in range(HOUR_START, HOUR_END):
-            key = f"{d.isoformat()}:{hour:02d}"
-            grid[key] = sorted(
-                resp_id
-                for resp_id, (avail_rows, booked) in per_resp.items()
-                if is_free(avail_rows, booked, d, hour)
-            )
+            utc = cell_start_utc(viewer_tz, d, hour)
+            free = []
+            for rid, (_avail, rtz, booked) in per_resp.items():
+                if is_free(intervals[rid], booked, utc):
+                    free.append({"id": rid, "tz": rtz,
+                                 "local": to_local(utc, rtz).strftime("%H:%M")})
+            free.sort(key=lambda x: x["id"])
+            grid[f"{d.isoformat()}:{hour:02d}"] = free
     return grid

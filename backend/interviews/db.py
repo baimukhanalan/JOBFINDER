@@ -122,6 +122,13 @@ def set_password_hash(rid: int, password_hash: str) -> None:
                     (password_hash, rid))
 
 
+def set_tz(rid: int, tz: str) -> None:
+    """Set a responsible's IANA timezone (the anchor for their wall-clock availability
+    and the zone their times are shown/reminded in). Auto-detected from their browser."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET tz=%s WHERE id=%s", (tz, rid))
+
+
 def set_active(rid: int, active: bool) -> None:
     """Deactivate (active=False) or reactivate a responsible. A deactivated employee's
     existing session cookie stops working on the next request (see auth.current_responsible)."""

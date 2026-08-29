@@ -31,10 +31,32 @@ def _fmt(n) -> str:
         return str(n)
 
 
+def _fmt_money(n) -> str:
+    try:
+        n = int(n)
+    except Exception:
+        return "—"
+    if not n:
+        return "—"
+    if n >= 1_000_000:
+        return f"${n / 1_000_000:.1f}M"
+    if n >= 1000:
+        return f"${round(n / 1000)}k"
+    return f"${n}"
+
+
 def _kpi(label: str, value, sub: str = "", color: str = "") -> str:
     c = f"color:{color};" if color else ""
     subhtml = f'<div class="st-kpi-sub">{escape(sub)}</div>' if sub else ""
     return (f'<div class="st-kpi"><div class="st-kpi-v" style="{c}">{_fmt(value)}</div>'
+            f'<div class="st-kpi-l">{escape(label)}</div>{subhtml}</div>')
+
+
+def _kpi_raw(label: str, value_str: str, sub: str = "", color: str = "") -> str:
+    """Like _kpi but the value is a pre-formatted string (e.g. money), not a count."""
+    c = f"color:{color};" if color else ""
+    subhtml = f'<div class="st-kpi-sub">{escape(sub)}</div>' if sub else ""
+    return (f'<div class="st-kpi"><div class="st-kpi-v" style="{c}">{escape(value_str)}</div>'
             f'<div class="st-kpi-l">{escape(label)}</div>{subhtml}</div>')
 
 
@@ -148,8 +170,54 @@ def _company_table(companies: list[dict]) -> str:
             f'<td class="st-num"><span class="st-irbar" style="width:{irbar:.0f}%"></span>'
             f'<span class="st-irtxt">{ir:.1f}%</span></td>'
             f'</tr>')
-    return (f'<table class="st-tbl" id="stTbl"><thead>{head}</thead>'
+    return (f'<table class="st-tbl st-sort" id="stTbl"><thead>{head}</thead>'
             f'<tbody>{"".join(rows)}</tbody></table>')
+
+
+def _role_table(roles: list[dict]) -> str:
+    head = (
+        '<tr>'
+        '<th data-k="role" class="st-th st-l">Роль</th>'
+        '<th data-k="applied" class="st-th st-num">Подано</th>'
+        '<th data-k="invited" class="st-th st-num st-sorted">Приглашали</th>'
+        '<th data-k="action_needed" class="st-th st-num">Треб. действий</th>'
+        '<th data-k="invite_rate" class="st-th st-num">% пригл.</th>'
+        '<th data-k="comp_median" class="st-th st-num">Медиана вилки</th>'
+        '</tr>')
+    rows = []
+    for r in roles:
+        ir = r["invite_rate"]
+        irbar = min(100.0, ir * 6)  # invite rates are small; amplify for the bar
+        compn = f'<span class="st-mute"> · {r["comp_n"]}</span>' if r["comp_n"] else ""
+        rows.append(
+            f'<tr data-role="{escape(r["role"].lower())}" data-applied="{r["applied"]}" '
+            f'data-invited="{r["invited"]}" data-action_needed="{r["action_needed"]}" '
+            f'data-invite_rate="{ir}" data-comp_median="{r["comp_median"]}">'
+            f'<td class="st-l"><b>{escape(r["role"])}</b></td>'
+            f'<td class="st-num">{_fmt(r["applied"])}</td>'
+            f'<td class="st-num"><b style="color:{_C["interview"]}">{r["invited"] or ""}</b></td>'
+            f'<td class="st-num st-mute">{r["action_needed"] or ""}</td>'
+            f'<td class="st-num"><span class="st-irbar" style="width:{irbar:.0f}%"></span>'
+            f'<span class="st-irtxt">{ir:.1f}%</span></td>'
+            f'<td class="st-num">{_fmt_money(r["comp_median"])}{compn}</td>'
+            f'</tr>')
+    return (f'<table class="st-tbl st-sort"><thead>{head}</thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>')
+
+
+def _role_section(b: dict) -> str:
+    roles = b.get("roles", [])
+    inv = [(r["role"], r["invited"], r["applied"]) for r in roles if r["invited"] > 0][:10]
+    bar = (_hbars(inv, _C["interview"], unit=" подано") if inv
+           else '<div class="st-mute">пока никого не приглашали на собеседование</div>')
+    return (
+        '<div class="st-h-row"><h2 class="st-h">По ролям</h2>'
+        '<span class="st-mute">на какие роли приглашали больше всего · клик по заголовку — сортировка</span></div>'
+        f'<div class="st-role-bar">{bar}</div>'
+        f'<div class="st-tbl-wrap" style="margin-top:14px">{_role_table(roles)}</div>'
+        '<p class="st-note">«Приглашали» — заявки, дошедшие до собеседования или оффера. '
+        '«Медиана вилки» — медианная посадочная вилка по вакансии (обычно базовый оклад, '
+        'как его публикует работодатель), только по вакансиям, где вилка указана.</p>')
 
 
 def _focus_lists(companies: list[dict]) -> str:
@@ -200,8 +268,11 @@ def render_page(force: bool = False) -> str:
     from backend.tools import stats
     b = stats.get_stats(force=force)
     t = b["totals"]
+    comp = b.get("comp") or {}
     gen = datetime.fromtimestamp(b["generated_at"], tz=timezone.utc).astimezone().strftime("%H:%M")
 
+    comp_sub = (f'{_fmt_money(comp.get("p25"))}–{_fmt_money(comp.get("p75"))} · '
+                f'{_fmt(comp.get("coverage", 0))} вак.') if comp.get("median") else "нет данных"
     kpis = "".join([
         _kpi("Подано (вакансий)", t["applied"], sub=f'{_fmt(t["attempts"])} попыток с повторами'),
         _kpi("Подтверждено сабмитов", t["submitted"], color=_C["mute"]),
@@ -209,6 +280,7 @@ def render_page(force: bool = False) -> str:
         _kpi("Собеседования", t["interview"], sub=f'{t["interview_rate"]:.1f}% от поданных', color=_C["interview"]),
         _kpi("Отказы", t["rejection"], color=_C["rejection"]),
         _kpi("Офферы", t["offer"], color=_C["offer"]),
+        _kpi_raw("Медиана вилки", _fmt_money(comp.get("median")), sub=comp_sub, color=_C["offer"]),
     ])
 
     funnel = _funnel([
@@ -251,6 +323,8 @@ def render_page(force: bool = False) -> str:
 <span class="st-mute">клик по заголовку — сортировка · сейчас по числу собеседований (кликните «% собес.» для конверсии)</span></div>
 <div class="st-tbl-wrap">{_company_table(b['companies'])}</div></section>
 
+<section class="st-card">{_role_section(b)}</section>
+
 <div class="st-grid2">
   <section class="st-card"><h2 class="st-h">По системе подачи</h2>{ats}
     <p class="st-note">Столбец — сколько подано; справа — сколько собеседований. Видно, где отдача выше.</p></section>
@@ -275,8 +349,7 @@ _CSS = """
 .st-grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:760px){.st-grid2{grid-template-columns:1fr}}
 /* KPI */
-.st-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:16px}
-@media(max-width:900px){.st-kpis{grid-template-columns:repeat(3,1fr)}}
+.st-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 @media(max-width:460px){.st-kpis{grid-template-columns:repeat(2,1fr)}}
 .st-kpi{background:#fff;border:1px solid #e8eaed;border-radius:12px;padding:14px 14px 12px}
 .st-kpi-v{font-size:26px;font-weight:800;line-height:1.1;font-family:var(--ff-mono,monospace)}
@@ -341,22 +414,23 @@ _CSS = """
 
 _JS = """<script>
 (function(){
-  var tbl=document.getElementById('stTbl'); if(!tbl) return;
-  var dir={};
-  tbl.querySelectorAll('th[data-k]').forEach(function(th){
-    th.addEventListener('click', function(){
-      var k=th.dataset.k, num=k!=='name';
-      dir[k]=!dir[k]; var asc=dir[k];
-      var tb=tbl.tBodies[0];
-      var rows=[].slice.call(tb.rows);
-      rows.sort(function(a,b){
-        var x=a.dataset[k], y=b.dataset[k];
-        if(num){x=parseFloat(x)||0;y=parseFloat(y)||0;return asc?x-y:y-x;}
-        return asc?(''+x).localeCompare(y):(''+y).localeCompare(x);
+  document.querySelectorAll('table.st-sort').forEach(function(tbl){
+    var dir={};
+    tbl.querySelectorAll('th[data-k]').forEach(function(th){
+      th.addEventListener('click', function(){
+        var k=th.dataset.k, num=(k!=='name' && k!=='role');
+        dir[k]=!dir[k]; var asc=dir[k];
+        var tb=tbl.tBodies[0];
+        var rows=[].slice.call(tb.rows);
+        rows.sort(function(a,b){
+          var x=a.dataset[k], y=b.dataset[k];
+          if(num){x=parseFloat(x)||0;y=parseFloat(y)||0;return asc?x-y:y-x;}
+          return asc?(''+x).localeCompare(y):(''+y).localeCompare(x);
+        });
+        rows.forEach(function(r){tb.appendChild(r);});
+        tbl.querySelectorAll('.st-th').forEach(function(h){h.classList.remove('st-sorted');});
+        th.classList.add('st-sorted');
       });
-      rows.forEach(function(r){tb.appendChild(r);});
-      tbl.querySelectorAll('.st-th').forEach(function(h){h.classList.remove('st-sorted');});
-      th.classList.add('st-sorted');
     });
   });
 })();

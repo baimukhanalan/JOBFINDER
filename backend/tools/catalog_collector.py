@@ -27,6 +27,8 @@ import httpx
 
 from backend.applier import ats_boards
 from backend.applier.regions import classify_with_source
+from backend.applier.role_category import classify_role
+from backend.applier.comp_extract import extract_comp
 from backend.tools import catalog_db
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -95,6 +97,14 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
             # A deterministic rule hit on re-collect is authoritative and may narrow a
             # prior LLM multi-region set (e.g. LLM US+CA -> rule US) — by design, not a bug.
             row["regions"], row["region_source"] = regs, src
+        # role: only attach a CONFIDENT deterministic hit (else leave NULL for the
+        # backfill/LLM residue). comp: always attach (an 'unknown' marks the row as
+        # checked so the comp backfill skips it). The upsert PRESERVES an existing
+        # value (COALESCE existing first), so neither overwrites a gold-backfilled row.
+        cat, rsrc = classify_role(row["title"], row.get("department"))
+        if rsrc == "rule":
+            row["role_category"], row["role_source"] = cat, rsrc
+        row.update(extract_comp(row.get("description")))
         rows.append(row)
     return rows
 
@@ -247,6 +257,38 @@ def backfill_regions(limit: int = 0, use_llm: bool = True) -> dict:
     return {"processed": done, **catalog_db.counts()}
 
 
+def backfill_roles(limit: int = 0) -> dict:
+    """Deterministically classify every DISTINCT title whose role_category IS NULL,
+    applied title-wise across all its rows. A rule miss leaves the title NULL (an
+    optional LLM residue pass, or the fleet, can label it later)."""
+    catalog_db.ensure_schema()
+    rows = catalog_db.rows_missing_role(limit)
+    hit = 0
+    for r in rows:
+        cat, src = classify_role(r.get("title"), r.get("department"))
+        if src == "rule":
+            catalog_db.set_role_by_title(r["title"], cat, src, only_if_null=True)
+            hit += 1
+    return {"titles_processed": len(rows), "labeled": hit}
+
+
+def backfill_comp(limit: int = 0) -> dict:
+    """Extract the posted pay range for every row whose comp_source IS NULL. Always
+    stamps comp_source ('rule' on a hit, 'none' otherwise) so a row is checked once."""
+    catalog_db.ensure_schema()
+    rows = catalog_db.rows_missing_comp(limit)
+    hit = 0
+    for r in rows:
+        res = extract_comp(r.get("description"))
+        if res["comp_source"] == "rule":
+            catalog_db.set_comp(r["id"], res["comp_min"], res["comp_max"],
+                                res["comp_currency"], "rule", only_if_null=True)
+            hit += 1
+        else:
+            catalog_db.set_comp(r["id"], None, None, None, "none", only_if_null=True)
+    return {"rows_processed": len(rows), "with_pay": hit}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="include non-remote jobs too")
@@ -258,6 +300,10 @@ if __name__ == "__main__":
                          "(adds the select options we now capture)")
     ap.add_argument("--backfill-regions", action="store_true",
                     help="classify regions for rows whose regions IS NULL")
+    ap.add_argument("--backfill-roles", action="store_true",
+                    help="classify role_category for distinct titles that lack one")
+    ap.add_argument("--backfill-comp", action="store_true",
+                    help="extract posted pay range for rows whose comp_source IS NULL")
     ap.add_argument("--no-llm", action="store_true",
                     help="with --backfill-regions, skip the LLM fallback (deterministic only)")
     ap.add_argument("--limit", type=int, default=0,
@@ -272,6 +318,10 @@ if __name__ == "__main__":
         backfill_gh_questions()
     elif args.backfill_regions:
         print(backfill_regions(limit=args.limit, use_llm=not args.no_llm), flush=True)
+    elif args.backfill_roles:
+        print(backfill_roles(limit=args.limit), flush=True)
+    elif args.backfill_comp:
+        print(backfill_comp(limit=args.limit), flush=True)
     else:
         run(remote_only=not args.all, with_questions=not args.no_questions,
             ats_filter=args.ats, limit=args.limit)

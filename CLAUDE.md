@@ -107,6 +107,10 @@ were recreated with `cwd=/home/projects/jobfinder` (`pm2 delete <name>` → `pm2
   `tools/catalog_collector.py` over Ashby/Greenhouse/Lever/**Workable**, remote-only). `job_catalog`
   carries per-job `regions text[]` ∈ `{US,CA,UK,OTHER}` (multi-eligibility) + `region_source`
   (`rule`/`llm`/`unknown`), classified by `applier/regions.py` (deterministic-first, LLM residue);
+  a `role_category` (one of 13 functional buckets) + `role_source` classified by
+  `applier/role_category.py` (title+department, deterministic, at collect time), and a posted-pay
+  range `comp_min`/`comp_max`/`comp_currency` + `comp_source` extracted from the description by
+  `applier/comp_extract.py` — both feed the `/stats` «По ролям» cut (see the stats gotcha);
   `questions JSONB` per job (GH via API, Ashby/Lever/Workable via `tools/catalog_forms.py` Playwright).
   A `dead BOOLEAN` + `dead_reason` blacklist marks postings confirmed gone at the source (e.g. a GH
   job id that now 404s); `catalog_db.mark_dead()` sets it (reversible) and `list_jobs`/`companies`/
@@ -244,6 +248,23 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   brand-grep (the branding rule is about hiding OUR stack, not real employers). Route `GET /stats` in
   `dashboard_app.py`; only the dashboard restarts for changes (not indexer/copilot). Tests:
   `test_stats.py` (pure, monkeypatched sources — asserts jobid dedup + base consistency).
+  **«По ролям» cut + posted-comp (2026-08-29).** A card after «По компаниям» shows, per functional
+  role category, «Подано / Приглашали / % / медианная вилка $» + a ranked bar «на какие роли приглашали
+  больше всего»; a «Медиана вилки» KPI is in the header row. «Приглашали» = a job whose furthest outcome
+  is `interview` OR `offer` (an offer implies an invite); the base is the SAME 4908 jobids as `applied`
+  (`_catalog_dims` now also returns jobid→`role_category` and jobid→comp-midpoint from `job_catalog`).
+  `comp_median` = median of posted-range midpoints over that role's applied jobs that carry a comp; the
+  number is the range the POSTING states (mostly base, per US pay-transparency law — labeled «вилка по
+  вакансии», NOT a fabricated total comp), midpoints clamped to $10k–$2M. **Data pipeline:** role +
+  comp are `job_catalog` columns classified deterministically at collect time (`role_category.py`,
+  `comp_extract.py`, wired in `catalog_collector.collect_board`; the upsert COALESCEs existing-first so
+  a re-collect never clobbers a labeled row) and were BACKFILLED once by a ~131-agent sonnet Workflow
+  fleet (the authoritative gold; the deterministic rules are tuned to it at ~77% agreement — the residue
+  is irreducible gold noise like ML-Engineer↔Data + a thin-signal `Other` tail, all shown as the `Other`
+  bucket). One-shot repair: `catalog_collector --backfill-roles` / `--backfill-comp` (deterministic,
+  only-if-NULL). NO cron needed — the nightly collect self-heals NULLs. role_category 100% of live rows,
+  comp ~48% (many remote-intl postings disclose no pay). The role table + company table share one sort
+  JS (`table.st-sort`). Tests: `test_role_category.py`, `test_comp_extract.py`, `test_stats.py::test_role_aggregation`.
 - **Replying as a candidate: the submission password comes from the DB, not the JSON cache
   (`mailcrm.send`, 2026-08-28).** Sending a reply authenticates to Postfix submission (587, SASL) AS the
   candidate mailbox, using its password. That password was read only from `backend/data/

@@ -101,6 +101,19 @@ def ensure_schema() -> None:
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS regions TEXT[]")
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS region_source TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS jc_regions ON job_catalog USING GIN (regions)")
+        # role_category: a functional bucket derived from the title (+ department),
+        # classified deterministically at collect time (applier/role_category.py),
+        # like regions. Powers the /stats "По ролям" cut. comp_min/comp_max: the
+        # posted pay range annualized to USD ints (applier/comp_extract.py) — the
+        # range the posting states (mostly base, per US pay-transparency law), NOT a
+        # fabricated total comp. *_source ∈ {rule, llm, agent, unknown}.
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS role_category TEXT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS role_source TEXT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_min INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_max INT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_currency TEXT")
+        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_source TEXT")
+        cur.execute("CREATE INDEX IF NOT EXISTS jc_role ON job_catalog (role_category)")
         # draft: the full pre-generated application fill-packet (tailored résumé dict +
         # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
         cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft JSONB")
@@ -114,7 +127,9 @@ def ensure_schema() -> None:
 
 _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
             "department", "workplace", "is_remote", "url", "description",
-            "description_html", "questions", "q_count", "regions", "region_source")
+            "description_html", "questions", "q_count", "regions", "region_source",
+            "role_category", "role_source", "comp_min", "comp_max", "comp_currency",
+            "comp_source")
 _QI = _UP_COLS.index("questions")
 
 
@@ -139,6 +154,15 @@ def upsert_jobs(rows: list[dict]) -> int:
            "q_count=GREATEST(EXCLUDED.q_count, job_catalog.q_count), "
            "regions=COALESCE(EXCLUDED.regions, job_catalog.regions), "
            "region_source=COALESCE(EXCLUDED.region_source, job_catalog.region_source), "
+           # role/comp: PRESERVE an existing value (gold backfill / earlier rule) —
+           # only fill when the row is still NULL, so a 77%-accurate collect-time
+           # deterministic pass never clobbers a fleet-labeled row.
+           "role_category=COALESCE(job_catalog.role_category, EXCLUDED.role_category), "
+           "role_source=COALESCE(job_catalog.role_source, EXCLUDED.role_source), "
+           "comp_min=COALESCE(job_catalog.comp_min, EXCLUDED.comp_min), "
+           "comp_max=COALESCE(job_catalog.comp_max, EXCLUDED.comp_max), "
+           "comp_currency=COALESCE(job_catalog.comp_currency, EXCLUDED.comp_currency), "
+           "comp_source=COALESCE(job_catalog.comp_source, EXCLUDED.comp_source), "
            "last_seen=now()")
     with _cur(False) as cur:
         cur.executemany(sql, vals)
@@ -234,6 +258,67 @@ def set_regions(ats: str, company_key: str, external_id: str, regions: list, sou
 def rows_missing_regions(limit: int = 0) -> list:
     sql = ("SELECT ats, company_key, external_id, title, location, description "
            "FROM job_catalog WHERE regions IS NULL")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def set_role(ats: str, company_key: str, external_id: str, category: str, source: str,
+             only_if_null: bool = False) -> int:
+    """Set role_category/role_source for one row. only_if_null guards a backfill
+    write against a concurrent collect (same rationale as set_regions)."""
+    sql = ("UPDATE job_catalog SET role_category=%s, role_source=%s "
+           "WHERE ats=%s AND company_key=%s AND external_id=%s")
+    if only_if_null:
+        sql += " AND role_category IS NULL"
+    with _cur(False) as cur:
+        cur.execute(sql, (category, source, ats, company_key, external_id))
+        return cur.rowcount
+
+
+def set_role_by_title(title: str, category: str, source: str,
+                      only_if_null: bool = False) -> int:
+    """Set role_category on EVERY row sharing this exact title (role is a property
+    of the title, so the gold set is applied title-wise across all companies)."""
+    sql = "UPDATE job_catalog SET role_category=%s, role_source=%s WHERE btrim(title)=btrim(%s)"
+    if only_if_null:
+        sql += " AND role_category IS NULL"
+    with _cur(False) as cur:
+        cur.execute(sql, (category, source, title))
+        return cur.rowcount
+
+
+def set_comp(row_id: int, comp_min, comp_max, currency: str, source: str,
+             only_if_null: bool = False) -> int:
+    """Set the posted pay range for one row by id (comp is per-row, not per-title)."""
+    sql = ("UPDATE job_catalog SET comp_min=%s, comp_max=%s, comp_currency=%s, "
+           "comp_source=%s WHERE id=%s")
+    if only_if_null:
+        sql += " AND comp_source IS NULL"
+    with _cur(False) as cur:
+        cur.execute(sql, (comp_min, comp_max, currency, source, row_id))
+        return cur.rowcount
+
+
+def rows_missing_role(limit: int = 0) -> list:
+    """Distinct titles still lacking a role_category (the backfill work-list).
+    Role is title-based, so one representative row (+ its department) per title."""
+    sql = ("SELECT DISTINCT ON (title) title, department, ats, company_key, external_id "
+           "FROM job_catalog WHERE role_category IS NULL AND title IS NOT NULL "
+           "ORDER BY title, department NULLS LAST")
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def rows_missing_comp(limit: int = 0) -> list:
+    """Rows with a description but no comp yet (the comp backfill work-list)."""
+    sql = ("SELECT id, title, description FROM job_catalog "
+           "WHERE comp_source IS NULL AND description IS NOT NULL AND description <> ''")
     if limit:
         sql += f" LIMIT {int(limit)}"
     with _cur() as cur:

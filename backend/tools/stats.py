@@ -135,11 +135,14 @@ def _mail_outcomes() -> tuple[dict, list]:
     return best, inbound
 
 
-def _catalog_dims(jobids: set[str]) -> tuple[dict, dict]:
-    """jobid -> ats, jobid -> region (primary), for the applied jobs."""
+def _catalog_dims(jobids: set[str]) -> tuple[dict, dict, dict, dict]:
+    """jobid -> ats, region (primary), role_category, and posted comp midpoint —
+    for the applied jobs, all keyed on the same jobid base as `applied`."""
     from backend.tools import mail_db
     jid_ats: dict[str, str] = {}
     jid_region: dict[str, str] = {}
+    jid_role: dict[str, str] = {}
+    jid_comp: dict[str, int] = {}
     ints = []
     for j in jobids:
         try:
@@ -147,15 +150,52 @@ def _catalog_dims(jobids: set[str]) -> tuple[dict, dict]:
         except (TypeError, ValueError):
             pass
     if not ints:
-        return jid_ats, jid_region
+        return jid_ats, jid_region, jid_role, jid_comp
     with mail_db.conn() as c:
         cur = c.cursor()
-        cur.execute("SELECT id, ats, regions FROM job_catalog WHERE id = ANY(%s)", (ints,))
-        for jid, ats, regions in cur.fetchall():
-            jid_ats[str(jid)] = ats or "other"
+        cur.execute("SELECT id, ats, regions, role_category, comp_min, comp_max "
+                    "FROM job_catalog WHERE id = ANY(%s)", (ints,))
+        for jid, ats, regions, role, cmin, cmax in cur.fetchall():
+            sid = str(jid)
+            jid_ats[sid] = ats or "other"
             reg = (regions or [])
-            jid_region[str(jid)] = (reg[0] if reg else "UNKNOWN")
-    return jid_ats, jid_region
+            jid_region[sid] = (reg[0] if reg else "UNKNOWN")
+            jid_role[sid] = role or "Other"
+            mid = _comp_mid(cmin, cmax)
+            if mid is not None:
+                jid_comp[sid] = mid
+    return jid_ats, jid_region, jid_role, jid_comp
+
+
+_COMP_LO, _COMP_HI = 10_000, 2_000_000  # ignore parse garbage outside a sane band
+
+
+def _comp_mid(cmin, cmax):
+    """Midpoint of a posted range, or None if absent/implausible."""
+    vals = [v for v in (cmin, cmax) if isinstance(v, (int, float)) and v > 0]
+    if not vals:
+        return None
+    mid = sum(vals) / len(vals)
+    if mid < _COMP_LO or mid > _COMP_HI:
+        return None
+    return int(round(mid))
+
+
+def _median(vals: list) -> int:
+    if not vals:
+        return 0
+    s = sorted(vals)
+    n = len(s)
+    m = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+    return int(round(m))
+
+
+def _pct(vals: list, q: float) -> int:
+    if not vals:
+        return 0
+    s = sorted(vals)
+    i = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+    return int(s[i])
 
 
 def _day_start(ts: int) -> int:
@@ -183,7 +223,7 @@ def compute_stats() -> dict:
     except Exception as e:  # never let bookkeeping break the page
         log.warning("stats: submitted_jobids failed: %s", e)
         submitted = set()
-    jid_ats, jid_region = _catalog_dims(set(jobid_company))
+    jid_ats, jid_region, jid_role, jid_comp = _catalog_dims(set(jobid_company))
 
     # the outcome of a JOB = the furthest any of its personas got (None = no reply)
     job_outcome: dict[str, str | None] = {}
@@ -214,6 +254,43 @@ def compute_stats() -> dict:
     for jid in jobid_company:
         if job_outcome.get(jid) == "interview":
             ats_interview[jid_ats.get(jid, "other")] += 1
+
+    # by ROLE (jobid-based, same base as `applied`). "invited" = interview OR offer
+    # (an offer implies we were invited); action_needed shown separately as a
+    # softer signal. comp_median = median posted-range midpoint over that role's
+    # applied jobs that carry a comp.
+    role_applied = Counter()
+    role_invited = Counter()
+    role_action = Counter()
+    role_comps: dict[str, list] = defaultdict(list)
+    all_comps: list = []
+    for jid in jobid_company:
+        cat = jid_role.get(jid, "Other")
+        role_applied[cat] += 1
+        bo = job_outcome.get(jid)
+        if bo in ("interview", "offer"):
+            role_invited[cat] += 1
+        elif bo == "action_needed":
+            role_action[cat] += 1
+        mid = jid_comp.get(jid)
+        if mid is not None:
+            role_comps[cat].append(mid)
+            all_comps.append(mid)
+
+    roles = []
+    for cat, n in role_applied.items():
+        inv = role_invited.get(cat, 0)
+        comps = role_comps.get(cat, [])
+        roles.append({
+            "role": cat,
+            "applied": n,
+            "invited": inv,
+            "action_needed": role_action.get(cat, 0),
+            "invite_rate": round(100.0 * inv / n, 1) if n else 0.0,
+            "comp_median": _median(comps),
+            "comp_n": len(comps),
+        })
+    roles.sort(key=lambda r: (r["invited"], r["applied"]), reverse=True)
 
     companies = []
     for comp, n in applied.items():
@@ -278,6 +355,14 @@ def compute_stats() -> dict:
             "interview_rate": round(100.0 * total_interview / total_applied, 1) if total_applied else 0.0,
         },
         "companies": companies,
+        "roles": roles,
+        "comp": {
+            "median": _median(all_comps),
+            "p25": _pct(all_comps, 0.25),
+            "p75": _pct(all_comps, 0.75),
+            "coverage": len(all_comps),
+            "coverage_pct": round(100.0 * len(all_comps) / total_applied, 0) if total_applied else 0.0,
+        },
         "outcome_totals": {k: outcome_totals.get(k, 0) for k in _OUTCOME_KINDS},
         "ats": sorted(
             ({"ats": a, "applied": ats_applied[a], "interview": ats_interview.get(a, 0)}

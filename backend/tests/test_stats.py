@@ -33,11 +33,16 @@ def _install(monkeypatch):
     jid_ats = {"j1": "greenhouse", "j2": "greenhouse", "j3": "ashby",
                "j4": "greenhouse", "j5": "lever"}
     jid_region = {"j1": "US", "j2": "US", "j3": "OTHER", "j4": "US", "j5": "CA"}
+    jid_role = {"j1": "Engineering", "j2": "Engineering", "j3": "Sales / GTM",
+                "j4": "Sales / GTM", "j5": "Data & ML"}
+    # comp midpoints; j2/j5 carry no comp -> absent (median must ignore them)
+    jid_comp = {"j1": 150000, "j3": 120000, "j4": 200000}
 
     monkeypatch.setattr(stats, "_scan_applications", lambda: scan)
     monkeypatch.setattr(stats, "_mail_outcomes", lambda: (best, inbound))
     monkeypatch.setattr(stats, "bulk_submitted", lambda: {"j1", "j2", "j4"})
-    monkeypatch.setattr(stats, "_catalog_dims", lambda jids: (jid_ats, jid_region))
+    monkeypatch.setattr(stats, "_catalog_dims",
+                        lambda jids: (jid_ats, jid_region, jid_role, jid_comp))
 
 
 def test_company_aggregation_dedupes_retries(monkeypatch):
@@ -118,3 +123,34 @@ def test_pure_helpers():
     assert stats._pretty("GitLab") == "GitLab"
     assert stats._pretty("OpenAI") == "OpenAI"
     assert stats._pretty("1Password") == "1Password"
+
+
+def test_role_aggregation(monkeypatch):
+    _install(monkeypatch)
+    b = stats.compute_stats()
+    by = {r["role"]: r for r in b["roles"]}
+
+    # base is the jobid, same as `applied`
+    assert sum(r["applied"] for r in b["roles"]) == b["totals"]["applied"] == 5
+
+    eng = by["Engineering"]
+    assert eng["applied"] == 2                # j1, j2
+    assert eng["invited"] == 1                # j1 interview
+    assert eng["comp_median"] == 150000       # j2 has no comp -> ignored
+    assert eng["comp_n"] == 1
+
+    sales = by["Sales / GTM"]
+    assert sales["applied"] == 2              # j3, j4
+    assert sales["invited"] == 1              # j4 interview
+    assert sales["comp_median"] == 160000     # median(120000, 200000)
+    assert sales["comp_n"] == 2
+
+    data = by["Data & ML"]
+    assert data["applied"] == 1              # j5
+    assert data["invited"] == 1              # j5 OFFER counts as invited
+    assert data["comp_median"] == 0          # no comp on this role
+    assert data["comp_n"] == 0
+
+    # global comp block ignores the two no-comp jobs
+    assert b["comp"]["median"] == 150000     # median(120000, 150000, 200000)
+    assert b["comp"]["coverage"] == 3

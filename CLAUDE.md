@@ -24,16 +24,17 @@
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 7 tabs** (Инбокс `/mail`,
-Каталог `/catalog`, Заявки `/apply`, Незавершённые `/unfinished`, Mass Hiring `/mass-hiring`,
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 6 tabs** (Инбокс `/mail`,
+Каталог `/catalog`, Незавершённые `/unfinished`, Mass Hiring `/mass-hiring`,
 Статистика `/stats`, Пользователи `/users` — nav was reduced from 6 to 3 on 2026-08-21, then «Незавершённые» was added
 2026-08-25 for bulk-apply jobs that need a human to finish the captcha, «Mass Hiring» 2026-08-26 for the
-human-apply board, «Статистика» 2026-08-28 for the by-company outcome dashboard, and «Пользователи»
-2026-08-29 to manage the interview responsibles from the UI (was CLI-only); `_NAV` in
+human-apply board, «Статистика» 2026-08-28 for the by-company outcome dashboard, «Пользователи»
+2026-08-29 to manage the interview responsibles from the UI (was CLI-only), and the **«Заявки» `/apply`
+tab + its route were DELETED 2026-08-29** by owner request; `_NAV` in
 `mailcrm_ui.py`). The general
 Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
-the target of the Заявки cards → `/queue?profile=…`) and `/setup` (onboard a real candidate) still exist
-but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
+now reached from the Кандидаты roster «📄 N» chip; its «Назад» goes to `/mail/candidates`) and `/setup`
+(onboard a real candidate) still exist but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
 DELETED** 2026-08-21 (with `backend/tools/jobs_feed.py`) — `/catalog` is the single job-browsing surface.
 `backend/tools/roles_dashboard.py` was **kept** (its `_is_remote` / `_workplace` helpers are imported by
 `applier`/`apply_bot` + `online_roles`), it's just no longer routed. Plus a one-click browser extension

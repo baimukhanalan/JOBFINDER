@@ -21,6 +21,8 @@ _WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четв
 
 # Cabinet-specific styling layered on top of the shared base CSS.
 _CAB_CSS = """
+main{max-width:900px;margin:0 auto;padding:22px 18px;}
+@media(max-width:600px){main{padding:14px 12px;}}
 .cab-top{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:22px;
   padding-bottom:14px;border-bottom:1px solid var(--line);}
 .cab-top .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);
@@ -51,14 +53,22 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .iv-list .iv-when{font-weight:700;color:var(--ink);font-size:14px;}
 .iv-list .iv-meta{color:var(--ink-soft);font-size:13px;}
 .iv-list .iv-meta b{color:var(--ink);}
-.av-grid{display:flex;flex-direction:column;gap:10px;max-width:520px;}
-.av-day{display:flex;align-items:center;gap:14px;background:var(--panel);
-  border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 14px;}
-.av-day .dow{flex:0 0 120px;font-weight:600;color:var(--ink);}
-.av-day .tog{display:flex;align-items:center;gap:7px;color:var(--ink-soft);font-weight:600;font-size:12px;}
-.av-day .times{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--ink-mute);font-size:12px;}
-.av-day input[type=time]{padding:7px 10px;}
+.av-grid{display:flex;flex-direction:column;gap:10px;max-width:560px;}
+.av-day{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r-sm);padding:12px 14px;}
+.av-day .dow{flex:0 0 auto;min-width:96px;font-weight:600;color:var(--ink);}
+.av-day .tog{display:flex;align-items:center;gap:7px;color:var(--ink-soft);font-weight:600;font-size:13px;cursor:pointer;user-select:none;}
+.av-day .tog input{width:17px;height:17px;flex:0 0 auto;}
+.av-day .times{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--ink-mute);font-size:13px;}
+.av-day .times input[type=time]{padding:9px 10px;}
 .av-day.off{opacity:.55;}
+/* phones: the day label + toggle on one line, the two time inputs full-width below */
+@media(max-width:560px){
+  .av-day{gap:10px;}
+  .av-day .dow{flex:1 1 auto;min-width:0;font-size:15px;}
+  .av-day .times{margin-left:0;flex:1 1 100%;gap:8px;}
+  .av-day .times input[type=time]{flex:1;min-width:0;text-align:center;}
+}
 .empty{color:var(--ink-mute);padding:18px 0;}
 /* read-only avatar wrapper in the reused mail rows: not a select toggle */
 .msel-ro{cursor:default;}

@@ -878,6 +878,39 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   (HTTP 200), NOT submitted; `submit_clicked` = Submit pressed; `submit_confirmed` = confirmation seen
   right after the click (best-effort — captcha-gated ATS confirm later/never; the real confirmation still
   only lands in per-job `status.json`).
+- **«Незавершённые» ledger audit + the datacenter-IP reCAPTCHA-code ceiling (2026-08-30).** A full audit
+  of `logs/unfinished.json` (337 rows) found it 100% Greenhouse+Ashby, 0 dead-404, 0 Lever/Workable, and
+  `submit_reconcile.reconcile_ledger()` cleared 0 (NO parked job held an ATS receipt). It split into
+  **"clicked"** (submit pressed, never confirmed) and **"incomplete"** (a required field the bot couldn't
+  fill → auto-submit refused). **Key finding — a whole class of Greenhouse companies is UN-COMPLETABLE
+  from this datacenter IP, distinct from the Ashby-spam ceiling:** after the fill + auto-submit, GH mails
+  an 8-char security code (the co-pilot enters it fine — `verify_code.read_code` works), but a FINAL
+  reCAPTCHA on the code step blocks the submit from a datacenter IP, so **no ack is ever emitted**.
+  Calibrated by the per-company ratio of "Security code" mails to acks in `mail_index`: **samsara 269→1,
+  fivetran 166→0, calendly 32→0**, canonical/Ramp/tailscale 0-ack — hundreds of attempts, ~0 completions
+  — WHILE standard `job-boards.greenhouse.io` companies complete fine (nebius 346→381, datadog 228→221,
+  gitlab, axon 162→181, Remote 135→108, stripe, cresta, charliehealth, alphasense). A human at noVNC (same
+  IP) can't finish a reCAPTCHA-gated one either, so parking it just re-inflates the tab — same rationale as
+  the Ashby-spam drop. **Audit actions:** dropped the 205 un-completable "clicked" jobs (clicked at
+  <3-all-time-ack companies + all 59 Ashby, spam-rejected with 0 inbound mail) via `bulk_log.drop_many`,
+  then out-of-process-drained (per the automation note above) the 47 jobs at COMPLETING companies →
+  **18 confirmed real applications (Remote 17/18, charliehealth 1), 0 errors.** Ledger 337 → 114.
+  **RECOMMENDED follow-up (owner decision):** a per-company completion-rate SKIP so «Подать на все» stops
+  re-applying to the proven-0% companies (samsara/fivetran/pinterest/calendly/…) — they currently burn
+  thousands of futile submits and re-inflate «Незавершённые» every operator-triggered run.
+- **Two live-DOM Greenhouse fill bugs = the remaining "incomplete" backlog (root-caused 2026-08-30, NOT
+  yet fixed — the fragile SHARED fill layer needs deliberate live iteration + `dry_run` verification so the
+  ~20 WORKING GH/Ashby company fills don't regress).** (1) **natera ×45 'End date month'**: the structured
+  Employment block's End-date MONTH is a react-select; `materialize_prefill` DOES draft it and 'Start date
+  month' fills, but 'End date month' stays unfilled (Current role=Yes does NOT waive it on natera's form,
+  and the second month react-select never receives the known answer) → auto-submit refused. (2) **coalition
+  ×25 'Have you ever served in the military?'**: a veteran-status react-select the `_DEMOGRAPHIC` regex
+  MISSES — it has `\bveteran\b` but no `military`/`served` keyword, so the field isn't declined and is left
+  blank. Fix routes it to `fill_demographics_decline` (narrow: `served in the (military|armed forces)|
+  military service`, added to ALL FOUR demographic regexes) IF a decline option exists (unconfirmed). Both
+  are live-only fields the nightly `catalog_forms` scrape never captures. NB coalition is a company-domain
+  embed (likely also reCAPTCHA-gated per the finding above), so fixing its fill may only move it from
+  "incomplete" to "clicked" — natera (standard board) is the higher-value fill fix.
 - **Local LLM default.** `ANTHROPIC_API_KEY` is empty; résumé polish (`--ai`) and answer drafting
   (`--draft`) hit Sumrak at `127.0.0.1:8080/v1` (`config.llm_url/llm_model=sumrak-smart`). Without the
   key, tailoring falls back to the deterministic keyword path.

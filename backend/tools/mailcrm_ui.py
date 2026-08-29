@@ -438,7 +438,7 @@ _IC_STATS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 _IC_USERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
 _IC_LOGOUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>'
 _NAV = [
-    ("/mail", "inbox", "Инбокс", _IC_INBOX),
+    ("/mail/candidates", "candidates", "Кандидаты", _IC_CANDIDATES),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
     ("/unfinished", "unfinished", "Незавершённые", _IC_UNFINISHED),
     ("/mass-hiring", "masshiring", "Mass Hiring", _IC_MASS),

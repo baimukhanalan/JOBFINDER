@@ -269,6 +269,29 @@ def _by_email() -> dict[str, dict]:
     return {c["email"]: c for c in candidates()}
 
 
+def candidate_groups(stage: str = "", q: str = "", limit: int = 50,
+                     offset: int = 0) -> list[dict]:
+    """Grouped candidate inbox rows (see mail_db.candidate_groups) enriched with the
+    authoritative roster display NAME (real roster > demo registry > stored candidate >
+    local-part), a candidate `id` and an `is_demo` flag — the spine of the merged
+    Кандидаты screen. Returns [] (the empty state, never a crash) when the index is
+    unavailable."""
+    try:
+        rows = mail_db.candidate_groups(stage=stage or None, q=q or None,
+                                        limit=limit, offset=offset)
+    except Exception as e:
+        _health_fallback("candidate_groups", e)
+        return []
+    by = _by_email()
+    for r in rows:
+        c = by.get(r["mailbox"]) or {}
+        local = r["mailbox"].split("@")[0]
+        r["name"] = c.get("name") or r.get("last_candidate") or local
+        r["id"] = c.get("id") or local
+        r["is_demo"] = bool(c.get("is_demo")) if c else True
+    return rows
+
+
 # ---- Maildir reading -------------------------------------------------------
 def _pid(path: str) -> str:
     """STABLE message id: hash the Maildir file's UNIQUE name (`<time>.<uniq>.<host>`),

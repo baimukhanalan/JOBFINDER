@@ -334,6 +334,107 @@ def mailboxes_with_kind(kind: str) -> set:
         return {r[0] for r in cur.fetchall()}
 
 
+def candidate_groups(stage: str | None = None, q: str | None = None,
+                     limit: int = 50, offset: int = 0) -> list[dict]:
+    """One row per candidate MAILBOX that has mail, newest-activity first — the spine of
+    the grouped candidate inbox (Gmail-style, one group per persona). Assembled from a
+    single GROUP BY plus a DISTINCT ON for each mailbox's latest message (and latest
+    interview message, so the «Собес» control links the right thread).
+
+    Row keys: mailbox, last_ts, msg_count, unread, n_interview, n_offer, n_rejection,
+      n_action, n_ack, has_sent, stage (furthest inbound kind), last_hash, last_thread,
+      last_subject, last_snippet, last_from, last_candidate, last_kind, last_outbound,
+      has_att, iv_hash, iv_thread.
+
+    stage: '' / None → every mailbox; 'sent' → has an outbound message; 'priority' →
+      has an inbound interview OR action_needed (the «Приоритетные» tab); a single kind
+      ('interview'|'offer'|'rejection'|'action_needed'|'ack'|'other') → has ≥1 inbound
+      message of that kind. q → group-level search (mailbox / candidate / subject).
+    Pagination is a plain LIMIT/OFFSET over the last-activity order (matches the roster's
+    existing offset pagination)."""
+    stage = (stage or "").strip().lower()
+    where, wargs = "", []
+    if q:
+        # membership subquery so a match narrows the GROUPS but counts stay over ALL of
+        # each candidate's mail (a row-level filter would under-count matched mailboxes).
+        where = ("WHERE mailbox IN (SELECT mailbox FROM mail_index WHERE "
+                 "mailbox ILIKE %s OR candidate ILIKE %s OR subject ILIKE %s)")
+        wargs = [f"%{q}%", f"%{q}%", f"%{q}%"]
+    having, hargs = "", []
+    if stage == "sent":
+        having = "HAVING bool_or(outbound)"
+    elif stage == "priority":
+        having = ("HAVING COUNT(*) FILTER (WHERE kind='interview' AND NOT outbound) > 0 "
+                  "OR COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) > 0")
+    elif stage in ("interview", "offer", "rejection", "action_needed", "ack", "other"):
+        having = "HAVING COUNT(*) FILTER (WHERE kind=%s AND NOT outbound) > 0"
+        hargs = [stage]
+
+    agg_sql = f"""
+        SELECT mailbox,
+               MAX(date_ts) AS last_ts,
+               COUNT(*) AS msg_count,
+               COUNT(*) FILTER (WHERE NOT seen AND NOT outbound) AS unread,
+               COUNT(*) FILTER (WHERE kind='interview' AND NOT outbound) AS n_interview,
+               COUNT(*) FILTER (WHERE kind='offer' AND NOT outbound) AS n_offer,
+               COUNT(*) FILTER (WHERE kind='rejection' AND NOT outbound) AS n_rejection,
+               COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) AS n_action,
+               COUNT(*) FILTER (WHERE kind='ack' AND NOT outbound) AS n_ack,
+               bool_or(outbound) AS has_sent
+          FROM mail_index
+          {where}
+         GROUP BY mailbox
+         {having}
+         ORDER BY last_ts DESC
+         LIMIT %s OFFSET %s"""
+    with _cur() as cur:
+        cur.execute(agg_sql, tuple(wargs) + tuple(hargs) + (limit, offset))
+        groups = [dict(r) for r in cur.fetchall()]
+        if not groups:
+            return []
+        mboxes = [g["mailbox"] for g in groups]
+
+        cur.execute(
+            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key, subject, "
+            "snippet, from_name, candidate, kind, outbound, has_att "
+            "FROM mail_index WHERE mailbox = ANY(%s) "
+            "ORDER BY mailbox, date_ts DESC, path_hash DESC", (mboxes,))
+        last = {r["mailbox"]: dict(r) for r in cur.fetchall()}
+
+        cur.execute(
+            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key "
+            "FROM mail_index WHERE mailbox = ANY(%s) AND kind='interview' AND NOT outbound "
+            "ORDER BY mailbox, date_ts DESC, path_hash DESC", (mboxes,))
+        iv = {r["mailbox"]: dict(r) for r in cur.fetchall()}
+
+    def _furthest(g) -> str:
+        if g["n_offer"]:     return "offer"
+        if g["n_interview"]: return "interview"
+        if g["n_action"]:    return "action_needed"
+        if g["n_rejection"]: return "rejection"
+        if g["n_ack"]:       return "ack"
+        return "other"
+
+    for g in groups:
+        lm = last.get(g["mailbox"], {})
+        im = iv.get(g["mailbox"], {})
+        g.update({
+            "stage": _furthest(g),
+            "last_hash": lm.get("path_hash", ""),
+            "last_thread": lm.get("thread_key", ""),
+            "last_subject": lm.get("subject") or "",
+            "last_snippet": lm.get("snippet") or "",
+            "last_from": lm.get("from_name") or "",
+            "last_candidate": lm.get("candidate") or "",
+            "last_kind": lm.get("kind") or "other",
+            "last_outbound": bool(lm.get("outbound")),
+            "has_att": bool(lm.get("has_att")),
+            "iv_hash": im.get("path_hash", ""),
+            "iv_thread": im.get("thread_key", ""),
+        })
+    return groups
+
+
 # ---- retention (cron) ----------------------------------------------------------
 def protected_thread_keys() -> set:
     """(mailbox, thread_key) pairs that must NEVER be auto-deleted: any thread that

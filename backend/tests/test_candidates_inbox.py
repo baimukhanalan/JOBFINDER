@@ -1,0 +1,272 @@
+"""Tests for the merged, Gmail-style «Кандидаты» screen.
+
+Two layers are covered:
+
+1. Pure RENDER (`backend.tools.candidates_inbox`) — no DB, no network. Synthetic group
+   dicts are built inline via `_g(**over)`; every assertion is matched against the module's
+   REAL markup (class names / active-state / hidden-toggle / escaping), so the tests lock in
+   current behaviour rather than guessing.
+2. DATA contract (`mail_db.candidate_groups` + its `mailcrm.candidate_groups` wrapper) —
+   READ-ONLY, guarded, and skipped when no CRM DSN is reachable (mirrors
+   test_interviews_notify.py). These make no writes.
+"""
+from __future__ import annotations
+
+import pytest
+
+from backend.tools import candidates_inbox as ci
+from backend.tools import mail_db, mailcrm
+
+
+# ---- shared key contracts ----------------------------------------------------------
+# The keys mail_db.candidate_groups() puts on every row (the DB layer). The mailcrm
+# wrapper ADDS name/id/is_demo on top of these.
+_DB_KEYS = {
+    "mailbox", "last_ts", "msg_count", "unread", "n_interview", "n_offer",
+    "n_rejection", "n_action", "n_ack", "has_sent", "stage", "last_hash",
+    "last_thread", "last_subject", "last_snippet", "last_from", "last_candidate",
+    "last_kind", "last_outbound", "has_att", "iv_hash", "iv_thread",
+}
+_WRAPPER_KEYS = _DB_KEYS | {"name", "id", "is_demo"}
+
+
+def _g(**over) -> dict:
+    """A full, valid candidate-group dict (every contract key) with sane defaults,
+    overridable per test."""
+    g = {
+        "mailbox": "a@takhet.com",
+        "name": "Jane",
+        "id": "a",
+        "is_demo": True,
+        "last_ts": 1000,
+        "msg_count": 3,
+        "unread": 0,
+        "n_interview": 0,
+        "n_offer": 0,
+        "n_rejection": 0,
+        "n_action": 0,
+        "n_ack": 0,
+        "has_sent": False,
+        "stage": "other",
+        "last_hash": "h",
+        "last_thread": "t",
+        "last_subject": "Hi",
+        "last_snippet": "snip",
+        "last_from": "Bob",
+        "last_candidate": "Jane",
+        "last_kind": "other",
+        "last_outbound": False,
+        "has_att": False,
+        "iv_hash": "",
+        "iv_thread": "",
+    }
+    g.update(over)
+    return g
+
+
+# ---- pure render: group cards ------------------------------------------------------
+def test_render_groups_basic_card_with_sobes():
+    out = ci.render_groups([_g(
+        mailbox="a@takhet.com", name="Jane Roe", unread=2, msg_count=3,
+        stage="interview", iv_hash="H1", iv_thread="T1")])
+    assert 'data-mailbox="a@takhet.com"' in out
+    assert "Jane Roe" in out
+    assert "cg-card" in out
+    # «Собес» control present BECAUSE iv_hash is set (renders openSobes(...) / .iv-sobes)
+    assert "openSobes" in out
+    assert "iv-sobes" in out
+
+
+def test_sobes_control_absent_without_iv_hash():
+    with_iv = ci.render_groups([_g(iv_hash="H1", iv_thread="T1")])
+    without_iv = ci.render_groups([_g(iv_hash="")])
+    assert "openSobes(" in with_iv
+    assert "openSobes(" not in without_iv
+    assert "iv-sobes" not in without_iv
+
+
+def test_unread_badge_only_when_positive():
+    seven = ci.render_groups([_g(unread=7)])
+    none = ci.render_groups([_g(unread=0)])
+    # the distinctive number shows only in the unread=7 render
+    assert "7" in seven
+    assert "cg-cnt" in seven
+    assert "cg-cnt" not in none
+
+
+def test_render_groups_empty_input():
+    assert ci.render_groups([]) == ""
+    assert ci.render_groups(None) == ""
+
+
+def test_render_groups_escapes_html():
+    out = ci.render_groups([_g(name="<script>x</script>", last_subject="<b>hi</b>")])
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    # subject is escaped too
+    assert "<b>hi</b>" not in out
+
+
+# ---- pure render: full page --------------------------------------------------------
+def test_page_constant():
+    assert ci.PAGE == 40
+
+
+def test_render_page_shell_and_tabs():
+    page = ci.render_page([], tab="all", stage="", q="",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1})
+    assert "<main" in page
+    assert "Приоритетные" in page
+    assert "Все письма" in page
+    assert 'id="grouplist"' in page
+    assert 'id="grpmore"' in page
+
+
+def test_render_page_active_tab_priority():
+    page = ci.render_page([], tab="priority",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1})
+    # the priority tab carries the active class; «Все письма» does not
+    assert '<a class="cg-tab active" href="/mail/candidates?tab=priority">Приоритетные</a>' in page
+    assert '<a class="cg-tab" href="/mail/candidates?tab=all">Все письма</a>' in page
+
+
+def test_render_page_active_tab_all():
+    page = ci.render_page([], tab="all",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1})
+    assert '<a class="cg-tab active" href="/mail/candidates?tab=all">Все письма</a>' in page
+    assert '<a class="cg-tab" href="/mail/candidates?tab=priority">Приоритетные</a>' in page
+
+
+def test_render_page_funnel_counts():
+    page = ci.render_page([], tab="all",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1})
+    # the funnel renders each supplied count in a <b>…</b>
+    assert "<b>5</b>" in page
+    assert "<b>2</b>" in page
+    assert "<b>1</b>" in page
+
+
+def test_render_page_sentinel_hidden_when_no_more():
+    import re
+    page = ci.render_page([_g()], tab="all", has_more=False, offset=0)
+    m = re.search(r'<div id="grpmore"[^>]*>', page)
+    assert m, "sentinel must be present"
+    assert "hidden" in m.group(0)
+
+
+def test_render_page_sentinel_visible_and_advances_when_more():
+    import re
+    groups = [_g(mailbox=f"c{i}@takhet.com", id=f"c{i}") for i in range(40)]
+    page = ci.render_page(groups, tab="all", has_more=True, offset=40)
+    m = re.search(r'<div id="grpmore"([^>]*)>', page)
+    assert m, "sentinel must be present"
+    attrs = m.group(0)
+    # NOT hidden when there is a next page
+    assert "hidden" not in attrs
+    # data-offset carries a number > 40 (offset 40 + 40 groups == 80)
+    off = re.search(r'data-offset="(\d+)"', attrs)
+    assert off and int(off.group(1)) > 40
+
+
+def test_render_page_branding_neutral():
+    groups = [_g(mailbox=f"c{i}@takhet.com", id=f"c{i}") for i in range(40)]
+    page = ci.render_page(groups, tab="priority",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1},
+                          has_more=True, offset=40)
+    low = page.lower()
+    for banned in ("claude", "anthropic", "openai", " gpt", "llm"):
+        assert banned not in low, banned
+
+
+# ---- pure render: thread + message fragments ---------------------------------------
+def _m(**over) -> dict:
+    m = {
+        "id": "m1",
+        "mailbox": "a@takhet.com",
+        "from_name": "Alpha",
+        "subject": "Subj",
+        "snippet": "snip",
+        "kind": "other",
+        "thread": "t",
+        "has_att": False,
+        "outbound": False,
+        "date_ts": 100,
+        "seen": True,
+    }
+    m.update(over)
+    return m
+
+
+def test_render_thread_fragment_order_and_count():
+    msg1 = _m(id="m1", subject="S1", date_ts=100, seen=True)
+    msg2 = _m(id="m2", subject="S2", kind="interview", has_att=True, date_ts=200, seen=False)
+    out = ci.render_thread_fragment("a@takhet.com", [msg2, msg1])
+    # one row per message
+    assert out.count("cg-msg-top") == 2
+    # order preserved: msg2 before msg1
+    assert out.index("m2") < out.index("m1")
+
+
+def test_render_thread_fragment_empty():
+    out = ci.render_thread_fragment("a@takhet.com", [])
+    assert "Писем нет" in out
+
+
+def test_render_message_fragment_body_and_defensive():
+    good = ci.render_message_fragment({
+        "plain": "HELLO_BODY_TEXT", "subject": "S", "date_ts": 100,
+        "outbound": False, "mailbox": "a@takhet.com", "attachments": [], "html": "",
+    })
+    assert isinstance(good, str) and good
+    assert "HELLO_BODY_TEXT" in good
+
+    # a deliberately broken dict must NOT raise — degrades to some div
+    broken = ci.render_message_fragment({})
+    assert isinstance(broken, str)
+    assert "div" in broken
+
+
+# ---- live DB (read-only, skipped without a CRM DSN) --------------------------------
+try:
+    with mail_db._cur(dict_rows=False) as _c:
+        _c.execute("SELECT 1")
+    HAS_DB = True
+except Exception:
+    HAS_DB = False
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_candidate_groups_full_key_contract():
+    rows = mail_db.candidate_groups(limit=3)
+    for r in rows:
+        assert _DB_KEYS <= set(r.keys()), sorted(_DB_KEYS - set(r.keys()))
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_candidate_groups_priority_filter():
+    rows = mail_db.candidate_groups(stage="priority", limit=5)
+    for r in rows:
+        assert r.get("n_interview") or r.get("n_action")
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_candidate_groups_interview_filter_has_iv_hash():
+    rows = mail_db.candidate_groups(stage="interview", limit=5)
+    for r in rows:
+        assert r.get("iv_hash")
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_candidate_groups_sorted_by_last_ts_desc():
+    rows = mail_db.candidate_groups(limit=5)
+    ts = [r["last_ts"] for r in rows]
+    assert ts == sorted(ts, reverse=True)
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_mailcrm_candidate_groups_wrapper_adds_identity_keys():
+    rows = mailcrm.candidate_groups(limit=2)
+    for r in rows:
+        assert "name" in r
+        assert "is_demo" in r
+        assert _WRAPPER_KEYS <= set(r.keys()), sorted(_WRAPPER_KEYS - set(r.keys()))

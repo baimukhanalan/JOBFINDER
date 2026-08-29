@@ -24,15 +24,18 @@
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 6 tabs** (Инбокс `/mail`,
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 6 tabs** (Кандидаты `/mail/candidates`,
 Каталог `/catalog`, Незавершённые `/unfinished`, Mass Hiring `/mass-hiring`,
 Статистика `/stats`, Пользователи `/users` — nav was reduced from 6 to 3 on 2026-08-21, then «Незавершённые» was added
 2026-08-25 for bulk-apply jobs that need a human to finish the captcha, «Mass Hiring» 2026-08-26 for the
 human-apply board, «Статистика» 2026-08-28 for the by-company outcome dashboard, «Пользователи»
-2026-08-29 to manage the interview responsibles from the UI (was CLI-only), and the **«Заявки» `/apply`
-tab + its route were DELETED 2026-08-29** by owner request; `_NAV` in
-`mailcrm_ui.py`). The general
-Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
+2026-08-29 to manage the interview responsibles from the UI (was CLI-only), the **«Заявки» `/apply`
+tab + its route were DELETED 2026-08-29** by owner request, and on **2026-08-29 the separate «Инбокс»
+`/mail` tab was DROPPED from nav and MERGED into «Кандидаты»** — the primary tab is now a Gmail-style
+inbox GROUPED BY CANDIDATE (`/mail/candidates`, `tools/candidates_inbox.py`) where each persona is one
+card that expands INLINE to its thread, opens each message in place, and assigns an interview («Собес»)
+inline; `/mail` (the old flat inbox `render_inbox`) is KEPT as an unrouted fallback; `_NAV` in
+`mailcrm_ui.py`). `/queue` (per-candidate review queue,
 now reached from the Кандидаты roster «📄 N» chip; its «Назад» goes to `/mail/candidates`) and `/setup`
 (onboard a real candidate) still exist but are drill-downs, not nav items. The duplicate **`/jobs` (Вакансии) and `/roles` (Компании) routes were
 DELETED** 2026-08-21 (with `backend/tools/jobs_feed.py`) — `/catalog` is the single job-browsing surface.
@@ -342,6 +345,24 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   Postgres rows. `mailcrm.classifier_version()` includes a hash of the saved rules so `mail_indexer` also
   repairs stale rows after a restart. Defaults intentionally require explicit interview invitations and do
   not include broad acknowledgement-template words such as `next steps`, `screening`, or `move forward`.
+- **Merged Кандидаты screen — the primary tab, a candidate-grouped inbox (2026-08-29).** «Инбокс» `/mail`
+  and «Кандидаты» were showing the same mail two ways, so they were merged into ONE Gmail-style surface at
+  `/mail/candidates` (`tools/candidates_inbox.py`, rendered via `mailcrm_ui._page("candidates", …)`): one
+  card per persona (`mailcrm.candidate_groups` → `mail_db.candidate_groups`, a `GROUP BY mailbox` aggregate:
+  last message + per-kind counts + unread + furthest `stage` + the latest interview msg hash for «Собес»),
+  newest-activity first. A card EXPANDS INLINE to its messages (`GET /mail/candidates/thread?mailbox=`),
+  each message OPENS INLINE (`GET /mail/candidates/message?id=`), and an inline **«Собес»** (only when the
+  persona has an interview; reuses `mailcrm_ui._iv_sobes` + the shared `openSobes` assign modal) books
+  without leaving the page. Tabs **«Приоритетные»** (`?tab=priority` = has an inbound interview OR
+  action_needed) / **«Все письма»**, a stage funnel + search, and offset pagination
+  (`GET /mail/candidates/more?tab=&stage=&q=&offset=`, `PAGE=40`, IntersectionObserver on `#grpmore`).
+  `/mail` (the old flat `render_inbox`) is KEPT but dropped from nav — a fallback, not deleted; the old
+  `/mail/candidates/more` (which returned `render_candidate_rows`) was REPOINTED to return grouped cards.
+  All routes are admin-gated by `dash_auth` (unauth → 303 `/login`; verified live). ONLY the dashboard
+  restarts for changes (not indexer/copilot — `mail_db`/`mailcrm` only got the additive
+  `candidate_groups`). Tests: `test_candidates_inbox.py`. NB some `last_snippet`s carry raw CSS/HTML from
+  senders that put markup in `text/plain` (Axon/Outlook) — a pre-existing `mail_index.snippet` data-quality
+  quirk shared with the old inbox, not a render bug.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

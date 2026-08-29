@@ -1,0 +1,398 @@
+"""Merged, Gmail-style «Кандидаты» screen for the JobFinder dashboard.
+
+Server-rendered HTML, no framework. The list is GROUPED BY CANDIDATE (one card per
+persona mailbox), newest-activity first. A card header shows the candidate + the latest
+message preview + badges + (when the candidate has an interview mail) a «Собес» control;
+clicking a header EXPANDS the card inline to that candidate's messages, and clicking a
+message opens its body inline. Everything expands / loads in place through the small
+fragment endpoints below — minimal page navigation.
+
+Routes (already wired in dashboard_app.py) call the four public functions here:
+    GET /mail/candidates                       -> render_page(...)
+    GET /mail/candidates/more?tab&stage&q&offset -> render_groups(groups)
+    GET /mail/candidates/thread?mailbox        -> render_thread_fragment(mailbox, msgs)
+    GET /mail/candidates/message?id            -> render_message_fragment(message)
+
+All rendering reuses the existing shell (sidebar / topbar / drawer / modals + global JS)
+via mailcrm_ui._page, and its shared components (avatar, kind tags, message card, the
+interview-assign «Собес» control + modal, the reply compose modal). This module only
+adds the grouped-card markup, its scoped CSS (all classes prefixed `cg-`) and its scoped
+JS (all functions prefixed `cg`). No stack names appear in any user-facing text.
+"""
+from __future__ import annotations
+
+from html import escape
+from urllib.parse import urlencode
+
+from backend.tools.mailcrm_ui import (
+    _page, _initial, _avatar_color, maildate, _kind_tag, _msg_card,
+    _iv_sobes, _iv_modal, _COMPOSE_MODAL,
+)
+
+# One page of candidate groups. The routes pass this as candidate_groups(limit=PAGE),
+# and the infinite-scroll JS advances the offset by PAGE per fetch.
+PAGE = 40
+
+# Funnel chips: (stage key, label). The empty key is «Все» (its count lives under 'all'
+# in stage_counts). Order mirrors the existing mail funnel. 'action_needed' has no
+# distinct count in stage_counts(), so its chip simply shows no number.
+_FUNNEL = [
+    ("", "Все"),
+    ("sent", "Отправленные"),
+    ("ack", "Принято"),
+    ("action_needed", "Действие"),
+    ("interview", "Собеседование"),
+    ("offer", "Оффер"),
+    ("rejection", "Отказ"),
+]
+
+
+def _clink(tab: str, stage: str, q: str) -> str:
+    """A /mail/candidates URL carrying the current tab (always), plus stage/q when set."""
+    params = {"tab": tab or "all"}
+    if stage:
+        params["stage"] = stage
+    if q:
+        params["q"] = q
+    return "/mail/candidates?" + urlencode(params)
+
+
+# --------------------------------------------------------------- group cards
+def _group_card(g: dict) -> str:
+    """One candidate card (collapsed). The header toggles the card open (cgToggle);
+    its body is filled lazily from /mail/candidates/thread on first open."""
+    mailbox = g.get("mailbox", "") or ""
+    name = g.get("name") or (mailbox.split("@")[0] if mailbox else "?")
+    avatar = (f'<span class="avatar cg-ava" style="background:{_avatar_color(name)}">'
+              f'{escape(_initial(name))}</span>')
+
+    subject = g.get("last_subject") or "(без темы)"
+    # An outbound last message reads as "Вы: …" (Gmail-style), so the operator can tell at a
+    # glance whether the candidate is waiting on us.
+    snip_prefix = "Вы: " if g.get("last_outbound") else ""
+    snippet = g.get("last_snippet") or ""
+
+    clip = '<span class="cg-clip" title="есть вложение">📎</span>' if g.get("has_att") else ""
+    date = maildate(g.get("last_ts", 0))
+
+    # Stage tag (furthest inbound kind). _kind_tag returns "" for the neutral «other» bucket.
+    stage_tag = _kind_tag(g.get("stage", "other"))
+
+    n_msg = g.get("msg_count", 0)
+    count_chip = f'<span class="cg-count" title="писем в переписке">{n_msg}</span>' if n_msg else ""
+
+    # «Собес» assign control — only when the candidate actually has an interview mail. It
+    # stops its own click propagation, so tapping it opens the assign modal, not the card.
+    sobes = ""
+    if g.get("iv_hash"):
+        sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
+                          as_span=True)
+
+    unread = g.get("unread", 0)
+    unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
+
+    return (
+        f'<div class="cg-card" data-mailbox="{escape(mailbox, quote=True)}" data-loaded="0">'
+        f'<div class="cg-head" onclick="cgToggle(this)">'
+        f'{avatar}'
+        f'<div class="cg-mid">'
+        f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
+        f'{clip}<span class="cg-date">{escape(date)}</span></div>'
+        f'<div class="cg-preview"><span class="cg-subj">{escape(subject)}</span>'
+        f'<span class="cg-snip">{escape(snip_prefix + snippet)}</span></div>'
+        f'<div class="cg-metaline">{stage_tag}{count_chip}{sobes}</div>'
+        f'</div>'
+        f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
+        f'</div>'
+        f'<div class="cg-body" hidden></div>'
+        f'</div>'
+    )
+
+
+def render_groups(groups) -> str:
+    """Fragment: just the group cards. Used for the first page (inside #grouplist),
+    the /mail/candidates/more page fetches, and any AJAX list swap."""
+    return "".join(_group_card(g) for g in (groups or []))
+
+
+# ------------------------------------------------------- expanded message rows
+def _msg_row(m: dict) -> str:
+    """One collapsed message row inside an expanded candidate card. Clicking it opens the
+    message body inline (cgOpen → /mail/candidates/message)."""
+    hid = m.get("id", "") or ""
+    outbound = bool(m.get("outbound"))
+    who = "Вы" if outbound else (m.get("from_name") or m.get("from_email") or "?")
+    unread = "" if m.get("seen") else " unread"
+    kind_tag = _kind_tag(m.get("kind", "other")) if m.get("kind") else ""
+    clip = '<span class="cg-msg-clip" title="есть вложение">📎</span>' if m.get("has_att") else ""
+    subject = m.get("subject") or "(без темы)"
+    snippet = m.get("snippet", "") or ""
+    date = maildate(m.get("date_ts", 0))
+    return (
+        f'<div class="cg-msg{unread}" data-id="{escape(hid, quote=True)}" data-loaded="0" '
+        f'onclick="cgOpen(this)">'
+        f'<div class="cg-msg-top"><span class="cg-msg-from">{escape(who)}</span>'
+        f'{kind_tag}{clip}<span class="cg-msg-date">{escape(date)}</span></div>'
+        f'<div class="cg-msg-line"><span class="cg-msg-subj">{escape(subject)}</span>'
+        f'<span class="cg-msg-snip">{escape(snippet)}</span></div>'
+        f'<div class="cg-msg-body" hidden></div>'
+        f'</div>'
+    )
+
+
+def render_thread_fragment(mailbox, messages) -> str:
+    """Fragment: a candidate's message rows, newest first (list_messages is already
+    newest-first). Each row is inline-openable. Empty → a small placeholder, never a crash."""
+    rows = messages or []
+    if not rows:
+        return '<div class="cg-thread-empty">Писем нет</div>'
+    return "".join(_msg_row(m) for m in rows)
+
+
+def render_message_fragment(message) -> str:
+    """Fragment: one message body — the shared full-message card. Wrapped defensively so an
+    unexpected message dict shape degrades to a small error, never breaks the page."""
+    try:
+        return _msg_card(message)
+    except Exception:
+        return '<div class="cg-msg-err">Не удалось показать письмо.</div>'
+
+
+# ------------------------------------------------------------------- full page
+def _tabs(tab: str) -> str:
+    def one(key: str, label: str) -> str:
+        cls = "cg-tab active" if tab == key else "cg-tab"
+        return f'<a class="{cls}" href="/mail/candidates?tab={key}">{label}</a>'
+    return ('<div class="cg-tabs">'
+            + one("priority", "Приоритетные")
+            + one("all", "Все письма")
+            + '</div>')
+
+
+def _funnel(tab: str, stage: str, q: str, stage_counts: dict | None) -> str:
+    sc = stage_counts or {}
+    chips = []
+    for key, label in _FUNNEL:
+        cls = "cg-fbtn active" if stage == key else "cg-fbtn"
+        ck = "all" if not key else key
+        # Show the count only when stage_counts actually carries this bucket.
+        cnt = f' <b>{sc[ck]}</b>' if ck in sc else ""
+        href = escape(_clink(tab, key, q), quote=True)
+        chips.append(f'<a class="{cls}" href="{href}">{label}{cnt}</a>')
+    return '<div class="cg-funnel">' + "".join(chips) + '</div>'
+
+
+def _search(tab: str, stage: str, q: str) -> str:
+    # Desktop search. On mobile the shared Gmail top pill (name="q" → /mail/candidates)
+    # already provides search, so .cg-search is hidden ≤760px.
+    hidden = f'<input type="hidden" name="tab" value="{escape(tab or "all", quote=True)}">'
+    if stage:
+        hidden += f'<input type="hidden" name="stage" value="{escape(stage, quote=True)}">'
+    return ('<form class="cg-search" method="get" action="/mail/candidates" role="search">'
+            + hidden
+            + f'<input type="search" name="q" value="{escape(q or "", quote=True)}" '
+            'placeholder="Поиск кандидата" autocomplete="off"></form>')
+
+
+def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
+                stage_counts: dict | None = None, has_more: bool = False,
+                offset: int = 0) -> str:
+    groups = groups or []
+    tab = tab or "all"
+
+    toolbar = ('<div class="cg-toolbar">' + _tabs(tab) + _search(tab, stage, q) + '</div>')
+    funnel = _funnel(tab, stage, q, stage_counts)
+
+    empty = '' if groups else '<div class="cg-empty">Кандидатов пока нет</div>'
+    # The sentinel keeps the paging state the infinite-scroll JS reads. It is inert (hidden)
+    # when there is no next page; when there IS one it stays observable (1px, empty).
+    next_off = offset + len(groups)
+    sentinel = (
+        f'<div id="grpmore" data-offset="{next_off}" data-tab="{escape(tab, quote=True)}" '
+        f'data-stage="{escape(stage or "", quote=True)}" data-q="{escape(q or "", quote=True)}"'
+        f'{"" if has_more else " hidden"}></div>'
+    )
+
+    body = (
+        f'<style>{_CG_CSS}</style>'
+        + toolbar + funnel
+        + f'<div id="grouplist">{render_groups(groups)}</div>'
+        + empty
+        + sentinel
+        + f'<script>window.CG_PAGE={PAGE};</script>'
+        + _CG_JS
+    )
+    # _COMPOSE_MODAL powers the reply button inside an opened message; _iv_modal() powers the
+    # «Собес» assign flow. Both need to be present once in the page.
+    modal = _COMPOSE_MODAL + _iv_modal()
+    return _page("candidates", body, modal)
+
+
+# ------------------------------------------------------------------------ CSS
+# Scoped, all classes prefixed `cg-`, reusing the shell design tokens so the screen matches
+# the rest of the app in both padding and palette. Mobile-first with a single 760px break.
+_CG_CSS = """
+.cg-toolbar{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 14px;}
+.cg-tabs{display:flex;align-items:baseline;gap:22px;}
+.cg-tab{font-size:22px;font-weight:600;color:var(--ink-mute);letter-spacing:-.02em;padding-bottom:4px;}
+.cg-tab:hover{color:var(--ink-soft);text-decoration:none;}
+.cg-tab.active{color:var(--ink);box-shadow:0 2px 0 var(--accent);}
+.cg-search{margin:0;flex:0 0 auto;}
+.cg-search input[type=search]{min-width:260px;}
+.cg-funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
+.cg-fbtn{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:var(--r-full);border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap;min-height:38px;}
+.cg-fbtn b{font-family:var(--ff-mono);font-size:12.5px;color:var(--ink);}
+.cg-fbtn:hover{border-color:var(--accent);text-decoration:none;}
+.cg-fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+.cg-fbtn.active b{color:#fff;}
+/* card list */
+#grouplist{display:flex;flex-direction:column;gap:10px;}
+.cg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;transition:border-color .12s,box-shadow .12s;}
+.cg-card:hover{border-color:var(--line-strong);}
+.cg-card.open{border-color:var(--accent);box-shadow:0 2px 16px -8px rgba(26,115,232,.4);}
+.cg-head{display:flex;align-items:flex-start;gap:13px;padding:13px 16px;cursor:pointer;}
+.cg-head:hover{background:#f8fafd;}
+.cg-ava{width:38px;height:38px;font-size:15px;margin-top:1px;}
+.cg-mid{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;}
+.cg-top{display:flex;align-items:baseline;gap:8px;}
+.cg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:var(--ink);font-size:14.5px;}
+.cg-clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
+.cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);}
+.cg-preview{display:flex;gap:7px;min-width:0;}
+.cg-subj{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:13.5px;}
+.cg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-mute);font-size:12.5px;}
+.cg-metaline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:1px;}
+.cg-metaline:empty{display:none;}
+.cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}
+.cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
+.cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
+.cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}
+.cg-card.open .cg-chev{transform:rotate(90deg);color:var(--accent);}
+.cg-body{background:#f8fafd;border-top:1px solid var(--line);padding:4px 12px 8px;}
+.cg-load,.cg-thread-empty{padding:16px;text-align:center;color:var(--ink-mute);font-size:13px;}
+.cg-empty{text-align:center;padding:48px;color:var(--ink-mute);}
+#grpmore{min-height:1px;}
+/* message rows inside an expanded card */
+.cg-msg{border-bottom:1px solid var(--line);padding:10px 6px;cursor:pointer;}
+.cg-msg:last-child{border-bottom:0;}
+.cg-msg:hover{background:#fff;}
+.cg-msg-top{display:flex;align-items:baseline;gap:8px;}
+.cg-msg-from{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink-soft);font-size:13px;}
+.cg-msg-clip{flex:0 0 auto;font-size:11px;color:var(--ink-mute);}
+.cg-msg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);}
+.cg-msg-line{display:flex;gap:6px;min-width:0;margin-top:2px;}
+.cg-msg-subj{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:12.5px;}
+.cg-msg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-mute);font-size:12px;}
+.cg-msg.unread .cg-msg-from,.cg-msg.unread .cg-msg-subj{color:var(--ink);font-weight:700;}
+.cg-msg.unread .cg-msg-date{color:var(--accent);}
+.cg-msg-body{margin-top:8px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm);padding:2px 14px;}
+.cg-msg-err{padding:14px;color:var(--danger);font-size:13px;}
+@media(max-width:760px){
+  .cg-toolbar{margin-bottom:12px;}
+  .cg-tabs{gap:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;max-width:100%;}
+  .cg-tab{font-size:19px;}
+  .cg-search{display:none;}
+  .cg-funnel{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;margin-bottom:12px;}
+  .cg-fbtn{min-height:44px;}
+  .cg-head{padding:14px;gap:12px;min-height:44px;}
+  .cg-name{font-size:15px;}
+  .cg-msg{padding:12px 6px;}
+}
+"""
+
+# ------------------------------------------------------------------------- JS
+# Scoped behaviour, all functions prefixed `cg`. Toggling expands a card and lazy-loads its
+# thread; opening a row lazy-loads a message body; an IntersectionObserver on #grpmore drives
+# infinite scroll. Reply/forward buttons inside a freshly injected message body are re-wired
+# to the global reply()/forward() helpers that ship with _page.
+_CG_JS = """
+<script>
+(function(){
+  var PAGE = window.CG_PAGE || 40;
+
+  // Re-bind reply/forward controls inside a just-injected message body. The page-level
+  // wiring only ran over markup present at parse time, so dynamically loaded cards need this.
+  function cgWireReply(root){
+    if(!root) return;
+    root.querySelectorAll('.reply-action').forEach(function(b){
+      if(b._cgw) return; b._cgw=1;
+      b.addEventListener('click',function(){ if(window.reply) reply(b.dataset.from,b.dataset.to,b.dataset.subject,b.dataset.mid); });
+    });
+    root.querySelectorAll('.fwd-action').forEach(function(b){
+      if(b._cgw) return; b._cgw=1;
+      b.addEventListener('click',function(){ if(window.forward) forward(b.dataset.from,b.dataset.subject,b.dataset.body); });
+    });
+  }
+
+  // Expand / collapse a candidate card; lazy-load its thread on first open.
+  window.cgToggle = function(head){
+    // Ignore clicks that landed on the «Собес» control or any link/button in the header
+    // (the sobes span already stops propagation; this is belt-and-suspenders).
+    if(window.event && window.event.target && window.event.target.closest('.iv-sobes, a, button')) return;
+    var card = head.closest('.cg-card'); if(!card) return;
+    var body = card.querySelector('.cg-body');
+    var open = card.classList.toggle('open');
+    if(body) body.hidden = !open;
+    if(open && card.dataset.loaded === '0' && body){
+      card.dataset.loaded = '1';
+      body.innerHTML = '<div class="cg-load">Загрузка…</div>';
+      fetch('/mail/candidates/thread?mailbox=' + encodeURIComponent(card.dataset.mailbox || ''))
+        .then(function(r){ return r.text(); })
+        .then(function(h){ body.innerHTML = h; })
+        .catch(function(){ body.innerHTML = '<div class="cg-load">Не удалось загрузить письма.</div>'; card.dataset.loaded = '0'; });
+    }
+  };
+
+  // Open / close a single message body inline; lazy-load it on first open.
+  window.cgOpen = function(row){
+    if(window.event && window.event.target && window.event.target.closest('a, button')) return;
+    var body = row.querySelector('.cg-msg-body'); if(!body) return;
+    var open = row.classList.toggle('open');
+    body.hidden = !open;
+    if(open && row.dataset.loaded !== '1'){
+      row.dataset.loaded = '1';
+      body.innerHTML = '<div class="cg-load">Загрузка…</div>';
+      fetch('/mail/candidates/message?id=' + encodeURIComponent(row.dataset.id || ''))
+        .then(function(r){ return r.text(); })
+        .then(function(h){ body.innerHTML = h; cgWireReply(body); })
+        .catch(function(){ body.innerHTML = '<div class="cg-msg-err">Не удалось загрузить письмо.</div>'; row.dataset.loaded = ''; });
+    }
+  };
+
+  // Infinite scroll: append the next page of cards when the sentinel scrolls into view.
+  var sentinel = document.getElementById('grpmore');
+  var list = document.getElementById('grouplist');
+  if(sentinel && list && 'IntersectionObserver' in window){
+    var loading = false, done = false;
+    function cgMore(){
+      if(loading || done || sentinel.hidden) return;
+      loading = true;
+      var off = parseInt(sentinel.dataset.offset || '0', 10) || 0;
+      var qs = new URLSearchParams({
+        tab: sentinel.dataset.tab || 'all',
+        stage: sentinel.dataset.stage || '',
+        q: sentinel.dataset.q || '',
+        offset: String(off)
+      });
+      fetch('/mail/candidates/more?' + qs.toString())
+        .then(function(r){ return r.ok ? r.text() : ''; })
+        .then(function(html){
+          html = (html || '').trim();
+          if(html){
+            list.insertAdjacentHTML('beforeend', html);
+            sentinel.dataset.offset = String(off + PAGE);
+          }
+          var added = (html.match(/class="cg-card"/g) || []).length;
+          if(added < PAGE){ done = true; sentinel.hidden = true; }
+          loading = false;
+        })
+        .catch(function(){ loading = false; });
+    }
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if(en.isIntersecting) cgMore(); });
+    }, {rootMargin: '400px'});
+    io.observe(sentinel);
+  }
+})();
+</script>
+"""

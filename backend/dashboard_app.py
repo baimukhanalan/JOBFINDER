@@ -1838,32 +1838,55 @@ def _filtered_candidates(filter: str, q: str):
     return cands, len(all_cands)
 
 
+def _eff_stage(tab: str, stage: str) -> str:
+    """Map the merged Кандидаты tab + explicit stage filter to the DB stage the
+    grouped inbox query expects. An explicit stage always wins; otherwise the
+    «priority» tab implies the priority bucket and everything else is all stages."""
+    stage = (stage or "").strip()
+    if stage:
+        return stage
+    return "priority" if (tab or "") == "priority" else ""
+
+
 @app.get("/mail/candidates", response_class=HTMLResponse)
-def mail_candidates(filter: str = "", q: str = ""):
-    from backend.tools import mail_db, mailcrm, mailcrm_ui
-    cands, total = _filtered_candidates(filter, q)
-    # funnel counts (distinct candidates per bucket)
+def mail_candidates(tab: str = "all", stage: str = "", q: str = ""):
+    from backend.tools import mailcrm, candidates_inbox
+    eff = _eff_stage(tab, stage)
+    groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=0)
     try:
-        kc = mail_db.kind_counts()
+        scounts = mailcrm.stage_counts()
     except Exception:
-        kc = {}
-    counts = {"submitted": len(_submitted_mailboxes()), "ack": kc.get("ack", 0),
-              "interview": kc.get("interview", 0), "offer": kc.get("offer", 0),
-              "rejection": kc.get("rejection", 0)}
-    page = cands[:CANDIDATES_PAGE]
-    has_more = 1 if len(cands) > CANDIDATES_PAGE else 0
-    return HTMLResponse(mailcrm_ui.render_candidates(
-        page, counts=counts, active_filter=(filter or "").lower(),
-        total=total, has_more=has_more, query=q, keyword_rules=mailcrm.keyword_rules()))
+        scounts = {}
+    return HTMLResponse(candidates_inbox.render_page(
+        groups, tab=tab, stage=stage, q=q, stage_counts=scounts,
+        has_more=(len(groups) == candidates_inbox.PAGE), offset=0))
 
 
 @app.get("/mail/candidates/more", response_class=HTMLResponse)
-def mail_candidates_more(filter: str = "", q: str = "", offset: int = 0):
-    """Infinite-scroll fragment: the next CANDIDATES_PAGE rows past ``offset``."""
-    from backend.tools import mailcrm_ui
-    cands, _ = _filtered_candidates(filter, q)
-    rows = cands[max(offset, 0):max(offset, 0) + CANDIDATES_PAGE]
-    return HTMLResponse(mailcrm_ui.render_candidate_rows(rows))
+def mail_candidates_more(tab: str = "all", stage: str = "", q: str = "", offset: int = 0):
+    """Infinite-scroll fragment: the next PAGE candidate groups past ``offset``."""
+    from backend.tools import mailcrm, candidates_inbox
+    eff = _eff_stage(tab, stage)
+    groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=int(offset))
+    return HTMLResponse(candidates_inbox.render_groups(groups))
+
+
+@app.get("/mail/candidates/thread", response_class=HTMLResponse)
+def mail_candidates_thread(mailbox: str = ""):
+    """Expand one candidate's thread (its messages) inside the grouped inbox."""
+    from backend.tools import mailcrm, candidates_inbox
+    msgs = mailcrm.list_messages(mailbox=mailbox, limit=100) if mailbox else []
+    return HTMLResponse(candidates_inbox.render_thread_fragment(mailbox, msgs))
+
+
+@app.get("/mail/candidates/message", response_class=HTMLResponse)
+def mail_candidates_message(id: str = ""):
+    """Render a single message (marks it read) for the grouped inbox drill-down."""
+    from backend.tools import mailcrm, candidates_inbox
+    m = mailcrm.get_message(id, mark=True) if id else None
+    if not m:
+        return HTMLResponse('<div class="cg-msg-err">Письмо не найдено</div>', status_code=404)
+    return HTMLResponse(candidates_inbox.render_message_fragment(m))
 
 
 @app.get("/candidates/{cid}", response_class=HTMLResponse)

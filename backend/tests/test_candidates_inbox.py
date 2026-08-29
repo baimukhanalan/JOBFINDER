@@ -112,29 +112,40 @@ def test_page_constant():
     assert ci.PAGE == 40
 
 
-def test_render_page_shell_and_tabs():
+def test_render_page_shell_and_controls():
     page = ci.render_page([], tab="all", stage="", q="",
                           stage_counts={"all": 5, "interview": 2, "sent": 1})
     assert "<main" in page
-    assert "Приоритетные" in page
     assert "Все письма" in page
     assert 'id="grouplist"' in page
     assert 'id="grpmore"' in page
+    # «Приоритетные» tab was removed by owner request
+    assert "Приоритетные" not in page
+    # filters restored as a «Фильтры» button + modal; compose restored (mobile FAB + desktop btn)
+    assert 'class="filter-btn"' in page
+    assert 'id="cgFilterModal"' in page
+    assert "fab-compose" in page
+    assert "cg-compose-desk" in page
+    assert "openCompose()" in page
 
 
-def test_render_page_active_tab_priority():
-    page = ci.render_page([], tab="priority",
-                          stage_counts={"all": 5, "interview": 2, "sent": 1})
-    # the priority tab carries the active class; «Все письма» does not
-    assert '<a class="cg-tab active" href="/mail/candidates?tab=priority">Приоритетные</a>' in page
-    assert '<a class="cg-tab" href="/mail/candidates?tab=all">Все письма</a>' in page
-
-
-def test_render_page_active_tab_all():
+def test_render_page_single_title_no_priority_link():
     page = ci.render_page([], tab="all",
                           stage_counts={"all": 5, "interview": 2, "sent": 1})
-    assert '<a class="cg-tab active" href="/mail/candidates?tab=all">Все письма</a>' in page
-    assert '<a class="cg-tab" href="/mail/candidates?tab=priority">Приоритетные</a>' in page
+    # the header is a single non-link title, styled like the old active tab
+    assert '<span class="cg-tab active">Все письма</span>' in page
+    # no priority tab link anywhere
+    assert "tab=priority" not in page
+
+
+def test_render_page_filter_modal_lists_stages_with_counts():
+    page = ci.render_page([], tab="all",
+                          stage_counts={"all": 5, "interview": 2, "sent": 1})
+    # the mobile filter modal carries the stage options in the shared .fm-stage chrome
+    assert "fm-stage" in page
+    assert "Собеседование" in page and "Отказ" in page
+    # a supplied count flows into the modal / funnel
+    assert ">5<" in page
 
 
 def test_render_page_funnel_counts():

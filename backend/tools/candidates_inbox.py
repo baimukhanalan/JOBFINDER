@@ -159,14 +159,57 @@ def render_message_fragment(message) -> str:
 
 
 # ------------------------------------------------------------------- full page
-def _tabs(tab: str) -> str:
-    def one(key: str, label: str) -> str:
-        cls = "cg-tab active" if tab == key else "cg-tab"
-        return f'<a class="{cls}" href="/mail/candidates?tab={key}">{label}</a>'
-    return ('<div class="cg-tabs">'
-            + one("priority", "Приоритетные")
-            + one("all", "Все письма")
-            + '</div>')
+def _title() -> str:
+    # The «Приоритетные» tab was removed by owner request — this slot is now just the screen
+    # title, kept in the old active-tab slot/looks so the layout is unchanged.
+    return '<div class="cg-tabs"><span class="cg-tab active">Все письма</span></div>'
+
+
+def _filter_btn(stage: str) -> str:
+    """Compact «Фильтры» control (shows the active stage). Desktop uses the inline funnel;
+    on mobile (funnel hidden) this button opens the same stages as a modal — the pre-merge
+    behaviour. Reuses the shared `.filter-btn` (mobile-only) styling."""
+    active = next((label for key, label in _FUNNEL if key == stage), "Все")
+    return ('<button type="button" class="filter-btn" onclick="cgFilters(true)" '
+            'aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'
+            '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>'
+            f'<span>{escape(active)}</span></button>')
+
+
+def _filter_modal(tab: str, stage: str, q: str, stage_counts: dict | None) -> str:
+    """The mobile filter sheet — the same stage options as the desktop funnel, in the shared
+    modal chrome (`.modal`/`.modal-card`/`.fm-stage`). Stage chips are plain navigation links."""
+    sc = stage_counts or {}
+    links = []
+    for key, label in _FUNNEL:
+        ck = "all" if not key else key
+        cnt = sc.get(ck, "")
+        cls = "fm-stage active" if stage == key else "fm-stage"
+        href = escape(_clink(tab, key, q), quote=True)
+        links.append(f'<a class="{cls}" href="{href}"><span class="fm-stage-lbl">{label}</span>'
+                     f'<span class="fm-stage-n">{cnt}</span></a>')
+    return ('<div class="modal" id="cgFilterModal" '
+            'onclick="if(event.target===this)cgFilters(false)">'
+            '<div class="modal-card"><div class="modal-head"><b>Фильтры</b>'
+            '<button type="button" class="iconbtn" onclick="cgFilters(false)" '
+            'aria-label="Закрыть">✕</button></div>'
+            '<div class="fm-stages">' + "".join(links) + '</div></div></div>')
+
+
+# Compose affordances: a Gmail-style floating button on mobile (shared `.fab-compose`, hidden
+# on desktop) + a header button on desktop (`.cg-compose-desk`, hidden on mobile). Both open
+# the shared compose modal (`openCompose` / `#composeModal`, shipped by _page + _COMPOSE_MODAL).
+_FAB_COMPOSE = ('<button class="fab-compose" onclick="openCompose()" aria-label="Написать">'
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+                'stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/>'
+                '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+                '<span>Написать</span></button>')
+_COMPOSE_BTN = ('<button class="hbtn hbtn-compose cg-compose-desk" onclick="openCompose()">'
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+                'stroke-linecap="round"><path d="M12 20h9"/>'
+                '<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
+                '<span class="hbtn-lbl">Написать</span></button>')
 
 
 def _funnel(tab: str, stage: str, q: str, stage_counts: dict | None) -> str:
@@ -200,7 +243,9 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
     groups = groups or []
     tab = tab or "all"
 
-    toolbar = ('<div class="cg-toolbar">' + _tabs(tab) + _search(tab, stage, q) + '</div>')
+    toolbar = ('<div class="cg-toolbar">' + _title()
+               + '<div class="cg-actions">' + _filter_btn(stage) + _COMPOSE_BTN
+               + _search(tab, stage, q) + '</div></div>')
     funnel = _funnel(tab, stage, q, stage_counts)
 
     empty = '' if groups else '<div class="cg-empty">Кандидатов пока нет</div>'
@@ -220,11 +265,12 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
         + empty
         + sentinel
         + f'<script>window.CG_PAGE={PAGE};</script>'
+        + _FAB_COMPOSE
         + _CG_JS
     )
-    # _COMPOSE_MODAL powers the reply button inside an opened message; _iv_modal() powers the
-    # «Собес» assign flow. Both need to be present once in the page.
-    modal = _COMPOSE_MODAL + _iv_modal()
+    # _COMPOSE_MODAL powers compose + the reply button inside an opened message; _iv_modal()
+    # the «Собес» assign flow; the candidates filter modal holds the mobile stage picker.
+    modal = _COMPOSE_MODAL + _iv_modal() + _filter_modal(tab, stage, q, stage_counts)
     return _page("candidates", body, modal)
 
 
@@ -232,7 +278,8 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
 # Scoped, all classes prefixed `cg-`, reusing the shell design tokens so the screen matches
 # the rest of the app in both padding and palette. Mobile-first with a single 760px break.
 _CG_CSS = """
-.cg-toolbar{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 14px;}
+.cg-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 14px;}
+.cg-actions{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
 .cg-tabs{display:flex;align-items:baseline;gap:22px;}
 .cg-tab{font-size:22px;font-weight:600;color:var(--ink-mute);letter-spacing:-.02em;padding-bottom:4px;}
 .cg-tab:hover{color:var(--ink-soft);text-decoration:none;}
@@ -289,11 +336,10 @@ _CG_CSS = """
 .cg-msg-err{padding:14px;color:var(--danger);font-size:13px;}
 @media(max-width:760px){
   .cg-toolbar{margin-bottom:12px;}
-  .cg-tabs{gap:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;max-width:100%;}
   .cg-tab{font-size:19px;}
   .cg-search{display:none;}
-  .cg-funnel{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;margin-bottom:12px;}
-  .cg-fbtn{min-height:44px;}
+  .cg-compose-desk{display:none;}
+  .cg-funnel{display:none;}          /* mobile uses the «Фильтры» button + modal instead */
   .cg-head{padding:14px;gap:12px;min-height:44px;}
   .cg-name{font-size:15px;}
   .cg-msg{padding:12px 6px;}
@@ -309,6 +355,14 @@ _CG_JS = """
 <script>
 (function(){
   var PAGE = window.CG_PAGE || 40;
+
+  // «Фильтры» modal (mobile): open/close the stage sheet. Backdrop closes it inline; Esc here.
+  window.cgFilters = function(open){
+    var m = document.getElementById('cgFilterModal'); if(!m) return;
+    m.classList.toggle('open', open);
+    document.body.style.overflow = open ? 'hidden' : '';
+  };
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') window.cgFilters(false); });
 
   // Re-bind reply/forward controls inside a just-injected message body. The page-level
   // wiring only ran over markup present at parse time, so dynamically loaded cards need this.

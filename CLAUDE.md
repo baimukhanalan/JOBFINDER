@@ -24,11 +24,12 @@
 Semi-automatic job-application engine for remote US/CA roles, plus a **self-hosted candidate-mail CRM**.
 It collects openings (company roster + live ATS APIs), tailors a résumé per JD, **pre-fills** the ATS
 form (never submits), a human reviews + clicks Submit; recruiter replies land in a Gmail-style inbox
-per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 6 tabs** (Инбокс `/mail`,
+per candidate. Surfaces: a server-rendered dashboard whose **sidebar nav is 7 tabs** (Инбокс `/mail`,
 Каталог `/catalog`, Заявки `/apply`, Незавершённые `/unfinished`, Mass Hiring `/mass-hiring`,
-Статистика `/stats` — nav was reduced from 6 to 3 on 2026-08-21, then «Незавершённые» was added
+Статистика `/stats`, Пользователи `/users` — nav was reduced from 6 to 3 on 2026-08-21, then «Незавершённые» was added
 2026-08-25 for bulk-apply jobs that need a human to finish the captcha, «Mass Hiring» 2026-08-26 for the
-human-apply board, and «Статистика» 2026-08-28 for the by-company outcome dashboard; `_NAV` in
+human-apply board, «Статистика» 2026-08-28 for the by-company outcome dashboard, and «Пользователи»
+2026-08-29 to manage the interview responsibles from the UI (was CLI-only); `_NAV` in
 `mailcrm_ui.py`). The general
 Инбокс `/mail` is still reachable via the in-page mail tab strip; `/queue` (per-candidate review queue,
 the target of the Заявки cards → `/queue?profile=…`) and `/setup` (onboard a real candidate) still exist
@@ -1115,9 +1116,17 @@ cabinet is a SEPARATE app.
   because the isolation guarantee rests on it (else the cookie is forgeable). pm2 launch:
   `cd /home/projects/jobfinder && sg mail -c 'IV_COOKIE_SECURE=1 /usr/bin/python3 -m uvicorn
   backend.interviews.cabinet_app:app --host 127.0.0.1 --port 8103'` (needs `mail` group to read Maildirs).
-- **Manage responsibles via CLI** (no UI): `python -m backend.interviews.admin_cli
-  {add|list|passwd|setavail|deactivate|reactivate}` (run via `sg mail`). Cabinet docs are disabled
-  (`docs_url=None`).
+- **Manage responsibles — operator UI + CLI.** UI (added 2026-08-29): the **«Пользователи» `/users`
+  tab** on the dashboard (`interviews/users_ui.py` + `routes_users.py`, `include_router`'d guarded in
+  `dashboard_app.py` like the operator routes) — list/create/reset-password/set-role/link-telegram/
+  toggle-active, plus a **weekly availability editor** (GMT, per weekday) so a freshly-created interviewer
+  is immediately assignable in the «Собес» grid (verified E2E: new user + availability → shows as free in
+  `service.grid_for_week`). ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
+  gates it (no separate check needed). POST handlers re-render the page with a banner (a generated password
+  is shown once, inline — never in a URL/redirect/log); accounts are DEACTIVATED, never hard-deleted (FK to
+  `iv_interviews`). Only the dashboard restarts for changes. CLI still works: `python -m
+  backend.interviews.admin_cli {add|list|passwd|setavail|deactivate|reactivate|link|setrole}` (run via
+  `sg mail`). Cabinet docs are disabled (`docs_url=None`).
 - **Gotcha — nginx `/cabinet/login` alias:** the cabinet is root-mounted on its subdomain, but
   `auth.current_responsible` redirects logged-out users to `/cabinet/login`; the `cabinet.systeam.kz`
   vhost has `location = /cabinet/login { proxy_pass …:8103/login; }` so that redirect lands. If that

@@ -1627,6 +1627,16 @@ except Exception:
     logging.getLogger(__name__).warning("interview operator routes unavailable", exc_info=True)
 
 
+# «Пользователи» tab: manage the interview responsibles (accounts assignable via «Собес»).
+# Admin-only (non-allowlisted → gated by AdminAuthMiddleware). Guarded like the operator
+# routes so a broken interviews package degrades to "no tab", never a boot failure.
+try:
+    from backend.interviews.routes_users import router as iv_users_router
+    app.include_router(iv_users_router)
+except Exception:
+    logging.getLogger(__name__).warning("interview users routes unavailable", exc_info=True)
+
+
 # In-app admin login + a fail-closed auth gate over every non-allowlisted route
 # (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
 # sits in front for now.

@@ -425,6 +425,7 @@ _IC_INBOX = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 _IC_UNFINISHED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>'
 _IC_MASS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>'
 _IC_STATS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>'
+_IC_USERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
 _NAV = [
     ("/mail", "inbox", "Инбокс", _IC_INBOX),
     ("/catalog", "catalog", "Каталог", _IC_CATALOG),
@@ -432,6 +433,7 @@ _NAV = [
     ("/unfinished", "unfinished", "Незавершённые", _IC_UNFINISHED),
     ("/mass-hiring", "masshiring", "Mass Hiring", _IC_MASS),
     ("/stats", "stats", "Статистика", _IC_STATS),
+    ("/users", "users", "Пользователи", _IC_USERS),
 ]
 # Per-screen context for the Gmail-style mobile search pill: active -> (route,
 # placeholder). Screens absent here (e.g. Заявки) show a title instead of a field.

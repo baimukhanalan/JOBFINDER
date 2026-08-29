@@ -164,7 +164,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None) -> str:
     return mailcrm_ui._page("users", body)
 
 
-def edit_page(u: dict, availability: list[dict], notice=None) -> str:
+def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0) -> str:
     rid = u["id"]
     role = u.get("role")
     active = u.get("active")
@@ -191,6 +191,23 @@ def edit_page(u: dict, availability: list[dict], notice=None) -> str:
     toggle_lbl = "Отключить" if active else "Включить"
     toggle_val = "0" if active else "1"
     toggle_cls = "hbtn danger" if active else "primary"
+
+    # Danger zone: hard-delete. A user with any interview can't be hard-deleted (FK keeps the
+    # history) — show why + point to «Отключить» instead. Otherwise a confirmed delete button.
+    if interview_count:
+        del_block = (
+            "<div class='u-card u-set u-span'><h3>Удаление</h3>"
+            "<p class='u-chint'>Нельзя удалить: за пользователем закреплено интервью — "
+            f"<b>{interview_count}</b>. Чтобы сохранить историю, используйте «Отключить». "
+            "Удаление доступно только для пользователя без интервью.</p></div>")
+    else:
+        del_block = (
+            "<div class='u-card u-set u-span'><h3>Удаление</h3>"
+            "<p class='u-chint'>Полностью удаляет учётную запись и её доступность. "
+            "Действие необратимо.</p>"
+            f"<form method='post' action='/users/{rid}/delete' "
+            "onsubmit=\"return confirm('Удалить пользователя безвозвратно?');\">"
+            "<button class='hbtn danger' type='submit'>Удалить пользователя</button></form></div>")
 
     body = (
         _CSS +
@@ -247,6 +264,7 @@ def edit_page(u: dict, availability: list[dict], notice=None) -> str:
         "</div>"
         "<p class='u-chint' style='margin-top:8px'>Отключение мгновенно отзывает сессию в кабинете.</p></div>"
         "</div>"
+        + del_block +
         "</div>"
 
         "<script>function uCopyMon(b){var f=b.closest('form');"

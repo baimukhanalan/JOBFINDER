@@ -1207,8 +1207,14 @@ tz-parametrised (80 pass).
   matches the other tabs; the availability editor stacks per-day (big tap-target time inputs), notes the
   night/24h window rule, and has a «Скопировать Пн на все дни» quick-fill. Screenshot-verified at 390px/1100px. ADMIN-ONLY: every `/users*` path is non-allowlisted, so the `AdminAuthMiddleware`
   gates it (no separate check needed). POST handlers re-render the page with a banner (a generated password
-  is shown once, inline — never in a URL/redirect/log); accounts are DEACTIVATED, never hard-deleted (FK to
-  `iv_interviews`). Only the dashboard restarts for changes. CLI still works: `python -m
+  is shown once, inline — never in a URL/redirect/log). **Deletion (added 2026-08-29):** a responsible with
+  interview HISTORY is DEACTIVATED (the `iv_interviews` FK has no ON DELETE, so history is preserved), but one
+  with **no interviews can be hard-DELETED** from the edit page — `POST /users/{rid}/delete` →
+  `db.delete_responsible` (their `iv_availability` cascades). Two guards, enforced BOTH in the UI and
+  server-side: you can't delete the account you're signed in as (`Depends(auth.current_responsible)` id check
+  → lockout guard), and a user with `db.interview_count(rid) > 0` is refused with a «Нельзя удалить … N
+  интервью — отключите» banner (the delete form is replaced by that hint; a direct POST is still blocked).
+  Only the dashboard restarts for changes. CLI still works: `python -m
   backend.interviews.admin_cli {add|list|passwd|setavail|deactivate|reactivate|link|setrole}` (run via
   `sg mail`). Cabinet docs are disabled (`docs_url=None`).
 - **Gotcha — obsolete after the merge:** the old `/cabinet/login` nginx alias is gone —

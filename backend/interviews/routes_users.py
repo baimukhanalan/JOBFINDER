@@ -12,7 +12,7 @@ from __future__ import annotations
 import secrets
 from html import escape
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse
 
 from backend.interviews import auth, db, users_ui
@@ -30,7 +30,8 @@ def _render_edit(rid: int, notice=None) -> HTMLResponse:
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
-    return HTMLResponse(users_ui.edit_page(u, db.get_availability(rid), notice))
+    return HTMLResponse(users_ui.edit_page(u, db.get_availability(rid), notice,
+                                           interview_count=db.interview_count(rid)))
 
 
 @router.get("/users", response_class=HTMLResponse)
@@ -103,6 +104,28 @@ def users_active(rid: int, active: str = Form(...)):
     on = active == "1"
     db.set_active(rid, on)
     return _render_edit(rid, ("ok", "Пользователь включён." if on else "Пользователь отключён (сессия отозвана)."))
+
+
+@router.post("/users/{rid}/delete", response_class=HTMLResponse)
+def users_delete(rid: int, me: dict = Depends(auth.current_responsible)):
+    u = db.get_responsible(rid)
+    if not u:
+        return HTMLResponse("<h1>404</h1>", status_code=404)
+    # Never let an admin delete the account they are signed in as (would lock themselves out).
+    if me and me.get("id") == rid:
+        return _render_edit(rid, ("err", "Нельзя удалить собственную учётную запись — вы под ней вошли."))
+    # The iv_interviews FK has no ON DELETE, so a user with any interview can't be hard-deleted
+    # (history is kept). Guide the operator to deactivate instead.
+    n = db.interview_count(rid)
+    if n:
+        return _render_edit(rid, ("err",
+            f"Нельзя удалить: за пользователем закреплено интервью — {n}. "
+            "Чтобы сохранить историю, отключите его (кнопка «Отключить») вместо удаления."))
+    try:
+        db.delete_responsible(rid)
+    except Exception as e:
+        return _render_edit(rid, ("err", f"Не удалось удалить: {escape(str(e))}"))
+    return _render_list(("ok", f"Пользователь «{escape(str(u.get('name') or u.get('login') or rid))}» удалён."))
 
 
 @router.post("/users/{rid}/availability", response_class=HTMLResponse)

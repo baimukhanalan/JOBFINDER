@@ -163,6 +163,24 @@ def set_role(rid: int, role: str) -> None:
                     (role, rid))
 
 
+def interview_count(rid: int) -> int:
+    """How many iv_interviews rows reference this responsible (ANY status). Non-zero means
+    the account can't be hard-deleted (its FK has no ON DELETE) — deactivate it instead so
+    the interview history is preserved."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("SELECT COUNT(*) FROM iv_interviews WHERE responsible_id=%s", (rid,))
+        return int(cur.fetchone()[0])
+
+
+def delete_responsible(rid: int) -> None:
+    """Hard-delete a responsible. Their iv_availability rows cascade (ON DELETE CASCADE);
+    their iv_interviews rows do NOT (the FK has no cascade, on purpose — history is kept),
+    so this raises psycopg2.IntegrityError when any interview still references them. Callers
+    must check interview_count() first and deactivate such accounts instead of deleting."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("DELETE FROM iv_responsibles WHERE id=%s", (rid,))
+
+
 # ---- availability --------------------------------------------------------------
 def get_availability(rid: int) -> list[dict]:
     """7 rows (dow 0..6), missing days filled with enabled=False, start/end 0."""

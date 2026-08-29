@@ -217,3 +217,34 @@ def test_due_reminders_window():
     db.mark_reminded(soon_id, "60")
     due60_after2 = {r["id"] for r in db.due_reminders(now, 60)}
     assert soon_id not in due60_after2
+
+
+def test_delete_responsible_without_interviews_and_cascade():
+    rid = db.add_responsible("test_iv_del", "h", "Del")
+    assert db.interview_count(rid) == 0
+    # give them an availability window, then delete — the window must cascade away
+    db.set_availability(rid, [{"dow": 0, "start_min": 540, "end_min": 1020, "enabled": True}])
+    assert any(r["enabled"] for r in db.get_availability(rid))
+
+    db.delete_responsible(rid)
+    assert db.get_responsible(rid) is None
+    # ON DELETE CASCADE removed their iv_availability rows (get_availability now fills all False)
+    assert all(not r["enabled"] for r in db.get_availability(rid))
+
+
+def test_delete_responsible_with_interviews_is_blocked():
+    rid = db.add_responsible("test_iv_delx", "h", "DelX")
+    start = _future(60 * 24 * 3)
+    db.insert_interview(
+        mailbox="test_iv_delx@x.com", responsible_id=rid, start_ts=start,
+        end_ts=start + timedelta(hours=1), company="Acme", jobid="d1",
+        thread_key="thd", source_message_hash="hd",
+    )
+    assert db.interview_count(rid) == 1
+    # the iv_interviews FK has no ON DELETE, so a hard delete RAISES rather than orphaning
+    # history — the operator must deactivate such an account instead.
+    with pytest.raises(psycopg2.Error):
+        db.delete_responsible(rid)
+    # the failed delete rolled back; the responsible is still there
+    assert db.get_responsible(rid) is not None
+    assert db.interview_count(rid) == 1

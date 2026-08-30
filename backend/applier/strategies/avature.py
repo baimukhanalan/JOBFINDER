@@ -71,14 +71,24 @@ class AvatureStrategy(ApplyStrategy):
         # application+account wizard is /careers/Register?folderId=<id>. Navigate there.
         url = page.url
         m = re.search(r"folderId=(\d+)", url)
-        if m and "/careers/register" not in url.lower():
-            base = url.split("/careers/")[0]
-            try:
-                await page.goto(f"{base}/careers/Register?folderId={m.group(1)}",
-                                wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(2500)
-            except Exception as exc:
-                logger.debug("avature: register nav failed: %s", exc)
+        if not m:
+            return
+        # Clear any prior Avature login FIRST: the co-pilot's shared browser persists cookies,
+        # so without this every application AFTER the first is filled while still logged in as
+        # the previous persona — the Register wizard pre-fills/locks a field, leaving 1 unfilled
+        # and the submit gate refuses (batch incident 2026-08-30: 1/22 confirmed, rest blocked).
+        try:
+            await page.context.clear_cookies()
+        except Exception:
+            pass
+        base = url.split("/careers/")[0]
+        try:
+            # Always (re)load the clean, logged-out Register page for this folder.
+            await page.goto(f"{base}/careers/Register?folderId={m.group(1)}",
+                            wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2500)
+        except Exception as exc:
+            logger.debug("avature: register nav failed: %s", exc)
 
     async def prefill(self, page: Page, profile_form: dict, resume_path: str,
                       cover_letter: str = "", job: dict | None = None,

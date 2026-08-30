@@ -119,6 +119,7 @@ def ensure_schema() -> None:
           UNIQUE (source, source_id)
         );""")
         cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS comp_type TEXT;")
+        cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS auto_status TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_company ON mass_hiring_jobs (company_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_cat ON mass_hiring_jobs (category);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_active ON mass_hiring_jobs (active);")
@@ -135,6 +136,21 @@ def backfill_comp_type() -> int:
             cur.execute("UPDATE mass_hiring_jobs SET comp_type=%s WHERE id=%s",
                         (comp_type(title, cat), _id))
     return len(rows)
+
+
+def backfill_auto_status() -> int:
+    """Set auto_status on every row from its source (recon map). The nightly collect
+    self-heals new rows; this one-shot labels the backlog."""
+    ensure_schema()
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT DISTINCT source FROM mass_hiring_jobs")
+        srcs = [r[0] for r in cur.fetchall()]
+        n = 0
+        for s in srcs:
+            cur.execute("UPDATE mass_hiring_jobs SET auto_status=%s WHERE source=%s",
+                        (auto_status(s), s))
+            n += cur.rowcount
+    return n
 
 
 # ---- classification (the two HARD RULES) ---------------------------------------
@@ -232,6 +248,25 @@ def comp_type(title: str, category: str | None) -> str:
     return "fixed"
 
 
+# ---- auto-apply feasibility per source (recon 2026-08-30) -----------------------
+# 'auto'         = our server can auto-submit unattended (no human, no residential IP).
+# 'needs_laptop' = automatable but needs the owner's laptop (residential IP / a human to
+#                  solve a captcha or WAF challenge) — mark + do later.
+# 'blocked'      = a mandatory human video/voice/VJT assessment gates the application.
+# unmapped (aggregators remotive/himalayas/remoteok, mixed ATS) -> 'unknown'.
+_AUTO_STATUS = {
+    "maximus": "auto", "alorica": "auto",
+    "kelly": "needs_laptop", "concentrix": "needs_laptop", "cvshealth": "needs_laptop",
+    "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
+    "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
+    "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
+}
+
+
+def auto_status(source: str) -> str:
+    return _AUTO_STATUS.get((source or "").lower(), "unknown")
+
+
 # ---- hourly pay -----------------------------------------------------------------
 _HOURS_PER_YEAR = 2080          # 40h * 52w
 
@@ -302,8 +337,9 @@ def _slug(name: str) -> str:
 
 # ---- writes --------------------------------------------------------------------
 _COLS = ("source", "source_id", "company", "company_key", "title", "category", "comp_type",
-         "location_raw", "us_eligible", "employment_type", "seniority", "salary_min", "salary_max",
-         "salary_raw", "apply_url", "posted_at", "first_seen", "last_seen", "active")
+         "auto_status", "location_raw", "us_eligible", "employment_type", "seniority",
+         "salary_min", "salary_max", "salary_raw", "apply_url", "posted_at", "first_seen",
+         "last_seen", "active")
 
 
 def upsert_jobs(rows: list[dict]) -> int:
@@ -342,7 +378,7 @@ def _mk_row(source, source_id, company, title, location, apply_url, *, salary_ra
     return {
         "source": source, "source_id": str(source_id), "company": company,
         "company_key": _slug(company), "title": title, "category": cat,
-        "comp_type": comp_type(title, cat),
+        "comp_type": comp_type(title, cat), "auto_status": auto_status(source),
         "location_raw": location, "us_eligible": us_eligible(location),
         "employment_type": employment_type, "seniority": seniority,
         "salary_min": salary_min, "salary_max": salary_max, "salary_raw": salary_raw,
@@ -1291,6 +1327,8 @@ if __name__ == "__main__":
         print(f"stats: {stats()}  ({time.time()-t:.1f}s)")
     elif "--backfill-comptype" in sys.argv:
         print(f"comp_type set on {backfill_comp_type()} rows")
+    elif "--backfill-autostatus" in sys.argv:
+        print(f"auto_status set on {backfill_auto_status()} rows")
     elif "--stats" in sys.argv:
         import json
         print(json.dumps(stats(), indent=2))

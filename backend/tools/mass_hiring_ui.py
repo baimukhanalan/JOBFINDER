@@ -89,6 +89,10 @@ _CSS = """
   cursor:pointer;white-space:nowrap;}
 .mh-fill:hover{filter:brightness(1.07);}
 .mh-fill:disabled{opacity:.6;cursor:default;}
+.mh-st{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;white-space:nowrap;}
+.mh-st.st-auto{background:#0f7b3e;color:#fff;}
+.mh-st.st-lap{background:#f5a623;color:#3a2a00;}
+.mh-st.st-blk{background:var(--panel-2);color:var(--ink-soft);border:1px solid var(--line);}
 .mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
@@ -146,6 +150,20 @@ def _pay_html(j: dict) -> str:
     return f'<span class="mh-pay" title="Ставка из вакансии">{rng}/ч</span>'
 
 
+_STATUS = {"auto": ("🤖 Авто", "st-auto", "Наш сервер подаёт автоматически, без человека"),
+           "needs_laptop": ("💻 Нужен ноут", "st-lap",
+                            "Автоматизируемо, но нужен твой ноут (резидентный IP / решить капчу)"),
+           "blocked": ("⛔ Ассессмент", "st-blk",
+                       "Обязательный человеческий видео/голос-ассессмент — авто невозможно")}
+
+
+def _status_badge(j: dict) -> str:
+    s = _STATUS.get(j.get("auto_status") or "")
+    if not s:
+        return ""
+    return f'<span class="mh-st {s[1]}" title="{_esc(s[2])}">{s[0]}</span>'
+
+
 def _job_row(j: dict) -> str:
     url = _esc(j.get("apply_url"))
     title = _esc(j.get("title"))
@@ -159,6 +177,7 @@ def _job_row(j: dict) -> str:
                 f'title="Заполнить форму автоматически (тест — ничего не отправляется)">Заполнить (тест)</button>')
     return (f'<div class="mh-job">{star}<a class="mh-jtitle" href="{url}" target="_blank" '
             f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_pay_html(j)}'
+            f'{_status_badge(j)}'
             f'<a class="mh-apply" href="{url}" target="_blank" rel="noopener">подать вручную →</a>{fill}</div>')
 
 

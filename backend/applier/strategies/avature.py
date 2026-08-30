@@ -377,6 +377,8 @@ class AvatureStrategy(ApplyStrategy):
     async def _fill_current_step(self, page, profile_form, cover_letter, facts):
         """Fill an EEO/voluntary/review step: decline demographics, tick required consent,
         and fill any ordinary matched fields the analyzer recognizes."""
+        await self._dismiss_cookie_banner(page)
+        name = (profile_form or {}).get("full_name") or (profile_form or {}).get("name") or ""
         for fn in (fill_demographics_decline, fill_demographic_checkboxes_decline,
                    fill_required_consent):
             try:
@@ -384,19 +386,15 @@ class AvatureStrategy(ApplyStrategy):
             except Exception:
                 pass
         await self._tick_required_checkboxes(page)
-        await self._decline_demographics(page)
-        # Voluntary Self-ID selects the shared decline helpers miss on Avature.
-        for substr, ans in (("armed forces", "No"), ("member of armed", "No"),
-                            ("gender", "not to disclose"), ("veteran status", "not")):
-            try:
-                await self._select_by_label(page, substr, ans)
-            except Exception:
-                pass
+        await self._decline_demographics(page, name)
         try:
             analysis = await analyze_page(page, profile_form, cover_letter, {}, facts or {})
             await fill_form(page, analysis)
         except Exception as exc:
             logger.debug("avature: step fill raised: %s", exc)
+        # fill_form can set "Do you choose to disclose? = Yes", which REVEALS the gender/race
+        # sub-fields only now — so decline AGAIN to catch anything it exposed.
+        await self._decline_demographics(page, name)
         # Job-specific screening questions (experience / education / language proficiency /
         # residence / internet) on the final step — answered deterministically & TRUTHFULLY
         # (the persona is located at the job's city and defined bilingual for bilingual roles).
@@ -407,6 +405,7 @@ class AvatureStrategy(ApplyStrategy):
 
     async def _answer_screeners(self, page: Page, facts) -> None:
         facts = facts or {}
+        await self._dismiss_cookie_banner(page)   # its banner overlaps step-3 fields
         await self._tick_acknowledge(page)
         try:
             fields = await page.evaluate(
@@ -454,6 +453,119 @@ class AvatureStrategy(ApplyStrategy):
             if not done:
                 await self._fill_select2(page, key, values or ["Native", "Fluent", "Advanced"],
                                          allow_first=is_prof)
+        # Yes/No (and multi-option) job screeners on the final step are RADIO groups, not
+        # selects — a whole bespoke "Job Screening Questions" block per posting. Answer them
+        # deterministically & truthfully from the same _screener_answer table.
+        await self._answer_radio_screeners(page, facts)
+
+    async def _dismiss_cookie_banner(self, page: Page) -> None:
+        """Close the cookie consent banner — it floats over the step-3 fields and intercepts
+        clicks on the top screeners (education select, first radios)."""
+        for name in ("Reject Optional Cookies", "Reject All", "Accept All Cookies",
+                     "Accept Cookies", "Accept All"):
+            try:
+                b = page.get_by_role("button", name=re.compile(re.escape(name), re.I))
+                if await b.count():
+                    await b.first.click(timeout=1500)
+                    await page.wait_for_timeout(250)
+                    return
+            except Exception:
+                continue
+
+    async def _answer_radio_screeners(self, page: Page, facts) -> None:
+        """Answer every UNANSWERED radio-group screener on the step with a truthful, backed
+        pick from _screener_answer (Yes/No availability + eligibility, or a multi-option
+        experience level). Leaves an unmatched group for the human rather than guessing."""
+        facts = facts or {}
+        try:
+            groups = await page.evaluate(
+                """()=>{const byName={};
+                  for(const r of document.querySelectorAll('input[type=radio]')){
+                    const nm=r.name||''; if(!nm) continue; (byName[nm]=byName[nm]||[]).push(r);}
+                  const out=[];
+                  for(const nm in byName){const rs=byName[nm];
+                    const opts=rs.map(r=>{const lab=r.id?document.querySelector('label[for="'+
+                        (window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]'):null;
+                      const t=(lab?lab.innerText:(r.closest('label')?r.closest('label').innerText:''))||'';
+                      return {value:r.value,text:t.trim().replace(/\\s+/g,' '),checked:r.checked};});
+                    // smallest ancestor holding every radio of the group...
+                    let box=rs[0].parentElement;
+                    while(box&&!rs.every(r=>box.contains(r))) box=box.parentElement;
+                    // ...then climb until the container text exceeds the option labels (i.e. it
+                    // now includes the QUESTION prompt, which lives in a sibling/parent node).
+                    const optLen=opts.map(o=>o.text).join(' ').replace(/\\s+/g,'').length;
+                    let g=0;
+                    while(box&&box.parentElement&&g<4){
+                      if((box.innerText||'').replace(/\\s+/g,'').length>optLen+10) break;
+                      box=box.parentElement; g++;}
+                    let qt=box?(box.innerText||''):'';
+                    for(const o of opts) if(o.text) qt=qt.split(o.text).join(' ');
+                    qt=qt.replace(/\\s+/g,' ').trim();
+                    out.push({name:nm,label:qt,answered:rs.some(r=>r.checked),
+                      required:rs.some(r=>r.required||r.getAttribute('aria-required')==='true'),
+                      options:opts.map(o=>({value:o.value,text:o.text}))});}
+                  return out;}""")
+        except Exception:
+            return
+        for g in groups:
+            if g.get("answered"):
+                continue
+            cands = self._screener_answer((g.get("label") or "").lower(), facts)
+            if not cands:
+                continue
+            opts = g.get("options") or []
+            picked = None
+            for c in cands:
+                cl = c.strip().lower()
+                for o in opts:
+                    if self._opt_match(cl, (o.get("text") or "").strip().lower()):
+                        picked = o
+                        break
+                if picked:
+                    break
+            if not picked:
+                continue
+            try:
+                await self._click_radio(page, g["name"], picked.get("value"))
+            except Exception:
+                pass
+
+    @staticmethod
+    def _opt_match(cand: str, opt: str) -> bool:
+        """Match a candidate answer to an option text. Short answers (yes/no/ged) need a word
+        boundary so 'No' never matches 'None'; longer answers ('1-3 years') use substring."""
+        if not cand or not opt:
+            return False
+        if cand == opt:
+            return True
+        if len(cand) <= 4:
+            return (opt.startswith(cand + " ") or opt.startswith(cand + ",")
+                    or (" " + cand + " ") in (" " + opt + " "))
+        return cand in opt or opt in cand
+
+    async def _click_radio(self, page: Page, name: str, value) -> bool:
+        found = await page.evaluate(
+            """([nm,val])=>{for(const r of document.querySelectorAll('input[type=radio]')){
+                if(r.name===nm && r.value===val){r.setAttribute('data-jfr','1');return true;}}
+              return false;}""", [name, value])
+        if not found:
+            return False
+        ok = True
+        try:
+            await page.check("input[data-jfr='1']", timeout=3000)
+        except Exception:
+            try:
+                await page.eval_on_selector(
+                    "input[data-jfr='1']",
+                    "e=>{e.checked=true;e.dispatchEvent(new Event('click',{bubbles:true}));"
+                    "e.dispatchEvent(new Event('change',{bubbles:true}));}")
+            except Exception:
+                ok = False
+        try:
+            await page.eval_on_selector("input[data-jfr='1']", "e=>e.removeAttribute('data-jfr')")
+        except Exception:
+            pass
+        return ok
 
     async def _pick_proficiency(self, page: Page, label_key: str, high: bool) -> bool:
         """Pick a language-proficiency option by RANK, not exact text: HIGH → the option matching
@@ -523,6 +635,17 @@ class AvatureStrategy(ApplyStrategy):
             return ["Yes"]
         if re.search(r"18 (years|and older)|older|authorized|eligible to work", t):
             return ["Yes"]
+        # Availability / eligibility screeners on the Compliance step (per-posting wording):
+        # a synthetic applicant DESIGNED to fit the job answers these affirmatively.
+        if re.search(r"seasonal|interested in (the |this )?(season|temporary|position|role|opportunity)", t):
+            return ["Yes"]
+        if re.search(r"\bcitizen(ship)?\b|u\.?s\.? citizen", t):
+            return ["Yes"]
+        if re.search(r"able to meet this requirement|do you meet this requirement|"
+                     r"meet (this|the) requirement|able to work|\bshift\b|overtime|"
+                     r"willing to obtain|obtain a[n]? .*(clearance|public trust)|"
+                     r"public trust|federal clearance|background (check|investigation)", t):
+            return ["Yes"]
         return None
 
     async def _tick_acknowledge(self, page: Page) -> None:
@@ -552,33 +675,64 @@ class AvatureStrategy(ApplyStrategy):
                 except Exception:
                     pass
 
-    async def _decline_demographics(self, page: Page) -> None:
-        """On an EEO / Voluntary Self-ID step, answer every UNANSWERED required demographic with a
-        decline: pick a 'choose not to disclose / prefer not / decline' RADIO, and tick the
-        'I am not a protected veteran' CHECKBOX — never claiming a protected characteristic."""
+    async def _decline_demographics(self, page: Page, name: str = "") -> None:
+        """On an EEO / Voluntary Self-ID step, decline every demographic without claiming a
+        protected characteristic: a 'do you choose to disclose / self-identify?' group -> No;
+        gender/race/disability/veteran RADIOS -> the decline option; demographic SELECTS
+        (race, Member of Armed Forces) -> the decline option else No; tick 'not a protected
+        veteran' / 'do not wish to answer' CHECKBOXES; and sign the disability form's name
+        field (a signature, not a protected characteristic). Idempotent — safe to run twice."""
+        # 1) radio groups: disclose-question -> No; otherwise pick the decline option
         try:
-            ids = await page.evaluate(
-                """()=>{const out={radios:[],checks:[]};
-                  const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want/i;
-                  const groups={};
-                  for(const r of document.querySelectorAll('input[type=radio]'))
-                    (groups[r.name]=groups[r.name]||[]).push(r);
+            rids = await page.evaluate(
+                """()=>{const out=[];const groups={};
+                  const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want|don't wish|wish not/i;
+                  const dq=/choose to disclose|wish to disclose|like to disclose|self-?identify|do you wish/i;
+                  const lab=r=>{const l=r.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]'):null;
+                    return ((l&&l.innerText)||(r.closest('label')?r.closest('label').innerText:'')||'').trim();};
+                  for(const r of document.querySelectorAll('input[type=radio]'))(groups[r.name]=groups[r.name]||[]).push(r);
                   for(const nm in groups){const rs=groups[nm];
-                    if(rs.some(r=>r.checked))continue;
-                    for(const r of rs){const l=document.querySelector('label[for="'+r.id+'"]');
-                      const t=(l&&l.innerText)||(r.closest('label')||{}).innerText||'';
-                      if(dec.test(t)&&r.id){out.radios.push(r.id);break;}}}
-                  for(const c of document.querySelectorAll('input[type=checkbox]')){
-                    if(c.checked||!c.id)continue;
-                    const l=document.querySelector('label[for="'+c.id+'"]');
-                    const t=(l&&l.innerText)||(c.closest('label')||{}).innerText||'';
-                    if(/not a protected veteran/i.test(t))out.checks.push(c.id);}
+                    let box=rs[0].parentElement;while(box&&!rs.every(r=>box.contains(r)))box=box.parentElement;
+                    const opts=rs.map(r=>({id:r.id,t:lab(r),checked:r.checked}));
+                    let qt=box?(box.innerText||''):'';for(const o of opts)if(o.t)qt=qt.split(o.t).join(' ');
+                    qt=qt.replace(/\\s+/g,' ').trim().toLowerCase();
+                    let pick=null;
+                    if(dq.test(qt)){const no=opts.find(o=>/^\\s*no\\b/i.test(o.t));if(no&&!no.checked)pick=no;}
+                    else if(!rs.some(r=>r.checked)){const d=opts.find(o=>dec.test(o.t));if(d)pick=d;}
+                    if(pick&&pick.id)out.push(pick.id);}
                   return out;}""")
         except Exception:
-            return
-        for eid in ids.get("radios", []) + ids.get("checks", []):
+            rids = []
+        # 2) demographic SELECTS -> decline option, else No / "I do not"
+        try:
+            await page.evaluate(
+                """()=>{const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want/i;
+                  const demo=/gender|race|ethnic|hispanic|latino|disabilit|veteran|armed forces|self-?identif|self-?classif|orientation|pronoun/i;
+                  for(const el of document.querySelectorAll('select:not([multiple])')){
+                    const cur=el.options[el.selectedIndex];
+                    if(el.value&&cur&&!/select an option|select a |please select/i.test(cur.text))continue;
+                    const l=el.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]'):null;
+                    let lt=((l&&l.innerText)||'');if(!lt){const b=el.closest('div');lt=b?(b.innerText||''):'';}lt=lt.toLowerCase();
+                    if(!demo.test(lt)&&![...el.options].some(o=>demo.test(o.text)))continue;
+                    const o=[...el.options].find(o=>o.value&&dec.test(o.text))
+                          ||[...el.options].find(o=>o.value&&/^\\s*no\\b/i.test(o.text))
+                          ||[...el.options].find(o=>o.value&&/i do not|not a /i.test(o.text));
+                    if(o){el.value=o.value;el.dispatchEvent(new Event('change',{bubbles:true}));}}}""")
+        except Exception:
+            pass
+        # 3) decline CHECKBOXES (not-a-veteran / do-not-wish-to-answer)
+        try:
+            cids = await page.evaluate(
+                """()=>{const out=[];for(const c of document.querySelectorAll('input[type=checkbox]')){
+                    if(c.checked||!c.id)continue;const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(c.id):c.id)+'"]');
+                    const t=((l&&l.innerText)||(c.closest('label')?c.closest('label').innerText:'')||'');
+                    if(/not a protected veteran|do not wish to answer|don't wish to answer|do not wish to self/i.test(t))out.push(c.id);}
+                  return out;}""")
+        except Exception:
+            cids = []
+        for eid in rids + cids:
             try:
-                await page.locator(f'[id="{eid}"]').check(force=True, timeout=2500)
+                await page.locator(f'[id="{eid}"]').check(force=True, timeout=2000)
             except Exception:
                 try:
                     await page.evaluate(
@@ -587,6 +741,17 @@ class AvatureStrategy(ApplyStrategy):
                         """e.dispatchEvent(new Event('change',{bubbles:true}));}}""", eid)
                 except Exception:
                     pass
+        # 4) sign the disability/EEO form's name field (a signature, not a self-ID)
+        if name:
+            try:
+                await page.evaluate(
+                    """(nm)=>{for(const inp of document.querySelectorAll('input[type=text],input:not([type])')){
+                        if(inp.value)continue;const l=inp.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(inp.id):inp.id)+'"]'):null;
+                        let lt=((l&&l.innerText)||'');if(!lt){const b=inp.closest('div');lt=b?(b.innerText||''):'';}lt=lt.toLowerCase();
+                        if(/your name|employee name|name of employee|signature|please enter your name|please type your name/.test(lt)){
+                          inp.value=nm;inp.dispatchEvent(new Event('input',{bubbles:true}));inp.dispatchEvent(new Event('change',{bubbles:true}));}}}""", name)
+            except Exception:
+                pass
 
     async def _advance_wizard(self, page, report, profile_form, cover_letter, facts):
         """Walk the multi-step wizard: click Continue while it advances (filling each new
@@ -598,8 +763,11 @@ class AvatureStrategy(ApplyStrategy):
             if btn is None:
                 break
             if kind == "submit":
-                # Record the true final-submit button so the co-pilot's gated auto-submit
-                # (or a human) uses it directly — never the wizard's Continue.
+                # The FINAL page (its primary button is Submit) is reached without a Continue,
+                # so its own fields were never filled by the post-advance _fill_current_step —
+                # fill them NOW (job screeners / EEO / demographics live on this last page too),
+                # then record the true final-submit button (never the wizard's Continue).
+                await self._fill_current_step(page, profile_form, cover_letter, facts)
                 report["submit_selector"] = (
                     "button.WizardButtonPrimary:has-text('Submit'), "
                     "button:has-text('Submit'), .WizardButtonPrimary")

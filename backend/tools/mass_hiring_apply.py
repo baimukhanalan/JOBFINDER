@@ -11,9 +11,27 @@ transmitted to the employer until we explicitly enable the live path.
 from __future__ import annotations
 
 import json
+import re
 
 from backend.tools import catalog_drafts, drafts_ui
 from backend.tools.catalog_drafts import PREFILL_ROOT
+
+# Maximus/BPO titles carry the work-location city+state in parens, e.g.
+# "CSR II Operations (Temporary, Remote Lawrence KS)" / "... Remote McAllen, TX)" /
+# "... (Remote - New York, NY)". Some of these jobs require residence within N miles of that
+# site (onsite equipment pickup), so the persona must be LOCATED there for the residence
+# screener to answer Yes truthfully-by-design.
+_TITLE_CITY_RE = re.compile(
+    r"[Rr]emote\s*[-–,]?\s*([A-Za-z][A-Za-z .'-]+?),?\s+([A-Z]{2})\b")
+
+
+def _city_from_title(title: str) -> str:
+    m = _TITLE_CITY_RE.search(title or "")
+    if not m:
+        return ""
+    city = m.group(1).strip(" .,-")
+    st = m.group(2).strip()
+    return f"{city}, {st}, United States"
 
 # Apply hosts that have a working auto-fill strategy on THIS board. Avature (Maximus) only
 # for now — the one mass-hiring ATS that completes without a live human captcha/assessment.
@@ -27,12 +45,16 @@ def is_supported(apply_url: str) -> bool:
 
 def _job_from_row(row: dict) -> dict:
     """Shape a mass_hiring_jobs row into the job dict synth_persona/generate_draft expect."""
+    # Prefer the concrete city+state named in the title (residence screeners need it); fall
+    # back to the raw location, then a bare US so _country_of still resolves United States.
+    location = (_city_from_title(row.get("title") or "")
+                or row.get("location_raw") or "United States")
     return {
         "title": row.get("title") or "",
         "company": row.get("company") or "",
         "company_key": row.get("company_key") or "",
         "description": "",                       # the board stores no JD body
-        "location": row.get("location_raw") or "United States",
+        "location": location,
         "regions": ["US"],                       # the board is US-only
         "ats": "avature",
         "external_id": str(row.get("source_id") or row.get("id") or ""),
@@ -79,6 +101,21 @@ def prepare(row: dict, gender: str | None = None) -> tuple[str, str]:
         pass
 
     cand = synth_persona(job, gender=gender)
+
+    # Force the persona to LIVE at the job's city/state (parsed from the title) so residence
+    # screeners ("do you reside within 75 miles of <site>?") are coherent — synth_persona only
+    # knows major cities, so a "Lawrence, KS" job would otherwise land the persona elsewhere.
+    place = _city_from_title(job["title"])
+    if place:
+        from backend.tools.synth_persona import _us_state_full
+        city, st_code = place.split(",")[0].strip(), place.split(",")[1].strip()
+        prof = cand["profile"]
+        prof["city"] = city
+        prof["state"] = _us_state_full(st_code) or prof.get("state") or ""
+        prof["location"] = f"{city}, {st_code}"
+        pi = (prof.get("resume") or {}).get("personal_info")
+        if isinstance(pi, dict):
+            pi["location"] = f"{city}, {st_code}"
 
     # live, deliverable @takhet.com mailbox + CRM registration (best-effort, never fatal) so
     # a Maximus "Application Complete" reply lands in a box the CRM shows.

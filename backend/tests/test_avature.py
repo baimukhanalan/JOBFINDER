@@ -59,3 +59,30 @@ def test_non_us_persona_has_no_state():
     p = _build_candidate({"full_name": "João Silva", "city": "São Paulo"}, "Brazil", _job())
     assert p["profile"]["state"] == ""
     assert p["profile"]["city"] == "São Paulo"
+
+
+# ---- step-3 radio screeners (job screening questions) -------------------------
+
+def test_screener_answer_availability_and_eligibility():
+    A = AvatureStrategy._screener_answer
+    # per-posting Compliance-step screeners a synthetic applicant answers affirmatively
+    assert A("are you interested in seasonal work? (2-4 months)", {}) == ["Yes"]
+    assert A("work an 8 hour shift between 7am-7pm cst. are you able to meet this requirement?", {}) == ["Yes"]
+    assert A("obtain a federal clearance (medium risk public trust). able to meet this requirement?", {}) == ["Yes"]
+    assert A("this position requires that you be a current u.s. citizen. do you meet this requirement?", {}) == ["Yes"]
+    assert A("do you reside within 75 miles of the maximus lawrence kansas location?", {}) == ["Yes"]
+    assert A("do you have a private and secure workspace away from others?", {}) == ["Yes"]
+    # a conflict/commitment screener is still truthfully No
+    assert A("do you foresee any commitment that would interfere with attendance?", {}) == ["No"]
+    # CSR experience is a multi-option, not Yes/No
+    exp = A("how much experience do you have as a tier i csr in a call center?", {})
+    assert exp and any("year" in c.lower() for c in exp)
+
+
+def test_opt_match_boundary():
+    m = AvatureStrategy._opt_match
+    assert m("no", "no") is True
+    assert m("no", "none") is False               # short answer needs a boundary
+    assert m("yes", "yes, my home internet is hardwired") is True
+    assert m("1-3 years", "1-3 years") is True
+    assert m("3-5 years", "i do not have any experience") is False

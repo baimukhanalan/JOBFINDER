@@ -427,3 +427,14 @@ def test_hourly_pay_falls_back_to_category_estimate():
     assert (lo, hi, est) == (15.0, 21.0, True)
     # a category with no estimate and no posted pay -> None
     assert mh.hourly_pay({"category": None}) is None
+
+
+# ---- mass_hiring_apply: work-city from the title (residence-screener coherence) ---
+
+def test_city_from_title():
+    from backend.tools import mass_hiring_apply as mha
+    assert mha._city_from_title("CSR II Operations (Temporary, Remote Lawrence KS)") == "Lawrence, KS, United States"
+    assert mha._city_from_title("CSR I Operations (Temporary, Remote McAllen, TX)") == "McAllen, TX, United States"
+    assert mha._city_from_title("Bilingual CSR (Remote - New York, NY)") == "New York, NY, United States"
+    assert mha._city_from_title("Fully Remote Customer Service Representative") == ""   # no city named
+    assert mha._city_from_title("") == ""

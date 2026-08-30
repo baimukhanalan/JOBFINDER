@@ -1157,6 +1157,27 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   upload, Bachelor's degree) fills and it reaches Submit without pressing it. NOTE Maximus real hire is
   still human-gated by a later assessment (the board stays a discovery surface); next auto-fill targets
   after Maximus = Oracle ORC (Alorica) + Workday (Centene/Cigna/CVS/Humana, partial reCAPTCHA).
+  **Full-wizard completion (2026-08-30, the first real submit revealed the gaps).** A real submit on
+  folderId=42174 CLICKED the final Submit but Maximus rejected it — the wizard's step-3 «Job Screening
+  Questions» + the EEO/Self-ID step were unanswered. Root causes + fixes in `strategies/avature.py`:
+  (1) the bespoke per-posting screeners are Yes/No **radio groups**, but `_answer_screeners` only handled
+  `<select>`/select2 — added `_answer_radio_screeners` (enumerates radio groups, extracts the QUESTION
+  prompt by climbing the DOM until the container text exceeds the option labels, then picks a truthful
+  answer via `_screener_answer`); extended `_screener_answer` with seasonal / «able to meet this
+  requirement» / shift / overtime / federal-clearance-obtain / U.S.-citizen → Yes. (2) `fill_form` set
+  «Do you choose to disclose? = Yes», REVEALING gender/race only AFTER the decline pass ran — so
+  `_fill_current_step` now declines demographics AGAIN after `fill_form`, and `_decline_demographics` was
+  widened to a disclose-question→No, demographic **SELECTS** (race, Member of Armed Forces → decline/No),
+  disability «do not wish to answer», and the disability-form **name signature**. (3) `_advance_wizard`
+  stopped at the final Submit page WITHOUT filling it (fills only ran post-Continue) — it now
+  `_fill_current_step`s the final page before recording the submit. Plus `mass_hiring_apply.prepare`
+  forces the persona to LIVE at the job's city (`_city_from_title` parses «Remote Lawrence KS» from the
+  title → `_us_state_full`) so the «reside within 75 miles» screener is truthful-by-design. **Verified via
+  dry-run (AVATURE_ADVANCE=1, dry_run=1): all 3 steps pass, every required field filled (education,
+  seasonal, shift, OT, clearance, CSR-experience=3-5y, citizen, internet/wired/workspace, 75-miles=Yes),
+  stops at the real Submit unclicked.** NB in dry-run `blocked:null` only means "not clicked" — the
+  SCREENSHOT is the ground truth for completeness. Tests: `test_avature.py` (screener_answer / opt_match),
+  `test_mass_hiring.py::test_city_from_title`.
   Live sources + their gotchas:
   - **Amazon (RE-DIAGNOSED 2026-08-28 — the earlier "0 = seasonal, not a bug" claim was WRONG and masked a
     real bug).** TWO bugs, EITHER of which zeroed it: (1) `result_limit=200` — the API rejects `>100` with

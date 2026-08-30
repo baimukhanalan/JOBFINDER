@@ -100,3 +100,42 @@ def test_msg_card_href_matches_raw_scheduling_url(tmp_path):
     assert url in hrefs, f"clean scheduling URL must be a rendered href, got {hrefs}"
     assert not any(h.startswith(url) and h != url for h in hrefs), \
         f"no href may append trailing junk to the URL, got {hrefs}"
+
+
+# --- HTML-only-link surfacing (2026-08-30) -----------------------------------------
+# Recruiter scheduling mail is multipart: the HTML part has <a href="URL">Share your
+# availability here</a> but the PLAIN alternative keeps only the anchor TEXT and drops
+# the URL. _msg_card prefers plain, so the link was invisible — the company link the
+# candidate "couldn't open". _extra_links_block surfaces the HTML link when plain has none.
+
+def test_html_links_extracted_and_unsubscribe_dropped():
+    html = ('<p>Please <a href="https://interview.gofasti.com/gofasti/i/ABC123">'
+            'share your availability here</a>.</p>'
+            '<a href="https://track.example.com/unsubscribe?u=1">Unsubscribe</a>')
+    links = mailcrm_ui._html_links(html)
+    urls = [u for u, _ in links]
+    assert "https://interview.gofasti.com/gofasti/i/ABC123" in urls
+    assert not any("unsubscribe" in u for u in urls)
+    assert links[0][1] == "share your availability here"  # anchor text kept as label
+
+
+def test_extra_links_block_only_when_plain_has_no_url():
+    m = {"html": '<a href="https://mloop.in/s/XYZ">Pick a time</a>'}
+    # plain body has NO url -> surface the HTML link
+    block = mailcrm_ui._extra_links_block(m, "Please pick a time that works for you.")
+    assert "https://mloop.in/s/XYZ" in block and "Ссылки из письма" in block
+    # plain body already has a url -> no block (would be noise)
+    assert mailcrm_ui._extra_links_block(m, "Book here: https://mloop.in/s/XYZ") == ""
+
+
+def test_msg_card_surfaces_scheduling_link_lost_from_plain():
+    m = {
+        "from_email": "recruiter@company.com", "from_name": "Recruiter",
+        "plain": "Hi Alex, This is a reminder. Share your availability here. Best, Team",
+        "html": '<p>Hi Alex, <a href="https://app.greenhouse.io/availability/6d0829b0">'
+                'Share your availability here</a></p>',
+        "kind": "interview", "date_ts": 0,
+    }
+    card = mailcrm_ui._msg_card(m, "Interview Availability")
+    assert 'href="https://app.greenhouse.io/availability/6d0829b0"' in card
+    assert 'target="_blank"' in card and "ml-link" in card

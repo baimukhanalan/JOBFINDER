@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from html import escape
+from html import escape, unescape
 from urllib.parse import urlencode
 
 _MONTHS = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
@@ -101,6 +101,46 @@ def _linkify(text: str) -> str:
                 break
         return f'<a href="{url}" target="_blank" rel="noopener">{url}</a>{trail}'
     return _URL_RE.sub(_repl, text)
+
+
+# Recruiter/ATS scheduling mail is multipart: the HTML part carries the real link inside an
+# <a href="…">Share your availability here</a>, but the PLAIN alternative keeps only the anchor
+# TEXT and drops the URL. We prefer the plain part (renders cleanly on iOS), so that link is lost.
+# _html_links pulls the http(s) anchors out of the HTML so they can be surfaced as a clickable
+# block whenever the plain body carries no URL of its own (the link-loss case).
+_A_TAG = _re.compile(r'<a\b[^>]*?href=(["\']?)(https?://[^"\'>\s]+)\1[^>]*>(.*?)</a>', _re.I | _re.S)
+_STRIP_TAGS = _re.compile(r'<[^>]+>')
+_LINK_SKIP = _re.compile(r'(unsubscribe|list-manage|/preferences|/privacy|email_preferences|opt[-_]?out)', _re.I)
+_HAS_URL = _re.compile(r'https?://', _re.I)
+
+
+def _html_links(html: str):
+    """[(url, label)] http(s) anchors from an HTML mail body — deduped, unsubscribe/footer noise
+    dropped, label from the anchor text (falls back to the URL)."""
+    out, seen = [], set()
+    for _q, url, inner in _A_TAG.findall(html or ""):
+        u = unescape(url)
+        if u in seen or _LINK_SKIP.search(u):
+            continue
+        seen.add(u)
+        label = unescape(_STRIP_TAGS.sub("", inner)).strip()
+        out.append((u, label or u))
+    return out
+
+
+def _extra_links_block(m: dict, plain_text: str) -> str:
+    """A clickable «Ссылки из письма» block — surfaced ONLY when the rendered plain body has no
+    URL of its own, so the scheduling/meeting link kept only in the HTML part is still reachable.
+    (When the plain body already has links, HTML footer/logo links would just be noise.)"""
+    if plain_text and _HAS_URL.search(plain_text):
+        return ""
+    links = _html_links(m.get("html") or "")
+    if not links:
+        return ""
+    items = "".join(
+        f'<a class="ml-link" href="{escape(u, quote=True)}" target="_blank" rel="noopener">'
+        f'{escape(lbl[:90])}</a>' for (u, lbl) in links[:12])
+    return f'<div class="msg-links"><div class="ml-hd">Ссылки из письма</div>{items}</div>'
 
 
 _BULLET = {"*", "•", "-", "·", "◦", "▪", "‣", "*"}
@@ -463,6 +503,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 /* modal/sheet open animation (the catalog modal keeps its own cm-pop; these are the
    shell compose/filter cards + the interview-assign panel, which had none). */
 .modal-card,.fm-card,.iv-modal-panel{animation:jfFadeIn .18s ease;}
+/* surfaced links from an HTML mail whose plain part dropped the URL (scheduling/meeting) */
+.msg-links{margin-top:10px;padding:10px 13px;background:var(--panel-2);border:1px solid var(--line);
+  border-radius:var(--r-sm);}
+.msg-links .ml-hd{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--ink-mute);margin-bottom:6px;}
+.msg-links .ml-link{display:block;color:var(--accent);text-decoration:none;font-weight:600;
+  padding:5px 0;word-break:break-word;min-height:22px;}
+.msg-links .ml-link:hover{text-decoration:underline;}
 @media (prefers-reduced-motion: reduce){
   *{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important;}
@@ -870,10 +918,18 @@ def _msg_card(m: dict, thread_subject: str = "") -> str:
     # matter how it's measured, and almost every recruiter/ATS email is multipart with plain text.
     plain = _clean_plain(m.get("plain") or "")
     if plain:
-        content = f'<div class="msg-content">{_linkify(escape(plain))}</div>'
+        content = (f'<div class="msg-content">{_linkify(escape(plain))}</div>'
+                   + _extra_links_block(m, plain))
     elif m.get("html"):
-        content = (f'<div class="mail-frame-wrap"><iframe class="mail-frame" sandbox="allow-same-origin" '
-                   f'srcdoc="{escape(m["html"])}"></iframe></div>')
+        # allow-popups(+escape) so a link inside the sandboxed body actually opens (a bare
+        # allow-same-origin iframe swallows every click); <base target="_blank"> makes them
+        # open in a new tab instead of trying to navigate the dashboard itself. Still no
+        # allow-scripts — the untrusted mail HTML never runs JS.
+        html_src = '<base target="_blank">' + (m.get("html") or "")
+        content = (f'<div class="mail-frame-wrap"><iframe class="mail-frame" '
+                   f'sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox" '
+                   f'srcdoc="{escape(html_src)}"></iframe></div>'
+                   + _extra_links_block(m, ""))
     else:
         content = '<div class="msg-content">(пустое письмо)</div>'
     # reply icon right in the sender row (Gmail-style) — replies to THIS message's other party

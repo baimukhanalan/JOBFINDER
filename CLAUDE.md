@@ -337,6 +337,21 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   URL emails rendered a broken href (8 of them scheduling/Zoom). Only the dashboard restarts (the open/
   thread view re-parses from disk). Tests: `test_mailcrm_linkify.py` (real-shape Greenhouse-schedule/
   Calendly/gem/Zoom URLs, entity + query-string preservation, end-to-end via `_msg_card`).
+- **HTML-only scheduling links were unreachable — surface them (`mailcrm_ui`, 2026-08-30).** Owner: the
+  links companies send couldn't be opened. Root cause: recruiter/ATS scheduling mail is multipart and
+  `_msg_card` PREFERS the plain part (renders cleanly on iOS), but the plain alternative keeps only the
+  anchor TEXT ("Share your availability here") and DROPS the URL — the real link lives only in the HTML
+  `<a href>`. So the rendered plain view had no clickable link at all (verified: 25/25 sampled scheduling
+  mails were plain+html with 0 URLs in plain). Secondary bug: the HTML-only fallback iframe was
+  `sandbox="allow-same-origin"` — a bare sandbox SWALLOWS every link click. Fix: `_html_links` pulls the
+  http(s) anchors out of the HTML part; `_extra_links_block` renders them as a clickable «Ссылки из
+  письма» block, but ONLY when the plain body carries no URL of its own (else HTML footer/logo links are
+  noise) — unsubscribe/preferences links are dropped. The iframe fallback now uses
+  `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"` + a prepended
+  `<base target="_blank">` so its links open in a new tab (still NO allow-scripts — untrusted mail HTML
+  never runs JS). Verified live: gofasti/HeyMilo `interview.gofasti.com/...` + ModernLoop `mloop.in/s/...`
+  links now surface + click. Only the dashboard restarts (open/thread view re-parses from disk). Tests:
+  `test_mailcrm_linkify.py` (`_html_links`/`_extra_links_block` + end-to-end plain-drops-URL case).
 - **`no_button` on a "fully-filled" GH/Ashby job = a DEAD posting, not a detection bug (2026-08-26).**
   ~11% of bulk GH/Ashby applies failed with `submit_reason=no_button` on forms that looked complete
   (`unfilled=[]`). Live-DOM investigation proved these are postings **GONE at the ATS by bulk-run time**

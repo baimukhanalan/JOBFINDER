@@ -86,3 +86,13 @@ def test_opt_match_boundary():
     assert m("yes", "yes, my home internet is hardwired") is True
     assert m("1-3 years", "1-3 years") is True
     assert m("3-5 years", "i do not have any experience") is False
+
+
+def test_screener_answer_supervisor_experience():
+    A = AvatureStrategy._screener_answer
+    # the Supervisor - Call Center role asks leadership experience, not customer-service
+    vals = A("how much supervisor or leadership experience do you have?", {})
+    assert vals and any("year" in v.lower() for v in vals)
+    # the CSR customer-service experience question still resolves
+    vals2 = A("how much experience do you have in a customer service environment as a tier i csr?", {})
+    assert vals2 and vals2[0] == "3-5 years"

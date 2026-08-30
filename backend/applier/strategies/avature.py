@@ -627,6 +627,13 @@ class AvatureStrategy(ApplyStrategy):
         if re.search(r"experience.*(customer service|call center|contact center|retail|customer)", t):
             return ["3-5 years", "1-3 years", "3+ years", "1-2 years", "More than", "2 years",
                     "1 year", "Yes"]
+        # supervisor/leadership/management/general "years of experience" screeners (e.g. the
+        # Supervisor - Call Center role's "How much supervisor or leadership experience…")
+        if re.search(r"(supervisor|leadership|management|managerial|team lead)\s*(or [a-z]+ )?experience|"
+                     r"experience.*(supervisor|leadership|manage|team lead)|"
+                     r"how (much|many years?).*experience|years of experience", t):
+            return ["1-3 years", "3-5 years", "1-2 years", "2 years", "1 year", "More than",
+                    "4-5 years", "6+ years", "Yes"]
         if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
             return ["Yes"]
         if re.search(r"commitment|interfere|foresee|conflict|impact.*attendance", t):

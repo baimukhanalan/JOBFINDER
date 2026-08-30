@@ -42,11 +42,14 @@ def _health_ok(port: int, timeout: float = 2.0) -> bool:
         return False
 
 
-def _spawn_worker(port: int):
+def _spawn_worker(port: int, extra_env: dict | None = None):
     """Launch one headless co-pilot on `port`. Inherits the parent's env+groups (so the
-    dashboard's `mail` group carries over for Maildir reads). Returns the Popen or None."""
+    dashboard's `mail` group carries over for Maildir reads). `extra_env` overlays extra
+    variables (e.g. AVATURE_ADVANCE=1 for the mass-hiring lane). Returns the Popen or None."""
     env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
     env["COPILOT_HEADLESS"] = "1"
+    if extra_env:
+        env.update({k: str(v) for k, v in extra_env.items()})
     cmd = (f"cd {_REPO} && exec /usr/bin/python3 -m uvicorn backend.copilot:app "
            f"--host 127.0.0.1 --port {port} --log-level warning")
     try:
@@ -72,15 +75,16 @@ def _wait_healthy(ports: list[int], timeout: float = 90.0) -> list[int]:
     return ready
 
 
-def start_workers(n: int, wait: float = 90.0) -> list[int]:
+def start_workers(n: int, wait: float = 90.0, extra_env: dict | None = None) -> list[int]:
     """Tear down any existing pool, spawn `n` fresh headless workers, and return the ports
-    that came up healthy within `wait` seconds (may be fewer than n if some failed)."""
+    that came up healthy within `wait` seconds (may be fewer than n if some failed).
+    `extra_env` overlays env vars on every worker (e.g. AVATURE_ADVANCE for mass-hiring)."""
     stop_workers()
     n = max(1, min(int(n), _MAX_WORKERS))
     procs, ports = [], []
     for i in range(n):
         port = _BASE_PORT + i
-        p = _spawn_worker(port)
+        p = _spawn_worker(port, extra_env=extra_env)
         if p is not None:
             procs.append(p)
             ports.append(port)

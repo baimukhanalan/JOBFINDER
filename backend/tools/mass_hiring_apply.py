@@ -160,3 +160,84 @@ def prepare(row: dict, gender: str | None = None) -> tuple[str, str]:
         json.dumps({"profile": cand["profile"], "facts": cand.get("facts") or {}},
                    ensure_ascii=False), encoding="utf-8")
     return profile_id, jobid
+
+
+# ---- PARALLEL lane (headless worker pool) --------------------------------------
+# Avature (Maximus) submits are independent, so run them across N headless co-pilot workers
+# (bulk_pool, ports 8110+) instead of one-at-a-time on the single noVNC co-pilot. Each worker
+# is its own browser (clean session per job), so this is faster AND avoids the shared-login
+# pollution entirely. Workers get AVATURE_ADVANCE=1 so the wizard walks to the real Submit.
+def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
+                       dry_run: bool = True, per_job_timeout: int = 360,
+                       progress_path: str | None = None) -> list[dict]:
+    """Apply to every row_id across a fresh headless worker pool. Returns a result per job.
+    dry_run=True fills but never submits (safe). Writes progress to progress_path after each
+    job if given. Tears the pool down on exit."""
+    import queue as _queue
+    import threading
+
+    import httpx
+
+    from backend.tools import bulk_pool, mass_hiring
+
+    row_ids = list(row_ids)
+    if not row_ids:
+        return []
+    n = max(1, min(int(workers), len(row_ids)))
+    ports = bulk_pool.start_workers(n, wait=90, extra_env={"AVATURE_ADVANCE": "1"})
+    if not ports:
+        raise RuntimeError("no headless workers came up")
+
+    q: _queue.Queue = _queue.Queue()
+    for rid in row_ids:
+        q.put(rid)
+    results: list[dict] = []
+    lock = threading.Lock()
+
+    def _flush():
+        if not progress_path:
+            return
+        conf = sum(1 for r in results if r.get("confirmed"))
+        with open(progress_path, "w") as f:
+            json.dump({"done": len(results), "total": len(row_ids), "confirmed": conf,
+                       "workers": len(ports), "dry_run": dry_run, "results": results}, f, indent=2)
+
+    def _worker(port: int):
+        while True:
+            try:
+                rid = q.get_nowait()
+            except _queue.Empty:
+                return
+            row = mass_hiring.job_by_id(rid)
+            rec: dict = {"id": rid, "title": (row or {}).get("title"), "port": port}
+            try:
+                pid, jobid = prepare(row, gender=gender)
+                rec["profile"] = pid
+                httpx.post(f"http://127.0.0.1:{port}/release", data={"profile": pid}, timeout=10)
+                r = httpx.post(f"http://127.0.0.1:{port}/load",
+                               data={"jobid": jobid, "profile": pid,
+                                     "dry_run": "1" if dry_run else "0", "wait_submit": "1"},
+                               timeout=per_job_timeout)
+                res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+                sr = res.get("submit_result") or {}
+                rec.update({"http": r.status_code, "clicked": sr.get("clicked"),
+                            "confirmed": sr.get("confirmed"), "blocked": sr.get("blocked"),
+                            "post_url": sr.get("post_url"), "filled": res.get("filled"),
+                            "unfilled": res.get("unfilled")})
+            except Exception as e:
+                rec["error"] = f"{type(e).__name__}: {e}"[:200]
+            with lock:
+                results.append(rec)
+                _flush()
+            q.task_done()
+
+    threads = [threading.Thread(target=_worker, args=(p,), daemon=True) for p in ports]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    try:
+        bulk_pool.stop_workers()
+    except Exception:
+        pass
+    return results

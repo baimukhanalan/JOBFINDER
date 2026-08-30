@@ -440,6 +440,30 @@ button.primary:hover{background:var(--accent-deep);}
 }
 /* NB: the catalog's own .cat-search is hidden inside catalog_ui _CAT_CSS, whose
    later .cat-search{display:flex} would otherwise override a rule placed here. */
+
+/* ---- premium micro-interactions — subtle, consistent across every shell page.
+   Centralised here (the shell _CSS is included on every page via _page) so buttons,
+   cards, links and rows animate the same everywhere without per-file duplication. ---- */
+html{scroll-behavior:smooth;}
+a,button,.hbtn,.primary,.ghost,.iconbtn,.filter-btn,.fbtn,.chip,.tag,.pill,.seg-nav a,.nav a,.fab-compose{
+  transition:background-color .15s ease,border-color .15s ease,color .15s ease,box-shadow .15s ease,transform .12s ease;}
+button:not(:disabled):hover,.hbtn:hover,.primary:hover,.ghost:hover,.iconbtn:hover,.filter-btn:hover,.fbtn:hover{
+  transform:translateY(-1px);box-shadow:0 4px 14px -6px rgba(15,23,42,.20);}
+button:not(:disabled):active,.hbtn:active,.primary:active,.ghost:active,.iconbtn:active,.filter-btn:active,.fbtn:active{
+  transform:translateY(0);box-shadow:none;}
+.fab-compose:hover{transform:translateY(-2px);box-shadow:0 12px 26px -8px rgba(12,71,194,.42);}
+.mbxrow,.cg-card,.cat-card,.u-user,.iv-cell,.mh-card,.tcard,.capp-card{
+  transition:border-color .15s ease,box-shadow .18s ease,transform .18s ease;}
+.cg-card:hover,.cat-card:hover,.u-user:hover,.mh-card:hover,.tcard:hover,.capp-card:hover{
+  border-color:var(--accent);box-shadow:0 6px 20px -10px rgba(15,23,42,.22);}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,
+.hbtn:focus-visible,.iconbtn:focus-visible,.filter-btn:focus-visible,[role=button]:focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px;}
+@keyframes jfFadeIn{from{opacity:0;transform:translateY(8px) scale(.985);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important;}
+}
 """
 
 _FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
@@ -488,7 +512,7 @@ _LOGO_IMG = "<img src='/static/logo.svg' alt='JobFinder' class='jf-logo'>"
 # every page's <head> / end-of-body; the assets are on the dash_auth public allowlist.
 _HEAD_PWA = (
     "<link rel='manifest' href='/static/manifest.webmanifest'>"
-    "<meta name='theme-color' content='#1b46c2'>"
+    "<meta name='theme-color' content='#0c47c2'>"
     "<meta name='apple-mobile-web-app-capable' content='yes'>"
     "<meta name='apple-mobile-web-app-status-bar-style' content='default'>"
     "<meta name='apple-mobile-web-app-title' content='JobFinder'>"

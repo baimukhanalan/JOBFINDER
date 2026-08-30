@@ -49,10 +49,20 @@ _LOGIN_CSS = """
   border-radius:var(--r);padding:24px;}
 .login-wrap label{display:block;margin-top:14px;font-weight:600;font-size:13px;
   color:var(--ink-soft);}
-.login-wrap input{width:100%;}
-.login-wrap button{width:100%;margin-top:18px;}
-.login-wrap .err{background:#fce8e6;color:var(--danger);border-radius:var(--r-sm);
-  padding:9px 14px;margin-bottom:16px;font-weight:600;font-size:13px;}
+.login-wrap input{width:100%;min-height:44px;
+  transition:border-color .15s ease,box-shadow .15s ease;}
+.login-wrap button{width:100%;margin-top:18px;min-height:44px;
+  transition:background-color .15s ease,transform .1s ease;}
+.login-wrap button:active{transform:translateY(1px);}
+.login-wrap .err{background:#fce8e6;color:#a50e0e;border-radius:var(--r-sm);
+  padding:9px 14px;margin-bottom:16px;font-weight:600;font-size:13px;
+  animation:ivErrIn .18s ease;}
+@keyframes ivErrIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+/* This page's <main> reserves no room for the shell's .gm-topbar pill / .fab-compose
+   FAB (neither rendered here), so reset the inherited mobile padding reservations; a
+   bare same-specificity rule after mailcrm_ui._CSS wins by source order. */
+@media(max-width:760px){main{padding-top:16px;padding-bottom:16px;}}
+@media(max-height:500px){.login-wrap{margin:16px auto 0;}}
 """
 
 
@@ -67,16 +77,16 @@ def _doc(body: str, title: str = "Вход") -> str:
 
 
 def login_page(error: str = "") -> str:
-    err = f'<div class="err">{escape(error)}</div>' if error else ""
+    err = f'<div class="err" role="alert">{escape(error)}</div>' if error else ""
     body = (
         '<div class="login-wrap"><div class="brand">' + mailcrm_ui._LOGO_IMG + '</div>'
         '<h1>Вход</h1>'
         f'{err}'
         '<div class="card"><form method="post" action="/login">'
-        '<label>Логин</label>'
-        '<input name="login" autocomplete="username" autofocus required>'
-        '<label>Пароль</label>'
-        '<input name="password" type="password" autocomplete="current-password" required>'
+        '<label for="login">Логин</label>'
+        '<input id="login" name="login" autocomplete="username" autofocus required>'
+        '<label for="password">Пароль</label>'
+        '<input id="password" name="password" type="password" autocomplete="current-password" required>'
         '<button class="primary" type="submit">Войти</button>'
         '</form></div></div>')
     return _doc(body)

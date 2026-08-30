@@ -875,13 +875,15 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
 
 
 @app.get("/mass-hiring", response_class=HTMLResponse)
-def mass_hiring_page(category: str = ""):
+def mass_hiring_page(category: str = "", comp: str = ""):
     """«Mass Hiring» tab — REMOTE-only, mass-hiring US jobs the human applies to by hand.
     Reads the SEPARATE mass_hiring_jobs table; fully decoupled from the auto-apply /catalog
-    engine (no auto-submit here — every job links out to its own apply page)."""
+    engine (no auto-submit here — every job links out to its own apply page).
+    `comp=fixed` filters to stable (non-commission) roles — the ★ set."""
     from backend.tools import mass_hiring_ui
     try:
-        return HTMLResponse(mass_hiring_ui.render_page(category=category or None))
+        return HTMLResponse(mass_hiring_ui.render_page(category=category or None,
+                                                       comp=comp or None))
     except Exception as exc:
         return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
                             f"<p style='font-family:sans-serif;padding:16px'>Mass Hiring недоступен: {escape(str(exc))}</p>",

@@ -118,9 +118,23 @@ def ensure_schema() -> None:
           active       BOOLEAN DEFAULT TRUE,
           UNIQUE (source, source_id)
         );""")
+        cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS comp_type TEXT;")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_company ON mass_hiring_jobs (company_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_cat ON mass_hiring_jobs (category);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_active ON mass_hiring_jobs (active);")
+
+
+def backfill_comp_type() -> int:
+    """Set comp_type on every existing row from its title/category (deterministic).
+    The nightly collect self-heals new rows; this one-shot labels the backlog."""
+    ensure_schema()
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT id, title, category FROM mass_hiring_jobs")
+        rows = cur.fetchall()
+        for _id, title, cat in rows:
+            cur.execute("UPDATE mass_hiring_jobs SET comp_type=%s WHERE id=%s",
+                        (comp_type(title, cat), _id))
+    return len(rows)
 
 
 # ---- classification (the two HARD RULES) ---------------------------------------
@@ -203,6 +217,66 @@ def categorize(title: str) -> str | None:
     return None
 
 
+# ---- compensation type: stable fixed pay vs commission / percent-of-sales ------
+# What the human cares about: a stable hourly/salary W-2 role (⭐) vs one paid on
+# commission (SDR/BDR/telesales, "base + commission", OTE). Deterministic, title-driven.
+_COMMISSION_RE = re.compile(
+    r"\bcommission\b|\bote\b|uncapped|base ?\+ ?commission|per[- ]sale|\bquota\b|"
+    r"commission[- ]only|100% ?commission|1099 ?commission|\bdraw\b", re.I)
+
+
+def comp_type(title: str, category: str | None) -> str:
+    """'variable' for commission / percent-of-sales roles, else 'fixed' (stable pay)."""
+    if category == "sales" or _COMMISSION_RE.search(title or ""):
+        return "variable"
+    return "fixed"
+
+
+# ---- hourly pay -----------------------------------------------------------------
+_HOURS_PER_YEAR = 2080          # 40h * 52w
+
+# Rough hourly bands for US remote entry mass-hiring roles, by category — a LABELED
+# estimate shown only when a posting discloses no pay (most don't). Real posted pay wins.
+_HOURLY_EST = {
+    "customer_support": (15, 21),
+    "operations":       (16, 22),
+    "virtual_assistant": (13, 20),
+    "data_entry":       (13, 18),
+    "recruiting":       (20, 28),
+    "sales":            (16, 22),
+}
+
+
+def to_hourly(v) -> float | None:
+    """Normalize a stored pay figure to an hourly rate by magnitude:
+    <200 already hourly · <10000 monthly · else annual."""
+    try:
+        v = float(v or 0)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    if v < 200:
+        return v
+    if v < 10000:
+        return v * 12 / _HOURS_PER_YEAR
+    return v / _HOURS_PER_YEAR
+
+
+def hourly_pay(job: dict) -> tuple[float, float, bool] | None:
+    """Return (lo, hi, is_estimate) hourly for a job, or None. Posted pay (normalized to
+    hourly) wins; otherwise the category estimate."""
+    lo = to_hourly(job.get("salary_min"))
+    hi = to_hourly(job.get("salary_max"))
+    if lo or hi:
+        lo, hi = (lo or hi), (hi or lo)
+        return (min(lo, hi), max(lo, hi), False)
+    est = _HOURLY_EST.get(job.get("category"))
+    if est:
+        return (float(est[0]), float(est[1]), True)
+    return None
+
+
 # US-eligibility from a free-text remote-location field. Accept when US is allowed (explicitly, or
 # via anywhere/worldwide/global/americas/north america). Reject region-locked non-US.
 _US_OK = re.compile(r"\b(usa?|united states|u\.s\.?|north america|americas|anywhere|worldwide|"
@@ -227,9 +301,9 @@ def _slug(name: str) -> str:
 
 
 # ---- writes --------------------------------------------------------------------
-_COLS = ("source", "source_id", "company", "company_key", "title", "category", "location_raw",
-         "us_eligible", "employment_type", "seniority", "salary_min", "salary_max", "salary_raw",
-         "apply_url", "posted_at", "first_seen", "last_seen", "active")
+_COLS = ("source", "source_id", "company", "company_key", "title", "category", "comp_type",
+         "location_raw", "us_eligible", "employment_type", "seniority", "salary_min", "salary_max",
+         "salary_raw", "apply_url", "posted_at", "first_seen", "last_seen", "active")
 
 
 def upsert_jobs(rows: list[dict]) -> int:
@@ -268,6 +342,7 @@ def _mk_row(source, source_id, company, title, location, apply_url, *, salary_ra
     return {
         "source": source, "source_id": str(source_id), "company": company,
         "company_key": _slug(company), "title": title, "category": cat,
+        "comp_type": comp_type(title, cat),
         "location_raw": location, "us_eligible": us_eligible(location),
         "employment_type": employment_type, "seniority": seniority,
         "salary_min": salary_min, "salary_max": salary_max, "salary_raw": salary_raw,
@@ -1126,7 +1201,8 @@ def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:
 
 
 # ---- reads (for the tab) -------------------------------------------------------
-def companies(category: str | None = None, limit: int = 100) -> list[dict]:
+def companies(category: str | None = None, limit: int = 100,
+              comp: str | None = None) -> list[dict]:
     """Companies ranked by mass_hiring_score: active remote mass-hiring reqs + posting velocity."""
     week = int(time.time()) - 7 * 86400
     where = ["active=TRUE"]
@@ -1134,6 +1210,9 @@ def companies(category: str | None = None, limit: int = 100) -> list[dict]:
     if category:
         where.append("category=%s")
         args.append(category)
+    if comp:
+        where.append("comp_type=%s")
+        args.append(comp)
     w = " AND ".join(where)
     with _cur() as cur:
         cur.execute(f"""
@@ -1157,12 +1236,15 @@ def companies(category: str | None = None, limit: int = 100) -> list[dict]:
         return out
 
 
-def jobs(company_key: str | None = None, category: str | None = None, limit: int = 100) -> list[dict]:
+def jobs(company_key: str | None = None, category: str | None = None, limit: int = 100,
+         comp: str | None = None) -> list[dict]:
     where, args = ["active=TRUE"], []
     if company_key:
         where.append("company_key=%s"); args.append(company_key)
     if category:
         where.append("category=%s"); args.append(category)
+    if comp:
+        where.append("comp_type=%s"); args.append(comp)
     with _cur() as cur:
         cur.execute(f"SELECT * FROM mass_hiring_jobs WHERE {' AND '.join(where)} "
                     f"ORDER BY posted_at DESC NULLS LAST LIMIT %s", args + [limit])
@@ -1199,6 +1281,8 @@ if __name__ == "__main__":
         res = collect()
         print("collect:", res)
         print(f"stats: {stats()}  ({time.time()-t:.1f}s)")
+    elif "--backfill-comptype" in sys.argv:
+        print(f"comp_type set on {backfill_comp_type()} rows")
     elif "--stats" in sys.argv:
         import json
         print(json.dumps(stats(), indent=2))

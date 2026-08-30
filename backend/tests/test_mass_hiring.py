@@ -377,3 +377,53 @@ def test_insurance_rep_categorizes_but_bare_rep_does_not():
     assert mh.categorize("Legal Rep") is None
     # senior guard still wins
     assert mh.categorize("Senior Insurance Rep") is None
+
+
+# ---- comp_type: stable fixed pay vs commission / percent-of-sales --------------
+
+def test_comp_type_sales_category_is_variable():
+    assert mh.comp_type("Sales Development Representative", "sales") == "variable"
+    assert mh.comp_type("Inside Sales Associate", "sales") == "variable"
+
+
+def test_comp_type_commission_title_is_variable_even_in_cs():
+    # a commission signal in the title flips it regardless of category
+    assert mh.comp_type("Customer Service Rep (base + commission)", "customer_support") == "variable"
+    assert mh.comp_type("Retention Specialist — uncapped OTE", "customer_support") == "variable"
+    assert mh.comp_type("Telesales Associate, 100% Commission", "customer_support") == "variable"
+
+
+def test_comp_type_plain_support_is_fixed():
+    assert mh.comp_type("Customer Service Representative - Remote", "customer_support") == "fixed"
+    assert mh.comp_type("Care Coordinator", "customer_support") == "fixed"
+    assert mh.comp_type("Virtual Assistant", "virtual_assistant") == "fixed"
+    # "commission" as a substring of an unrelated word must not trip it (word-boundary)
+    assert mh.comp_type("Commissions Analyst Support", "operations") == "fixed"
+
+
+# ---- hourly pay normalization + estimate fallback ------------------------------
+
+def test_to_hourly_normalizes_by_magnitude():
+    assert mh.to_hourly(18) == 18                       # already hourly
+    assert mh.to_hourly(0) is None
+    assert mh.to_hourly(None) is None
+    # monthly (Job Duck ~$1150/mo) -> hourly
+    assert abs(mh.to_hourly(1150) - 1150 * 12 / 2080) < 1e-6
+    # annual ($46,990) -> hourly ~$22.6
+    assert abs(mh.to_hourly(46990) - 46990 / 2080) < 1e-6
+
+
+def test_hourly_pay_prefers_posted_over_estimate():
+    lo, hi, est = mh.hourly_pay({"category": "customer_support", "salary_min": 18, "salary_max": 24})
+    assert (lo, hi, est) == (18.0, 24.0, False)
+    # annual posted range normalizes to hourly, still not an estimate
+    lo, hi, est = mh.hourly_pay({"category": "customer_support",
+                                 "salary_min": 46990, "salary_max": 71385})
+    assert est is False and lo < hi and 20 < lo < 40
+
+
+def test_hourly_pay_falls_back_to_category_estimate():
+    lo, hi, est = mh.hourly_pay({"category": "customer_support"})
+    assert (lo, hi, est) == (15.0, 21.0, True)
+    # a category with no estimate and no posted pay -> None
+    assert mh.hourly_pay({"category": None}) is None

@@ -1125,7 +1125,21 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   two HARD RULES: `_is_remote`/location must be REMOTE, `categorize()` must return a mass-hiring ENTRY
   bucket (drops senior/dev via `_NOT_MASS`/`_DEV`). `categorize`'s healthcare/insurance bucket matches bare
   `rep` (not only `representative`) so "Licensed Health Insurance Rep" survives (guarded so "Sales Rep"/
-  "Legal Rep" don't leak). Live sources + their gotchas:
+  "Legal Rep" don't leak).
+  **⭐ Stable-comp marker + hourly pay (2026-08-30, owner focus).** Owner wants to target STABLE fixed-pay
+  roles (not commission) and auto-apply to them first. `comp_type(title, category)` → `variable` iff
+  `category=='sales'` OR the title carries a commission signal (`_COMMISSION_RE`: commission / OTE /
+  uncapped / base+commission / per-sale / quota / draw), else `fixed`. Stored in a new `comp_type` column
+  (`ensure_schema` `ADD COLUMN IF NOT EXISTS`; set in `_mk_row`, so the nightly collect self-heals; one-shot
+  `--backfill-comptype` labelled the backlog — live: 260 fixed / 5 variable). `companies()`/`jobs()` take a
+  `comp=` filter; the route `GET /mass-hiring?comp=fixed` + a gold «★ Стабильная зп» chip show only stable
+  roles. Each fixed job renders a gold ★ (`.mh-star`) + an HOURLY rate next to it (`_pay_html`): the POSTED
+  pay normalized to hourly (`to_hourly` — magnitude-based: <200 hourly · <10000 monthly · else annual,
+  2080 h/yr) shown green, or a LABELED category estimate «≈$15–21/ч оц.» (`_HOURLY_EST`) when no pay is
+  posted (~94% of rows disclose none). Neutral RU labels (no stack disclosure). Only the dashboard restarts.
+  Tests: `test_mass_hiring.py` (comp_type / to_hourly / hourly_pay). **Auto-apply on these = Phase 2, next:
+  start with Maximus/Avature (the one stable-comp ATS that submits end-to-end without captcha).**
+  Live sources + their gotchas:
   - **Amazon (RE-DIAGNOSED 2026-08-28 — the earlier "0 = seasonal, not a bug" claim was WRONG and masked a
     real bug).** TWO bugs, EITHER of which zeroed it: (1) `result_limit=200` — the API rejects `>100` with
     `{"error":...,"hits":0,"jobs":null}`, so `_amazon_row` never even ran → **0 on every query**; (2) `is_us`

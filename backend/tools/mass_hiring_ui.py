@@ -52,6 +52,12 @@ _CSS = """
 .mh-chip{border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600;
   color:var(--ink-soft);text-decoration:none;background:var(--panel);white-space:nowrap;}
 .mh-chip.on{background:var(--accent,#2f6fed);border-color:var(--accent,#2f6fed);color:#fff;}
+.mh-chip-star.on{background:#f5a623;border-color:#f5a623;color:#fff;}
+.mh-star{flex:0 0 auto;color:#f5a623;font-size:15px;line-height:1;margin-right:5px;
+  text-shadow:0 1px 3px rgba(245,166,35,.45);}
+.mh-pay{font-size:12.5px;font-weight:700;color:#0f7b3e;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.mh-pay.est{color:var(--ink-soft);font-weight:600;}
+.mh-est-t{font-size:10px;font-weight:600;opacity:.65;}
 .mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
@@ -92,22 +98,37 @@ details[open] .mh-caret{transform:rotate(90deg);}
 """
 
 
+def _fmt_rate(x: float) -> str:
+    return f"${x:.0f}" if abs(x - round(x)) < 0.5 else f"${x:.1f}"
+
+
+def _pay_html(j: dict) -> str:
+    """Hourly pay next to the job: real posted rate (green) or a labeled estimate (muted)."""
+    hp = mass_hiring.hourly_pay(j)
+    if not hp:
+        return ""
+    lo, hi, est = hp
+    rng = _fmt_rate(lo) if abs(lo - hi) < 0.5 else f"{_fmt_rate(lo)}–{_fmt_rate(hi)[1:]}"
+    if est:
+        return (f'<span class="mh-pay est" title="Оценка по типу роли — точную ставку '
+                f'смотри в вакансии">≈{rng}/ч <span class="mh-est-t">оц.</span></span>')
+    return f'<span class="mh-pay" title="Ставка из вакансии">{rng}/ч</span>'
+
+
 def _job_row(j: dict) -> str:
     url = _esc(j.get("apply_url"))
     title = _esc(j.get("title"))
     loc = _esc(j.get("location_raw") or "Remote")
-    sal = ""
-    if j.get("salary_min") or j.get("salary_max"):
-        lo, hi = j.get("salary_min") or 0, j.get("salary_max") or 0
-        sal = f' · <span class="mh-jloc">${lo:,}–${hi:,}</span>' if lo and hi else ""
-    return (f'<div class="mh-job"><a class="mh-jtitle" href="{url}" target="_blank" '
-            f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{sal}'
+    star = ('<span class="mh-star" title="Стабильная оплата (не комиссия)">★</span>'
+            if j.get("comp_type") != "variable" else "")
+    return (f'<div class="mh-job">{star}<a class="mh-jtitle" href="{url}" target="_blank" '
+            f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_pay_html(j)}'
             f'<a class="mh-apply" href="{url}" target="_blank" rel="noopener">подать вручную →</a></div>')
 
 
-def _company_card(c: dict, category: str | None) -> str:
+def _company_card(c: dict, category: str | None, comp: str | None = None) -> str:
     key = c.get("company_key")
-    js = mass_hiring.jobs(company_key=key, category=category, limit=60)
+    js = mass_hiring.jobs(company_key=key, category=category, limit=60, comp=comp)
     src = {j.get("source") for j in js}
     src_tag = "".join(f'<span class="mh-src">{_SRC_LABEL.get(s, s)}</span>' for s in sorted(src))
     score = int(c.get("mass_hiring_score") or 0)
@@ -158,26 +179,42 @@ def _everify_panel(limit: int = 40) -> str:
         return ""
 
 
-def render_page(category: str | None = None) -> str:
+def _qs(category: str | None, comp: str | None) -> str:
+    parts = []
+    if category:
+        parts.append(f"category={category}")
+    if comp:
+        parts.append(f"comp={comp}")
+    return ("?" + "&".join(parts)) if parts else ""
+
+
+def render_page(category: str | None = None, comp: str | None = None) -> str:
     st = mass_hiring.stats()
-    cos = mass_hiring.companies(category=category or None, limit=200)
-    # category chips
-    chips = [('<a class="mh-chip {on}" href="/mass-hiring">Все</a>').format(on="" if category else "on")]
+    cos = mass_hiring.companies(category=category or None, limit=200, comp=comp or None)
+    # category chips (preserve the active comp filter)
+    chips = [f'<a class="mh-chip {"" if category else "on"}" '
+             f'href="/mass-hiring{_qs(None, comp)}">Все</a>']
     for k, lbl in mass_hiring.CATEGORY_LABELS.items():
         n = st["by_category"].get(k, 0)
         if not n and k != category:
             continue
         on = "on" if category == k else ""
-        chips.append(f'<a class="mh-chip {on}" href="/mass-hiring?category={k}">{lbl} · {n}</a>')
+        chips.append(f'<a class="mh-chip {on}" href="/mass-hiring{_qs(k, comp)}">{lbl} · {n}</a>')
+    # stable-comp toggle (★) — preserve the active category
+    stable_on = "on" if comp == "fixed" else ""
+    stable_href = _qs(category, None if comp == "fixed" else "fixed")
+    chips.append(f'<a class="mh-chip mh-chip-star {stable_on}" '
+                 f'href="/mass-hiring{stable_href}">★ Стабильная зп</a>')
 
-    body = "".join(_company_card(c, category or None) for c in cos) or \
+    body = "".join(_company_card(c, category or None, comp or None) for c in cos) or \
         ('<div class="mh-empty">Пока пусто. Нажми «Обновить», чтобы собрать вакансии '
          'из источников (Conduent / Alorica / Himalayas / …).</div>')
 
     head = (
         f'<div class="mh-wrap">{_CSS}'
         f'<div class="mh-head"><div><h1>Mass Hiring</h1>'
-        f'<p class="mh-sub">Remote · US · масс-хайринг — подаёшься вручную (бот сюда не подаёт)</p></div>'
+        f'<p class="mh-sub">Remote · US · масс-хайринг — подаёшься вручную (бот сюда не подаёт)<br>'
+        f'<span style="color:#f5a623">★</span> — стабильная оплата (не комиссия) · ставка «оц.» — оценка по типу роли</p></div>'
         f'<div class="mh-meta">{st["active"]} вакансий · {st["companies"]} компаний<br>'
         f'обновлено {_ago(st.get("last_collected", 0))}'
         f'<form method="post" action="/mass-hiring/collect" style="margin-top:8px">'

@@ -412,6 +412,14 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   whole-phrase keywords (Remote timezone `doesn't fit that requirement`, impact `to not move forward`,
   Stripe `set up a time to chat with you over the phone`→interview, `no longer considering applicants`,
   `decided not to progress`, `excited to move you forward`→interview).
+  **New `code` kind (2026-08-30):** the ATS "Security code for your application to X" verification
+  emails (~3511, half of `other`) now classify as `code` — a NEW `KEYWORD_KINDS` entry (LAST, so any
+  real signal wins first) with a `_KIND` tag «🔑 Код», a `🔑 Коды` funnel/filter chip (mailcrm_ui
+  `_stages`, candidates `_FUNNEL`), and a stage in `mail_db._STAGE_RANK`/`_FURTHEST_STAGE_SQL` just
+  above `other`. **The point: `other` now means genuinely UNCLASSIFIED** — a small review queue where a
+  real misclassification is visible instead of buried under code noise. `stats.py` is untouched (its
+  `_rank` gives an unknown kind −1, below `other`, so `code` never becomes an "outcome"). Bumped
+  `CLASSIFIER_VERSION`. Restart dash + indexer, then `reclassify_existing()`.
 - **Merged Кандидаты screen — the primary tab, a candidate-grouped inbox (2026-08-29).** «Инбокс» `/mail`
   and «Кандидаты» were showing the same mail two ways, so they were merged into ONE Gmail-style surface at
   `/mail/candidates` (`tools/candidates_inbox.py`, rendered via `mailcrm_ui._page("candidates", …)`): one

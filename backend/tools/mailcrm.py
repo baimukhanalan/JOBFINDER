@@ -40,9 +40,14 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-08-24-editable-keywords-v1"
+CLASSIFIER_VERSION = "2026-08-30-code-kind-v2"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
-KEYWORD_KINDS = ("offer", "rejection", "interview", "action_needed", "ack")
+# `code` is a transactional bucket for the ATS "here is your security/verification code"
+# emails (Greenhouse's "Security code for your application to X", ~half of what used to be
+# `other`). It is LAST so any real signal (offer/rejection/interview/action/ack) wins first;
+# a bare code email matches none of those. Splitting it out keeps `other` = genuinely
+# UNCLASSIFIED, so a real misclassification is visible instead of buried under code noise.
+KEYWORD_KINDS = ("offer", "rejection", "interview", "action_needed", "ack", "code")
 DEFAULT_KEYWORDS = {
     # NOTE: matching is plain SUBSTRING (casefold) over subject+body, priority
     # offer>rejection>interview>ack. Phrases must be recruiter-specific enough that
@@ -113,6 +118,13 @@ DEFAULT_KEYWORDS = {
         "отклик принят", "отклик получен", "отклик отправлен",
         "заявка принята", "заявка получена",
         "ваша заявка на рассмотрении", "ваша заявка рассматривается",
+    ],
+    "code": [
+        "security code for your application", "your security code",
+        "copy and paste this code", "verification code", "your verification code",
+        "confirmation code", "one-time passcode", "one-time password",
+        "your login code", "your access code", "enter the code below",
+        "код подтверждения", "проверочный код", "одноразовый код",
     ],
 }
 _KEYWORDS_CACHE: dict[str, Any] = {"mtime": None, "rules": None}
@@ -520,7 +532,7 @@ def _scan_messages(mailbox: str | None = None, q: str = "",
             kind = classify(subj, full_text)
             if stage == "sent" and not outbound:
                 continue
-            if stage in ("ack", "interview", "offer", "rejection") \
+            if stage in ("ack", "interview", "offer", "rejection", "action_needed", "code") \
                     and (outbound or kind != stage):
                 continue
             rows.append({

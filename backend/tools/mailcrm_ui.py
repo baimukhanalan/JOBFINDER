@@ -18,6 +18,7 @@ _KIND = {
     "rejection": ("✕", "Отказ", "#d93025", "#fce8e6"),
     "action_needed": ("⚠️", "Действие нужно", "#b06000", "#feefc3"),
     "ack": ("•", "Принято", "#5f6368", "#f1f3f4"),
+    "code": ("🔑", "Код", "#5f6368", "#f1f3f4"),
     "other": ("✉", "", "#80868b", "#f1f3f4"),
 }
 
@@ -784,7 +785,7 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
                ("action_needed", "⚠️ Действие"),
                ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ"),
-               ("other", "📁 Прочее")]
+               ("code", "🔑 Коды"), ("other", "📁 Прочее")]
     def _href(key: str) -> str:
         params = {}
         if key:

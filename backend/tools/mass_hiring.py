@@ -1251,6 +1251,14 @@ def jobs(company_key: str | None = None, category: str | None = None, limit: int
         return [dict(r) for r in cur.fetchall()]
 
 
+def job_by_id(row_id: int) -> dict | None:
+    """A single mass_hiring_jobs row by primary key (for the auto-fill lane)."""
+    with _cur() as cur:
+        cur.execute("SELECT * FROM mass_hiring_jobs WHERE id=%s", (row_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
+
+
 def stats() -> dict:
     with _cur() as cur:
         cur.execute("SELECT count(*) n, count(*) FILTER (WHERE active) act, "

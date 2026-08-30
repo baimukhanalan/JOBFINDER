@@ -1137,8 +1137,26 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   pay normalized to hourly (`to_hourly` — magnitude-based: <200 hourly · <10000 monthly · else annual,
   2080 h/yr) shown green, or a LABELED category estimate «≈$15–21/ч оц.» (`_HOURLY_EST`) when no pay is
   posted (~94% of rows disclose none). Neutral RU labels (no stack disclosure). Only the dashboard restarts.
-  Tests: `test_mass_hiring.py` (comp_type / to_hourly / hourly_pay). **Auto-apply on these = Phase 2, next:
-  start with Maximus/Avature (the one stable-comp ATS that submits end-to-end without captcha).**
+  Tests: `test_mass_hiring.py` (comp_type / to_hourly / hourly_pay).
+  **Auto-fill lane — Maximus/Avature, DRY-RUN pilot (`tools/mass_hiring_apply.py`, 2026-08-30).** Phase 2:
+  auto-apply to the STABLE roles, starting with the one mass-hiring ATS that completes without a live
+  captcha — **Maximus (Avature)**. `mass_hiring_apply.prepare(row, gender)` reuses the /catalog building
+  blocks (`synth_persona` → `catalog_drafts.generate_draft` → `drafts_ui.render_resume_pdf`) but reads a
+  `mass_hiring_jobs` ROW (not `job_catalog`) and writes the co-pilot prefill dir under a distinct
+  **`mh_<id>`** jobid namespace (`_job_from_row` shapes the row: regions=['US'], description='', ats=avature,
+  url=apply_url). The co-pilot `/load` picks `AvatureStrategy` by URL (`maximus.avature.net`), fills, and —
+  because the dashboard drives it with **`dry_run=1`** — STOPS at the real Submit button WITHOUT clicking
+  (nothing reaches the employer). Dashboard: `_do_mh_fill` + `POST /mass-hiring/{id}/fill` (background) +
+  `GET /mass-hiring/{id}/fill_status`, gated by `_MH_FILL_DRYRUN=True` (a module flag — flip to False, or
+  gate by env, ONLY after the dry-run is signed off; that switch is the one thing that makes it transmit
+  PII + create the account on the final Submit). Board renders a blue «Заполнить (тест)» button ONLY on
+  `avature.net` rows (`mass_hiring_ui._job_row` + `_JS.mhFill` polls fill_status + opens noVNC). Only the
+  dashboard restarts; the co-pilot (8102) must be up. **Verified live 2026-08-30** (dry-run on Maximus
+  folderId=42174): filled 18 / unfilled 0 / review_items [] / `would_click:true, clicked:false` — the whole
+  form (identity, password×2, Terms, phone, US/Denver/Colorado/ZIP, English, all Yes/No screeners, résumé
+  upload, Bachelor's degree) fills and it reaches Submit without pressing it. NOTE Maximus real hire is
+  still human-gated by a later assessment (the board stays a discovery surface); next auto-fill targets
+  after Maximus = Oracle ORC (Alorica) + Workday (Centene/Cigna/CVS/Humana, partial reCAPTCHA).
   Live sources + their gotchas:
   - **Amazon (RE-DIAGNOSED 2026-08-28 — the earlier "0 = seasonal, not a bug" claim was WRONG and masked a
     real bug).** TWO bugs, EITHER of which zeroed it: (1) `result_limit=200` — the API rejects `>100` with

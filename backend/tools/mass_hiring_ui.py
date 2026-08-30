@@ -19,6 +19,32 @@ _SEG_LABEL = {"staffing": "Кадровые / аутсорсинг", "government
               "nonprofit": "НКО", "general": "Крупный работодатель"}
 
 
+_JS = """
+<script>
+async function mhFill(id, btn){
+  if(!id) return;
+  btn.disabled = true; btn.textContent = 'Готовлю…';
+  try{
+    const r = await fetch('/mass-hiring/' + id + '/fill', {method:'POST'});
+    const j = await r.json();
+    if(j.novnc) window.open(j.novnc, '_blank', 'noopener');
+    btn.textContent = 'Заполняется — смотри в окне';
+    mhPoll(id, btn);
+  }catch(e){ btn.textContent = 'Ошибка'; btn.disabled = false; }
+}
+async function mhPoll(id, btn){
+  try{
+    const r = await fetch('/mass-hiring/' + id + '/fill_status');
+    const j = await r.json();
+    if(j.state === 'done'){ btn.textContent = j.dry_run ? 'Заполнено (тест) ✓' : 'Подано ✓'; return; }
+    if(j.state === 'error'){ btn.textContent = 'Ошибка: ' + (j.error || ''); btn.disabled = false; return; }
+    setTimeout(function(){ mhPoll(id, btn); }, 3000);
+  }catch(e){ setTimeout(function(){ mhPoll(id, btn); }, 5000); }
+}
+</script>
+"""
+
+
 def _esc(s) -> str:
     return html.escape(str(s or ""))
 
@@ -58,6 +84,11 @@ _CSS = """
 .mh-pay{font-size:12.5px;font-weight:700;color:#0f7b3e;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .mh-pay.est{color:var(--ink-soft);font-weight:600;}
 .mh-est-t{font-size:10px;font-weight:600;opacity:.65;}
+.mh-fill{margin-left:8px;border:1px solid var(--accent,#2f6fed);background:var(--accent,#2f6fed);
+  color:#fff;border-radius:8px;padding:5px 11px;font:inherit;font-size:12px;font-weight:700;
+  cursor:pointer;white-space:nowrap;}
+.mh-fill:hover{filter:brightness(1.07);}
+.mh-fill:disabled{opacity:.6;cursor:default;}
 .mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
@@ -121,9 +152,14 @@ def _job_row(j: dict) -> str:
     loc = _esc(j.get("location_raw") or "Remote")
     star = ('<span class="mh-star" title="Стабильная оплата (не комиссия)">★</span>'
             if j.get("comp_type") != "variable" else "")
+    # Auto-fill (dry-run) is supported only where we have a working strategy — Avature (Maximus).
+    fill = ""
+    if "avature.net" in (j.get("apply_url") or "").lower():
+        fill = (f'<button class="mh-fill" type="button" onclick="mhFill({int(j.get("id") or 0)},this)" '
+                f'title="Заполнить форму автоматически (тест — ничего не отправляется)">Заполнить (тест)</button>')
     return (f'<div class="mh-job">{star}<a class="mh-jtitle" href="{url}" target="_blank" '
             f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_pay_html(j)}'
-            f'<a class="mh-apply" href="{url}" target="_blank" rel="noopener">подать вручную →</a></div>')
+            f'<a class="mh-apply" href="{url}" target="_blank" rel="noopener">подать вручную →</a>{fill}</div>')
 
 
 def _company_card(c: dict, category: str | None, comp: str | None = None) -> str:
@@ -221,5 +257,5 @@ def render_page(category: str | None = None, comp: str | None = None) -> str:
         f'<button class="mh-refresh" type="submit">↻ Обновить</button></form></div></div>'
         f'<div class="mh-chips">{"".join(chips)}</div>'
         f'{_everify_panel()}'
-        f'{body}</div>')
+        f'{body}</div>{_JS}')
     return mailcrm_ui._page("masshiring", head)

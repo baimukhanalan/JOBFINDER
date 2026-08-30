@@ -1019,6 +1019,95 @@ def catalog_fill_status(job_id: int):
     return JSONResponse(_FILL_JOBS.get(job_id, {"state": "idle"}))
 
 
+# ---- Mass-hiring auto-fill lane (Maximus/Avature pilot) --------------------
+# Fills a mass_hiring_jobs posting in the shared co-pilot browser (watch in noVNC).
+# DRY-RUN ONLY for now: dry_run=1 → the strategy fills but NEVER clicks Submit, so nothing
+# is transmitted to the employer. Only Avature (Maximus) has a working strategy on this board.
+_MH_FILL: dict[int, dict] = {}
+_MH_FILL_DRYRUN = True   # flip to False (or gate by env) after the dry-run is verified
+
+
+def _do_mh_fill(row_id: int, gender: str | None) -> None:
+    import httpx
+
+    from backend.tools import mass_hiring, mass_hiring_apply
+    try:
+        row = mass_hiring.job_by_id(row_id)
+        if not row:
+            _MH_FILL[row_id] = {"state": "error", "error": "job not found"}
+            return
+        if not mass_hiring_apply.is_supported(row.get("apply_url", "")):
+            _MH_FILL[row_id] = {"state": "error",
+                                "error": "автозаполнение для этого источника пока не поддержано"}
+            return
+        pid, jid = mass_hiring_apply.prepare(row, gender=gender)
+    except Exception as exc:
+        _MH_FILL[row_id] = {"state": "error", "error": str(exc)[:200]}
+        return
+    _MH_FILL[row_id] = {"state": "running", "phase": "filling", "profile": pid,
+                        "dry_run": _MH_FILL_DRYRUN, "novnc": _NOVNC_URL}
+    load_data = {"jobid": jid, "profile": pid}
+    if _MH_FILL_DRYRUN:
+        load_data["dry_run"] = "1"
+    try:
+        from backend.tools import proxy_pool
+        px = proxy_pool.next_proxy()
+    except Exception:
+        px = None
+    if px and px.get("server"):
+        load_data["proxy_server"] = px["server"]
+        if px.get("username"):
+            load_data["proxy_username"] = px["username"]
+            load_data["proxy_password"] = px.get("password") or ""
+    try:
+        httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
+        r = httpx.post("http://127.0.0.1:8102/load", data=load_data, timeout=300)
+        res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+    except Exception as exc:
+        _MH_FILL[row_id] = {"state": "error", "error": f"co-pilot: {exc}"[:200],
+                            "novnc": _NOVNC_URL}
+        return
+    if r.status_code != 200:
+        _MH_FILL[row_id] = {"state": "error", "error": res.get("error", "co-pilot load failed"),
+                            "novnc": _NOVNC_URL}
+        return
+    _MH_FILL[row_id] = {"state": "done", "dry_run": _MH_FILL_DRYRUN, "novnc": _NOVNC_URL,
+                        "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+                        "unfilled_list": res.get("unfilled_list"),
+                        "submit": res.get("submit_result"),
+                        "company": res.get("company"), "title": res.get("title")}
+
+
+@app.post("/mass-hiring/{row_id}/fill")
+def mass_hiring_fill(row_id: int, gender: str = Form("")):
+    """Start a mass-hiring auto-fill (Maximus/Avature) in the shared co-pilot browser and
+    return immediately (poll /mass-hiring/{id}/fill_status). DRY-RUN — fills but does not
+    submit; watch it in noVNC."""
+    import threading
+    g = gender if gender in ("male", "female") else None
+    st = _MH_FILL.get(row_id)
+    if not (st and st.get("state") == "running"):
+        _MH_FILL[row_id] = {"state": "running", "phase": "generating", "novnc": _NOVNC_URL}
+        # Point the co-pilot at the apply URL immediately so noVNC shows the right job while
+        # the persona/résumé generate in the background thread below (best-effort).
+        try:
+            import httpx
+
+            from backend.tools import mass_hiring
+            row = mass_hiring.job_by_id(row_id)
+            if row and row.get("apply_url"):
+                httpx.post("http://127.0.0.1:8102/goto", data={"url": row["apply_url"]}, timeout=30)
+        except Exception:
+            pass
+        threading.Thread(target=_do_mh_fill, args=(row_id, g), daemon=True).start()
+    return JSONResponse({"started": True, "dry_run": _MH_FILL_DRYRUN, "novnc": _NOVNC_URL})
+
+
+@app.get("/mass-hiring/{row_id}/fill_status")
+def mass_hiring_fill_status(row_id: int):
+    return JSONResponse(_MH_FILL.get(row_id, {"state": "idle"}))
+
+
 # ---- Bulk "apply to all" ---------------------------------------------------
 # The co-pilot has ONE shared headful browser, so a bulk run is a SEQUENTIAL queue
 # (one job filled+submitted at a time), never parallel. Only one bulk run at a time.

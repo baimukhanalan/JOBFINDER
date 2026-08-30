@@ -626,8 +626,19 @@ class AvatureStrategy(ApplyStrategy):
     def _screener_answer(t: str, facts: dict):
         """Deterministic, truthful answer candidates for a job screener question (lowercased
         label). Returns an ordered list of option-text candidates, or None to leave it."""
-        if re.search(r"acknowledge|i certify|i attest", t):
-            return None                                   # handled by _tick_acknowledge
+        if re.search(r"acknowledge|i certif|certifying|attest|accuracy and complete", t):
+            # Usually a checkbox (_tick_acknowledge handles it); on some forms it's a SELECT
+            # ("Select an option") — pick the affirmative certification option.
+            return ["I acknowledge", "I certify", "I agree", "I understand", "I accept",
+                    "Acknowledge", "Yes"]
+        # A bilingual-role Yes/No screener ("Are you able to speak, read, and translate in
+        # <lang> and English?"). The synth persona is DESIGNED to fit the bilingual role
+        # (owner policy — same as the Spanish-bilingual design), so answer Yes. MUST come
+        # before the english/spanish proficiency patterns (which return a scale, not Yes/No).
+        if re.search(r"able to (speak|read|write|translate|converse)|"
+                     r"(speak|read|write|translate)\b.{0,30}(and|,|/).{0,30}(read|write|translate|english)|"
+                     r"fluent in .+ and english|bilingual in|proficient in .+ and english", t):
+            return ["Yes"]
         if re.search(r"spanish", t):
             return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
                     else ["None", "No proficiency", "Basic", "Beginner", "Limited"])
@@ -649,9 +660,11 @@ class AvatureStrategy(ApplyStrategy):
         # Lead 4-5y (consistent with a supervisor-since-2022 + senior-CSR résumé), then higher.
         if re.search(r"(supervisor|leadership|management|managerial|team lead)\s*(or [a-z]+ )?experience|"
                      r"experience.*(supervisor|leadership|manage|team lead)|"
-                     r"how (much|many years?).*experience|years of experience", t):
-            return ["4-5 years", "5+ years", "6+ years", "3-5 years", "5 years", "More than",
-                    "1-3 years", "Yes"]
+                     r"how (much|many years?).*experience|years of experience|total years", t):
+            # strongest-first, broad tiers so a "total years of work experience" select (which
+            # may use 5-10 / 10+ buckets) also resolves; persona résumé shows ~8 yrs.
+            return ["5+ years", "5-10 years", "6-10 years", "10+ years", "4-5 years", "6+ years",
+                    "3-5 years", "5 years", "8 years", "More than", "10 or more", "1-3 years", "Yes"]
         if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
             return ["Yes"]
         if re.search(r"commitment|interfere|foresee|conflict|impact.*attendance", t):

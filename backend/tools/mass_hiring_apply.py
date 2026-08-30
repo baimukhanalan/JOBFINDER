@@ -231,13 +231,18 @@ def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                 _flush()
             q.task_done()
 
-    threads = [threading.Thread(target=_worker, args=(p,), daemon=True) for p in ports]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
     try:
-        bulk_pool.stop_workers()
-    except Exception:
-        pass
-    return results
+        threads = [threading.Thread(target=_worker, args=(p,), daemon=True) for p in ports]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return results
+    finally:
+        # ALWAYS tear the pool down (on normal finish, an exception, OR a KeyboardInterrupt/
+        # SIGINT) so headless workers never orphan. A hard SIGTERM to the parent still needs
+        # the caller's own signal handler (the runner installs one).
+        try:
+            bulk_pool.stop_workers()
+        except Exception:
+            pass

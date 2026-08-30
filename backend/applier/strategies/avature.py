@@ -87,6 +87,11 @@ class AvatureStrategy(ApplyStrategy):
             await page.goto(f"{base}/careers/Register?folderId={m.group(1)}",
                             wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2500)
+            # Dismiss the cookie banner NOW — BEFORE any field is filled. Dismissing it
+            # AFTER base.prefill fills identity re-renders/resets step 1 and wipes those
+            # fields (incident 2026-08-30: 8 identity fields read back empty). Doing it here
+            # (on the fresh form) also stops it intercepting the later Continue/Submit clicks.
+            await self._dismiss_cookie_banner(page)
         except Exception as exc:
             logger.debug("avature: register nav failed: %s", exc)
 
@@ -138,6 +143,8 @@ class AvatureStrategy(ApplyStrategy):
     )
 
     async def _fill_avature_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
+        # (cookie banner is already dismissed in open_form BEFORE the fill — dismissing it
+        # here, after base.prefill filled identity, would reset step 1 and wipe those fields.)
         await self._fill_passwords(page)
         await self._tick_required_checkboxes(page)
         for substr, ans in self._SCREENERS:
@@ -166,10 +173,14 @@ class AvatureStrategy(ApplyStrategy):
         except Exception:
             pass
         try:
-            # strict (allow_first=False): only pick skills that actually exist in the taxonomy,
-            # never a spurious first result like ".NET Framework" for a CSR persona.
-            await self._fill_select2(page, "skills", ["Communication", "Data Entry"],
-                                     allow_first=False)
+            # A REQUIRED Skills select2 (present on the NY Maximus forms) blocks the wizard
+            # advance if left empty, so give it a broad CSR-relevant list and, as a last
+            # resort, accept the first result (allow_first=True) — any CSR skill beats a
+            # blocked submit; the taxonomy here is CSR-oriented so the first hit is sensible.
+            await self._fill_select2(page, "skills",
+                                     ["Customer Service", "Communication", "Data Entry",
+                                      "Microsoft Office", "Call Center", "Telephone", "Typing"],
+                                     allow_first=True)
         except Exception:
             pass
 
@@ -783,6 +794,10 @@ class AvatureStrategy(ApplyStrategy):
         ever clicking it. If a Continue click does NOT advance (Avature validation blocked
         it because a required field is still empty), stop and leave the gaps in `unfilled`."""
         for _ in range(6):
+            # The cookie banner floats over the bottom action bar and can INTERCEPT the
+            # Continue/Submit click (so the wizard never advances and we fall back to the
+            # generic button) — dismiss it before every step's button.
+            await self._dismiss_cookie_banner(page)
             btn, kind = await self._primary_button(page)
             if btn is None:
                 break

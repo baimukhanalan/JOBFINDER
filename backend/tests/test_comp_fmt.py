@@ -17,6 +17,27 @@ def test_fmt_money():
     assert comp_fmt.fmt_money(-5) == ""
 
 
+def test_fmt_money_currency():
+    assert comp_fmt.fmt_money(35000, "GBP") == "£35k"
+    assert comp_fmt.fmt_money(120000, "EUR") == "€120k"
+    assert comp_fmt.fmt_money(90000, "CAD") == "C$90k"
+    assert comp_fmt.fmt_money(125000, "USD") == "$125k"
+    assert comp_fmt.fmt_money(125000, None) == "$125k"  # missing currency -> $
+
+
+def test_posted_uses_its_own_currency():
+    html = comp_fmt.comp_html({"comp_min": 35000, "comp_max": 49000, "comp_currency": "GBP"})
+    assert "£35k–£49k" in html and "$" not in html
+
+
+def test_cleared_posted_falls_back_to_estimate():
+    # a job whose (garbage) posted pay was nulled shows the estimate, not an empty line
+    html = comp_fmt.comp_html({"comp_min": None, "comp_max": None,
+                               "est_base_min": 110000, "est_base_max": 140000,
+                               "est_total_min": 150000, "est_total_max": 200000})
+    assert "по вакансии" not in html and "$110k–$140k" in html and "оценка" in html
+
+
 def test_money_range():
     assert comp_fmt.money_range(120000, 160000) == "$120k–$160k"
     assert comp_fmt.money_range(100000, 100000) == "$100k"   # collapse equal ends

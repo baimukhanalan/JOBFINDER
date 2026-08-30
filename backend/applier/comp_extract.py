@@ -17,7 +17,9 @@ import re
 
 _NUM = r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d{1,3}(?:\.\d+)?\s?[kK]|\d{1,7}(?:\.\d+)?)"
 _SYM = r"[$£€]"
-_RANGE = re.compile(rf"({_SYM})\s?({_NUM})\s*(?:-|–|—|to)\s*({_SYM})?\s?({_NUM})")
+# Allow an optional currency code (and the word "and") BETWEEN the two numbers so
+# "£35,000 GBP and £49,000 GBP" reads as a range, not just the first figure.
+_RANGE = re.compile(rf"({_SYM})\s?({_NUM})\s*(?:[A-Za-z]{{3}}\s*)?(?:-|–|—|to|and)\s*({_SYM})?\s?({_NUM})")
 _SINGLE = re.compile(rf"({_SYM})\s?({_NUM})")
 _ANCHOR = re.compile(
     r"(base\s+pay|base\s+salary|salary\s+range|compensation\s+range|pay\s+range|"
@@ -26,6 +28,14 @@ _ANCHOR = re.compile(
 _NEG = re.compile(
     r"(funding|raised|valuation|deal\s+size|\bARR\b|\brevenue\b|series\s+[a-e]\b|"
     r"market\s+cap|\bfunded\b|\binvest)", re.I)
+# A $ amount sitting in an equity / bonus / relocation / stipend / 401(k) context is NOT
+# the base salary — do not report it as posted pay (e.g. "New hire equity: $24,000-$36,000").
+_NONBASE = re.compile(
+    r"(equity|\bstock\b|\bRSU\b|option\s+grant|new\s+hire|refresh|sign[-\s]?on|"
+    r"signing|relocation|stipend|per\s+pay\s+period|401\s*\(?k\)?)", re.I)
+# Below this, an "annual" figure is a misparse (a monthly/hourly/per-period number, or
+# noise) — a real annual salary for these roles is never under $15k.
+_MIN_ANNUAL = 15000
 _MB = re.compile(r"\s*(m|b|mm|million|billion|bn)\b", re.I)
 
 
@@ -94,11 +104,15 @@ def extract_comp(description: str | None) -> dict:
         v1, v2 = _num(n1), _num(n2)
         lo, hi = (min(v1, v2), max(v1, v2))
         near = d[max(0, m.start() - 45):end + 12]
+        if _NONBASE.search(near):  # equity/bonus/relocation/stipend — not base pay
+            continue
         currency = _currency(d[max(0, m.start() - 2):end + 6])
         # accept if anchored, or currency-tagged, or the numbers already read like a salary
         boxed = ("," in n1) or ("k" in n1.lower())
         annual_lo = _annual(lo, _period(near, hi, boxed))
         annual_hi = _annual(hi, _period(near, hi, boxed))
+        if annual_hi < _MIN_ANNUAL:  # too small to be an annual salary (per-period/misparse)
+            continue
         if not (_ANCHOR.search(near) or currency != "USD"
                 or re.search(r"USD|CAD|GBP|EUR", near) or annual_lo >= 20000):
             continue
@@ -112,12 +126,12 @@ def extract_comp(description: str | None) -> dict:
         if _MB.match(right):
             continue
         near = d[max(0, m.start() - 45):end + 12]
-        if _NEG.search(near) or not _ANCHOR.search(near):
+        if _NEG.search(near) or _NONBASE.search(near) or not _ANCHOR.search(near):
             continue
         v = _num(n)
         boxed = ("," in n) or ("k" in n.lower())
         annual = _annual(v, _period(near, v, boxed))
-        if annual < 15000:  # too small to be an annual salary, and not clearly hourly
+        if annual < _MIN_ANNUAL:  # too small to be an annual salary, and not clearly hourly
             continue
         currency = _currency(d[max(0, m.start() - 2):end + 6])
         return _result(annual, annual, currency, "rule")

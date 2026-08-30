@@ -1423,6 +1423,20 @@ tz-parametrised (80 pass).
 - **PWA install** = `_HEAD_PWA` (manifest/theme/apple-touch/favicon links) + `_SW_REG` (service-worker
   registration) injected by `mailcrm_ui._page`, cabinet `_doc`, and `dash_auth._doc`; `GET /sw.js`
   (`Service-Worker-Allowed: /`) + `/static/*` are on the `dash_auth` public-asset allowlist (`_public_asset`).
+- **Posted-comp extractor rejects non-base numbers + honours currency (2026-08-30).** `/catalog` was
+  showing wild "$35k / $2080 / $24k по вакансии" — `comp_extract` grabbed EQUITY grants ("New hire equity:
+  $24,000-$36,000"), signing bonuses, relocation stipends and per-period figures as base salary, and
+  `comp_fmt.fmt_money` printed every currency with a `$`. Fixes: `comp_extract._NONBASE` vetoes a $ amount
+  in an equity/stock/RSU/new-hire/refresh/sign-on/relocation/stipend/401(k) context; a `_MIN_ANNUAL`
+  (15000) floor drops per-period misparses in BOTH the range and single paths; `_RANGE` now tolerates a
+  currency code + "and" between the numbers ("£35,000 GBP and £49,000 GBP" → a full range). `comp_fmt`
+  is currency-aware (`£/€/C$/A$`, posted uses `comp_currency`, the estimate is USD). A one-off re-extract
+  overwrote the stale non-`agent` rows (80 updated, 29 garbage→NULL so those cards show the estimate, 18
+  ranges widened); `agent`-gold rows (incl. genuinely low LatAm/contractor USD pay) were left untouched.
+  KNOWN residual: the researched `est_total` can be US-scale for a non-US role (e.g. a UK BDR shows a
+  US-size total) — a separate estimate-quality issue, not this extractor. Tests: `test_comp_extract.py`
+  (equity/bonus/relocation/floor/GBP-range), `test_comp_fmt.py` (currency + cleared-posted→estimate).
+  Only the dashboard restarts.
 - **Premium micro-animations are CENTRALISED in `mailcrm_ui._CSS`** (a single block: `scroll-behavior:smooth`,
   subtle hover-lift/active/`:focus-visible` on buttons + cards + rows + the compose FAB, and a
   `prefers-reduced-motion` guard). Because the shell `_CSS` is included on EVERY surface (operator via

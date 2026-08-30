@@ -9,23 +9,29 @@ equity). Posted pay is authoritative and labelled «по вакансии»; the
 from __future__ import annotations
 
 
-def fmt_money(n) -> str:
-    """A compact USD label: 125000 -> '$125k', 1_800_000 -> '$1.8M'. Falsy/≤0 -> ''."""
+# Currency symbol per ISO code — so £/€ posted pay never renders with a misleading '$'.
+_SYMBOL = {"USD": "$", "GBP": "£", "EUR": "€", "CAD": "C$", "AUD": "A$"}
+
+
+def fmt_money(n, cur: str = "USD") -> str:
+    """A compact money label in the given currency: 125000 -> '$125k' (USD) / '£125k'
+    (GBP), 1_800_000 -> '$1.8M'. Falsy/≤0 -> ''."""
     try:
         n = int(n)
     except (TypeError, ValueError):
         return ""
     if n <= 0:
         return ""
+    sym = _SYMBOL.get((cur or "USD").upper(), "$")
     if n >= 1_000_000:
-        s = f"${n / 1_000_000:.1f}M"
+        s = f"{sym}{n / 1_000_000:.1f}M"
         return s.replace(".0M", "M")
-    return f"${round(n / 1000)}k"
+    return f"{sym}{round(n / 1000)}k"
 
 
-def money_range(lo, hi) -> str:
+def money_range(lo, hi, cur: str = "USD") -> str:
     """'$120k–$160k' when both present, else the single side, else ''."""
-    a, b = fmt_money(lo), fmt_money(hi)
+    a, b = fmt_money(lo, cur), fmt_money(hi, cur)
     if a and b:
         return a if a == b else f"{a}–{b}"
     return a or b or ""
@@ -33,11 +39,15 @@ def money_range(lo, hi) -> str:
 
 def comp_summary(job: dict) -> dict:
     """{'posted','est_base','est_total'} formatted ranges for a job dict (empty strings
-    when a piece is absent)."""
+    when a piece is absent). Posted pay uses its own currency; the researched estimate
+    is annualized USD."""
+    j = job or {}
+    pc = j.get("comp_currency") or "USD"
+    ec = j.get("est_comp_currency") or "USD"
     return {
-        "posted": money_range((job or {}).get("comp_min"), (job or {}).get("comp_max")),
-        "est_base": money_range((job or {}).get("est_base_min"), (job or {}).get("est_base_max")),
-        "est_total": money_range((job or {}).get("est_total_min"), (job or {}).get("est_total_max")),
+        "posted": money_range(j.get("comp_min"), j.get("comp_max"), pc),
+        "est_base": money_range(j.get("est_base_min"), j.get("est_base_max"), ec),
+        "est_total": money_range(j.get("est_total_min"), j.get("est_total_max"), ec),
     }
 
 

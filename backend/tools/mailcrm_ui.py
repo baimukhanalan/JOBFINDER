@@ -460,6 +460,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .hbtn:focus-visible,.iconbtn:focus-visible,.filter-btn:focus-visible,[role=button]:focus-visible{
   outline:2px solid var(--accent);outline-offset:2px;}
 @keyframes jfFadeIn{from{opacity:0;transform:translateY(8px) scale(.985);}to{opacity:1;transform:none;}}
+/* modal/sheet open animation (the catalog modal keeps its own cm-pop; these are the
+   shell compose/filter cards + the interview-assign panel, which had none). */
+.modal-card,.fm-card,.iv-modal-panel{animation:jfFadeIn .18s ease;}
 @media (prefers-reduced-motion: reduce){
   *{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important;}

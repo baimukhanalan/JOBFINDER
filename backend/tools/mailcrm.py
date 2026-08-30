@@ -119,8 +119,20 @@ _KEYWORDS_CACHE: dict[str, Any] = {"mtime": None, "rules": None}
 _KEYWORDS_LOCK = threading.Lock()
 
 
+# Map smart/typographic punctuation to ASCII so a keyword typed with a straight quote
+# still matches a sender's curly one (and vice-versa). Without this, a rejection using a
+# curly apostrophe ("we won't be moving forward") slipped past the straight-quote keyword
+# and landed in "other" — 4 Pinterest rejections did exactly that (2026-08-30).
+_PUNCT_MAP = str.maketrans({
+    "’": "'", "‘": "'", "ʼ": "'", "′": "'",   # ’ ‘ ʼ ′ -> '
+    "“": '"', "”": '"', "″": '"',                   # “ ” ″ -> "
+    "–": "-", "—": "-", "−": "-",                   # – — − -> -
+    " ": " ",                                                  # nbsp -> space
+})
+
+
 def _normalise_phrase(value: str) -> str:
-    return " ".join((value or "").casefold().split())
+    return " ".join((value or "").translate(_PUNCT_MAP).casefold().split())
 
 
 def _clean_keyword_rules(data: dict | None) -> dict[str, list[str]]:

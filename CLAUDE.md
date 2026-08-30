@@ -402,6 +402,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   Postgres rows. `mailcrm.classifier_version()` includes a hash of the saved rules so `mail_indexer` also
   repairs stale rows after a restart. Defaults intentionally require explicit interview invitations and do
   not include broad acknowledgement-template words such as `next steps`, `screening`, or `move forward`.
+  **`_normalise_phrase` maps smart punctuation to ASCII (’‘→', “”→", –—→-, nbsp→space) BEFORE casefold
+  (2026-08-30)** so a keyword typed with a straight quote matches a sender's curly one — without it,
+  rejections using a curly apostrophe ("we won’t be moving forward") slipped past the straight-quote
+  keyword into `other` (4 Pinterest rejections did). Changing `mailcrm.py`'s classifier needs BOTH
+  `pm2 restart jobfinder-alan-dash` AND `jobfinder-mail-indexer`, then `mailcrm.reclassify_existing()`.
+  A `/catalog`-audit of the `other` bucket (2026-08-30) found it 99% legit "Security code" noise; the
+  real misses were soft/templated rejections + recruiter-outreach interviews caught by adding specific
+  whole-phrase keywords (Remote timezone `doesn't fit that requirement`, impact `to not move forward`,
+  Stripe `set up a time to chat with you over the phone`→interview, `no longer considering applicants`,
+  `decided not to progress`, `excited to move you forward`→interview).
 - **Merged Кандидаты screen — the primary tab, a candidate-grouped inbox (2026-08-29).** «Инбокс» `/mail`
   and «Кандидаты» were showing the same mail two ways, so they were merged into ONE Gmail-style surface at
   `/mail/candidates` (`tools/candidates_inbox.py`, rendered via `mailcrm_ui._page("candidates", …)`): one

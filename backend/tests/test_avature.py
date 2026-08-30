@@ -95,4 +95,4 @@ def test_screener_answer_supervisor_experience():
     assert vals and any("year" in v.lower() for v in vals)
     # the CSR customer-service experience question still resolves
     vals2 = A("how much experience do you have in a customer service environment as a tier i csr?", {})
-    assert vals2 and vals2[0] == "3-5 years"
+    assert vals2 and vals2[0] == "5+ years"   # ETALON: strongest tier first

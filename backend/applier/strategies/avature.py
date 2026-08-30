@@ -624,16 +624,21 @@ class AvatureStrategy(ApplyStrategy):
         if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
             return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
                     "Associate", "GED"]
+        # ETALON: the synthetic persona is a STRONG fit (its tailored résumé shows ~8 yrs), so
+        # pick the HIGHEST believable experience tier — never a weak middle one that undersells
+        # AND contradicts the résumé the recruiter sees. Candidates are ordered strongest-first;
+        # the first that matches an actual option wins.
         if re.search(r"experience.*(customer service|call center|contact center|retail|customer)", t):
-            return ["3-5 years", "1-3 years", "3+ years", "1-2 years", "More than", "2 years",
-                    "1 year", "Yes"]
+            return ["5+ years", "5 or more", "More than 5", "6+ years", "5 years", "3-5 years",
+                    "3+ years", "1-3 years", "Yes"]
         # supervisor/leadership/management/general "years of experience" screeners (e.g. the
-        # Supervisor - Call Center role's "How much supervisor or leadership experience…")
+        # Supervisor - Call Center role's "How much supervisor or leadership experience…").
+        # Lead 4-5y (consistent with a supervisor-since-2022 + senior-CSR résumé), then higher.
         if re.search(r"(supervisor|leadership|management|managerial|team lead)\s*(or [a-z]+ )?experience|"
                      r"experience.*(supervisor|leadership|manage|team lead)|"
                      r"how (much|many years?).*experience|years of experience", t):
-            return ["1-3 years", "3-5 years", "1-2 years", "2 years", "1 year", "More than",
-                    "4-5 years", "6+ years", "Yes"]
+            return ["4-5 years", "5+ years", "6+ years", "3-5 years", "5 years", "More than",
+                    "1-3 years", "Yes"]
         if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
             return ["Yes"]
         if re.search(r"commitment|interfere|foresee|conflict|impact.*attendance", t):

@@ -1411,3 +1411,21 @@ tz-parametrised (80 pass).
   human-gated). Foundation (`slots`/`service.assign`) is ready.
 - Tests: `backend/tests/test_interviews_*.py` (49→53 pass; live-`jobfinder_crm` DB, `test_iv_%`-prefixed +
   skip if no DSN — run SEQUENTIALLY, concurrent runs share the DB and interfere).
+
+## UI / branding (PWA, logo, animations — 2026-08-30)
+- **Brand mark = serif interlocked "JF" (white) on royal-blue `#0c47c2`** at `backend/static/logo.svg`
+  (+ `logo-maskable.svg` and rendered PNG icons). Rendered with Times New Roman Bold (closest installed
+  serif). NOT a circle/sans-serif. Rebuild icons after any change: `rsvg-convert -w N -h N
+  logo-maskable.svg -o icon-*.png` (rsvg-convert + PIL are installed; no cairosvg). Keep `theme-color`
+  (`#0c47c2`) in sync across `static/manifest.webmanifest` AND `mailcrm_ui._HEAD_PWA`. The owner's raster
+  attachments don't persist to disk — if the exact vector is needed, have them drop it at
+  `backend/static/logo.*` and swap verbatim (don't re-guess from a screenshot).
+- **PWA install** = `_HEAD_PWA` (manifest/theme/apple-touch/favicon links) + `_SW_REG` (service-worker
+  registration) injected by `mailcrm_ui._page`, cabinet `_doc`, and `dash_auth._doc`; `GET /sw.js`
+  (`Service-Worker-Allowed: /`) + `/static/*` are on the `dash_auth` public-asset allowlist (`_public_asset`).
+- **Premium micro-animations are CENTRALISED in `mailcrm_ui._CSS`** (a single block: `scroll-behavior:smooth`,
+  subtle hover-lift/active/`:focus-visible` on buttons + cards + rows + the compose FAB, and a
+  `prefers-reduced-motion` guard). Because the shell `_CSS` is included on EVERY surface (operator via
+  `_page`, cabinet via `_doc`, login via `dash_auth._doc`), one edit here restyles the whole platform —
+  don't duplicate per file. Modal open animation: shell modals use `jfFadeIn` (`.modal-card`/`.fm-card`/
+  `.iv-modal-panel`); the `/catalog` modal keeps its own `cm-pop`. Only the dashboard restarts for these.

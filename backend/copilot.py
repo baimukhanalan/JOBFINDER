@@ -55,7 +55,11 @@ NOVNC_ADDR = ("127.0.0.1", int(os.environ.get("COPILOT_NOVNC_PORT", "6090")))  #
 # COPIED from extension/content.js CONFIRM_RE — the two MUST stay in sync.
 CONFIRM_RE = re.compile(
     r"(thank you for applying|application (has been )?submitted|successfully submitted"
-    r"|we have received your application|application received)", re.I)
+    r"|we have received your application|application received"
+    # Avature/Maximus completion page: "…no assessment is required and you have completed
+    # the application process." (a variant with no "thank you for applying" on the page).
+    r"|completed the application process|you have completed the application"
+    r"|your application is complete)", re.I)
 _URL_RE = re.compile(r"confirm|thank", re.I)
 
 WATCH_INTERVAL = 2.0        # seconds between confirmation polls
@@ -72,6 +76,24 @@ WATCH_MAX = 10 * 60         # give up after 10 minutes
 # throughput win — batches are dominated by the failing jobs' wait). A rare slow code is still
 # caught later by the ground-truth reconciler via the ATS receipt, so nothing is lost.
 WAIT_SUBMIT_MAX = 120
+
+# The emailed-code step that gates the final submit on GH/Ashby ("security code"), and on
+# Oracle ORC / Candidate Experience ("verification code" / "verify your email" PIN). ONE prompt
+# regex + ONE code-field selector list recognize the step across all three ATSes. The Oracle
+# selectors are APPENDED after the GH/Ashby ones (which stay first), so the existing GH/Ashby
+# behaviour is unchanged; the extra prompt wordings only make the trigger fire MORE often, and
+# the code-fill only proceeds when a matching EMPTY field is found AND a code is read from the
+# candidate's own mailbox — so a false trigger is a harmless no-op.
+_CODE_STEP_RE = re.compile(
+    r"(?i)verification code|security code|enter the .{0,20}code|verify your email"
+    r"|enter (?:the )?(?:pin|code)|one.?time (?:code|password|pin)")
+_CODE_FIELD_SELECTORS = (
+    "input[aria-label*='code' i]", "input[placeholder*='code' i]",
+    "input[name*='code' i]", "input[id*='security' i]", "input[id*='code' i]",
+    # Oracle ORC (JET) — the PIN input's id/aria-label carry 'pin'/'verification',
+    # not always 'code'. Appended, so GH/Ashby match their existing selectors first.
+    "input[aria-label*='verification' i]", "input[aria-label*='pin' i]",
+    "input[id*='pin' i]", "input[name*='pin' i]")
 
 app = FastAPI(title="JobFinder co-pilot")
 _S: dict = {"pw": None, "browser": None, "page": None, "ctx": None,
@@ -269,20 +291,17 @@ async def _watch_submit(page, profile: str, jid: str,
                 status_store.mark(profile, jid, "submitted")
                 logger.info("submit detected for %s/%s — marked submitted", profile, jid)
                 return True
-            if (applicant_email and not code_done
-                    and re.search(r"(?i)verification code|security code|enter the .{0,20}code", text)):
+            if (applicant_email and not code_done and _CODE_STEP_RE.search(text)):
+                sel_str = ",".join(_CODE_FIELD_SELECTORS)
                 state = await page.evaluate(
-                    "() => { const i = document.querySelector("
-                    "\"input[aria-label*='code' i],input[placeholder*='code' i],"
-                    "input[name*='code' i],input[id*='security' i],input[id*='code' i]\");"
-                    " return i ? ((i.value||'').trim() ? 'filled':'empty') : 'nofield'; }")
+                    "(sel) => { const i = document.querySelector(sel);"
+                    " return i ? ((i.value||'').trim() ? 'filled':'empty') : 'nofield'; }",
+                    sel_str)
                 if state == "empty":
                     from backend.tools.verify_code import read_code
                     code = read_code(applicant_email, load_ts)
                     if code:
-                        for sel in ("input[aria-label*='code' i]", "input[placeholder*='code' i]",
-                                    "input[name*='code' i]", "input[id*='security' i]",
-                                    "input[id*='code' i]"):
+                        for sel in _CODE_FIELD_SELECTORS:
                             try:
                                 el = page.locator(sel).first
                                 if await el.count() and await el.is_visible(timeout=1000):
@@ -350,7 +369,11 @@ _SUBMIT_BLOCK_RE = re.compile(
     # "If you do not have a preferred name, please enter your legal name." (Samsara/Greenhouse),
     # which falsely flagged a fully-filled form as blocked → skipped the email-code watch →
     # killed an application that was completing fine. Keep only error-specific "please" wordings.
-    r"this field is required|please (?:fill|complete|correct) (?:in |out |this|the|all|your)|is required|"
+    r"this field is required|please (?:fill|complete|correct) (?:in |out |this|the|all|your)|"
+    # field-scoped "is required" ONLY — a bare "is required" false-matched the Avature/Maximus
+    # SUCCESS page "…no assessment is required and you have completed the application process",
+    # flagging a completed application as blocked (incident 2026-08-30).
+    r"(?:field|entry|section|question|response|answer) is required|"
     # Real ATS rejection wordings observed on GH/Ashby (these were MISSED, so a rejected
     # submit was mislabeled "awaiting confirmation" and burned the full 300s watch):
     r"flagged as possible spam|turn off your (vpn|proxy)|couldn.?t submit(?: your)?|"
@@ -375,9 +398,8 @@ async def _submit_evidence(page, shot_dir) -> dict:
         # — the submit was accepted. Never let a stray block-phrase match on the filled form
         # (a field hint / privacy "please" text) flag it as blocked, which would SKIP the
         # code-fill watch (gated on `not blocked`) and kill an application that was completing.
-        if ev["blocked"] and (ev["confirmed"] or re.search(
-                r"(?i)verification code|security code|enter the .{0,25}code|"
-                r"confirm you'?re a human|code (?:was |has been )?sent", txt or "")):
+        if ev["blocked"] and (ev["confirmed"] or _CODE_STEP_RE.search(txt or "") or re.search(
+                r"(?i)confirm you'?re a human|code (?:was |has been )?sent", txt or "")):
             ev["blocked"] = None
     except Exception:
         pass

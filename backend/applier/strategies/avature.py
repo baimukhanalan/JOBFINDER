@@ -593,7 +593,8 @@ class AvatureStrategy(ApplyStrategy):
                 const real=[...el.options].filter(o=>o.value &&
                   !/select an option|select a |prefer not|decline/.test(n(o.text)));
                 if(!real.length)return null;
-                let o = high ? (real.find(o=>hi.test(n(o.text)))||real[real.length-1])
+                let o = high ? (real.find(o=>/native/.test(n(o.text)))||
+                                real.find(o=>hi.test(n(o.text)))||real[real.length-1])
                              : (real.find(o=>lo.test(n(o.text)))||real[0]);
                 el.setAttribute('data-jf','1');return {value:o.value};
               }return null;}""", [label_key.lower(), high])
@@ -620,7 +621,8 @@ class AvatureStrategy(ApplyStrategy):
             return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
                     else ["None", "No proficiency", "Basic", "Beginner", "Limited"])
         if re.search(r"english", t):
-            return ["Fluent", "Native", "Advanced", "Professional"]
+            # ETALON: a US persona is a native English speaker — lead the strongest tier.
+            return ["Native", "Native or bilingual", "Fluent", "Advanced", "Professional"]
         if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
             return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
                     "Associate", "GED"]

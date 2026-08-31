@@ -1,31 +1,48 @@
 {
   "manifest_version": 3,
   "name": "TP Apply Assist",
-  "version": "1.4",
+  "version": "1.5",
   "description": "Auto-fills the Teleperformance (iCIMS) application with a ready persona. You solve the captcha and click Submit yourself.",
-  "permissions": ["activeTab", "storage"],
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
   "host_permissions": [
     "https://careersus-teleperformance.icims.com/*",
     "https://*.icims.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_icon": { "48": "icons/icon48.png" }
+    "default_icon": {
+      "48": "icons/icon48.png"
+    }
   },
   "content_scripts": [
     {
-      "matches": ["https://*.icims.com/*"],
-      "js": ["persona.js", "content.js"],
+      "matches": [
+        "https://*.icims.com/*"
+      ],
+      "js": [
+        "persona.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
   ],
   "commands": {
     "tp-fill": {
-      "suggested_key": { "default": "Alt+Shift+F" },
+      "suggested_key": {
+        "default": "Alt+Shift+F"
+      },
       "description": "Fill the Teleperformance application on this page"
     }
   },
-  "background": { "service_worker": "background.js" },
-  "icons": { "48": "icons/icon48.png", "128": "icons/icon48.png" }
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "48": "icons/icon48.png",
+    "128": "icons/icon48.png"
+  }
 }

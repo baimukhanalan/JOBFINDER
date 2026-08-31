@@ -334,26 +334,68 @@
     if (hp === "listbox" || hp === "true" || hp === "menu") return true;
     const cls = elClass(el).toLowerCase();
     if (/(^|[-_ ])(select|dropdown|combo|chosen|typeahead|autocomplete|picklist)/.test(cls)) return true;
+    // Bootstrap dropdowns: a .dropdown-toggle button / [data-toggle=dropdown] (what iCIMS TP uses —
+    // the report showed `class="btn customizarBotao dropdown-toggle"`).
+    try { if (el.matches('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"]')) return true; } catch (e) {}
     // a readonly text input that opens a list is the classic select-replacement
     if (el.tagName === "INPUT" && (el.readOnly || el.getAttribute("readonly") !== null) &&
         (el.getAttribute("role") === "combobox" || hp)) return true;
     return false;
   }
-  // Best-effort: open a custom dropdown matching labelRe and click the option matching valueRe.
-  // Only used as a FALLBACK when the native <select> path found nothing. Text-matched (never blind).
+  // ONE click-equivalent (mousedown→mouseup→click) — do NOT also call el.click(), which would fire a
+  // SECOND click and toggle a Bootstrap dropdown open→closed. mousedown covers select2-style widgets.
+  function clickOpen(el) {
+    for (const type of ["mousedown", "mouseup", "click"]) {
+      try { el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })); } catch (e) {}
+    }
+  }
+  // Find a dropdown TRIGGER near a label matching labelRe, even when the trigger itself carries no
+  // resolvable label (iCIMS puts the label in a sibling, the trigger is a bare <button>/<div>).
+  function findFieldTrigger(labelRe) {
+    const rx = new RegExp(labelRe, "i");
+    for (const lab of document.querySelectorAll("label,span,td,th,legend,div,p")) {
+      if (!vis2(lab)) continue;
+      const own = norm(lab.innerText);
+      if (own.length > 70 || !rx.test(own)) continue;   // this node IS a short label matching labelRe
+      let box = lab.closest("div,li,fieldset,tr,section,td") || lab.parentElement;
+      for (let up = 0; up < 3 && box; up++) {
+        const trig = box.querySelector('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],input[readonly],select,button');
+        if (trig && vis2(trig)) return trig;
+        box = box.parentElement;
+      }
+    }
+    return null;
+  }
+  // Best-effort: open a custom dropdown for labelRe and click the option matching valueRe by TEXT.
+  // Only a FALLBACK when the native <select> path found nothing. Text-matched, so it never sets a
+  // wrong value — if no option text matches, it leaves the field blank.
   function openAndPickCustom(labelRe, valueRe) {
     const rx = new RegExp(labelRe, "i");
-    const cands = [...document.querySelectorAll('[role=combobox],[role=listbox],[aria-haspopup],input[readonly],button,a[role=button]')]
-      .filter((el) => vis2(el) && isDropdownWidget(el) && rx.test(labelText(el)));
-    for (const el of cands) {
+    const triggers = [];
+    for (const el of document.querySelectorAll('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],input[readonly],button,a[role=button]')) {
+      if (vis2(el) && isDropdownWidget(el) && rx.test(labelText(el))) triggers.push(el);
+    }
+    const t2 = findFieldTrigger(labelRe);
+    if (t2 && !triggers.includes(t2)) triggers.push(t2);
+    for (const el of triggers) {
       const disp = norm(el.innerText || el.value || "");
       if (disp && !isPlaceholder(disp) && optMatch(valueRe, disp)) return true;   // already right
-      try { el.click(); } catch (e) { continue; }
-      // options can render as [role=option], listbox <li>, or a portal dropdown item anywhere
-      const opts = [...document.querySelectorAll('[role=option],ul[role=listbox] li,li[role],.dropdown-item,.iCIMS_Dropdown li,li')].filter(vis2);
-      const opt = opts.find((o) => optMatch(valueRe, norm(o.innerText)));
-      if (opt) { try { opt.click(); } catch (e) {} return true; }
-      try { el.click(); } catch (e) {}   // couldn't match — close it back
+      clickOpen(el);
+      // options render as Bootstrap .dropdown-menu items, ARIA options, select2 results, or a portal list
+      const opts = [...document.querySelectorAll('.dropdown-menu li a,.dropdown-menu li,.dropdown-menu a,[role=option],ul[role=listbox] li,li[role],.select2-results__option,.dropdown-item,li,a')]
+        .filter((o) => vis2(o) && norm(o.innerText || o.textContent));
+      const matches = opts.filter((o) => optMatch(valueRe, norm(o.innerText || o.textContent)));
+      // querySelectorAll returns DOCUMENT order, so a wrapper <li> precedes its child <a>; clicking the
+      // <li> won't fire the <a>'s handler. Prefer an actual <a>/[role=option], else a leaf, and always
+      // click the innermost anchor/option of a wrapper.
+      let opt = matches.find((o) => o.tagName === "A" || o.getAttribute("role") === "option")
+        || matches.find((o) => !o.querySelector("a,[role=option],li")) || matches[0];
+      if (opt) {
+        const inner = opt.querySelector("a,[role=option]");
+        clickOpen(inner && vis2(inner) ? inner : opt);
+        return true;
+      }
+      clickOpen(el);   // no match — close it back so we don't leave a menu open
     }
     return false;
   }
@@ -361,57 +403,65 @@
   // Full structural dump of THIS frame's form — native selects (with options), custom dropdown
   // widgets, and the outerHTML of every required-but-empty field. This is the ground truth that
   // pins down why a dropdown won't fill; the badge copies it to the clipboard on click.
+  function ctrlLine(el, i) {
+    return "[" + i + "] <" + el.tagName.toLowerCase() + (el.type ? " type=" + el.type : "") + ">" +
+      " id=" + (el.id || "-") + " name=" + (el.name || "-").slice(0, 30) +
+      " class=" + JSON.stringify(elClass(el)) + " role=" + (el.getAttribute("role") || "") +
+      " arialb=" + (el.getAttribute("aria-labelledby") || "") +
+      " req=" + !!(el.required || el.getAttribute("aria-required") === "true") +
+      " label=" + JSON.stringify(labelText(el).slice(0, 45)) +
+      " val=" + JSON.stringify(norm(el.value || "").slice(0, 30));
+  }
+  // Smallest visible element whose text contains kw AND that holds a control/trigger — its outerHTML
+  // shows the exact real widget for a failing field.
+  function findLabelContainer(kw) {
+    kw = kw.toLowerCase();
+    let best = null, bestLen = 1e9;
+    for (const el of document.querySelectorAll("div,li,fieldset,tr,section,td")) {
+      if (!vis2(el)) continue;
+      if (!low(el.innerText).includes(kw)) continue;
+      if (!el.querySelector('input,select,textarea,button,a[role],[role],.dropdown-toggle,[data-toggle],[data-bs-toggle]')) continue;
+      const len = (el.outerHTML || "").length;
+      if (len < bestLen) { bestLen = len; best = el; }
+    }
+    return best;
+  }
   function buildReport() {
     const L = [];
-    L.push("=== TP Assist DOM report ===");
-    L.push("url: " + location.href.slice(0, 140));
-    L.push("form controls in this frame: " + document.querySelectorAll("input,select,textarea").length);
+    L.push("=== TP Assist DOM report v1.5 ===");
+    L.push("url: " + location.href.slice(0, 150));
+    const ctrls = [...document.querySelectorAll("input,select,textarea")];
+    const visc = ctrls.filter(vis2);
+    L.push("controls: " + ctrls.length + " total, " + visc.length + " visible");
+    L.push("");
+    L.push("--- visible controls (" + visc.length + ") ---");
+    visc.slice(0, 60).forEach((el, i) => L.push(ctrlLine(el, i)));
     const sels = [...document.querySelectorAll("select")].filter(vis2);
-    L.push("");
-    L.push("--- native <select> (" + sels.length + ") ---");
-    sels.forEach((s, i) => {
-      const cur = s.options[s.selectedIndex];
-      L.push("[sel " + i + "] label=" + JSON.stringify(labelText(s).slice(0, 60)) + " src=" + labelSource(s) +
-        " id=" + s.id + " name=" + s.name + " req=" + !!(s.required || s.getAttribute("aria-required") === "true") +
-        " value=" + JSON.stringify((cur && cur.text) || ""));
-      L.push("        opts: " + [...s.options].slice(0, 16).map((o) => norm(o.text)).filter(Boolean).join(" | "));
-    });
-    const widgets = [];
-    const seen = new Set();
-    for (const el of document.querySelectorAll('[role],[aria-haspopup],input[readonly],[class*="select"],[class*="dropdown"],[class*="combo"]')) {
-      if (!vis2(el) || !isDropdownWidget(el)) continue;
-      const k = el.tagName + "|" + el.id + "|" + elClass(el) + "|" + (el.getAttribute("aria-labelledby") || "");
-      if (seen.has(k)) continue; seen.add(k);
-      widgets.push(el); if (widgets.length >= 25) break;
+    if (sels.length) {
+      L.push(""); L.push("--- <select> options ---");
+      sels.forEach((s, i) => L.push("[sel " + i + "] " + JSON.stringify(labelText(s).slice(0, 40)) + ": " +
+        [...s.options].slice(0, 16).map((o) => norm(o.text)).filter(Boolean).join(" | ")));
     }
-    L.push("");
-    L.push("--- custom dropdown widgets (" + widgets.length + ") ---");
-    widgets.forEach((el, i) => {
-      L.push("[w " + i + "] <" + el.tagName.toLowerCase() + "> role=" + (el.getAttribute("role") || "") +
-        " haspopup=" + (el.getAttribute("aria-haspopup") || "") + " readonly=" + (el.readOnly || false) +
-        " class=" + JSON.stringify(elClass(el)) + " id=" + el.id +
-        " label=" + JSON.stringify(labelText(el).slice(0, 60)) + " src=" + labelSource(el) +
-        " shown=" + JSON.stringify(norm(el.innerText || el.value || "").slice(0, 40)));
-    });
-    // required + empty → outerHTML (the decisive evidence)
-    const un = [];
-    for (const el of document.querySelectorAll("input,select,textarea,[role=combobox],[role=listbox]")) {
-      const t = (el.type || el.tagName).toLowerCase();
-      if (["hidden", "submit", "button", "reset"].includes(t)) continue;
+    const ws = [], seen = new Set();
+    for (const el of document.querySelectorAll('.dropdown-toggle,[data-toggle],[data-bs-toggle],[role=combobox],[role=listbox],[aria-haspopup],[class*="select"],[class*="dropdown"],[class*="combo"],button')) {
       if (!vis2(el)) continue;
-      const req = el.required || el.getAttribute("aria-required") === "true";
-      if (!req) continue;
-      let empty = comboEmpty(el, t);
-      if (empty) un.push(el);
+      const cls = elClass(el).toLowerCase();
+      if (!(isDropdownWidget(el) || /dropdown|select|combo/.test(cls) || el.getAttribute("data-toggle") || el.getAttribute("data-bs-toggle"))) continue;
+      const k = el.tagName + "|" + el.id + "|" + cls + "|" + labelText(el).slice(0, 30);
+      if (seen.has(k)) continue; seen.add(k);
+      ws.push(el); if (ws.length >= 30) break;
     }
-    L.push("");
-    L.push("--- required & still-empty (" + un.length + ") — outerHTML ---");
-    un.slice(0, 14).forEach((el, i) => {
-      const par = el.parentElement;
-      L.push("[req " + i + "] label=" + JSON.stringify(labelText(el).slice(0, 55)) +
-        " parent=" + (par ? "<" + par.tagName.toLowerCase() + " class=" + JSON.stringify(elClass(par)) + ">" : ""));
-      L.push("        " + (el.outerHTML || "").replace(/\s+/g, " ").slice(0, 520));
-    });
+    L.push(""); L.push("--- dropdown-ish widgets (" + ws.length + ") ---");
+    ws.forEach((el, i) => L.push("[w " + i + "] <" + el.tagName.toLowerCase() + "> class=" + JSON.stringify(elClass(el)) +
+      " id=" + el.id + " role=" + (el.getAttribute("role") || "") +
+      " toggle=" + (el.getAttribute("data-toggle") || el.getAttribute("data-bs-toggle") || "") +
+      " label=" + JSON.stringify(labelText(el).slice(0, 40)) + " text=" + JSON.stringify(norm(el.innerText || "").slice(0, 35))));
+    // TARGETED: the outerHTML around each failing field — the decisive evidence
+    L.push(""); L.push("--- field containers by label (outerHTML) ---");
+    for (const kw of ["country", "state", "how did you hear", "please specify", "phone", "zip", "city"]) {
+      const el = findLabelContainer(kw);
+      L.push("[" + kw + "] " + (el ? (el.outerHTML || "").replace(/\s+/g, " ").slice(0, 700) : "(label not found)"));
+    }
     return L.join("\n");
   }
 

@@ -1396,9 +1396,28 @@ report** so the owner sends the REAL markup with zero F12: the orange "не за
 options), every custom dropdown widget (tag/role/class/label/label-source/shown), and the **outerHTML of
 every required-and-empty field** to the clipboard (`execCommand` under the gesture, works inside the iCIMS
 iframe where `navigator.clipboard` is policy-blocked) + a selectable overlay fallback. Tests (scratchpad,
-patchright): native-select mock 23/23, custom-widget iForm mock 14/14, table-layout PASS. NB patchright's
-stealth `evaluate` runs in an ISOLATED world so `window.__tpFill/__tpReport` read back `undefined` there
-even though the DOM fills work — verify the report via the `Alt+Shift+D` overlay, not the window hook. If a
+patchright): native-select mock 23/23, custom-widget iForm mock 14/14, table-layout PASS.
+**v1.5 (2026-08-31) — the REAL form's dropdowns are Bootstrap `dropdown-toggle` buttons.** The owner sent
+the v1.4 DOM report from the live form (`jobs/87127/candidate?from=login`): **51 controls, 0 native
+`<select>`**, and the only widget was `<button class="btn customizarBotao dropdown-toggle">` — a Bootstrap
+dropdown (`data-toggle=dropdown` + a `<ul class=dropdown-menu>` + a hidden `<input>` holding the value,
+label a plain sibling `<span>`). So Country/State/Type/how-heard are Bootstrap menus, which v1.4's
+`role=combobox`-only detector never saw. v1.5: `isDropdownWidget` + `openAndPickCustom` now also match
+`.dropdown-toggle`/`[data-toggle*=dropdown]`; `findFieldTrigger` locates the trigger by LABEL PROXIMITY
+(a short sibling node whose text matches → climb to the field container → first dropdown trigger);
+`clickOpen` fires ONE click-equivalent (`mousedown→mouseup→click` via dispatch, NOT also `el.click()` — the
+double-fire toggled the menu open→closed, the first bug); option pick prefers an actual `<a>`/`[role=option]`
+and clicks the INNERMOST anchor (querySelectorAll returns document order, so a wrapper `<li>` precedes its
+child `<a>` and clicking the `<li>` doesn't fire the `<a>`'s handler — the second bug). The report is now
+comprehensive: all visible controls, a broad dropdown-widget scan, and the **outerHTML of the field
+container around each label** (country/state/how-heard/phone/zip/city) — one paste shows the exact widget.
+**Root-cause gotcha:** v1.4 shipped with a DUPLICATE `openAndPickCustom` (my edit appended the new one but
+the old one below it survived) — in JS the LAST function declaration wins, so the OLD narrow one ran the
+whole time. Verify `grep -c 'function openAndPickCustom' == 1` after edits. Tests: Bootstrap-dropdown mock
+(data-toggle + hidden input + sibling label) all dropdowns fill, aria mock 14/14, native 23/23, table PASS.
+NB patchright's stealth `evaluate` runs in an ISOLATED world so `window.__tpFill/__tpReport` read back
+`undefined` there even though the DOM fills work — verify the report via the `Alt+Shift+D` overlay, not the
+window hook. If a
 dropdown STILL misses on the live form, the report's outerHTML is the ground truth to finish
 `openAndPickCustom`/`labelText` precisely.
 **Résumé auto-attach NOT yet built** (owner asked for "an external python script in tandem with the

@@ -253,9 +253,47 @@
     for (const el of pws) { if (!norm(el.value)) setVal(el, P.password || "Jf7xQ2wnpkV9!"); }
   }
 
+  // Auto-click "Apply for this job online" (a plain navigation, NOT captcha-gated) so the form opens
+  // on its own. Never clicks Next/Submit — those trigger the hCaptcha and must be your real click.
+  let _applyClicked = false;
+  function clickApplyIfNeeded() {
+    if (_applyClicked) return;
+    if (document.querySelector('input[type=email],input[type=password]')) return;  // already on the form
+    for (const el of document.querySelectorAll('a,button,input[type=submit],[role=button]')) {
+      const txt = norm(el.innerText || el.value || el.getAttribute("aria-label") || "");
+      if (/^apply for this job online$|^apply online$|^apply now$|^apply$/i.test(txt)) {
+        _applyClicked = true;
+        try { el.click(); } catch (e) {}
+        return;
+      }
+    }
+  }
+
+  // DEBUG: dump the exact structure of every required field still empty, so the real iCIMS markup
+  // can be seen (why a select/label isn't matching) and fixed precisely.
+  function debugUnfilled() {
+    const out = [];
+    for (const el of document.querySelectorAll("input,select,textarea")) {
+      const t = (el.type || el.tagName).toLowerCase();
+      if (["hidden", "submit", "button", "file", "reset"].includes(t)) continue;
+      const r = el.getBoundingClientRect(); if (r.width < 2 && r.height < 2) continue;
+      const req = el.required || el.getAttribute("aria-required") === "true"; if (!req) continue;
+      let empty;
+      if (t === "checkbox" || t === "radio") empty = !el.checked;
+      else if (el.tagName === "SELECT") { const c = el.options[el.selectedIndex]; empty = !el.value || isPlaceholder(c && c.text); }
+      else empty = !norm(el.value);
+      if (!empty) continue;
+      out.push({ tag: el.tagName, type: t, id: el.id || "", name: el.name || "",
+        arialb: el.getAttribute("aria-labelledby") || "", label: labelText(el).slice(0, 70),
+        opts: el.tagName === "SELECT" ? [...el.options].slice(0, 5).map((o) => o.text).join("|") : undefined });
+    }
+    return out;
+  }
+
   let lastCount = 0;
   function fillTP() {
     let n = 0;
+    clickApplyIfNeeded();
     const before = document.querySelectorAll('input,select,textarea').length;
     try {
       // identity (empty-only)
@@ -286,7 +324,11 @@
     try { unfilled = unfilledReport(); } catch (e) {}
     badge(unfilled);
     if (unfilled.length) {
-      try { console.log("[TP Assist] НЕ смог заполнить (required):", unfilled); } catch (e) {}
+      try {
+        console.log("[TP Assist] НЕ смог заполнить (required):", unfilled);
+        console.log("[TP Assist] DEBUG структура незаполненных → пришли эту строку:",
+                    JSON.stringify(debugUnfilled()));
+      } catch (e) {}
     }
     return n;
   }

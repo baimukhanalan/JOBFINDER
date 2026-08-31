@@ -12,6 +12,8 @@
   const norm = (s) => (s || "").replace(/\s+/g, " ").trim();
   const low = (s) => norm(s).toLowerCase();
 
+  function byId(id) { try { return document.getElementById(id); } catch (e) { return null; } }
+
   function labelText(el) {
     let t = "";
     const id = el.id;
@@ -20,13 +22,23 @@
       if (l) t = l.innerText;
     }
     if (!t) { const w = el.closest("label"); if (w) t = w.innerText; }
+    // iCIMS commonly gives the input NO <label for> — the label is a <span id> referenced by
+    // aria-labelledby (or aria-describedby). Resolve those id lists to their text.
+    if (!t) {
+      for (const attr of ["aria-labelledby", "aria-describedby"]) {
+        const ref = el.getAttribute(attr);
+        if (!ref) continue;
+        const parts = ref.split(/\s+/).map((i) => { const e = byId(i); return e ? e.innerText : ""; }).filter(Boolean);
+        if (parts.length) { t = parts.join(" "); break; }
+      }
+    }
     if (!t) t = el.getAttribute("aria-label") || "";
     if (!t) {
-      // iCIMS wraps the label in a sibling; climb to a small container and read its text.
-      let box = el.closest("div,li,fieldset,tr,td");
-      if (box && low(box.innerText).length < 160) t = box.innerText;
+      // climb to a small container and read its text (iCIMS wraps the label in a sibling)
+      let box = el.closest("div,li,fieldset,tr,td,section");
+      if (box && low(box.innerText).length < 180) t = box.innerText;
     }
-    if (!t) t = el.getAttribute("placeholder") || "";
+    if (!t) t = el.getAttribute("placeholder") || el.getAttribute("title") || (el.name || "");
     return norm(t);
   }
 
@@ -266,20 +278,63 @@
       answerScreeners();
       declineDemographics();
     } catch (e) { /* keep going */ }
-    badge();
+    let unfilled = [];
+    try { unfilled = unfilledReport(); } catch (e) {}
+    badge(unfilled);
+    if (unfilled.length) {
+      try { console.log("[TP Assist] НЕ смог заполнить (required):", unfilled); } catch (e) {}
+    }
     return n;
   }
 
-  // small floating status badge (so you can SEE it filled), top-frame only
-  function badge() {
-    if (window.top !== window) return;   // only the outer page draws it
+  // required, visible, still-empty fields (the ones that block Submit) — for the badge + console
+  function unfilledReport() {
+    const out = [];
+    for (const el of document.querySelectorAll("input,select,textarea")) {
+      const t = (el.type || el.tagName).toLowerCase();
+      if (["hidden", "submit", "button", "file", "reset"].includes(t)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 && r.height < 2) continue;
+      const req = el.required || el.getAttribute("aria-required") === "true";
+      if (!req) continue;
+      let empty;
+      if (t === "checkbox" || t === "radio") {
+        const nm = el.name;
+        empty = nm ? ![...document.querySelectorAll('[name="' + (window.CSS && CSS.escape ? CSS.escape(nm) : nm) + '"]')].some((x) => x.checked) : !el.checked;
+      } else if (el.tagName === "SELECT") {
+        const cur = el.options[el.selectedIndex];
+        empty = !el.value || isPlaceholder(cur && cur.text);
+      } else empty = !norm(el.value);
+      if (!empty) continue;
+      const lab = norm(labelText(el)).replace(/\s*\*\s*$/, "").slice(0, 55) || (el.name || "field");
+      if (lab && !out.includes(lab)) out.push(lab);
+    }
+    return out;
+  }
+
+  // floating status badge — drawn in the frame that actually holds the form (>=2 visible fields),
+  // listing the required fields it couldn't fill (so they're visible + reportable).
+  function badge(unfilled) {
+    const nFields = [...document.querySelectorAll("input,select,textarea")].filter((e) => {
+      const r = e.getBoundingClientRect();
+      return r.width > 2 && !["hidden", "submit", "button", "reset"].includes((e.type || "").toLowerCase());
+    }).length;
+    if (nFields < 2) return;
     let b = document.getElementById("__tpBadge");
     if (!b) {
       b = document.createElement("div"); b.id = "__tpBadge";
-      b.style.cssText = "position:fixed;z-index:2147483647;right:12px;bottom:12px;background:#0c47c2;color:#fff;" +
-        "font:12px -apple-system,Segoe UI,Roboto,sans-serif;padding:7px 11px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3)";
-      b.textContent = "TP Assist активен — реши капчу и жми Next/Submit";
+      b.style.cssText = "position:fixed;z-index:2147483647;right:10px;bottom:10px;max-width:460px;background:#0c47c2;" +
+        "color:#fff;font:12px -apple-system,Segoe UI,Roboto,sans-serif;padding:8px 12px;border-radius:9px;" +
+        "box-shadow:0 2px 10px rgba(0,0,0,.35);line-height:1.35";
       document.documentElement.appendChild(b);
+    }
+    if (unfilled && unfilled.length) {
+      b.style.background = "#b3541e";
+      b.textContent = "TP Assist: не заполнил " + unfilled.length + " — " +
+        unfilled.slice(0, 8).join(" · ") + (unfilled.length > 8 ? " …" : "") + "  (заполни вручную + реши капчу)";
+    } else {
+      b.style.background = "#1a7f37";
+      b.textContent = "TP Assist: всё заполнено ✓ — реши капчу и жми Submit";
     }
   }
 

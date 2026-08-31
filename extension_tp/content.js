@@ -75,19 +75,27 @@
   }
   const isPlaceholder = (t) => !t || /make a selection|select an option|select a |please select|choose|specify a|select a source/i.test(t);
 
+  function setSelect(el, opt) {
+    el.value = opt.value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Iterate the <select> ELEMENTS and read each one's label via labelText (which resolves iCIMS's
+  // aria-labelledby <span id> labels) — NOT document.querySelectorAll('label'), because iCIMS
+  // selects usually have NO <label for>, so a label-first scan misses them entirely.
   function pickSelect(labelRe, valueRe, force) {
     const rx = new RegExp(labelRe, "i");
-    for (const l of document.querySelectorAll("label")) {
-      if (!rx.test(l.innerText || "")) continue;
-      let el = l.getAttribute("for") ? document.getElementById(l.getAttribute("for")) : null;
-      if (!el || el.tagName !== "SELECT") el = (l.closest("div,li,fieldset,tr") || document).querySelector("select");
-      if (!el || el.tagName !== "SELECT") continue;
+    for (const el of document.querySelectorAll("select")) {
+      if (el.multiple) continue;
+      if (!rx.test(labelText(el))) continue;
       const cur = el.options[el.selectedIndex];
-      if (!force && el.value && !isPlaceholder(cur && cur.text)) return true;   // already answered
+      // already answered → try the NEXT select with this label (e.g. phone Type is set; the address
+      // Type shares the label "Type" and still needs a value), don't stop here.
+      if (!force && el.value && !isPlaceholder(cur && cur.text)) continue;
       const opt = [...el.options].find((o) => o.value && (optMatch(valueRe, o.text) || optMatch(valueRe, o.value)));
       if (!opt) continue;
-      el.value = opt.value;
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      setSelect(el, opt);
       return true;
     }
     return false;
@@ -95,17 +103,14 @@
 
   function selectFirstReal(labelRe) {
     const rx = new RegExp(labelRe, "i");
-    for (const l of document.querySelectorAll("label")) {
-      if (!rx.test(l.innerText || "")) continue;
-      let el = l.getAttribute("for") ? document.getElementById(l.getAttribute("for")) : null;
-      if (!el || el.tagName !== "SELECT") el = (l.closest("div,li,fieldset,tr") || document).querySelector("select");
-      if (!el || el.tagName !== "SELECT") continue;
+    for (const el of document.querySelectorAll("select")) {
+      if (el.multiple) continue;
+      if (!rx.test(labelText(el))) continue;
       const cur = el.options[el.selectedIndex];
       if (el.value && !isPlaceholder(cur && cur.text)) return true;
       const opt = [...el.options].find((o) => o.value && !isPlaceholder(o.text));
       if (!opt) continue;
-      el.value = opt.value;
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+      setSelect(el, opt);
       return true;
     }
     return false;
@@ -204,22 +209,20 @@
   }
 
   function answerScreeners() {
-    // native <select> screeners
-    for (const l of document.querySelectorAll("label")) {
-      const lt = norm(l.innerText); if (lt.length < 6) continue;
-      const w = l.closest("div,li,fieldset,tr"); if (!w) continue;
-      let el = l.getAttribute("for") ? document.getElementById(l.getAttribute("for")) : null;
-      if (!el || el.tagName !== "SELECT") el = w.querySelector("select:not([multiple])");
-      if (!el || el.tagName !== "SELECT") continue;
+    // native <select> screeners — iterate the SELECTs and read each label via labelText (iCIMS
+    // aria-labelledby), not a <label>-first scan.
+    for (const el of document.querySelectorAll("select")) {
+      if (el.multiple) continue;
       const cur = el.options[el.selectedIndex];
       if (el.value && !isPlaceholder(cur && cur.text)) continue;
+      const lt = labelText(el); if (norm(lt).length < 6) continue;
       let cands = screenerAnswer(lt);
       if (/proficiency|language/i.test(lt) && /english|spanish/i.test(lt) && !cands) {
         const high = /english/i.test(lt) ? true : !!P.bilingual;
         cands = high ? ["Native", "Fluent", "Advanced", "Professional"] : ["None", "No proficiency", "Basic", "Limited"];
       }
       if (!cands) continue;
-      for (const c of cands) { const o = [...el.options].find((o) => o.value && optMatch(c, o.text)); if (o) { el.value = o.value; el.dispatchEvent(new Event("change", { bubbles: true })); break; } }
+      for (const c of cands) { const o = [...el.options].find((o) => o.value && optMatch(c, o.text)); if (o) { setSelect(el, o); break; } }
     }
     // radio-group screeners
     const groups = {};
@@ -261,15 +264,16 @@
       n += fillText("last name|surname|family name", P.last_name) ? 1 : 0;
       if (P.middle_name) fillText("middle name", P.middle_name);
       fillPasswords();
-      // phone
-      pickSelect("^type$|phone", P.phone_type || "Mobile");
+      // phone: Type = Mobile (its own select) + Number as digits
+      pickSelect("^\\s*type\\b|phone type", P.phone_type || "Mobile");
       fillText("^\\s*number|include country code|^phone|mobile number", P.phone_digits, true);
-      // how did you hear + specify further
+      // how did you hear + its dependent specify-further
       fillHowHeard();
-      // residence: Country FIRST, then State, then address
+      // residence: Country FIRST (unlocks State), then State, address Type, then the address fields
       pickSelect("country", P.country || "United States");
       pickSelect("state|province", P.state_full || "Ohio");
-      fillText("^\\s*address\\b|street", P.address, false);
+      pickSelect("^\\s*type\\b", "Physical");                     // address Type (phone Type already set)
+      fillText("^\\s*address\\b(?!\\s*(2|line))|^\\s*street", P.address, false);
       fillText("^\\s*city\\b|city/town|^town\\b", P.city, true);
       fillText("zip|postal", P.zip, true);
       // consents / screeners / EEO

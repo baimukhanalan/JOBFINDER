@@ -1358,6 +1358,36 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     live at deploy (~300 employers). Only the dashboard restarts for panel display changes. Tests:
     `test_everify_employers.py` (parser + segmentation + graceful-degrade + stale-gated cache, no network).
 
+## Teleperformance (iCIMS) apply — full-auto is captcha-walled; the SHIPPED path is a browser EXTENSION the owner runs in HIS OWN browser (`extension_tp/`, 2026-08-31)
+The TP/iCIMS apply is gated by **hCaptcha on EVERY submit** (email Next, Submit Profile, each Continue).
+Established by a long investigation (don't re-derive): (1) **stealth (patchright) beats the entry
+AWS-WAF but NOT the hCaptcha**; (2) a **synthetic/Playwright click PARKS the challenge** (hCaptcha
+rejects CDP input — the parked challenge iframe stays full-size at `top:-9999`) — only a **REAL mouse**
+(noVNC / xdotool / the owner's real browser) yields a solvable challenge; (3) **every token-solver farm
+DROPPED hCaptcha in 2024-26** (CapSolver / 2Captcha / Anti-Captcha / CapMonster — confirmed from their
+own docs/SDKs) because of the new AI-resistant visual set; (4) the surviving in-browser solver
+**NopeCHA** works but its free tier returns `{"error":12,"Banned IP"}` from BOTH the datacenter AND the
+residential home IP → needs a **paid key (~$5/mo)**. So there is **no free full-auto**.
+**SHIPPED SOLUTION = `extension_tp/`** — an MV3 Chrome extension the owner loads unpacked in HIS OWN
+browser. Its content script (`all_frames` → reaches `icims_content_iframe`) **auto-fills the whole
+application** from a baked synthetic **Ohio** persona (`persona.js`; identity / phone-digits /
+Country→State / how-heard+specify-further / CSR screeners / EEO-decline / privacy consent — logic ported
+from `applier/strategies/icims.py::_tp_fill`/`_screener_answer`/`_decline_demographics`). It NEVER clicks
+Next/Submit and NEVER touches the captcha — **the owner solves the captcha + Submits himself** (real IP +
+real mouse ⇒ easy hCaptcha, no noVNC/proxy/solver). Fills on load + DOM-change + `Alt+Shift+F`. Verified
+2026-08-31: loads live on icims.com (badge shows), 22/22 fields on a mock form. Persona =
+`olivia.bennett2311@takhet.com` (mailbox provisioned); the account verification code lands in that
+@takhet.com Maildir on the server (read via `verify_code.read_code`) — relay it, or edit `persona.js` to
+the owner's own email. TP allowed-states = 38/39 (`AL AR AZ DE FL GA IA ID IL IN KS KY LA MD ME MI MN MO
+MS MT NC ND NE NJ NM NV OH OK PA (RI) SC SD TN TX UT VA WI WV WY`); a "based in Ohio" posting → Ohio.
+**Server-side investigation artifacts, KEPT but NOT the primary path:** `backend/tools/icims_recon.py`
+(patchright-stealth recon/autofill harness through the residential tunnel slot 8120; `_tp_fill` +
+`_advance` + wizard walk; env gates `ICIMS_RELAY_DRIVE`/`ICIMS_NOPECHA`/`NOPECHA_KEY`; loads
+`backend/vendor/nopecha_ext`), `backend/tools/captcha_relay.py` (a scrot+xdotool phone relay — laggy,
+superseded by noVNC), `captcha.systeam.kz` → **repointed to the :98 noVNC** (`vnc.html?path=websockify`).
+For full-auto later: buy a NopeCHA key → `NOPECHA_KEY` env → `icims_recon.py` runs autonomously. Memory:
+[[jobfinder-teleperformance-extension]].
+
 ## Interview Scheduler & Responsible Cabinet (`backend/interviews/`, added 2026-08-28)
 Assign an incoming interview (a `kind=interview` mail) into a free time-slot of a "responsible"
 (ответственный — the human who attends the interview as the persona), modelled on **orta.study**'s

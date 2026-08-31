@@ -53,3 +53,28 @@ covers the IP half of the problem.
 ## Artifacts
 - Screenshots: `scratchpad/tp_01_jobpage.png`, `tp_03_icims_job.png` (blank iframe = WAF), `tp_06_challenge.png` (the AWS WAF "choose all the hats" grid).
 - Recon scripts: `scratchpad/tp_recon{1,2,3,4}.py`.
+
+## UPDATE — STEALTH SPIKE (2026-08-31): stealth beats the AWS WAF, but hCaptcha remains
+Ran a stealth browser (**patchright** — patched Playwright, `launch_persistent_context`, real
+`channel="chromium"`, `navigator.webdriver=false`) through the same residential tunnel.
+
+- **AWS WAF: PASSED.** The "Choose all the hats" WAF puzzle did NOT appear — the real iCIMS job page
+  loaded (Welcome page, "Apply for this job online", job locations **US-OH**, 18 elements). The entry
+  WAF was purely automated-fingerprint detection, and stealth defeats it. (`tp_st_A.png`)
+- **Apply → "Enter Your Information" step:** Email input + required "Candidate Privacy Notice" checkbox
+  + submit, guarded by **INVISIBLE hCaptcha** (sitekey `94fee806-5cac-4582-9738-384a0f4ea6f8`).
+- **Submitting the email ESCALATED the invisible hCaptcha to a VISIBLE challenge** — *"Click the shape
+  that does not match"* (`newassets.hcaptcha.com`). Stealth did NOT silently pass it. URL → `.../login`.
+  (`tp_st_next.png`)
+- The full application form + the **STATE dropdown / allowed-states** sit AFTER this hCaptcha + the
+  account step — still NOT reached (only a 4-option "Select a country" on the register step).
+
+### Verdict for the build
+Two captcha layers: **(1) AWS WAF at entry — beaten by stealth (patchright).** **(2) hCaptcha on the
+iCIMS email/account step — NOT beaten by stealth alone** (escalates to a visible challenge under
+automation). Full-auto Teleperformance = **stealth (patchright) for the WAF + an hCaptcha solver for
+step 2 + the iCIMS multi-step form fill.** hCaptcha is solvable by CapSolver/2Captcha via the sitekey —
+needs a funded `CAPTCHA_SOLVER_KEY` wired into `applier/captcha_solver.py`. Alternative: **hybrid** —
+human solves the one hCaptcha in noVNC, bot does the rest. Allowed-states still behind hCaptcha. Stealth
+stack: `patchright` + `launch_persistent_context(channel="chromium", proxy="socks5://127.0.0.1:<slot>",
+no_viewport=True, locale/timezone set)`. Scripts: `scratchpad/tp_stealth{,2,3}.py`.

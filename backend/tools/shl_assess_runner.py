@@ -176,6 +176,21 @@ async def upgrade_bank() -> dict:
     return {"entries": len(judged), "changed": changed}
 
 
+def watch(concurrency: int = 2, interval: int = 60) -> None:
+    """Daemon: complete each assessment the MOMENT its invite lands (near-instant — polls the mail
+    index every `interval`s, so no 3h cron wait). Runs forever; a per-tick try/except keeps it up."""
+    import time
+    logger.info("shl watch started (interval=%ss, concurrency=%d)", interval, concurrency)
+    while True:
+        try:
+            if pending_invites():
+                asyncio.run(run_all(concurrency))
+        except Exception:
+            import traceback
+            logger.warning("watch tick error: %s", traceback.format_exc().splitlines()[-1])
+        time.sleep(interval)
+
+
 def _acquire_lock():
     os.makedirs(_DATA, exist_ok=True)
     f = open(LOCK_PATH, "w")
@@ -192,6 +207,8 @@ def main() -> None:
     ap.add_argument("--list", action="store_true", help="show pending/completed invites and exit")
     ap.add_argument("--concurrency", type=int, default=3)
     ap.add_argument("--upgrade-bank", action="store_true", help="offline: re-decide judgement bank")
+    ap.add_argument("--watch", action="store_true", help="daemon: complete invites the moment they arrive")
+    ap.add_argument("--interval", type=int, default=60, help="--watch poll seconds")
     args = ap.parse_args()
 
     if args.list:
@@ -205,6 +222,9 @@ def main() -> None:
     _lock = _acquire_lock()  # noqa: F841  (held for process lifetime)
     if args.upgrade_bank:
         asyncio.run(upgrade_bank())
+        return
+    if args.watch:
+        watch(args.concurrency, args.interval)
         return
     results = asyncio.run(run_all(args.concurrency))
     print("\n==== SUMMARY ====")

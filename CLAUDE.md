@@ -1204,10 +1204,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   fast. **`tools/shl_assess_runner.py`** = the AUTONOMOUS driver: discovers Maximus SHL invites across the
   persona mailboxes, drives each to 100% (retry/resume), remembers completed ones (`data/shl_assess_state.json`),
   file-locked (cron-safe). CLI: (default) run all pending · `--list` · `--concurrency N` · `--upgrade-bank`
-  (offline: re-decide judgement bank entries with the model). **Cron `0 */3`** runs it (`DISPLAY=:98 sg mail`,
-  by file path so no `cd` needed; exits fast if nothing pending). **The autonomous loop:** the Maximus Avature
-  lane real-submits (`mass_hiring_apply.run_batch_parallel(ids, dry_run=False)`) → Maximus emails «Application
-  Complete» + the SHL invite → the cron runner completes the OPQ → the bank grows. **Verified live 2026-08-31:**
+  (offline: re-decide judgement bank entries with the model) · **`--watch`** (daemon: complete each invite
+  the MOMENT it lands, polling the mail index every `--interval`s — no wait). **Completion is EVENT-DRIVEN:
+  pm2 `jobfinder-shl-watch`** runs `--watch --concurrency 2 --interval 60` (`DISPLAY=:98 sg mail`), so a new
+  assessment is done within ~1 min of the invite email, not on a schedule. **The APPLY side is cronned:**
+  `tools/mass_hiring_apply_cron.py` real-submits to every Maximus (Avature) job once per run, scheduled
+  **`0 1,6,11,15,20`** = 5x/day = **5 applications per job per day** (each is a fresh synthetic persona →
+  a fresh invite; lock-guarded; NB this creates ~5×(#Maximus jobs) real accounts/day — dial the schedule
+  down if Maximus flags the volume). **The autonomous loop:** apply cron real-submits (`run_batch_parallel(
+  ids, dry_run=False)`) → Maximus emails «Application Complete» + the SHL invite → the `shl-watch` daemon
+  completes the OPQ within ~1 min → the bank grows. **Verified live 2026-08-31:**
   all 6 pending personas driven to 100% («Completed / 0 Assessments left» on the SHL overview), and a Maximus
   real-submit batch confirmed (`dry_run=False`, ~80% confirmed; «Application Complete» emails landed for the
   new personas). Only run under `sg mail` + `:98`; the co-pilot's persistent browser also lives on `:98` but

@@ -18,6 +18,7 @@ backend/data/everify_employers.json
 backend/data/shl_answer_bank.json
 backend/data/shl_assess_state.json
 backend/data/shl_assess_runner.lock
+backend/data/mh_apply_cron.lock
 backend/data/facts/*
 !backend/data/facts/sample.json
 backend/data/etalons/*

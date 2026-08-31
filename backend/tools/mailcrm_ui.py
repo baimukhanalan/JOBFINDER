@@ -129,15 +129,29 @@ def _html_links(html: str):
     return out
 
 
+_ACTION_LINK_RE = _re.compile(
+    r"assessment|apply|complete|verif|schedul|interview|\bstart\b|begin|\baccess\b|portal|"
+    r"sign ?in|log ?in|confirm|upload|availab|calendar|meeting|zoom|teams|book|"
+    r"self-?schedul|click here|view (job|position|details)|next steps?|take (the |your )?(test|survey)",
+    _re.I)
+
+
 def _extra_links_block(m: dict, plain_text: str) -> str:
-    """A clickable «Ссылки из письма» block — surfaced ONLY when the rendered plain body has no
-    URL of its own, so the scheduling/meeting link kept only in the HTML part is still reachable.
-    (When the plain body already has links, HTML footer/logo links would just be noise.)"""
-    if plain_text and _HAS_URL.search(plain_text):
-        return ""
+    """A clickable «Ссылки из письма» block for links kept only in the HTML part.
+    - If the rendered plain body has NO URL of its own → surface all HTML anchors (a
+      scheduling/meeting link that lives only in HTML would otherwise be unreachable).
+    - If the plain body DOES have URLs (e.g. footnote-style '[1] Assessment Link' + a raw
+      '[1] https://…' at the bottom) → surface ONLY the ACTIONABLE named anchors (Assessment
+      Link / Apply / Schedule / Verify …) so the reader gets a clean button instead of hunting
+      the footnote, WITHOUT pulling in footer/logo noise. Requires a real text label."""
     links = _html_links(m.get("html") or "")
     if not links:
         return ""
+    if plain_text and _HAS_URL.search(plain_text):
+        links = [(u, lbl) for (u, lbl) in links
+                 if lbl and lbl != u and _ACTION_LINK_RE.search(lbl)]
+        if not links:
+            return ""
     items = "".join(
         f'<a class="ml-link" href="{escape(u, quote=True)}" target="_blank" rel="noopener">'
         f'{escape(lbl[:90])}</a>' for (u, lbl) in links[:12])

@@ -112,12 +112,25 @@ def _maybe_trigger_shl(row, seen):
     if "maximus" not in fe or "complete your assessment" not in subj:
         return
     import subprocess
+    # WATCHDOG: kill any SHL runner stuck > 45 min before spawning, so a hung run (display
+    # contention has hung one for ~56 min) can't hold the drain lock and block the queue. The
+    # in-runner per-assessment (900s) + drain (40-min) caps make this rare; this is belt-and-braces.
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,etimes,cmd"], capture_output=True, text=True, timeout=8).stdout
+        for line in out.splitlines():
+            if "shl_assess_runner" not in line or "ps -eo" in line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) > 2700:
+                subprocess.run(["kill", "-9", parts[0]], timeout=5)
+    except Exception:
+        pass
     env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98")
     try:
         log = open(_SHL_LOG, "a")
     except Exception:
         log = subprocess.DEVNULL
-    subprocess.Popen(["/usr/bin/python3", _SHL_RUNNER, "--drain", "--concurrency", "2"],
+    subprocess.Popen(["/usr/bin/python3", _SHL_RUNNER, "--drain", "--concurrency", "3"],
                      env=env, stdout=log, stderr=log, start_new_session=True)
     if hasattr(log, "close"):
         log.close()  # the child keeps its own dup; don't leak the parent fd

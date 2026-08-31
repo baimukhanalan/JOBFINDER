@@ -148,10 +148,18 @@ async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
     last = "?"
     for attempt in range(1, max_retries + 1):
         async with async_playwright() as p:
-            b = await p.chromium.launch(headless=False, args=["--no-sandbox"])
+            b = await p.chromium.launch(headless=False, args=["--no-sandbox"], timeout=60000)
             pg = await b.new_page(viewport={"width": 1280, "height": 850})
             try:
-                res = await sa.run_intro(link, PERSONA, page=pg, max_steps=18, complete_scored=True)
+                # WATCHDOG: a single assessment must never hang forever (a stuck run held the drain
+                # lock ~56 min once — display contention). A real OPQ finishes in ~5-8 min, so cap at
+                # 15 min per attempt; a timeout is treated as a failed attempt and retried on a fresh
+                # browser (or, after max_retries, left incomplete for the next run).
+                res = await asyncio.wait_for(
+                    sa.run_intro(link, PERSONA, page=pg, max_steps=18, complete_scored=True),
+                    timeout=900)
+            except asyncio.TimeoutError:
+                res = {"status": "error", "note": "timeout 900s — assessment hung, retrying"}
             except Exception as e:
                 res = {"status": "error", "note": f"{type(e).__name__}: {e}"[:120]}
             last = res.get("status")
@@ -271,8 +279,12 @@ def main() -> None:
         watch(args.concurrency, args.interval)
         return
     if args.drain:
-        # loop so invites that LAND DURING the drain are still picked up before we exit.
-        while True:
+        # loop so invites that LAND DURING the drain are still picked up before we exit. A 40-min
+        # cap is a backstop so a drain can NEVER hold the lock indefinitely — if work remains, the
+        # next invite (mail-indexer hook) or cron spawns a fresh drain that reclaims the lock.
+        import time as _t
+        start = _t.time()
+        while _t.time() - start < 2400:
             if not asyncio.run(run_all(args.concurrency)):
                 break
         return

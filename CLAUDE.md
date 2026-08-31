@@ -1204,16 +1204,21 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   fast. **`tools/shl_assess_runner.py`** = the AUTONOMOUS driver: discovers Maximus SHL invites across the
   persona mailboxes, drives each to 100% (retry/resume), remembers completed ones (`data/shl_assess_state.json`),
   file-locked (cron-safe). CLI: (default) run all pending · `--list` · `--concurrency N` · `--upgrade-bank`
-  (offline: re-decide judgement bank entries with the model) · **`--watch`** (daemon: complete each invite
-  the MOMENT it lands, polling the mail index every `--interval`s — no wait). **Completion is EVENT-DRIVEN:
-  pm2 `jobfinder-shl-watch`** runs `--watch --concurrency 2 --interval 60` (`DISPLAY=:98 sg mail`), so a new
-  assessment is done within ~1 min of the invite email, not on a schedule. **The APPLY side is cronned:**
+  (offline: re-decide judgement bank entries with the model) · **`--drain`** (complete every pending invite,
+  looping until none remain, then exit) · `--watch` (a polling daemon variant, NOT deployed). **Completion
+  is EVENT-DRIVEN with NO extra daemon — a hook in the existing `mail_indexer`:** `mail_indexer._maybe_trigger_shl`
+  spawns `shl_assess_runner.py --drain` (detached, `DISPLAY=:98`, isolated in try/except so it can NEVER break
+  indexing) the moment a FRESH Maximus «Complete Your Assessment» invite is indexed (inotify → within seconds,
+  not a schedule). The runner's file lock collapses concurrent triggers to ONE instance that drains ALL pending
+  (the drain LOOPS so invites landing mid-drain are still caught); `pending_invites` treats `completed`/
+  `needs_human`/`incomplete:*` as terminal so the loop can't spin. **Restart `jobfinder-mail-indexer` after
+  touching the hook.** **The APPLY side is cronned:**
   `tools/mass_hiring_apply_cron.py` real-submits to every Maximus (Avature) job once per run, scheduled
   **`0 1,6,11,15,20`** = 5x/day = **5 applications per job per day** (each is a fresh synthetic persona →
   a fresh invite; lock-guarded; NB this creates ~5×(#Maximus jobs) real accounts/day — dial the schedule
   down if Maximus flags the volume). **The autonomous loop:** apply cron real-submits (`run_batch_parallel(
-  ids, dry_run=False)`) → Maximus emails «Application Complete» + the SHL invite → the `shl-watch` daemon
-  completes the OPQ within ~1 min → the bank grows. **Verified live 2026-08-31:**
+  ids, dry_run=False)`) → Maximus emails «Application Complete» + the SHL invite → the mail-indexer hook
+  fires `--drain` → the OPQ is completed within seconds → the bank grows. **Verified live 2026-08-31:**
   all 6 pending personas driven to 100% («Completed / 0 Assessments left» on the SHL overview), and a Maximus
   real-submit batch confirmed (`dry_run=False`, ~80% confirmed; «Application Complete» emails landed for the
   new personas). Only run under `sg mail` + `:98`; the co-pilot's persistent browser also lives on `:98` but

@@ -95,6 +95,34 @@ def run_once():
 
 
 # ---- single-file index / prune (used by the watcher) -----------------------
+_SHL_RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shl_assess_runner.py")
+_SHL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "shl_assess.log")
+
+
+def _maybe_trigger_shl(row, seen):
+    """A FRESH Maximus SHL assessment invite just landed → spawn the completion drainer (detached),
+    so the OPQ is done within seconds of the email rather than on a schedule. The runner's file lock
+    collapses concurrent triggers to one instance that drains ALL pending invites. `seen==0` gates
+    it to new/ arrivals (a cur/ re-index doesn't re-fire). Fully isolated — the caller try/excepts
+    it so it can NEVER affect indexing."""
+    if seen != 0:
+        return
+    fe = (row.get("from_email") or "").lower()
+    subj = (row.get("subject") or "").lower()
+    if "maximus" not in fe or "complete your assessment" not in subj:
+        return
+    import subprocess
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98")
+    try:
+        log = open(_SHL_LOG, "a")
+    except Exception:
+        log = subprocess.DEVNULL
+    subprocess.Popen(["/usr/bin/python3", _SHL_RUNNER, "--drain", "--concurrency", "2"],
+                     env=env, stdout=log, stderr=log, start_new_session=True)
+    if hasattr(log, "close"):
+        log.close()  # the child keeps its own dup; don't leak the parent fd
+
+
 def index_file(path):
     """Index one Maildir file. seen from whether the path is under new/ (0) or cur/ (1);
     build_index_row returns None for anything outside a candidate mailbox (skipped)."""
@@ -110,6 +138,10 @@ def index_file(path):
         mail_db.upsert_message(**row)
     except Exception as e:
         print(f"upsert error {path}: {e}", flush=True)
+    try:
+        _maybe_trigger_shl(row, seen)
+    except Exception as e:
+        print(f"shl trigger error {path}: {e}", flush=True)
 
 
 def prune_file(path):

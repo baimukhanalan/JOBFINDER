@@ -88,9 +88,19 @@ def discover_invites() -> list[tuple[str, str]]:
     return out
 
 
+_TERMINAL = ("completed", "needs_human")
+
+
 def pending_invites() -> list[tuple[str, str]]:
+    """Invites not yet in a terminal state. 'incomplete:*' is terminal too (run_one already retried
+    it MAX_RETRIES times) so a drain loop can't spin on it forever; clear its state to retry."""
     state = _load_state()
-    return [(n, l) for n, l in discover_invites() if state.get(l) != "completed"]
+
+    def done(link: str) -> bool:
+        s = state.get(link, "")
+        return s in _TERMINAL or s.startswith("incomplete")
+
+    return [(n, l) for n, l in discover_invites() if not done(l)]
 
 
 # ---- run one assessment to completion ------------------------------------------------------------
@@ -209,6 +219,9 @@ def main() -> None:
     ap.add_argument("--upgrade-bank", action="store_true", help="offline: re-decide judgement bank")
     ap.add_argument("--watch", action="store_true", help="daemon: complete invites the moment they arrive")
     ap.add_argument("--interval", type=int, default=60, help="--watch poll seconds")
+    ap.add_argument("--drain", action="store_true",
+                    help="complete every pending invite, looping until none remain, then exit "
+                         "(what the mail-indexer hook spawns on a new invite)")
     args = ap.parse_args()
 
     if args.list:
@@ -225,6 +238,12 @@ def main() -> None:
         return
     if args.watch:
         watch(args.concurrency, args.interval)
+        return
+    if args.drain:
+        # loop so invites that LAND DURING the drain are still picked up before we exit.
+        while True:
+            if not asyncio.run(run_all(args.concurrency)):
+                break
         return
     results = asyncio.run(run_all(args.concurrency))
     print("\n==== SUMMARY ====")

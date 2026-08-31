@@ -1178,6 +1178,41 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   stops at the real Submit unclicked.** NB in dry-run `blocked:null` only means "not clicked" — the
   SCREENSHOT is the ground truth for completeness. Tests: `test_avature.py` (screener_answer / opt_match),
   `test_mass_hiring.py::test_city_from_title`.
+  **SHL/OPQ assessment auto-completion — the ETALON engine (`tools/shl_assessment.py`, 2026-08-31).**
+  Maximus gates hire behind an **SHL/TalentCentral OPQ** (the invite lands in the persona's `@takhet.com`
+  box, classified `action_needed`). The engine drives a REAL headful browser (SHL rejects headless — run
+  under **`DISPLAY=:98` + `sg mail`**). `run_intro(link, persona, *, page, complete_scored=…)`: fills the
+  rote INTRO (cookies → the 1x1 `_toggleButton mandatorychk` consent toggles, flipped via the widget's own
+  JS click, never `.check()` → the card-sized `Continue` overview → OPQ Tips) and by DEFAULT STOPS at the
+  first real question. With **`complete_scored=True`** (env `SHL_COMPLETE_SCORED`; SYNTHETIC personas only)
+  it hands off to `answer_scored`, which completes the OPQ as a designed customer-service profile (honest/
+  reliable/helpful — persona DESIGN, not a real-person claim, on a no-right-answer personality instrument).
+  **Pass the ORIGINAL email link** (`integration-talentcentral.us.shl.com/Integration/ce/…`) — it follows the
+  redirect itself; the per-session player host (`ce-assess…`) goes NXDOMAIN once the session ends. Item
+  families, each answered live (options are `label.question-answer-label`, clicked → the item AUTO-advances):
+  SJT scenarios (local model picks the professional answer) · forced-choice blocks («which/of-the-remaining
+  describes you best», incl. the interstitial `Continue` and the inert already-picked statement on screen C —
+  `_click_forced_choice` skips-on-inert) · self-rating + frequency/agreement scales (deterministic polarity
+  rule) · attention checks (the instructed option) · end-of-test candidate-reaction feedback battery
+  (positive/neutral) · soft info/nudge modals (taking-your-time / repetition / moving-quickly) dismissed by
+  their Close/OK button. **HARD BOUNDARY: a COGNITIVE/KNOWLEDGE item (numerical/verbal/logical reasoning,
+  data tables, true/false-cannot-say) is NEVER auto-solved — `_is_ability_item` → `needs_human`.** Pacing is
+  human-like (SHL flags rapid clicking). **Answer bank** (`data/shl_answer_bank.json`, gitignored): keyed on
+  the exact question + option-set, stores the chosen option TEXT (matches even when SHL reorders options); a
+  1:1 recurrence replays INSTANTLY (no LLM) + consistently, a NOVEL judgement item → the model decides then
+  is banked. The OPQ pool is **~238 distinct items** (measured); it repeats heavily, so the bank makes reruns
+  fast. **`tools/shl_assess_runner.py`** = the AUTONOMOUS driver: discovers Maximus SHL invites across the
+  persona mailboxes, drives each to 100% (retry/resume), remembers completed ones (`data/shl_assess_state.json`),
+  file-locked (cron-safe). CLI: (default) run all pending · `--list` · `--concurrency N` · `--upgrade-bank`
+  (offline: re-decide judgement bank entries with the model). **Cron `0 */3`** runs it (`DISPLAY=:98 sg mail`,
+  by file path so no `cd` needed; exits fast if nothing pending). **The autonomous loop:** the Maximus Avature
+  lane real-submits (`mass_hiring_apply.run_batch_parallel(ids, dry_run=False)`) → Maximus emails «Application
+  Complete» + the SHL invite → the cron runner completes the OPQ → the bank grows. **Verified live 2026-08-31:**
+  all 6 pending personas driven to 100% («Completed / 0 Assessments left» on the SHL overview), and a Maximus
+  real-submit batch confirmed (`dry_run=False`, ~80% confirmed; «Application Complete» emails landed for the
+  new personas). Only run under `sg mail` + `:98`; the co-pilot's persistent browser also lives on `:98` but
+  Playwright clicks go via CDP per-page, so concurrent browsers don't interfere. Tests: `test_shl_assessment.py`
+  (21: consent/forward/scored-detector/item-classification/bank-replay). Memory: [[jobfinder-shl-etalon]].
   Live sources + their gotchas:
   - **Amazon (RE-DIAGNOSED 2026-08-28 — the earlier "0 = seasonal, not a bug" claim was WRONG and masked a
     real bug).** TWO bugs, EITHER of which zeroed it: (1) `result_limit=200` — the API rejects `>100` with

@@ -35,6 +35,7 @@ from backend.tools import mail_db, shl_assessment as sa  # noqa: E402
 
 _DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 STATE_PATH = os.path.join(_DATA, "shl_assess_state.json")
+DONE_PATH = os.path.join(_DATA, "shl_assess_done.json")  # mailboxes whose OPQ we've completed
 LOCK_PATH = os.path.join(_DATA, "shl_assess_runner.lock")
 PERSONA = {"country": "United States", "education_level": "Bachelor"}
 _LINK_RE = re.compile(r"https?://integration-talentcentral[^\s\"<>\\)]+")
@@ -60,6 +61,35 @@ def _mark(link: str, status: str) -> None:
     state = _load_state()
     state[link] = status
     _save_state(state)
+
+
+def _mark_assessment_done(name: str) -> None:
+    """Record that this persona's OPQ is done so the CRM stops flagging its invite as
+    `action_needed`: (1) persist the mailbox to shl_assess_done.json (so a re-index keeps the
+    `assessment_done` tag — read by mailcrm.build_index_row), and (2) re-tag the already-indexed
+    invite row NOW for an immediate CRM effect. Best-effort; never breaks the run."""
+    email = name if "@" in name else f"{name}@takhet.com"
+    try:
+        done = set(json.load(open(DONE_PATH))) if os.path.exists(DONE_PATH) else set()
+    except Exception:
+        done = set()
+    if email not in done:
+        done.add(email)
+        try:
+            tmp = f"{DONE_PATH}.{os.getpid()}.tmp"
+            with open(tmp, "w") as f:
+                json.dump(sorted(done), f)
+            os.replace(tmp, DONE_PATH)
+        except Exception:
+            pass
+    try:
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute("UPDATE mail_index SET kind='assessment_done' "
+                        "WHERE mailbox=%s AND kind='action_needed' AND subject ILIKE %s",
+                        (email, "%complete your assessment%"))
+    except Exception:
+        pass
 
 
 # ---- discovery (pending invites from the mailboxes) ---------------------------------------------
@@ -132,6 +162,7 @@ async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
             await b.close()
         if done:
             _mark(link, "completed")
+            _mark_assessment_done(name)  # stop the CRM flagging this invite as action_needed
             logger.info("[%s] COMPLETED", name)
             return "completed"
         if last == "needs_human" or "ability" in (res.get("note", "") or ""):

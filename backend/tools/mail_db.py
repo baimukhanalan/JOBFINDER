@@ -240,7 +240,8 @@ def list_messages(mailbox=None, q=None, limit=50, before_ts=None, before_id=None
         args += [q, f"%{q}%", f"%{q}%"]
     if stage == "sent":
         where.append("outbound=TRUE")
-    elif stage in ("ack", "interview", "offer", "rejection", "other", "action_needed", "code"):
+    elif stage in ("ack", "interview", "offer", "rejection", "other", "action_needed",
+                   "assessment_done", "code"):
         where.append("kind=%s AND outbound=FALSE")
         args.append(stage)
     if before_ts is not None and before_id is not None:
@@ -289,7 +290,8 @@ def counts() -> dict:
 # it (a deliberate choice matching stats.py; a later rejection does not "un-progress" a lead).
 # 'code' (ATS verification-code noise) ranks just above 'other' so a candidate whose only
 # inbound is a security code lands in 'code', keeping 'other' = genuinely unclassified.
-_STAGE_RANK = ("offer", "interview", "action_needed", "rejection", "ack", "code", "other")
+_STAGE_RANK = ("offer", "interview", "action_needed", "assessment_done", "rejection",
+               "ack", "code", "other")
 
 
 def furthest_stage(kinds) -> str:
@@ -311,6 +313,7 @@ _FURTHEST_STAGE_SQL = """
           WHEN bool_or(kind='offer'         AND NOT outbound) THEN 'offer'
           WHEN bool_or(kind='interview'     AND NOT outbound) THEN 'interview'
           WHEN bool_or(kind='action_needed' AND NOT outbound) THEN 'action_needed'
+          WHEN bool_or(kind='assessment_done' AND NOT outbound) THEN 'assessment_done'
           WHEN bool_or(kind='rejection'     AND NOT outbound) THEN 'rejection'
           WHEN bool_or(kind='ack'           AND NOT outbound) THEN 'ack'
           WHEN bool_or(kind='code'          AND NOT outbound) THEN 'code'

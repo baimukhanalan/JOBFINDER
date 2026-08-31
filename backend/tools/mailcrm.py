@@ -218,6 +218,36 @@ def classify(subject: str, body: str) -> str:
     return "other"
 
 
+# A Maximus «Complete Your Assessment» invite classifies `action_needed`, but once the etalon
+# engine has COMPLETED that persona's assessment the invite is handled — the runner records the
+# mailbox in shl_assess_done.json, and `build_index_row` re-tags it `assessment_done` (🤖) so the
+# CRM stops flagging it as needing action. Cached by mtime (build_index_row runs per-file).
+_ASSESS_DONE_PATH = Path(__file__).resolve().parent.parent / "data" / "shl_assess_done.json"
+_assess_done_cache = {"mtime": None, "set": frozenset()}
+
+
+def assessment_done_mailboxes() -> frozenset:
+    try:
+        m = _ASSESS_DONE_PATH.stat().st_mtime
+    except OSError:
+        return frozenset()
+    if _assess_done_cache["mtime"] != m:
+        try:
+            _assess_done_cache["set"] = frozenset(json.loads(_ASSESS_DONE_PATH.read_text()))
+        except Exception:
+            _assess_done_cache["set"] = frozenset()
+        _assess_done_cache["mtime"] = m
+    return _assess_done_cache["set"]
+
+
+def _kind_with_done_override(subject: str, body: str, mailbox: str) -> str:
+    kind = classify(subject, body)
+    if (kind == "action_needed" and "complete your assessment" in (subject or "").lower()
+            and mailbox in assessment_done_mailboxes()):
+        return "assessment_done"
+    return kind
+
+
 # ---- candidate registry ----------------------------------------------------
 def _load(path: Path, default):
     try:
@@ -497,7 +527,8 @@ def build_index_row(path: str, seen: int) -> dict | None:
         "path": path, "path_hash": _pid(path),
         "from_name": _display_name(frm), "from_email": from_email,
         "subject": subj, "snippet": snip,
-        "kind": classify(subj, full_text), "thread_key": _norm_subject(subj),
+        "kind": _kind_with_done_override(subj, full_text, box["email"]),
+        "thread_key": _norm_subject(subj),
         "has_att": any(_is_attachment(p) for p in msg.walk()),
         "outbound": from_email.lower() == box["email"],
         "date_ts": _date_ts(msg, path), "seen": bool(seen),

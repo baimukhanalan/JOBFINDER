@@ -94,3 +94,6 @@ backend/data/mailbox_passwords.json
 logs/
 backend/data/demo_personas.json
 backend/data/demo_used_names.json
+
+# Residential-proxy tunnel key + filled installers (secret) — templates+generator ARE committed
+backend/tools/residential_proxy/dist/

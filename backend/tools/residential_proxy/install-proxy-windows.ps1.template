@@ -1,0 +1,86 @@
+# JobFinder residential proxy — Windows runner.
+# Downloads gost (a tiny local HTTP proxy), writes the tunnel key, and keeps a reverse-SSH
+# tunnel to the server alive so the server can egress through THIS laptop's home internet.
+# Nothing here listens on the network publicly — the server side binds loopback only.
+#
+#   First run (double-click start-proxy-windows.bat): installs + registers a logon task + runs.
+#   -Run : just run the supervisor (used by the scheduled task).
+param([switch]$Run)
+$ErrorActionPreference = "Stop"
+
+$RHOST  = "__HOST__"     # proxy.systeam.kz  (DNS -> the server, SSH port 22)
+$RPORT  = __RPORT__      # server loopback port the tunnel binds (fixed, key-restricted)
+$LP     = __LP__         # local gost port on this laptop
+$GostVer = "__GOSTVER__"
+
+$Base    = Join-Path $env:LOCALAPPDATA "jobfinder-proxy"
+$GostExe = Join-Path $Base "gost.exe"
+$KeyPath = Join-Path $Base "tunnel_key"
+$Known   = Join-Path $Base "known_hosts"
+$SelfPs1 = $MyInvocation.MyCommand.Path
+New-Item -ItemType Directory -Force -Path $Base | Out-Null
+
+function Install-Gost {
+  if (Test-Path $GostExe) { return }
+  Write-Host "downloading gost $GostVer ..."
+  $zip = Join-Path $Base "gost.zip"
+  $url = "https://github.com/ginuerzh/gost/releases/download/v$GostVer/gost-windows-amd64-$GostVer.zip"
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  Invoke-WebRequest -Uri $url -OutFile $zip
+  Expand-Archive -Path $zip -DestinationPath $Base -Force
+  $exe = Get-ChildItem $Base -Filter "gost*amd64*.exe" | Select-Object -First 1
+  if (-not $exe) { $exe = Get-ChildItem $Base -Filter "gost*.exe" | Select-Object -First 1 }
+  Move-Item $exe.FullName $GostExe -Force
+  Remove-Item $zip -Force
+}
+
+function Write-Key {
+  $key = @'
+__PRIVKEY__
+'@
+  # OpenSSH REJECTS a key with CRLF line endings — force LF and a trailing newline, write raw.
+  $key = ($key -replace "`r`n", "`n").TrimEnd("`n") + "`n"
+  [IO.File]::WriteAllText($KeyPath, $key, (New-Object Text.UTF8Encoding($false)))
+  # OpenSSH also refuses a world-readable key: strip inheritance, grant only this user Read.
+  icacls $KeyPath /inheritance:r | Out-Null
+  icacls $KeyPath /grant:r "$($env:USERNAME):(R)" | Out-Null
+}
+
+function Register-Autostart {
+  # run hidden at every logon so it survives reboot
+  $act  = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SelfPs1`" -Run"
+  $trig = New-ScheduledTaskTrigger -AtLogOn
+  $set  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  Register-ScheduledTask -TaskName "JobFinderResidentialProxy" -Action $act -Trigger $trig `
+     -Settings $set -Force -RunLevel Limited | Out-Null
+  Write-Host "autostart registered (Task Scheduler: JobFinderResidentialProxy)"
+}
+
+function Supervise {
+  $delay = 2
+  while ($true) {
+    if (-not (Get-Process -Name gost -ErrorAction SilentlyContinue)) {
+      Start-Process -FilePath $GostExe -ArgumentList "-L=http://127.0.0.1:$LP" -WindowStyle Hidden
+      Start-Sleep -Seconds 2
+    }
+    $t0 = Get-Date
+    Write-Host "$(Get-Date -Format o) connecting tunnel to $RHOST ..."
+    & ssh -i $KeyPath -N `
+        -o "ExitOnForwardFailure=yes" -o "ServerAliveInterval=15" -o "ServerAliveCountMax=3" `
+        -o "StrictHostKeyChecking=accept-new" -o "UserKnownHostsFile=$Known" -o "BatchMode=yes" `
+        -R "127.0.0.1:${RPORT}:127.0.0.1:${LP}" "tunnel@$RHOST"
+    if (((Get-Date) - $t0).TotalSeconds -gt 30) { $delay = 2 }  # long-lived connection -> reset backoff
+    Write-Host "$(Get-Date -Format o) tunnel dropped; reconnecting in $delay s"
+    Start-Sleep -Seconds $delay
+    $delay = [Math]::Min($delay * 2, 60)                        # exponential backoff, capped 60s
+  }
+}
+
+if (-not $Run) {
+  Install-Gost
+  Write-Key
+  try { Register-Autostart } catch { Write-Host "autostart skipped: $_" }
+  Write-Host "installed. keeping the tunnel up — leave this window open (or it also runs at logon)."
+}
+Supervise

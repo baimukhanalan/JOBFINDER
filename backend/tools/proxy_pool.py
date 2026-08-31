@@ -21,6 +21,7 @@ Cursor persists so round-robin survives process restarts.
 import asyncio
 import json
 import logging
+import socket
 import threading
 import time
 from pathlib import Path
@@ -31,6 +32,40 @@ logger = logging.getLogger(__name__)
 
 _STORE = Path(__file__).resolve().parents[1] / "data" / "proxies.json"
 _LOCK = threading.Lock()
+
+# The owner's home laptop, reverse-SSH-tunnelled to the server as a RESIDENTIAL egress on
+# loopback 127.0.0.1:8120 (see backend/tools/residential_proxy/). Present ONLY while the laptop
+# is connected — so we TCP-probe it (cached) and, when it's up, prefer it over the datacenter
+# Bright Data pool so blocked ATSes (Teleperformance/iCIMS, Kelly/Akamai, reCAPTCHA-Greenhouse)
+# see a residential IP. No auth (reachable only via the tunnel). Owner controls it by simply
+# connecting/disconnecting the laptop; when it's down, next_proxy() falls back to the pool.
+RESIDENTIAL_SERVER = "http://127.0.0.1:8120"
+_RES_HOST, _RES_PORT = "127.0.0.1", 8120
+_res_cache = {"ts": 0.0, "up": False}
+
+
+def residential_up() -> bool:
+    """True if the laptop residential tunnel is accepting connections on 127.0.0.1:8120.
+    Cached ~15s so next_proxy() can consult it per fill without a probe each time."""
+    now = time.time()
+    if now - _res_cache["ts"] < 15:
+        return _res_cache["up"]
+    up = False
+    try:
+        socket.create_connection((_RES_HOST, _RES_PORT), timeout=0.5).close()
+        up = True
+    except Exception:
+        up = False
+    _res_cache.update(ts=now, up=up)
+    return up
+
+
+def residential_proxy() -> dict | None:
+    """The residential (laptop) egress as a {server, username, password} proxy dict when the
+    tunnel is up, else None. No auth — it's reachable only over the loopback tunnel."""
+    if residential_up():
+        return {"server": RESIDENTIAL_SERVER, "username": None, "password": None}
+    return None
 # Plain http (not https) so an http proxy simply forwards it — https CONNECT is
 # occasionally blocked and would false-flag a working proxy as dead.
 _ECHO_URL = "http://api.ipify.org?format=json"
@@ -294,7 +329,14 @@ def replace_pool(proxies: list[dict]) -> dict:
 
 def next_proxy() -> dict | None:
     """Round-robin the pool (advances + persists the cursor). Returns
-    {server, username, password} or None when the pool is empty."""
+    {server, username, password} or None when the pool is empty.
+
+    When the owner's laptop residential tunnel is connected, PREFER it (so a fill goes out from a
+    real home IP for ATSes that block the datacenter). This is the owner's on/off switch — connect
+    the laptop and single-fills route residential; disconnect and it falls back to the pool below."""
+    res = residential_proxy()
+    if res:
+        return res
     with _LOCK:
         data = _load()
         ps = data.get("proxies") or []

@@ -36,7 +36,23 @@ from backend.tools import mail_db  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RECON_ROOT = os.path.join(REPO, "logs", "icims_recon")
 STEALTH_PROFILE = os.path.join(REPO, "backend", "data", "icims_stealth_profile")
-SLOT = "socks5://127.0.0.1:8120"
+SLOT = os.getenv("ICIMS_PROXY", "socks5://127.0.0.1:8120")   # empty = DIRECT (no residential tunnel)
+
+
+def _tunnel_up() -> bool:
+    """True if the SLOT proxy actually accepts a TCP connection (the residential chisel tunnel is
+    often down). When it's down we launch DIRECT instead of pointing Chromium at a dead proxy."""
+    if not SLOT:
+        return False
+    import socket
+    from urllib.parse import urlparse
+    u = urlparse(SLOT)
+    host, port = (u.hostname or "127.0.0.1"), (u.port or 8120)
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
 # NopeCHA extension auto-solves the hCaptcha in-page (its API egresses via the browser's residential
 # proxy, dodging the datacenter-IP free-tier ban). With it, the bot drives everything autonomously.
 NOPECHA_EXT = os.path.join(REPO, "backend", "vendor", "nopecha_ext")
@@ -403,18 +419,39 @@ async def _tp_fill(page, root, pf, facts, strat) -> None:
         await _fill_how_heard(page, root)
     except Exception:
         pass
-    # Country FIRST (unlocks State), then State/Province, then correct City/Zip
+    # Country FIRST — its change fires the iCIMS AJAX that loads the country-dependent State list.
     try:
         await strat._select_by_label(root, "country", "united states")
+        await _fire_country_change(root)   # force the change even if Country already defaults to US
     except Exception:
         pass
-    await page.wait_for_timeout(1200)
+    # Poll until the State select is actually populated (AJAX), THEN set it — a fixed 1200ms sleep
+    # raced the AJAX and left State blank ("Invalid Data Error", the profile step looped).
     st = (pf.get("state") or "").strip()
     if st:
+        for _ in range(16):                     # up to ~8s
+            await page.wait_for_timeout(500)
+            try:
+                nopts = await root.evaluate(
+                    """()=>{const n=s=>(s||'').toLowerCase();
+                      for(const el of document.querySelectorAll('select')){
+                        let t=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
+                        t=t||el.getAttribute('data-label')||'';
+                        if(n(t).includes('state')||n(t).includes('province')) return el.options.length;}
+                      return 0;}""")
+            except Exception:
+                nopts = 0
+            if nopts and nopts > 1:
+                break
         try:
             await strat._select_by_label(root, "state", st)
         except Exception:
             pass
+    # address Type = Physical (phone Type was already set to Mobile; _select_by_label skips it)
+    try:
+        await strat._select_by_label(root, "type", "physical")
+    except Exception:
+        pass
     await _force_text(root, r"^\s*city\b|city/town|^town\b", pf.get("city") or "")
     await _force_text(root, r"zip|postal", pf.get("zip") or "")
     # required acknowledgements / consent / EEO decline / deterministic screeners
@@ -454,6 +491,136 @@ async def _advance(page, root) -> str:
         except Exception:
             continue
     return "final" if has_final else "none"
+
+
+async def _residence_ready(root) -> bool:
+    """True when NO required Country/State/Province select is still on its placeholder. Submitting the
+    profile with State blank just fails validation ('Invalid Data Error') and BURNS a captcha, so we
+    gate the Submit on this — while it's False we only re-fill, never click Submit."""
+    try:
+        empty = await root.evaluate(
+            """()=>{const n=s=>(s||'').toLowerCase();
+              const ph=t=>!t||/make a selection|please select|no states available|select a source/.test(n(t));
+              for(const el of document.querySelectorAll('select')){
+                let t=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
+                t=t||el.getAttribute('data-label')||'';
+                const lab=n(t);
+                if(lab.includes('state')||lab.includes('province')||lab.includes('country')){
+                  const cur=el.options[el.selectedIndex];
+                  if(!el.value||ph(cur&&cur.text)) return true;}}
+              return false;}""")
+        return not empty
+    except Exception:
+        return True
+
+
+async def _state_diag(root) -> str:
+    """Compact dump of the residence selects (option count + current value) — to see WHY State won't set."""
+    try:
+        return await root.evaluate(
+            """()=>{const n=s=>(s||'').toLowerCase();const out=[];
+              for(const el of document.querySelectorAll('select')){
+                let t=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
+                t=t||el.getAttribute('data-label')||'';
+                const lab=n(t);
+                if(lab.includes('state')||lab.includes('province')||lab.includes('country')){
+                  const cur=el.options[el.selectedIndex];
+                  out.push((t||el.id).replace(/\\s+/g,' ').slice(0,20)+': n='+el.options.length+' val='+JSON.stringify((cur&&cur.text)||''));}}
+              return out.join(' | ');}""")
+    except Exception:
+        return "?"
+
+
+async def _fire_country_change(root) -> None:
+    """Load the country-dependent State list by calling iCIMS's OWN dependent-dropdown loader directly.
+    The Country <select>'s inline onchange is
+        icimsChangeParent('<parentId>', '<childId>')
+    (parent = Country select id, child = `<indexPrefix>` + `data-ddd-child-link`). Country DEFAULTS to
+    'United States' (its only option), so no user change ever fires it → State stays 'No states
+    available' (n=1). Setting the native value + dispatching change did NOT reliably run it, so we call
+    `icimsChangeParent(parentId, childId)` explicitly (what a real selection does), then also fire the
+    inline onchange / jQuery change as belt-and-suspenders."""
+    try:
+        await root.evaluate(
+            """()=>{const n=s=>(s||'').toLowerCase();
+              for(const el of document.querySelectorAll('select')){
+                if(!n(el.getAttribute('data-label')||'').includes('country')) continue;
+                const us=[...el.options].find(o=>/united states/i.test(o.text)||/^us$/i.test((o.value||'')));
+                if(us){ el.value=us.value; try{el.setAttribute('icimsdropdown-selected', us.value);}catch(e){} }
+                const childKey=el.getAttribute('data-ddd-child-link');           // 'PersonProfileFields.AddressState'
+                const m=(el.id||'').match(/^(-?\\d+_)/); const pref=m?m[1]:'';    // e.g. '-1_'
+                const childId=childKey?(pref+childKey):null;
+                try{ if(typeof window.icimsChangeParent==='function' && childId){ window.icimsChangeParent(el.id, childId); } }catch(e){}
+                el.dispatchEvent(new Event('change',{bubbles:true}));
+                try{ if(window.jQuery){ window.jQuery(el).trigger('change'); } }catch(e){}
+              }}""")
+    except Exception:
+        pass
+
+
+async def _icims_overlay_select(page, root, label_substr: str, value_substr: str) -> bool:
+    """Select an iCIMS dropdown the REAL-USER way: click its fake `<a class="dropdown-select">` overlay
+    (`<selectId>_icimsDropdown`) to OPEN the listbox — this fires the widget's own AJAX, including the
+    Country→State dependent load — then click the `<li role=option>` matching value_substr in the
+    listbox (`<selectId>_listbox`). Programmatic value-set + change / direct icimsChangeParent did NOT
+    load the State list; the widget only loads it on a genuine open/selection gesture."""
+    sid = await root.evaluate(
+        """(lbl)=>{const n=s=>(s||'').toLowerCase();
+          for(const el of document.querySelectorAll('select')){
+            if(n(el.getAttribute('data-label')||'').includes(lbl)) return el.id;} return null;}""",
+        label_substr.lower())
+    if not sid:
+        return False
+    try:
+        await root.click(f'[id="{sid}_icimsDropdown"]', timeout=4000)
+    except Exception:
+        return False
+    for _ in range(18):                                   # wait for the listbox to populate (AJAX)
+        await page.wait_for_timeout(400)
+        try:
+            cnt = await root.evaluate(
+                """(sid)=>{const lb=document.getElementById(sid+'_listbox');
+                   return lb?lb.querySelectorAll('li,[role=option]').length:0;}""", sid)
+        except Exception:
+            cnt = 0
+        if cnt and cnt > 0:
+            break
+    clicked = await root.evaluate(
+        """([sid,val])=>{const n=s=>(s||'').toLowerCase();
+          const lb=document.getElementById(sid+'_listbox'); if(!lb) return false;
+          const opts=[...lb.querySelectorAll('li,[role=option]')].filter(o=>n(o.textContent).trim());
+          const o=opts.find(x=>n(x.textContent).includes(n(val))); if(!o) return false;
+          try{o.scrollIntoView();}catch(e){}
+          for(const t of ['mousedown','mouseup','click']) o.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
+          return true;}""", [sid, value_substr])
+    return bool(clicked)
+
+
+_DUMPED = [False]
+
+
+async def _residence_dump(root) -> str:
+    """One-time dump: the Country/State select + Country fake-overlay outerHTML + any global iCIMS JS
+    that could load the dependent State list — to design the exact trigger from data, not guesses."""
+    try:
+        info = await root.evaluate(
+            """()=>{const out={};
+              const attrs=el=>{const o={};for(const a of el.attributes)o[a.name]=(a.value||'').slice(0,120);return o;};
+              const sels=[...document.querySelectorAll('select')];
+              const csel=sels.find(s=>/country/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
+              const ssel=sels.find(s=>/state|province/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
+              if(csel){out.country_attrs=attrs(csel); out.country_onchange=csel.getAttribute('onchange')||'';}
+              if(ssel){out.state_attrs=attrs(ssel);}
+              // inline scripts that mention the dependent-dropdown machinery
+              const scr=[];
+              for(const s of document.querySelectorAll('script')){
+                const t=s.textContent||''; if(/AddressState|ddd|Dependent|loadState|childDropdown|icimsDropdown/i.test(t)){
+                  const m=t.match(/.{0,60}(AddressState|ddd|Dependent|loadState|childDropdown).{0,90}/i); if(m)scr.push(m[0].replace(/\\s+/g,' '));}}
+              out.scripts=scr.slice(0,4);
+              return out;}""")
+        return str(info)[:2400]
+    except Exception as e:
+        return f"dump err {type(e).__name__}: {e}"
 
 
 # ---- persona ------------------------------------------------------------------------------------
@@ -549,10 +716,14 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
         _ext_args = [f"--disable-extensions-except={NOPECHA_EXT}", f"--load-extension={NOPECHA_EXT}"]
 
     async with async_playwright() as pw:
-        ctx = await pw.chromium.launch_persistent_context(
-            STEALTH_PROFILE, headless=False, channel="chromium",
-            proxy={"server": SLOT}, no_viewport=True, locale="en-US",
-            timezone_id="America/New_York", args=["--start-maximized"] + _ext_args)
+        _lk = dict(headless=False, channel="chromium", no_viewport=True, locale="en-US",
+                   timezone_id="America/New_York", args=["--start-maximized"] + _ext_args)
+        if _tunnel_up():
+            _lk["proxy"] = {"server": SLOT}
+            print(f"[proxy: {SLOT} (residential tunnel)]", flush=True)
+        else:
+            print("[proxy: DIRECT — no residential tunnel; NopeCHA solves the captcha regardless of IP]", flush=True)
+        ctx = await pw.chromium.launch_persistent_context(STEALTH_PROFILE, **_lk)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         # preseed NopeCHA config (keyless hCaptcha auto-solve; JS input to avoid CDP contention). A
         # paid key, if ever needed, goes in NOPECHA_KEY -> the same setup URL.
@@ -667,9 +838,12 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                 sig = await _sig()
                 new_step = sig != cur_sig
                 stalled = advanced and (time.time() - step_started > 75)
+                res_ready = await _residence_ready(root)   # residence selects (Country/State) all set?
                 # RELAY-DRIVE: re-fill (idempotently — only empty fields) EVERY tick, so if the human
                 # reloads the page or a field clears, the bot re-fills it instead of sitting idle.
-                if not (new_step or stalled or RELAY_DRIVE):
+                # Also keep re-filling while residence isn't ready (the résumé parser re-render + the
+                # Country→State AJAX race means State often needs several passes to stick).
+                if not (new_step or stalled or RELAY_DRIVE or not res_ready):
                     await page.wait_for_timeout(5000)
                     continue
                 if new_step:
@@ -731,6 +905,38 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                         print("[step filled — DRIVE IT FROM THE PHONE: tap Next/Submit + solve the "
                               "captcha at https://captcha.systeam.kz/ ]", flush=True)
                     await page.wait_for_timeout(5000)
+                    continue
+                # Credit-safe gate: never click Submit Profile while a residence select is blank — that
+                # submit only fails validation and burns a NopeCHA solve. Re-assert Country→State and
+                # loop (re-fill) until it's set, THEN advance once.
+                if not await _residence_ready(root):
+                    if not _DUMPED[0]:
+                        _DUMPED[0] = True
+                        print(f"[RESIDENCE DUMP] {await _residence_dump(root)}", flush=True)
+                    print(f"[residence not set — {await _state_diag(root)} — re-filling, NOT submitting (saves captcha)]", flush=True)
+                    try:
+                        stt = (pf.get("state") or "").strip()
+                        code = (p.get("state_code") or "").strip()
+                        # real-user gesture: open the Country overlay + pick US → fires the widget's
+                        # dependent-load AJAX that populates the State list; then open State + pick it.
+                        await _icims_overlay_select(page, root, "country", "united states")
+                        for st_val in (stt, code):
+                            if not st_val:
+                                continue
+                            for _ in range(3):
+                                if await _icims_overlay_select(page, root, "state", st_val.lower()):
+                                    break
+                                await page.wait_for_timeout(700)
+                            if await _residence_ready(root):
+                                break
+                        if not await _residence_ready(root):   # fallbacks: direct loader + JS set
+                            await _fire_country_change(root)
+                            await page.wait_for_timeout(1500)
+                            if stt:
+                                await strat._select_by_label(root, "state", stt)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(2500)
                     continue
                 kind = await _advance(page, root)
                 advanced = True

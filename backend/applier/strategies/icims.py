@@ -534,33 +534,36 @@ class ICIMSStrategy(ApplyStrategy):
                 pass
 
     async def _select_by_label(self, root, label_substr: str, value_substr: str) -> bool:
-        """Pick the option whose text/value contains value_substr on the native <select> whose
-        label contains label_substr (skips a select that is already answered). Frame-aware."""
-        info = await root.evaluate(
+        """Set the native <select> whose label contains label_substr to the option matching
+        value_substr — via JS, so it works even when the select is HIDDEN behind an iCIMS fake
+        `dropdown-select` overlay (`class="…dropdown-hide"`; Playwright's select_option needs an
+        actionable/visible element and silently fails on it — that left State/Province blank). Fires
+        `change` (drives the iCIMS onchange + the Country→State AJAX) and syncs the fake overlay
+        display (`<id>_fakeSelected_icimsDropdown` / the `.dropdown-text` inside `<id>_icimsDropdown`)
+        so the value is visible. Matches the label via `<label for>`, `data-label`, or the container
+        text (iCIMS selects often have no `<label for>`). Skips an already-answered select. Frame-aware."""
+        return bool(await root.evaluate(
             """([lbl,val])=>{const n=s=>(s||'').toLowerCase();
-              const placeholder=t=>!t||/select an option|select a |please select|choose/.test(n(t));
-              for(const l of document.querySelectorAll('label')){
-                if(!n(l.innerText).includes(lbl)) continue;
-                let el=l.getAttribute('for')?document.getElementById(l.getAttribute('for')):null;
-                if(!el||el.tagName!=='SELECT') el=(l.closest('div,li,fieldset,tr')||document).querySelector('select');
-                if(!el||el.tagName!=='SELECT') continue;
-                if(el.value && !placeholder(el.options[el.selectedIndex]&&el.options[el.selectedIndex].text)) continue;
+              const ph=t=>!t||/select an option|select a |please select|choose|make a selection|no states available/.test(n(t));
+              const labelOf=el=>{ let t='';
+                if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]'); if(l)t=l.innerText;}
+                if(!t)t=el.getAttribute('data-label')||'';
+                if(!t){const b=el.closest('div,li,fieldset,tr,td'); if(b&&(b.innerText||'').length<160)t=b.innerText;}
+                return t; };
+              for(const el of document.querySelectorAll('select')){
+                if(el.multiple) continue;
+                if(!n(labelOf(el)).includes(lbl)) continue;
+                const cur=el.options[el.selectedIndex];
+                if(el.value && !ph(cur&&cur.text)) return true;   // already answered
                 const o=[...el.options].find(o=>o.value && (n(o.text).includes(val)||n(o.value).includes(val)));
                 if(!o) continue;
-                el.setAttribute('data-jf','1'); return {value:o.value};
-              } return null;}""", [label_substr.lower(), value_substr.lower()])
-        if not info:
-            return False
-        ok = True
-        try:
-            await root.select_option("select[data-jf='1']", value=info["value"])
-        except Exception:
-            ok = False
-        try:
-            await root.eval_on_selector("select[data-jf='1']", "e=>e.removeAttribute('data-jf')")
-        except Exception:
-            pass
-        return ok
+                el.value=o.value;
+                el.dispatchEvent(new Event('input',{bubbles:true}));
+                el.dispatchEvent(new Event('change',{bubbles:true}));
+                try{ const f=document.getElementById(el.id+'_fakeSelected_icimsDropdown'); if(f)f.textContent=o.text;
+                     const ov=document.getElementById(el.id+'_icimsDropdown'); if(ov){const d=ov.querySelector('.dropdown-text'); (d||ov).textContent=o.text;} }catch(e){}
+                return true;
+              } return false;}""", [label_substr.lower(), value_substr.lower()]))
 
     async def _click_radio(self, root, name: str, value) -> bool:
         found = await root.evaluate(

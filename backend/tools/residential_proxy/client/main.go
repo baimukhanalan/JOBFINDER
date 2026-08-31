@@ -1,45 +1,49 @@
 // JobFinder residential proxy — single self-contained client.
 //
 // Modes:
-//   (no args)     first run: copy self into place, register autostart (logon), start hidden, notify
-//   --run         the background supervisor: hold a reverse SSH tunnel + serve an HTTP proxy over it
+//   (no args)     first run: copy self into place, register autostart, start hidden in background, notify
+//   --run         the background supervisor: hold a reverse tunnel over 443/WSS and expose a loopback SOCKS slot
 //   --uninstall   stop + remove autostart (turn it off cleanly)
 //
-// The server egresses to the internet through THIS machine's home connection (residential IP) so it
-// can reach ATSes that block the datacenter. The server side binds a loopback SLOT in 8120..8129
-// only (one per connected machine) — never public. Reconnects with exponential backoff, forever.
+// The server egresses to the internet THROUGH this machine's home connection (residential IP) so it can
+// reach sites that block the datacenter. Transport is chisel over HTTPS/WebSocket to proxy.systeam.kz:443
+// (survives networks that block outbound SSH/:22). The server side binds ONE loopback slot in 8120..8129
+// (one per connected machine) — never public. Reconnects with exponential backoff, forever.
 //
-// The private key is embedded from key.pem at build time (gitignored). The server host key is pinned
-// below (public) so the client can't be MITM'd.
+// Honest status: "Подключено ✓" is written ONLY after the server confirms it bound the reverse slot
+// (chisel's "Connected" line is emitted only after the server-side listen succeeds — a busy or denied
+// slot never reaches it). There is no local listener that comes up independently of the server, so a
+// blocked network can never show a false "connected".
+//
+// The shared tunnel credential is injected at build time via -ldflags "-X main.chiselAuth=..." (kept out
+// of git). The server key fingerprint is pinned below (public) so the client can't be MITM'd even if TLS
+// were somehow subverted.
 package main
 
 import (
 	"bufio"
-	"bytes"
-	_ "embed"
+	"context"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 
-	"golang.org/x/crypto/ssh"
+	chclient "github.com/jpillora/chisel/client"
 )
 
-//go:embed key.pem
-var privKey []byte
+// chiselAuth is injected at build time (-ldflags "-X main.chiselAuth=user:pass"); empty in source.
+var chiselAuth string
 
 const (
-	serverAddr    = "proxy.systeam.kz:22"
-	tunnelUser    = "tunnel"
-	slotBase      = 8120 // loopback slot range 8120..8120+slotCount-1 — one per connected machine
-	slotCount     = 10
-	taskName      = "JobFinderResidentialProxy"
-	serverHostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJlMT9ZRT/tAUXCbDHAE1Fp9cmCCpndXsICk4EkdU/jV"
+	serverURL = "https://proxy.systeam.kz/link"                    // chisel WSS endpoint behind nginx on 443
+	chiselFP  = "/GVgVoPYa802RrE/HwRWH8SKCCM+i5L0w0WFXCUuqVE="     // pinned server key fingerprint (public)
+	slotBase  = 8120                                               // loopback slot range 8120..8120+slotCount-1
+	slotCount = 10
+	taskName  = "JobFinderResidentialProxy"
 )
 
 func main() {
@@ -144,126 +148,149 @@ func doUninstall() {
 }
 
 // ---- supervisor (the actual tunnel) ------------------------------------------------------------
+
+// tunState is updated by the log scanner from chisel's own output; the connect loop reads it to decide
+// honest status + which slot to claim. Reset before every attempt.
+type tunState struct {
+	mu        sync.Mutex
+	connected bool   // saw "Connected (Latency ...)" — the server bound the slot (real round-trip)
+	busy      bool   // saw "Server cannot listen" — the slot is taken by another machine
+	denied    bool   // saw "... denied" — credential/slot not permitted (server misconfig)
+	lastErr   string // last connection error line
+}
+
+func (s *tunState) reset() {
+	s.mu.Lock()
+	s.connected, s.busy, s.denied, s.lastErr = false, false, false, ""
+	s.mu.Unlock()
+}
+
+func (s *tunState) snap() (bool, bool, bool, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connected, s.busy, s.denied, s.lastErr
+}
+
+// scan reads chisel's log stream and translates the meaningful lines into tunState transitions.
+func scan(r *os.File, s *tunState) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		s.mu.Lock()
+		switch {
+		case strings.Contains(line, "Connected (Latency"):
+			s.connected = true
+		case strings.Contains(line, "Server cannot listen"):
+			s.busy = true
+		case strings.Contains(line, "denied"):
+			s.denied, s.lastErr = true, line
+		case strings.Contains(line, "Disconnected"):
+			s.connected = false
+		case strings.Contains(line, "Connection error"):
+			s.lastErr = line
+		}
+		s.mu.Unlock()
+	}
+}
+
 func supervise() {
-	delay := 2 * time.Second
+	// Route chisel's logger (which binds os.Stderr at NewClient time) into a pipe we parse for honest
+	// status. Set BEFORE any NewClient call so every client logs into it.
+	pr, pw, err := os.Pipe()
+	if err == nil {
+		os.Stderr = pw
+	}
+	st := &tunState{}
+	if pr != nil {
+		go scan(pr, st)
+	}
+
+	notified := false
+	backoff := 2 * time.Second
 	for {
-		t0 := time.Now()
-		err := runOnce()
-		if time.Since(t0) > 30*time.Second {
-			delay = 2 * time.Second
-		}
-		writeStatus(fmt.Sprintf("отключён (%v) — переподключение через %v", err, delay))
-		time.Sleep(delay)
-		if delay *= 2; delay > 60*time.Second {
-			delay = 60 * time.Second
+		slot, connected := connectCycle(st, &notified)
+		if connected {
+			backoff = 2 * time.Second // a real session held; reconnect promptly on drop
+			writeStatus("соединение потеряно — переподключаюсь…")
+			time.Sleep(backoff)
+		} else {
+			_ = slot
+			writeStatus(fmt.Sprintf("нет соединения — проверьте интернет. Повтор через %v", backoff))
+			time.Sleep(backoff)
+			if backoff *= 2; backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
 		}
 	}
 }
 
-func fixedHostKey() ssh.HostKeyCallback {
-	pinned, _, _, _, err := ssh.ParseAuthorizedKey([]byte(serverHostKey))
-	if err != nil {
-		panic(err)
-	}
-	want := pinned.Marshal()
-	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		if bytes.Equal(key.Marshal(), want) {
-			return nil
-		}
-		return fmt.Errorf("server host key mismatch (possible MITM) — refusing")
-	}
-}
-
-func runOnce() error {
-	signer, err := ssh.ParsePrivateKey(privKey)
-	if err != nil {
-		return fmt.Errorf("bad embedded key: %w", err)
-	}
-	cfg := &ssh.ClientConfig{
-		User:              tunnelUser,
-		Auth:              []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback:   fixedHostKey(),
-		HostKeyAlgorithms: []string{ssh.KeyAlgoED25519},
-		Timeout:           15 * time.Second,
-	}
-	client, err := ssh.Dial("tcp", serverAddr, cfg)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	defer client.Close()
-
-	// Claim the FIRST FREE slot so several machines can be connected at once, each on its own port.
-	var ln net.Listener
-	var slot string
+// connectCycle tries slots 8120..8129 in order. It returns (slot, true) after a slot connected AND the
+// tunnel later dropped (so the caller reconnects), or (slot, false) when no slot could connect this pass
+// (all busy, or a real network/credential error) so the caller backs off.
+func connectCycle(st *tunState, notified *bool) (int, bool) {
 	for i := 0; i < slotCount; i++ {
-		slot = fmt.Sprintf("127.0.0.1:%d", slotBase+i)
-		if ln, err = client.Listen("tcp", slot); err == nil {
-			break
-		}
-	}
-	if ln == nil {
-		return fmt.Errorf("no free slot in %d..%d: %w", slotBase, slotBase+slotCount-1, err)
-	}
-	defer ln.Close()
-	writeStatus("Подключено ✓ (слот " + slot + ")")
+		slot := slotBase + i
+		st.reset()
+		writeStatus(fmt.Sprintf("подключаюсь… (слот %d)", slot))
 
-	go func() { // keepalive so a dead link is noticed
-		t := time.NewTicker(20 * time.Second)
-		defer t.Stop()
-		for range t.C {
-			if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-				client.Close()
-				ln.Close()
-				return
-			}
+		cfg := &chclient.Config{
+			Server:           serverURL,
+			Auth:             chiselAuth,
+			Fingerprint:      chiselFP,
+			KeepAlive:        25 * time.Second,
+			MaxRetryCount:    0, // fail fast — WE own slot-cycling + backoff in supervise
+			MaxRetryInterval: 60 * time.Second,
+			Remotes:          []string{fmt.Sprintf("R:127.0.0.1:%d:socks", slot)},
 		}
-	}()
-
-	for {
-		conn, err := ln.Accept()
+		c, err := chclient.NewClient(cfg)
 		if err != nil {
-			return fmt.Errorf("accept: %w", err)
+			continue
 		}
-		go handleConn(conn)
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := c.Start(ctx); err != nil {
+			cancel()
+			continue
+		}
+
+		switch waitOutcome(st, 20*time.Second) {
+		case "connected":
+			writeStatus(fmt.Sprintf("Подключено ✓ (слот %d)", slot))
+			if !*notified {
+				*notified = true
+				notify("JobFinder residential proxy", "Подключено ✓\nСервер ходит через твой домашний IP.\nМожно закрыть это окно — работает в фоне.")
+			}
+			c.Wait() // block until the tunnel drops
+			cancel()
+			return slot, true
+		case "busy":
+			cancel()
+			c.Wait()
+			continue // slot taken by another machine — try the next one immediately
+		default: // "error" or timeout
+			cancel()
+			c.Wait()
+			return slot, false // real failure — let supervise back off
+		}
 	}
+	return 0, false
 }
 
-// handleConn speaks HTTP-proxy on one reverse-forwarded connection. Every dial happens HERE, so the
-// egress IP is this machine's home IP.
-func handleConn(conn net.Conn) {
-	defer conn.Close()
-	br := bufio.NewReader(conn)
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		return
-	}
-	if req.Method == http.MethodConnect {
-		dst, err := net.DialTimeout("tcp", req.Host, 20*time.Second)
-		if err != nil {
-			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-			return
+// waitOutcome polls the scanner-fed state until we know how this attempt went.
+func waitOutcome(st *tunState, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	for {
+		connected, busy, denied, _ := st.snap()
+		switch {
+		case connected:
+			return "connected"
+		case busy:
+			return "busy"
+		case denied:
+			return "error"
+		case time.Now().After(deadline):
+			return "error"
 		}
-		defer dst.Close()
-		conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-		go func() {
-			io.Copy(dst, br)
-			if cw, ok := dst.(interface{ CloseWrite() error }); ok {
-				cw.CloseWrite()
-			}
-		}()
-		io.Copy(conn, dst)
-		return
+		time.Sleep(150 * time.Millisecond)
 	}
-	for _, h := range []string{"Proxy-Connection", "Connection", "Keep-Alive",
-		"Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
-		req.Header.Del(h)
-	}
-	req.RequestURI = ""
-	resp, err := http.DefaultTransport.RoundTrip(req)
-	if err != nil {
-		conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-		return
-	}
-	defer resp.Body.Close()
-	resp.Write(conn)
 }

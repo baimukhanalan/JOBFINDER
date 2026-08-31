@@ -33,13 +33,14 @@ logger = logging.getLogger(__name__)
 _STORE = Path(__file__).resolve().parents[1] / "data" / "proxies.json"
 _LOCK = threading.Lock()
 
-# The owner's home machines, each reverse-SSH-tunnelled to the server as a RESIDENTIAL egress on a
-# loopback SLOT in 127.0.0.1:8120..8129 (one per connected machine; see backend/tools/residential_
-# proxy/). We TCP-probe the whole range (cached) and, when any slot is up, PREFER residential over
-# the datacenter Bright Data pool so blocked ATSes (Teleperformance/iCIMS, Kelly/Akamai, reCAPTCHA-
+# The owner's home machines, each reverse-tunnelled to the server (chisel over 443/WSS) as a
+# RESIDENTIAL egress on a loopback SLOT in 127.0.0.1:8120..8129 (one per connected machine; see
+# backend/tools/residential_proxy/). Each slot is a no-auth SOCKS5 proxy (chisel reverse socks).
+# We TCP-probe the whole range (cached) and, when any slot is up, PREFER residential over the
+# datacenter Bright Data pool so blocked ATSes (Teleperformance/iCIMS, Kelly/Akamai, reCAPTCHA-
 # Greenhouse) see a home IP — round-robining across ALL live slots so several laptops share load and
-# a dropped one stops being used. No auth (reachable only via the tunnels). When zero slots are up,
-# next_proxy() falls back to the Bright Data pool.
+# a dropped one stops being used. No auth (reachable only via the tunnels; Playwright accepts a
+# no-auth loopback SOCKS5). When zero slots are up, next_proxy() falls back to the Bright Data pool.
 _RES_HOST = "127.0.0.1"
 _RES_BASE, _RES_COUNT = 8120, 10
 _res_cache = {"ts": 0.0, "slots": []}
@@ -56,7 +57,7 @@ def residential_slots() -> list[str]:
     for port in range(_RES_BASE, _RES_BASE + _RES_COUNT):
         try:
             socket.create_connection((_RES_HOST, port), timeout=0.4).close()
-            live.append(f"http://{_RES_HOST}:{port}")
+            live.append(f"socks5://{_RES_HOST}:{port}")
         except Exception:
             pass
     _res_cache.update(ts=now, slots=live)

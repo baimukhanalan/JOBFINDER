@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Residential proxy</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;
+         background:#0c47c2; color:#fff; min-height:100vh; display:grid; place-items:center; padding:24px; }
+  .card { background:#fff; color:#1a1a1a; max-width:520px; width:100%; border-radius:18px;
+          padding:34px 30px; box-shadow:0 18px 50px rgba(0,0,0,.28); }
+  h1 { margin:0 0 6px; font-size:22px; }
+  .sub { color:#5a6270; margin:0 0 22px; font-size:14.5px; }
+  .btn { display:block; width:100%; text-align:center; text-decoration:none; padding:16px 20px;
+         border-radius:12px; font-weight:600; font-size:17px; margin:10px 0; }
+  .primary { background:#0c47c2; color:#fff; }
+  .primary:hover { background:#0a3aa0; }
+  .off { background:#f1f3f4; color:#b00020; font-size:15px; padding:12px; }
+  .off:hover { background:#e7eaec; }
+  ol { margin:18px 0 0; padding-left:20px; color:#3a4150; font-size:14.5px; }
+  ol li { margin:6px 0; }
+  .os { font-size:13px; color:#8a919c; margin-top:14px; text-align:center; }
+  a.alt { color:#0c47c2; }
+  code { background:#f1f3f4; padding:1px 6px; border-radius:5px; font-size:13px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Residential proxy</h1>
+    <p class="sub">Подключает домашний интернет этого компьютера к серверу, чтобы подавать на сайты,
+       которые блокируют дата-центр. Скачай, запусти — работает в фоне и включается сама при загрузке.</p>
+
+    <a class="btn primary" id="dl" href="#">Скачать и подключить</a>
+    <a class="btn off" id="off" href="#">Отключить</a>
+
+    <ol id="steps"></ol>
+    <p class="os">ОС определена: <b id="osname">…</b> · <a class="alt" id="other" href="#">другая ОС</a></p>
+  </div>
+
+<script>
+(function () {
+  var ua = navigator.userAgent, plat = (navigator.platform || "");
+  var win  = /Win/i.test(plat) || /Windows/i.test(ua);
+  var mac  = /Mac/i.test(plat) || /Mac OS/i.test(ua);
+  var dl = document.getElementById('dl'), off = document.getElementById('off');
+  var osn = document.getElementById('osname'), steps = document.getElementById('steps');
+  function set(os) {
+    if (os === 'win') {
+      osn.textContent = 'Windows';
+      dl.href = 'win.exe'; off.href = 'win-off.bat';
+      steps.innerHTML = '<li>Нажми <b>«Скачать и подключить»</b> — скачается <code>win.exe</code>.</li>' +
+        '<li>Открой его (если Windows предупредит — «Подробнее» → «Выполнить в любом случае»).</li>' +
+        '<li>Появится «Установлено ✓». Всё — работает в фоне и при каждой загрузке.</li>' +
+        '<li>Выключить — кнопка <b>«Отключить»</b> (<code>win-off.bat</code>).</li>';
+    } else if (os === 'mac') {
+      osn.textContent = 'macOS';
+      dl.href = 'mac.command'; off.href = 'mac-off.command';
+      steps.innerHTML = '<li>Нажми <b>«Скачать и подключить»</b> — скачается <code>mac.command</code>.</li>' +
+        '<li>Открой его (правый клик → «Открыть», если Gatekeeper предупредит).</li>' +
+        '<li>В окне Терминала будет «Готово ✓». Работает в фоне и при каждом входе.</li>' +
+        '<li>Выключить — <code>mac-off.command</code>.</li>';
+    } else {
+      osn.textContent = 'Linux';
+      dl.href = 'linux-amd64'; off.href = '#';
+      steps.innerHTML = '<li><code>chmod +x linux-amd64 && ./linux-amd64</code> (автозапуск настрой сам).</li>' +
+        '<li>Выключить: <code>~/.jobfinder-proxy/agent --uninstall</code>.</li>';
+    }
+  }
+  set(win ? 'win' : mac ? 'mac' : 'linux');
+  document.getElementById('other').onclick = function (e) {
+    e.preventDefault();
+    var o = prompt('ОС: win / mac / linux', win ? 'win' : mac ? 'mac' : 'linux');
+    if (o) set(o.trim().toLowerCase());
+  };
+})();
+</script>
+</body>
+</html>

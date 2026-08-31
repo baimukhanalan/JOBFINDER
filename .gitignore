@@ -97,3 +97,4 @@ backend/data/demo_used_names.json
 
 # Residential-proxy tunnel key + filled installers (secret) — templates+generator ARE committed
 backend/tools/residential_proxy/dist/
+backend/tools/residential_proxy/client/key.pem

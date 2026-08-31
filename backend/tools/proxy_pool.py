@@ -33,39 +33,52 @@ logger = logging.getLogger(__name__)
 _STORE = Path(__file__).resolve().parents[1] / "data" / "proxies.json"
 _LOCK = threading.Lock()
 
-# The owner's home laptop, reverse-SSH-tunnelled to the server as a RESIDENTIAL egress on
-# loopback 127.0.0.1:8120 (see backend/tools/residential_proxy/). Present ONLY while the laptop
-# is connected — so we TCP-probe it (cached) and, when it's up, prefer it over the datacenter
-# Bright Data pool so blocked ATSes (Teleperformance/iCIMS, Kelly/Akamai, reCAPTCHA-Greenhouse)
-# see a residential IP. No auth (reachable only via the tunnel). Owner controls it by simply
-# connecting/disconnecting the laptop; when it's down, next_proxy() falls back to the pool.
-RESIDENTIAL_SERVER = "http://127.0.0.1:8120"
-_RES_HOST, _RES_PORT = "127.0.0.1", 8120
-_res_cache = {"ts": 0.0, "up": False}
+# The owner's home machines, each reverse-SSH-tunnelled to the server as a RESIDENTIAL egress on a
+# loopback SLOT in 127.0.0.1:8120..8129 (one per connected machine; see backend/tools/residential_
+# proxy/). We TCP-probe the whole range (cached) and, when any slot is up, PREFER residential over
+# the datacenter Bright Data pool so blocked ATSes (Teleperformance/iCIMS, Kelly/Akamai, reCAPTCHA-
+# Greenhouse) see a home IP — round-robining across ALL live slots so several laptops share load and
+# a dropped one stops being used. No auth (reachable only via the tunnels). When zero slots are up,
+# next_proxy() falls back to the Bright Data pool.
+_RES_HOST = "127.0.0.1"
+_RES_BASE, _RES_COUNT = 8120, 10
+_res_cache = {"ts": 0.0, "slots": []}
+_res_cursor = 0
+
+
+def residential_slots() -> list[str]:
+    """The live residential slot proxy servers (one per connected machine). Cached ~8s so
+    next_proxy() can consult it per fill without probing 10 ports each time."""
+    now = time.time()
+    if now - _res_cache["ts"] < 8:
+        return _res_cache["slots"]
+    live = []
+    for port in range(_RES_BASE, _RES_BASE + _RES_COUNT):
+        try:
+            socket.create_connection((_RES_HOST, port), timeout=0.4).close()
+            live.append(f"http://{_RES_HOST}:{port}")
+        except Exception:
+            pass
+    _res_cache.update(ts=now, slots=live)
+    return live
 
 
 def residential_up() -> bool:
-    """True if the laptop residential tunnel is accepting connections on 127.0.0.1:8120.
-    Cached ~15s so next_proxy() can consult it per fill without a probe each time."""
-    now = time.time()
-    if now - _res_cache["ts"] < 15:
-        return _res_cache["up"]
-    up = False
-    try:
-        socket.create_connection((_RES_HOST, _RES_PORT), timeout=0.5).close()
-        up = True
-    except Exception:
-        up = False
-    _res_cache.update(ts=now, up=up)
-    return up
+    """True if at least one residential slot (connected machine) is available."""
+    return bool(residential_slots())
 
 
 def residential_proxy() -> dict | None:
-    """The residential (laptop) egress as a {server, username, password} proxy dict when the
-    tunnel is up, else None. No auth — it's reachable only over the loopback tunnel."""
-    if residential_up():
-        return {"server": RESIDENTIAL_SERVER, "username": None, "password": None}
-    return None
+    """The NEXT live residential slot as a {server, username, password} proxy dict (round-robin
+    across connected machines), or None if none are up. No auth — loopback tunnel only."""
+    global _res_cursor
+    slots = residential_slots()
+    if not slots:
+        return None
+    with _LOCK:
+        srv = slots[_res_cursor % len(slots)]
+        _res_cursor += 1
+    return {"server": srv, "username": None, "password": None}
 # Plain http (not https) so an http proxy simply forwards it — https CONNECT is
 # occasionally blocked and would false-flag a working proxy as dead.
 _ECHO_URL = "http://api.ipify.org?format=json"

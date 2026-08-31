@@ -40,7 +40,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-08-30-code-kind-v2"
+CLASSIFIER_VERSION = "2026-08-31-assessment-actionneeded-v1"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be
@@ -92,6 +92,11 @@ DEFAULT_KEYWORDS = {
         "к сожалению, мы приняли решение", "к сожалению, вынуждены отказать",
         "приняли решение отказать", "вынуждены вам отказать", "вам отказано",
         "не готовы продолжить", "вы не подошли",
+        # soft/templated rejections whose exact wording broke the substring matches above
+        # (audit 2026-08-31): keep the negation on "selected to move forward" — the bare form
+        # appears in benign CONDITIONAL acks ("if you're selected to move forward").
+        "not be proceeding with your candidacy", "wasn't selected to move forward",
+        "candidates whose experience is a closer match", "the position has been filled",
     ],
     # action_needed = the submit landed but the ATS needs the CANDIDATE to do something to
     # complete/advance it (sign an NDA, verify identity, e-sign) — looks like an ack but the
@@ -104,6 +109,13 @@ DEFAULT_KEYWORDS = {
         "non-disclosure agreement", "nda request", "sign and return", "e-signature",
         "background check consent", "please complete the following",
         "требуется действие", "подтвердите вашу личность", "подтвердите личность",
+        # ASSESSMENT invites (Maximus & other mass-hiring) — the candidate must go take a
+        # test; these were caught by ack's "thank you for applying" before reaching here, so
+        # they sit ABOVE ack in KEYWORD_KINDS priority (audit 2026-08-31).
+        "complete your assessment", "complete an assessment",
+        # statement-form / follow-up asks whose word order broke the interrogative keywords
+        "you are open to relocating", "we have a few outstanding questions",
+        "share the additional information needed",
     ],
     "ack": [
         "application received", "application has been received",

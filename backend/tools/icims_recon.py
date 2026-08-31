@@ -37,6 +37,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 RECON_ROOT = os.path.join(REPO, "logs", "icims_recon")
 STEALTH_PROFILE = os.path.join(REPO, "backend", "data", "icims_stealth_profile")
 SLOT = "socks5://127.0.0.1:8120"
+# NopeCHA extension auto-solves the hCaptcha in-page (its API egresses via the browser's residential
+# proxy, dodging the datacenter-IP free-tier ban). With it, the bot drives everything autonomously.
+NOPECHA_EXT = os.path.join(REPO, "backend", "vendor", "nopecha_ext")
+NOPECHA = os.getenv("ICIMS_NOPECHA", "1").strip().lower() in ("1", "true", "yes", "on")
+# RELAY-DRIVE (fallback): the human taps Next/Submit + solves the captcha from the phone
+# (captcha.systeam.kz / noVNC) — used only when NopeCHA is off/failing. Default OFF now that the
+# extension solves captchas, so the bot auto-advances.
+RELAY_DRIVE = os.getenv("ICIMS_RELAY_DRIVE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 # Teleperformance US remote-hire allow-list (38 states), confirmed verbatim on two live postings
 # (recon 2026-08-31). The synthetic persona's claimed residence MUST be one of these. Excluded:
@@ -533,16 +541,41 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
     idx = [0]
     strat = ICIMSStrategy()
 
+    # NopeCHA captcha-solver extension: it auto-solves the hCaptcha IN-PAGE (its API egresses through
+    # the browser's residential proxy, so it dodges NopeCHA's datacenter-IP free-tier ban). Loading it
+    # makes the whole apply flow autonomous — the bot clicks Next/Submit, the extension solves.
+    _ext_args = []
+    if NOPECHA and os.path.isdir(NOPECHA_EXT):
+        _ext_args = [f"--disable-extensions-except={NOPECHA_EXT}", f"--load-extension={NOPECHA_EXT}"]
+
     async with async_playwright() as pw:
         ctx = await pw.chromium.launch_persistent_context(
             STEALTH_PROFILE, headless=False, channel="chromium",
             proxy={"server": SLOT}, no_viewport=True, locale="en-US",
-            timezone_id="America/New_York", args=["--start-maximized"])
+            timezone_id="America/New_York", args=["--start-maximized"] + _ext_args)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-        # phone-solvable captcha relay -> captcha.systeam.kz (mirror this browser + forward taps)
+        # preseed NopeCHA config (keyless hCaptcha auto-solve; JS input to avoid CDP contention). A
+        # paid key, if ever needed, goes in NOPECHA_KEY -> the same setup URL.
+        if _ext_args:
+            try:
+                key = os.getenv("NOPECHA_KEY", "").strip()
+                cfg = ("input_method=javascript|hcaptcha_auto_open=true|hcaptcha_auto_solve=true|"
+                       "hcaptcha_solve_delay_time=200|enabled=true" + (f"|key={key}" if key else ""))
+                sp = await ctx.new_page()
+                await sp.goto("https://nopecha.com/setup#" + cfg,
+                              wait_until="domcontentloaded", timeout=45000)
+                await sp.wait_for_timeout(3500)
+                await sp.close()
+                print(f"[NopeCHA extension loaded + configured{' (key set)' if key else ' (free tier)'}]",
+                      flush=True)
+            except Exception as e:
+                print(f"[NopeCHA config: {type(e).__name__}: {e}]"[:120], flush=True)
+        # phone control relay -> captcha.systeam.kz (mirror this browser on the X display + forward
+        # REAL taps via xdotool — the human drives navigation + solves the captcha from a phone)
         try:
             from backend.tools import captcha_relay
-            captcha_relay.set_page(page, label="Teleperformance hCaptcha")
+            captcha_relay.set_page(page, display=os.environ.get("DISPLAY", ":98"),
+                                   label="Teleperformance")
             await captcha_relay.serve(9003)
             print("[captcha relay up -> https://captcha.systeam.kz/ ]", flush=True)
         except BaseException as e:
@@ -624,13 +657,19 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
             step_started = time.time()
             advanced = False
             while time.time() < deadline:
+                try:
+                    await page.bring_to_front()   # keep OUR browser topmost on the shared :98 (noVNC)
+                except Exception:
+                    pass
                 await _wait_human(page, "step", recon_dir, recon, idx)   # pause on a VISIBLE captcha
                 frame = await strat._content_frame(page)
                 root = frame or page
                 sig = await _sig()
                 new_step = sig != cur_sig
                 stalled = advanced and (time.time() - step_started > 75)
-                if not (new_step or stalled):
+                # RELAY-DRIVE: re-fill (idempotently — only empty fields) EVERY tick, so if the human
+                # reloads the page or a field clears, the bot re-fills it instead of sitting idle.
+                if not (new_step or stalled or RELAY_DRIVE):
                     await page.wait_for_timeout(5000)
                     continue
                 if new_step:
@@ -659,9 +698,15 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                             await page.wait_for_timeout(3000)     # let the parser settle once
                     except Exception:
                         pass
-                # (c) fill the whole step
+                # (c) fill: the WHOLE step on a new step; on RELAY-DRIVE re-fill ticks only top up
+                #     EMPTY identity + the required consent (so a page reload re-fills email/privacy),
+                #     without re-forcing country/state/how-heard every tick (that would flicker).
                 try:
-                    await _tp_fill(page, root, pf, p["facts"], strat)
+                    if new_step or not RELAY_DRIVE:
+                        await _tp_fill(page, root, pf, p["facts"], strat)
+                    else:
+                        await strat._fill_identity(root, pf)
+                        await strat._tick_required_checkboxes(page, root)
                 except Exception as e:
                     print(f"[fill: {type(e).__name__}: {e}]"[:120], flush=True)
                 # (d) emailed verification code
@@ -674,8 +719,19 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                             print(f"\n>>> VERIFICATION CODE {pf['email']}: {code}\n", flush=True)
                     except Exception:
                         pass
-                await _capture(page, "filled", recon_dir, recon, idx)   # filled values + live State list
-                # (e) advance ONCE (never the final submit)
+                if new_step or not RELAY_DRIVE:
+                    await _capture(page, "filled", recon_dir, recon, idx)   # values + live State list
+                # (e) advance. In RELAY-DRIVE mode the HUMAN taps Next/Submit + solves the captcha
+                #     from the phone (a real X click hCaptcha accepts), so the bot must NOT click the
+                #     gated buttons (a synthetic click just parks the captcha and fights the human) —
+                #     it only fills. Otherwise it auto-advances (needs a captcha solver to complete).
+                if RELAY_DRIVE:
+                    advanced = True
+                    if new_step:
+                        print("[step filled — DRIVE IT FROM THE PHONE: tap Next/Submit + solve the "
+                              "captcha at https://captcha.systeam.kz/ ]", flush=True)
+                    await page.wait_for_timeout(5000)
+                    continue
                 kind = await _advance(page, root)
                 advanced = True
                 if kind == "final":
@@ -684,12 +740,27 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                     break
                 print(f"[step filled + advance={kind} -> waiting for next step / captcha]", flush=True)
                 await page.wait_for_timeout(5000)
+        except Exception as e:
+            # A page error (the human closed/navigated a tab in noVNC, a transient crash) must NOT
+            # tear the whole browser down — keep it alive until the run window ends so the human can
+            # keep driving the application from the phone (captcha.systeam.kz / noVNC).
+            print(f"[fill loop stopped: {type(e).__name__}: {str(e)[:80]} — keeping the browser alive "
+                  f"for noVNC; drive it from the phone]", flush=True)
+            try:
+                end = start_ts + keep_minutes * 60
+                while time.time() < end:
+                    await asyncio.sleep(10)
+            except Exception:
+                pass
         finally:
             try:
                 await _capture(page, "final", recon_dir, recon, idx)
             except Exception:
                 pass
-            await ctx.close()
+            try:
+                await ctx.close()
+            except Exception:
+                pass
     print(f"=== recon done — {len(recon)} snapshots in {recon_dir}/recon.json", flush=True)
 
 

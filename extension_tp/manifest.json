@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TP Apply Assist",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Auto-fills the Teleperformance (iCIMS) application with a ready persona. You solve the captcha and click Submit yourself.",
   "permissions": [
     "activeTab",
@@ -9,7 +9,8 @@
   ],
   "host_permissions": [
     "https://careersus-teleperformance.icims.com/*",
-    "https://*.icims.com/*"
+    "https://*.icims.com/*",
+    "https://jobs.systeam.kz/*"
   ],
   "action": {
     "default_popup": "popup.html",

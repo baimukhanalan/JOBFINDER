@@ -34,6 +34,7 @@ ETALONS_DIR = PROJECT_ROOT / "backend" / "data" / "etalons"
 _TOKEN_FILE = Path(__file__).resolve().parent / ".assist_token"
 ASSIST_TOKEN = _TOKEN_FILE.read_text().strip() if _TOKEN_FILE.exists() else ""
 INBOX_DIR = PROJECT_ROOT / "uploads" / "inbox"
+TP_RESUMES_DIR = PROJECT_ROOT / "uploads" / "tp_resumes"
 
 # Inbox category → (emoji, css class) for the tracker feed.
 _CAT_META = {
@@ -1128,6 +1129,11 @@ def _fill_all_public() -> dict:
 # ---- Parallel bulk lane (headless worker pool) -----------------------------
 _FILL_ALL_LOCK = threading.Lock()
 _PARA_ATS = ("greenhouse", "ashby")   # auto-submit end-to-end → safe to parallelize
+# PARA_RESIDENTIAL=1 routes the GH/Ashby parallel lane through the RESIDENTIAL tunnel (owner's home
+# IP, slots 8120-8129) instead of DIRECT — the only egress that clears Ashby's datacenter-IP spam
+# flag. OFF by default (a residential IP is slower + a single home IP doing many submits can itself
+# be flagged); set it deliberately for a residential test/run while the tunnel is up.
+_PARA_RESIDENTIAL = os.getenv("PARA_RESIDENTIAL", "").strip().lower() in ("1", "true", "yes", "on")
 _PER_JOB_TIMEOUT = 480                 # hard cap per /load: fill + inline confirm watch. Raised
 #   300→480 on 2026-08-26: big Greenhouse forms (samsara/natera/wikimedia, 20+ LLM-answered
 #   questions) fill+click in ~180-300s and the inline WAIT_SUBMIT_MAX=120s confirm watch pushed
@@ -1187,15 +1193,20 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
         for attempt in range(3):
             load = {"jobid": jjid, "profile": pid, "wait_submit": "1"}
             px = None
-            # GH/Ashby submit fine DIRECT from the datacenter IP (email-code step, no captcha)
-            # and Ashby's anti-spam FLAGS known proxy/BD-datacenter IPs — the submit comes back
-            # "flagged as possible spam — turn off your VPN or proxy" and is rejected outright
-            # (root-caused 2026-08-25: proxying the parallel lane silently broke ~⅓ of GH/Ashby
-            # submits). The parallel lane is GH/Ashby ONLY, so it goes DIRECT. A proxy is used
-            # only for a hypothetical non-_PARA_ATS job, and only on the first attempts.
-            if (job or {}).get("ats") not in _PARA_ATS and attempt < 2:
+            ats = (job or {}).get("ats")
+            # GH/Ashby normally submit DIRECT (datacenter IP): Ashby's anti-spam FLAGS known proxy/
+            # BD-datacenter IPs ("flagged as possible spam — turn off your VPN or proxy"), so a
+            # datacenter proxy is no better than direct. The ONE egress that clears the flag is a
+            # RESIDENTIAL IP — so when PARA_RESIDENTIAL=1 and the owner's home tunnel is up, route
+            # GH/Ashby through it on the first attempts (3rd attempt still falls back to DIRECT). A
+            # non-_PARA_ATS job uses the normal pool.
+            if attempt < 2:
                 try:
-                    px = proxy_pool.next_proxy()
+                    if ats in _PARA_ATS:
+                        if _PARA_RESIDENTIAL and proxy_pool.residential_up():
+                            px = proxy_pool.residential_proxy()
+                    else:
+                        px = proxy_pool.next_proxy()
                 except Exception:
                     px = None
             if px and px.get("server"):
@@ -2389,6 +2400,148 @@ def mark_ext(payload: dict, x_assist_token: str = Header(default="")):
     profile = _safe_id(payload.get("profile") or "") or "michael"
     _apply_mark(profile, _safe_id(payload.get("jid") or ""), to)
     return {"ok": True, "status": to}
+
+
+# --- Teleperformance / iCIMS own-browser extension endpoints -----------------------
+# The owner runs a Chrome extension in HIS OWN browser on a TP/iCIMS apply page; these
+# token-gated twins let it (1) read the verification code the server received for a
+# synthetic persona and (2) fetch that persona's résumé PDF. Same X-Assist-Token guard
+# as /draft; both are on the dash_auth ALLOWLIST so no session cookie is required.
+def _tp_safe_mailbox(mailbox: str) -> str:
+    """Filesystem-safe cache filename stem for a persona email."""
+    return re.sub(r"[^a-z0-9._-]+", "_", (mailbox or "").strip().lower()) or "persona"
+
+
+def _tp_name_from_mailbox(mailbox: str) -> str:
+    """Best-effort person name from the mailbox local-part (olivia.bennett2311 ->
+    'Olivia Bennett'). Trailing digits (the unique-mailbox suffix) are dropped."""
+    local = (mailbox or "").split("@", 1)[0]
+    local = re.sub(r"\d+$", "", local)
+    parts = [p for p in re.split(r"[._+-]+", local) if p]
+    if not parts:
+        return "Alex Morgan"
+    return " ".join(p.capitalize() for p in parts[:2])
+
+
+def _tp_find_existing_resume(mailbox: str) -> Path | None:
+    """Newest tailored résumé.pdf the bot already produced for this persona, found by
+    scanning uploads/prefill/*/*/persona.json for a matching profile email."""
+    target = (mailbox or "").strip().lower()
+    if not target:
+        return None
+    for pj in PREFILL_ROOT.glob("*/*/persona.json"):
+        try:
+            data = json.loads(pj.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        prof = data.get("profile") or {}
+        email = str(prof.get("email") or data.get("email") or "").strip().lower()
+        if email == target:
+            pdf = pj.parent / "resume.pdf"
+            return pdf if pdf.is_file() else None
+    return None
+
+
+def _tp_csr_resume(mailbox: str, name: str) -> dict:
+    """A plausible one-page US Customer-Service-Representative résumé for a synthetic
+    persona (Columbus OH). Generic — not JD-tailored."""
+    return {
+        "personal_info": {
+            "full_name": name,
+            "email": mailbox,
+            "location": "Columbus, OH",
+        },
+        "headline": "Customer Service Representative",
+        "summary": (
+            "Reliable customer service representative with 4+ years of experience across "
+            "high-volume call centers and remote support roles. Skilled at resolving billing, "
+            "account, and product inquiries with empathy and accuracy while consistently "
+            "meeting quality and productivity targets."),
+        "experience": [
+            {
+                "title": "Customer Service Representative",
+                "company": "Nationwide",
+                "dates": "2023 – Present",
+                "bullets": [
+                    "Handle 60+ inbound calls and chats daily, resolving billing, coverage, and account questions on first contact.",
+                    "Maintain a 95%+ customer satisfaction score while meeting average-handle-time and quality goals.",
+                    "Document every interaction accurately in the CRM and escalate complex cases to the right team.",
+                ],
+            },
+            {
+                "title": "Call Center Agent",
+                "company": "Cardinal Health",
+                "dates": "2021 – 2023",
+                "bullets": [
+                    "Answered high volumes of customer and provider inquiries in a fast-paced contact center.",
+                    "Processed orders, returns, and account updates across multiple systems.",
+                    "Recognized twice for top monthly quality-assurance scores.",
+                ],
+            },
+            {
+                "title": "Retail Sales Associate",
+                "company": "Target",
+                "dates": "2019 – 2021",
+                "bullets": [
+                    "Delivered friendly in-person service and handled point-of-sale transactions.",
+                    "Resolved customer concerns and returns to keep satisfaction high.",
+                ],
+            },
+        ],
+        "skills_grouped": {
+            "Customer Service": ["Inbound/outbound calls", "Live chat & email support", "Conflict resolution", "De-escalation"],
+            "Tools": ["Salesforce CRM", "Zendesk", "Microsoft Office", "Google Workspace"],
+            "Strengths": ["Active listening", "Data-entry accuracy", "Time management", "Remote collaboration"],
+        },
+        "education": [
+            {"degree": "High School Diploma", "school": "Columbus North High School", "year": "2019"},
+        ],
+    }
+
+
+@app.get("/tp_code")
+def tp_code(mailbox: str = "", since: float = 0.0, x_assist_token: str = Header(default="")):
+    """Token-gated: the newest email verification/security code the server received for a
+    synthetic persona's @takhet.com mailbox (read from its Maildir). Reads mail only — never
+    enters the code, never submits. Twin policy of /draft. Never 500s."""
+    if not ASSIST_TOKEN or x_assist_token != ASSIST_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    from backend.tools import verify_code
+    try:
+        return JSONResponse({"code": verify_code.read_code(mailbox, since)})
+    except Exception:
+        return JSONResponse({"code": None})
+
+
+@app.get("/tp_resume")
+def tp_resume(mailbox: str = "", x_assist_token: str = Header(default="")):
+    """Token-gated: a résumé PDF for the synthetic persona. Serves an existing tailored
+    résumé if the bot already made one, else generates + caches a generic CSR résumé at
+    uploads/tp_resumes/<mailbox>.pdf. Never 500s (404 on failure)."""
+    if not ASSIST_TOKEN or x_assist_token != ASSIST_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        mb = (mailbox or "").strip()
+        if not mb:
+            return JSONResponse({"error": "no resume"}, status_code=404)
+        # 1) previously-generated cache
+        cache = TP_RESUMES_DIR / f"{_tp_safe_mailbox(mb)}.pdf"
+        if cache.is_file():
+            return FileResponse(str(cache), media_type="application/pdf", filename="resume.pdf")
+        # 2) an existing tailored résumé for this persona, if the bot already applied
+        existing = _tp_find_existing_resume(mb)
+        if existing is not None:
+            return FileResponse(str(existing), media_type="application/pdf", filename="resume.pdf")
+        # 3) generate a generic CSR résumé and cache it
+        from backend.tools import drafts_ui
+        pdf = drafts_ui.render_resume_pdf(_tp_csr_resume(mb, _tp_name_from_mailbox(mb)))
+        if not pdf:
+            return JSONResponse({"error": "no resume"}, status_code=404)
+        TP_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(pdf)
+        return FileResponse(str(cache), media_type="application/pdf", filename="resume.pdf")
+    except Exception:
+        return JSONResponse({"error": "no resume"}, status_code=404)
 
 
 # --- /setup: friend onboarding editor ------------------------------------------

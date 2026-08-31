@@ -1420,11 +1420,40 @@ NB patchright's stealth `evaluate` runs in an ISOLATED world so `window.__tpFill
 window hook. If a
 dropdown STILL misses on the live form, the report's outerHTML is the ground truth to finish
 `openAndPickCustom`/`labelText` precisely.
-**Résumé auto-attach NOT yet built** (owner asked for "an external python script in tandem with the
-plugin"): a content script can't set `<input type=file>`. The real path = `chrome.downloads` the persona
-résumé PDF (served by the server) to disk → `chrome.debugger` + CDP `DOM.setFileInputFiles(path)` (needs the
-`debugger` permission; shows a yellow "started debugging" banner). Deferred until the fill is signed off on
-the live form. Persona =
+**v1.6 (2026-08-31) — the REAL form is native iCIMS selects; fixed a DESTRUCTIVE bug + shipped résumé/code
+auto.** The owner pasted the live-form field containers, which showed the truth: the TP dropdowns are
+**native `<select>`** (`id="rcf3048"` how-heard, `id="-1_PersonProfileFields.AddressCountry"`/`AddressState`)
+that are HIDDEN (`class="…dropdown-hide"`) behind an iCIMS fake `<a class="dropdown-select">` overlay + a
+`"<id>_fakeSelected_icimsDropdown"` span; State is AJAX + Country-dependent (`data-ddd-parent-link`, "No
+states available" until Country is set). **My v1.4/v1.5 custom-widget CLICKING was clicking the iCIMS
+"Add More (Addresses/Phones)" anchors (`<a role=button onclick=showGroup(…)>`), and re-running on every DOM
+mutation → the form spawned endless `-2_/-3_/-4_` address blocks (owner: "плодит адреса").** v1.6 fix:
+`fillICIMS()` sets the native `<select>` DIRECTLY (`value`+`change`, which fires the `SourceChange()` /
+Country→State AJAX), syncs the fake overlay text so the human sees it, and is IDEMPOTENT (a set select is
+skipped → re-runs don't re-dispatch change and churn the cascade). `fillTP` NO LONGER calls
+`openAndPickCustom`/`pickSelect` for country/state/type/how-heard (that clicking was the culprit); the
+generic `openAndPickCustom`/`findFieldTrigger` are kept for non-iCIMS pages but made SAFE — a `_NAV_RE`
+(`add more|add another|remove|next|back|submit|showgroup`) guard on EVERY click, and bare `button`/
+`a[role=button]` dropped from the trigger selectors. Tests: an iCIMS-structure mock (hidden native selects
++ fake overlay + Add-More that appends a `.addr` div + Country→State cascade) fills every field AND the
+address-block count stays 1 (no spawn); native 23/23 + table-layout still pass.
+**Résumé + emailed code are now AUTO (v1.6).** Two server endpoints (built following the `/draft`
+X-Assist-Token + dash_auth ALLOWLIST pattern, in `dashboard_app.py` + `dash_auth.py`): `GET /tp_code?mailbox=
+&since=` → `verify_code.read_code` (the account-verification code from the persona's `@takhet.com` Maildir);
+`GET /tp_resume?mailbox=` → the persona's résumé PDF (an existing tailored `resume.pdf` if found, else a
+generated generic US-CSR PDF cached at `uploads/tp_resumes/<mailbox>.pdf`). The extension `background.js`
+proxies both (content scripts can't fetch our server cross-origin; background has the
+`https://jobs.systeam.kz/*` host-permission + the baked `ASSIST_TOKEN`). `content.js::attachResume()` fetches
+the PDF (base64) and sets it on the résumé file input via a **`DataTransfer`** (`input.files = dt.files` —
+Chrome allows it, NO `debugger` permission / no scary banner needed — verified), once, idempotent;
+`fillEmailCode()` polls (throttled 4s) for the code and fills the verification input when it lands. Both
+no-op gracefully when `chrome` is absent (so the offline mocks still pass). **Deploy: `pm2 restart
+jobfinder-alan-dash`** to load `/tp_code`+`/tp_resume` (done; verified live: `/tp_resume` serves a 2986-byte
+`%PDF`, `/tp_code`→`{"code":null}` until an email lands, 401 on bad token). Only the dashboard restarts.
+NB `attachResume` sets the SYNTHETIC persona's résumé on a real ATS — intended for the synthetic-persona TP
+flow; the field detection (`input[type=file]` near resume/cv/upload) + code detection (input near
+verification/security-code) are best-effort + self-healing on re-runs since the live résumé/code steps
+weren't captured. Persona =
 `olivia.bennett2311@takhet.com` (mailbox provisioned); the account verification code lands in that
 @takhet.com Maildir on the server (read via `verify_code.read_code`) — relay it, or edit `persona.js` to
 the owner's own email. TP allowed-states = 38/39 (`AL AR AZ DE FL GA IA ID IL IN KS KY LA MD ME MI MN MO

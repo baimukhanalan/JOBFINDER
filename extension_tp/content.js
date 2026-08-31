@@ -359,7 +359,8 @@
       if (own.length > 70 || !rx.test(own)) continue;   // this node IS a short label matching labelRe
       let box = lab.closest("div,li,fieldset,tr,section,td") || lab.parentElement;
       for (let up = 0; up < 3 && box; up++) {
-        const trig = box.querySelector('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],input[readonly],select,button');
+        // real dropdown widgets ONLY — NOT bare <button> (that grabbed "Add More" anchors and spawned rows)
+        const trig = box.querySelector('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],.dropdown-select,input[readonly],select');
         if (trig && vis2(trig)) return trig;
         box = box.parentElement;
       }
@@ -369,21 +370,28 @@
   // Best-effort: open a custom dropdown for labelRe and click the option matching valueRe by TEXT.
   // Only a FALLBACK when the native <select> path found nothing. Text-matched, so it never sets a
   // wrong value — if no option text matches, it leaves the field blank.
+  // NEVER click these — they ADD form rows / navigate, not select an option (clicking iCIMS
+  // "Add More (Addresses)" spawned endless -2/-3/-4 blocks). Guards every click in this function.
+  const _NAV_RE = /add more|add another|add a\b|remove|delete|\bnext\b|\bback\b|\bsubmit\b|showgroup/i;
+  function _isNav(el) {
+    return _NAV_RE.test(norm(el.innerText || el.value || "")) || _NAV_RE.test(el.getAttribute("onclick") || "");
+  }
   function openAndPickCustom(labelRe, valueRe) {
     const rx = new RegExp(labelRe, "i");
     const triggers = [];
-    for (const el of document.querySelectorAll('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],input[readonly],button,a[role=button]')) {
-      if (vis2(el) && isDropdownWidget(el) && rx.test(labelText(el))) triggers.push(el);
+    // real dropdown widgets ONLY — NOT bare button/a[role=button] (those were the "Add More" anchors)
+    for (const el of document.querySelectorAll('.dropdown-toggle,[data-toggle*="dropdown"],[data-bs-toggle*="dropdown"],[role=combobox],[role=listbox],[aria-haspopup],.dropdown-select,input[readonly]')) {
+      if (vis2(el) && isDropdownWidget(el) && !_isNav(el) && rx.test(labelText(el))) triggers.push(el);
     }
     const t2 = findFieldTrigger(labelRe);
-    if (t2 && !triggers.includes(t2)) triggers.push(t2);
+    if (t2 && !_isNav(t2) && !triggers.includes(t2)) triggers.push(t2);
     for (const el of triggers) {
       const disp = norm(el.innerText || el.value || "");
       if (disp && !isPlaceholder(disp) && optMatch(valueRe, disp)) return true;   // already right
       clickOpen(el);
       // options render as Bootstrap .dropdown-menu items, ARIA options, select2 results, or a portal list
       const opts = [...document.querySelectorAll('.dropdown-menu li a,.dropdown-menu li,.dropdown-menu a,[role=option],ul[role=listbox] li,li[role],.select2-results__option,.dropdown-item,li,a')]
-        .filter((o) => vis2(o) && norm(o.innerText || o.textContent));
+        .filter((o) => vis2(o) && norm(o.innerText || o.textContent) && !_isNav(o));
       const matches = opts.filter((o) => optMatch(valueRe, norm(o.innerText || o.textContent)));
       // querySelectorAll returns DOCUMENT order, so a wrapper <li> precedes its child <a>; clicking the
       // <li> won't fire the <a>'s handler. Prefer an actual <a>/[role=option], else a leaf, and always
@@ -499,6 +507,88 @@
     return ok;
   }
 
+  // ---- iCIMS native-select fill (the REAL Teleperformance form) -----------------------------------
+  // TP dropdowns are native <select> elements (Country/State/how-heard/Type), usually class
+  // "dropdown-hide" behind an iCIMS fake <a class="dropdown-select"> overlay + a
+  // "<id>_fakeSelected_icimsDropdown" span. Fill the NATIVE <select> directly (value + change) — the
+  // form submits the native value. NEVER click the fake overlay or the "Add More (Addresses/Phones)"
+  // anchors (that clicking spawned endless -2/-3/-4 address rows). Idempotent: a select already set is
+  // skipped, so re-runs don't re-dispatch change and churn the AJAX cascade.
+  function icimsSetSelect(sel, valueRe) {
+    if (!sel || sel.tagName !== "SELECT" || sel.multiple) return false;
+    const cur = sel.options[sel.selectedIndex];
+    if (sel.value && !isPlaceholder(cur && cur.text)) return true;         // already set — idempotent
+    const opt = [...sel.options].find((o) => o.value && (optMatch(valueRe, o.text) || optMatch(valueRe, o.value)));
+    if (!opt) return false;
+    sel.value = opt.value;
+    sel.dispatchEvent(new Event("input", { bubbles: true }));
+    sel.dispatchEvent(new Event("change", { bubbles: true }));            // fires iCIMS onchange (SourceChange / country→state AJAX)
+    try {                                                                 // sync the fake overlay so the human SEES the value
+      const fake = document.getElementById(sel.id + "_fakeSelected_icimsDropdown");
+      if (fake) fake.textContent = opt.text;
+      const overlay = document.getElementById(sel.id + "_icimsDropdown");
+      if (overlay) { const tx = overlay.querySelector(".dropdown-text"); (tx || overlay).textContent = opt.text; }
+    } catch (e) {}
+    return true;
+  }
+  function icimsSelectsByLabel(labelRe) {
+    const rx = new RegExp(labelRe, "i");
+    return [...document.querySelectorAll("select")].filter((s) => rx.test(s.getAttribute("data-label") || "") || rx.test(labelText(s)));
+  }
+  function fillICIMS() {
+    for (const s of icimsSelectsByLabel("country")) icimsSetSelect(s, P.country || "United States");   // sets country → triggers State AJAX
+    for (const s of icimsSelectsByLabel("state|province")) icimsSetSelect(s, P.state_full || "Ohio");  // retried on later passes once loaded
+    for (const v of (P.how_heard || ["Job Board", "Google Search", "Media"])) {
+      const hh = icimsSelectsByLabel("how did you hear")[0];
+      if (hh && icimsSetSelect(hh, v)) break;
+    }
+    fillText("specify further", "Online", false);                        // "Please specify further" is a free-text input
+    for (const s of icimsSelectsByLabel("^\\s*type\\b")) {                // phone Type / address Type
+      if (comboEmpty(s)) icimsSetSelect(s, /phone/i.test(s.id) ? (P.phone_type || "Mobile") : "Physical");
+    }
+  }
+
+  // ---- résumé auto-attach + emailed verification-code auto-fill (background → server) -------------
+  let _resumeAttached = false;
+  function attachResume() {
+    if (_resumeAttached || typeof chrome === "undefined" || !chrome.runtime) return;
+    const files = [...document.querySelectorAll('input[type=file]')].filter(vis2);
+    if (!files.length) return;
+    const target = files.find((f) => /resume|cv|curriculum|upload/i.test(
+      labelText(f) + " " + (f.name || "") + " " + (f.getAttribute("accept") || ""))) || files[0];
+    if (target.files && target.files.length) { _resumeAttached = true; return; }   // already has a file
+    _resumeAttached = true;                                                         // guard re-fire while fetching
+    chrome.runtime.sendMessage({ type: "tp_resume", mailbox: P.email }, (resp) => {
+      try {
+        if (!resp || !resp.b64) { _resumeAttached = false; return; }               // none yet — retry next pass
+        const bin = atob(resp.b64), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const dt = new DataTransfer();
+        dt.items.add(new File([bytes], "resume.pdf", { type: "application/pdf" }));
+        target.files = dt.files;                                                    // Chrome allows setting .files from a DataTransfer
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+        target.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (e) { _resumeAttached = false; }
+    });
+  }
+
+  const _loadTs = Math.floor(Date.now() / 1000);
+  let _codeFilled = false, _lastCodePoll = 0;
+  function fillEmailCode() {
+    if (_codeFilled || typeof chrome === "undefined" || !chrome.runtime) return;
+    const inp = [...document.querySelectorAll('input[type=text],input[type=tel],input[type=number],input:not([type])')]
+      .find((el) => vis2(el) && !norm(el.value) &&
+        /verification|security code|enter the code|confirmation code|one[- ]?time|access code|\bcode\b/i
+          .test(labelText(el) + " " + (el.name || "") + " " + (el.getAttribute("placeholder") || "")));
+    if (!inp) return;
+    const now = Date.now();
+    if (now - _lastCodePoll < 4000) return;   // throttle — the code arrives by email, may take a moment
+    _lastCodePoll = now;
+    chrome.runtime.sendMessage({ type: "tp_code", mailbox: P.email, since: _loadTs - 120 }, (resp) => {
+      if (resp && resp.code) { setVal(inp, resp.code); _codeFilled = true; }
+    });
+  }
+
   let lastCount = 0;
   function fillTP() {
     let n = 0;
@@ -511,16 +601,11 @@
       n += fillText("last name|surname|family name", P.last_name) ? 1 : 0;
       if (P.middle_name) fillText("middle name", P.middle_name);
       fillPasswords();
-      // phone: Type = Mobile (its own select) + Number as digits. Fall back to a custom dropdown
-      // widget when there is no native <select> (iCIMS iForms render these as widgets).
-      if (!pickSelect("^\\s*type\\b|phone type", P.phone_type || "Mobile")) openAndPickCustom("^\\s*type\\b|phone type", P.phone_type || "Mobile");
+      // iCIMS native <select> fields: Country/State (AJAX cascade)/how-heard/Type + specify text.
+      // Fills the real hidden <select> directly — never clicks the fake overlay or "Add More" anchors.
+      fillICIMS();
+      // phone number (free text; include country code, digits only)
       fillText("^\\s*number|include country code|^phone|mobile number", P.phone_digits, true);
-      // how did you hear + its dependent specify-further
-      fillHowHeard();
-      // residence: Country FIRST (unlocks State), then State, address Type, then the address fields
-      if (!pickSelect("country", P.country || "United States")) openAndPickCustom("country", P.country || "United States");
-      if (!pickSelect("state|province", P.state_full || "Ohio")) openAndPickCustom("state|province", P.state_full || "Ohio");
-      if (!pickSelect("^\\s*type\\b", "Physical")) openAndPickCustom("^\\s*type\\b", "Physical");   // address Type (phone Type already set)
       fillText("^\\s*address\\b(?!\\s*(2|line))|^\\s*street", P.address, false);
       fillText("^\\s*city\\b|city/town|^town\\b", P.city, true);
       fillText("zip|postal", P.zip, true);
@@ -529,6 +614,8 @@
       tickRequiredConsent();
       answerScreeners();
       declineDemographics();
+      attachResume();      // set the persona résumé PDF on the file input (fetched from the server)
+      fillEmailCode();     // fill the emailed account-verification code once it lands in the persona inbox
     } catch (e) { /* keep going */ }
     let unfilled = [];
     try { unfilled = unfilledReport(); } catch (e) {}

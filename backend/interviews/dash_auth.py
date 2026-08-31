@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 ALLOWLIST = {
     "/login", "/logout", "/favicon.ico",
     "/draft", "/assist", "/profile_form", "/job_pack", "/resume_file", "/mark_ext",
+    "/tp_code", "/tp_resume",
 }
 
 # Secure cookie on the HTTPS deploy (nginx). Off by default so an http TestClient works;

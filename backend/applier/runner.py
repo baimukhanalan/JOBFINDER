@@ -20,14 +20,20 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from backend.applier.browser import BrowserManager
+from backend.applier.strategies.amazon_apply import AmazonStrategy
 from backend.applier.strategies.ashby import AshbyStrategy
 from backend.applier.strategies.avature import AvatureStrategy
 from backend.applier.strategies.base import GenericStrategy
 from backend.applier.strategies.greenhouse import GreenhouseStrategy
 from backend.applier.strategies.icims import ICIMSStrategy
+from backend.applier.strategies.kelly import KellyStrategy
 from backend.applier.strategies.lever import LeverStrategy
+from backend.applier.strategies.oracle_orc import OracleORCStrategy
+from backend.applier.strategies.phenom import PhenomStrategy, PhenomWorkdayStrategy
+from backend.applier.strategies.smartrecruiters import SmartRecruitersStrategy
 from backend.applier.strategies.workable import WorkableStrategy
-from backend.applier.strategies.workday import WorkdayStrategy
+from backend.applier.strategies.workday import WorkdayMassHiringStrategy, WorkdayStrategy
+from backend.applier.strategies.workingsolutions import WorkingSolutionsStrategy
 from backend.profiles.facts import load_facts
 from backend.profiles.store import Profile
 from backend.services.tailor.render import render_html, render_text
@@ -95,8 +101,15 @@ def _url_keywords(url: str, company: str = "") -> str:
     return " ".join(dict.fromkeys(words))  # order-preserving dedup
 
 
+# PhenomWorkdayStrategy (Humana) MUST precede WorkdayStrategy — Humana's apply_url is a
+# Workday URL, so it has to be checked first; every other Workday URL still falls through to
+# the stock WorkdayStrategy (byte-identical). PhenomStrategy (Conduent) matches only the
+# careers.conduent.com wrapper host, so its position is not order-sensitive.
 STRATEGIES = [GreenhouseStrategy, LeverStrategy, AshbyStrategy, WorkableStrategy,
-              WorkdayStrategy, ICIMSStrategy, AvatureStrategy]  # GenericStrategy is the fallback
+              PhenomWorkdayStrategy, WorkdayMassHiringStrategy, WorkdayStrategy,
+              ICIMSStrategy, AvatureStrategy,
+              KellyStrategy, PhenomStrategy, OracleORCStrategy, WorkingSolutionsStrategy,
+              SmartRecruitersStrategy, AmazonStrategy]  # GenericStrategy is the fallback
 
 
 def _pick_strategy(url: str):

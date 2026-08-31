@@ -33,9 +33,42 @@ def _city_from_title(title: str) -> str:
     st = m.group(2).strip()
     return f"{city}, {st}, United States"
 
-# Apply hosts that have a working auto-fill strategy on THIS board. Avature (Maximus) only
-# for now — the one mass-hiring ATS that completes without a live human captcha/assessment.
-SUPPORTED_HOSTS = ("avature.net",)
+# Apply hosts that have a working auto-fill strategy on THIS board. Avature (Maximus) and
+# Oracle Recruiting Cloud / Candidate Experience (Alorica) complete without a live human
+# captcha/assessment (ORC's only gate is an emailed PIN + invisible reCAPTCHA v3 the page
+# auto-executes; see strategies/oracle_orc.py). Working Solutions' apply portal
+# (apply.workingsolutions.com) is gated by a reCAPTCHA v2 CHECKBOX + an emailed 6-digit code
+# — the checkbox is solved via captcha_solver (needs CAPTCHA_SOLVER_KEY) and a US RESIDENTIAL
+# proxy for the risk/geo gate; see strategies/workingsolutions.py. SmartRecruiters (Sutherland,
+# jobs.smartrecruiters.com) is a login-less guest apply whose SUBMIT carries no captcha — the
+# oneclick form sits behind DataDome, so it needs a US RESIDENTIAL egress (which clears DataDome
+# silently) and NO captcha key; see strategies/smartrecruiters.py. Kelly (KellyConnect,
+# www.mykelly.com) is a login-less WordPress Gravity Form backed by Bullhorn whose SUBMIT carries
+# NO captcha (verified live) — the only gate is Akamai bot-management on the host, cleared by a US
+# RESIDENTIAL egress; no captcha key needed. See strategies/kelly.py. Amazon corporate ATS
+# (account.amazon.jobs, SAML -> passport.amazon.jobs) is ACCOUNT-gated: register + emailed OTP
+# guard the form, and the register step carries an AWS WAF CAPTCHA — so it needs BOTH a
+# CAPTCHA_SOLVER_KEY (AWS WAF, solved via captcha_solver.solve_aws_waf) AND a US RESIDENTIAL
+# proxy (the WAF token is IP-bound; datacenter IPs are risk-flagged); the account/OTP/wizard walk
+# is gated behind AMAZON_ADVANCE. See strategies/amazon_apply.py.
+SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com",
+                   "smartrecruiters.com", "mykelly.com",
+                   "account.amazon.jobs", "passport.amazon.jobs",
+                   # Phenom family: Conduent (careers.conduent.com → Oracle HCM guest apply)
+                   # + Humana (its own Workday tenant).
+                   "careers.conduent.com", "humana.wd5.myworkdayjobs.com",
+                   # Workday CxS mass-hiring family (strategies/workday.py) — the four validated
+                   # tenants only, NOT a blanket myworkdayjobs.com, so an unvetted Workday tenant
+                   # isn't silently attempted. reCAPTCHA v2-checkbox / Enterprise on the account
+                   # step only (solved via captcha_solver + a US residential IP); the CxS Submit
+                   # itself has none. Concentrix / CVS Health / Centene / Cigna.
+                   "cnx.wd1.myworkdayjobs.com", "cvshealth.wd1.myworkdayjobs.com",
+                   "centene.wd5.myworkdayjobs.com", "cigna.wd5.myworkdayjobs.com",
+                   # iCIMS family: Teleperformance (careersus-teleperformance.icims.com) — the
+                   # iframe iForm is account-gated with AWS-WAF + reCAPTCHA on submit
+                   # (strategies/icims.py). Account creation + submit gated behind ICIMS_ADVANCE;
+                   # needs a CapSolver key + a US residential egress to go live.
+                   "icims.com")
 
 
 def is_supported(apply_url: str) -> bool:
@@ -184,7 +217,19 @@ def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
     if not row_ids:
         return []
     n = max(1, min(int(workers), len(row_ids)))
-    ports = bulk_pool.start_workers(n, wait=90, extra_env={"AVATURE_ADVANCE": "1"})
+    # Each worker reads its ATS-advance switch at import: Avature (Maximus) walks its wizard on
+    # AVATURE_ADVANCE, Oracle ORC (Alorica) on ORC_ADVANCE, Working Solutions solves its captcha
+    # + records the submit on WS_ADVANCE, SmartRecruiters (Sutherland) on SMARTRECRUITERS_ADVANCE,
+    # Kelly (KellyConnect) records its Gravity Forms submit on KELLY_ADVANCE. Phenom: Conduent
+    # (Oracle HCM) walks on PHENOM_ADVANCE (ORC_ADVANCE also enables it) and Humana (Workday)
+    # creates its account + walks on WORKDAY_ADVANCE. All are set so a mixed batch drives whichever
+    # ATS the job's URL routes to (dry_run still gates the final Submit click; the captcha solve is
+    # itself a no-op without CAPTCHA_SOLVER_KEY — and Kelly carries no captcha).
+    ports = bulk_pool.start_workers(
+        n, wait=90, extra_env={"AVATURE_ADVANCE": "1", "ORC_ADVANCE": "1",
+                               "WS_ADVANCE": "1", "SMARTRECRUITERS_ADVANCE": "1",
+                               "KELLY_ADVANCE": "1", "PHENOM_ADVANCE": "1",
+                               "WORKDAY_ADVANCE": "1"})
     if not ports:
         raise RuntimeError("no headless workers came up")
 

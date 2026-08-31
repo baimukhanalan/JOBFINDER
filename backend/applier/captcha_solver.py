@@ -223,3 +223,123 @@ async def solve_on_page(page, action: str | None = None) -> bool:
     except Exception as exc:
         logger.warning("captcha token injection failed: %s", exc)
         return False
+
+
+# ---- AWS WAF CAPTCHA (Amazon Passport / account.amazon.jobs) -------------------
+# Amazon's corporate ATS gates account-creation (and sometimes the apply submit) with an
+# AWS WAF CAPTCHA (captcha-sdk.awswaf.com jsapi.js; window.AwsWafCaptcha.renderCaptcha).
+# It is Amazon-proprietary — NOT reCAPTCHA/hCaptcha/Turnstile — so it is a SEPARATE task
+# type from _CAPSOLVER_TASK above (kept out of that dict on purpose; a token here is a
+# cookie, not a g-recaptcha-response). CapSolver mints it with AntiAwsWafTask; the token is
+# short-lived, so solve it right before the register/submit request.
+_CAPSOLVER_AWS_WAF_TASK = "AntiAwsWafTaskProxyLess"
+
+# Which AWS WAF challenge is on the page + its challenge props. AWS WAF exposes the
+# key/iv/context the solver needs via window.gokuProps (present on the interactive shell);
+# an interactive puzzle rendered by the SDK may expose none — CapSolver can still mint a
+# token from the websiteURL alone, so a null props set is not a hard failure.
+_AWS_WAF_DETECT_JS = r"""() => {
+  const sdk = [...document.querySelectorAll('script[src*="captcha-sdk.awswaf.com"]')][0];
+  const box = document.querySelector('.captcha-container, [class*="captcha-container"], '
+              + '#captcha-container, [id*="awswaf" i]');
+  const shell = /(verify you are human|are you a human|solve this puzzle)/i
+                .test((document.body && document.body.innerText || '').slice(0, 4000));
+  if (!sdk && !box && !shell) return null;
+  const g = window.gokuProps
+        || (window.AwsWafIntegration && window.AwsWafIntegration.gokuProps)
+        || (window.awsWafCookieDomainList ? {} : null) || {};
+  return { present: true, key: g.key || null, iv: g.iv || null, context: g.context || null };
+}"""
+
+
+async def _capsolver_solution(task: dict) -> dict | None:
+    """Run one CapSolver task and return its full `solution` dict (or None on
+    disabled/error/timeout). Separate from _capsolver_solve — the AWS WAF solution is a
+    cookie, not a gRecaptchaResponse token, so the caller extracts the right field."""
+    if not is_enabled():
+        return None
+    async with httpx.AsyncClient(timeout=30) as cx:
+        r = await cx.post(f"{_CAPSOLVER_BASE}/createTask",
+                          json={"clientKey": _key(), "task": task})
+        j = r.json()
+        if j.get("errorId"):
+            logger.warning("capsolver createTask error: %s", j.get("errorDescription"))
+            return None
+        task_id = j.get("taskId")
+        if not task_id:
+            return None
+        import asyncio
+        waited = 0.0
+        while waited < _POLL_MAX:
+            await asyncio.sleep(_POLL_INTERVAL)
+            waited += _POLL_INTERVAL
+            rr = await cx.post(f"{_CAPSOLVER_BASE}/getTaskResult",
+                               json={"clientKey": _key(), "taskId": task_id})
+            jr = rr.json()
+            if jr.get("errorId"):
+                logger.warning("capsolver getTaskResult error: %s", jr.get("errorDescription"))
+                return None
+            if jr.get("status") == "ready":
+                return jr.get("solution") or {}
+    logger.warning("capsolver aws-waf timed out after %ss", _POLL_MAX)
+    return None
+
+
+async def solve_aws_waf(page) -> bool:
+    """Detect an AWS WAF CAPTCHA on `page`, solve it via CapSolver's AntiAwsWafTask, and inject
+    the resulting `aws-waf-token` cookie onto the browser context. Returns True only if a
+    challenge was found AND solved AND the token injected. A graceful no-op (False) when the
+    solver is disabled, no AWS WAF challenge is present, the provider is 2captcha (its Amazon-WAF
+    method is not wired here), or anything fails — so it is always safe to call before a register
+    or submit click. Never raises.
+
+    The token is IP-bound: solve it through the SAME (residential) session the page uses, and do
+    it immediately before the gated request — it expires fast."""
+    if not is_enabled():
+        return False
+    if _provider() == "twocaptcha":
+        logger.info("aws-waf: 2captcha provider not wired for AWS WAF; skipping")
+        return False
+    try:
+        info = await page.evaluate(_AWS_WAF_DETECT_JS)
+    except Exception:
+        return False
+    if not info or not info.get("present"):
+        return False
+    try:
+        page_url = page.url
+    except Exception:
+        page_url = ""
+    if not page_url:
+        return False
+    task = {"type": _CAPSOLVER_AWS_WAF_TASK, "websiteURL": page_url}
+    if info.get("key"):
+        task["awsKey"] = info["key"]
+    if info.get("iv"):
+        task["awsIv"] = info["iv"]
+    if info.get("context"):
+        task["awsContext"] = info["context"]
+    try:
+        sol = await _capsolver_solution(task)
+    except Exception as exc:
+        logger.warning("aws-waf solve failed: %s", exc)
+        return False
+    token = (sol or {}).get("cookie") or (sol or {}).get("token") if sol else None
+    if isinstance(token, str) and token.startswith("aws-waf-token="):
+        token = token.split("=", 1)[1]
+    if not token:
+        logger.info("aws-waf captcha present but not solved")
+        return False
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(page_url).hostname or "").lower()
+        # Scope the cookie domain-wide when on *.amazon.jobs so the token also satisfies the
+        # account.amazon.jobs / passport.amazon.jobs XHRs the SPA fires.
+        domain = ".amazon.jobs" if host.endswith("amazon.jobs") else host
+        await page.context.add_cookies(
+            [{"name": "aws-waf-token", "value": token, "domain": domain, "path": "/"}])
+        logger.info("aws-waf captcha solved + token injected")
+        return True
+    except Exception as exc:
+        logger.warning("aws-waf token injection failed: %s", exc)
+        return False

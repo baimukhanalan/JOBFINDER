@@ -34,6 +34,12 @@
     }
     if (!t) t = el.getAttribute("aria-label") || "";
     if (!t) {
+      // table layout: the label often sits in the PREVIOUS cell of the same row (<td>State</td><td><select></td>)
+      const cell = el.closest("td,th");
+      const prev = cell && cell.previousElementSibling;
+      if (prev && low(prev.innerText).length < 80) t = prev.innerText;
+    }
+    if (!t) {
       // climb to a small container and read its text (iCIMS wraps the label in a sibling)
       let box = el.closest("div,li,fieldset,tr,td,section");
       if (box && low(box.innerText).length < 180) t = box.innerText;
@@ -246,6 +252,13 @@
       let ok = selectFirstReal("specify further") || fillText("specify further", "Online", true);
       if (ok) return;
     }
+    // no native <select> matched → try a custom dropdown widget (best-effort)
+    for (const v of (P.how_heard || ["Job Board", "Google Search", "Other/None"])) {
+      if (openAndPickCustom("how did you hear", v)) {
+        openAndPickCustom("specify further", "Online") || fillText("specify further", "Online", true);
+        return;
+      }
+    }
   }
 
   function fillPasswords() {
@@ -290,6 +303,152 @@
     return out;
   }
 
+  // ---- custom (non-native) dropdown support + a full DOM report -----------------------------------
+  function vis2(el) { try { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1; } catch (e) { return false; } }
+  // Is a control (native OR custom [role=combobox]/[role=listbox]) still empty / on its placeholder?
+  function comboEmpty(el, t) {
+    t = t || (el.type || el.tagName).toLowerCase();
+    if (t === "checkbox" || t === "radio") return !el.checked;
+    if (el.tagName === "SELECT") { const c = el.options[el.selectedIndex]; return !el.value || isPlaceholder(c && c.text); }
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "combobox" || role === "listbox") { const d = norm(el.value || el.innerText); return !d || isPlaceholder(d); }
+    return !norm(el.value);
+  }
+  function elClass(el) { try { return (el.className && el.className.toString ? el.className.toString() : "").slice(0, 90); } catch (e) { return ""; } }
+  function labelSource(el) {
+    const id = el.id;
+    if (id && document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]')) return "label[for]";
+    if (el.closest("label")) return "wrapping-label";
+    if (el.getAttribute("aria-labelledby")) return "aria-labelledby";
+    if (el.getAttribute("aria-label")) return "aria-label";
+    if (el.getAttribute("placeholder")) return "placeholder";
+    return "container/name";
+  }
+  // Is this element a dropdown-like WIDGET (not a native <select>)? iCIMS "iForms" often render
+  // Country/State/How-heard as a styled control + popup list instead of a <select>.
+  function isDropdownWidget(el) {
+    if (el.tagName === "SELECT") return false;
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    if (role === "combobox" || role === "listbox") return true;
+    const hp = (el.getAttribute("aria-haspopup") || "").toLowerCase();
+    if (hp === "listbox" || hp === "true" || hp === "menu") return true;
+    const cls = elClass(el).toLowerCase();
+    if (/(^|[-_ ])(select|dropdown|combo|chosen|typeahead|autocomplete|picklist)/.test(cls)) return true;
+    // a readonly text input that opens a list is the classic select-replacement
+    if (el.tagName === "INPUT" && (el.readOnly || el.getAttribute("readonly") !== null) &&
+        (el.getAttribute("role") === "combobox" || hp)) return true;
+    return false;
+  }
+  // Best-effort: open a custom dropdown matching labelRe and click the option matching valueRe.
+  // Only used as a FALLBACK when the native <select> path found nothing. Text-matched (never blind).
+  function openAndPickCustom(labelRe, valueRe) {
+    const rx = new RegExp(labelRe, "i");
+    const cands = [...document.querySelectorAll('[role=combobox],[role=listbox],[aria-haspopup],input[readonly],button,a[role=button]')]
+      .filter((el) => vis2(el) && isDropdownWidget(el) && rx.test(labelText(el)));
+    for (const el of cands) {
+      const disp = norm(el.innerText || el.value || "");
+      if (disp && !isPlaceholder(disp) && optMatch(valueRe, disp)) return true;   // already right
+      try { el.click(); } catch (e) { continue; }
+      // options can render as [role=option], listbox <li>, or a portal dropdown item anywhere
+      const opts = [...document.querySelectorAll('[role=option],ul[role=listbox] li,li[role],.dropdown-item,.iCIMS_Dropdown li,li')].filter(vis2);
+      const opt = opts.find((o) => optMatch(valueRe, norm(o.innerText)));
+      if (opt) { try { opt.click(); } catch (e) {} return true; }
+      try { el.click(); } catch (e) {}   // couldn't match — close it back
+    }
+    return false;
+  }
+
+  // Full structural dump of THIS frame's form — native selects (with options), custom dropdown
+  // widgets, and the outerHTML of every required-but-empty field. This is the ground truth that
+  // pins down why a dropdown won't fill; the badge copies it to the clipboard on click.
+  function buildReport() {
+    const L = [];
+    L.push("=== TP Assist DOM report ===");
+    L.push("url: " + location.href.slice(0, 140));
+    L.push("form controls in this frame: " + document.querySelectorAll("input,select,textarea").length);
+    const sels = [...document.querySelectorAll("select")].filter(vis2);
+    L.push("");
+    L.push("--- native <select> (" + sels.length + ") ---");
+    sels.forEach((s, i) => {
+      const cur = s.options[s.selectedIndex];
+      L.push("[sel " + i + "] label=" + JSON.stringify(labelText(s).slice(0, 60)) + " src=" + labelSource(s) +
+        " id=" + s.id + " name=" + s.name + " req=" + !!(s.required || s.getAttribute("aria-required") === "true") +
+        " value=" + JSON.stringify((cur && cur.text) || ""));
+      L.push("        opts: " + [...s.options].slice(0, 16).map((o) => norm(o.text)).filter(Boolean).join(" | "));
+    });
+    const widgets = [];
+    const seen = new Set();
+    for (const el of document.querySelectorAll('[role],[aria-haspopup],input[readonly],[class*="select"],[class*="dropdown"],[class*="combo"]')) {
+      if (!vis2(el) || !isDropdownWidget(el)) continue;
+      const k = el.tagName + "|" + el.id + "|" + elClass(el) + "|" + (el.getAttribute("aria-labelledby") || "");
+      if (seen.has(k)) continue; seen.add(k);
+      widgets.push(el); if (widgets.length >= 25) break;
+    }
+    L.push("");
+    L.push("--- custom dropdown widgets (" + widgets.length + ") ---");
+    widgets.forEach((el, i) => {
+      L.push("[w " + i + "] <" + el.tagName.toLowerCase() + "> role=" + (el.getAttribute("role") || "") +
+        " haspopup=" + (el.getAttribute("aria-haspopup") || "") + " readonly=" + (el.readOnly || false) +
+        " class=" + JSON.stringify(elClass(el)) + " id=" + el.id +
+        " label=" + JSON.stringify(labelText(el).slice(0, 60)) + " src=" + labelSource(el) +
+        " shown=" + JSON.stringify(norm(el.innerText || el.value || "").slice(0, 40)));
+    });
+    // required + empty → outerHTML (the decisive evidence)
+    const un = [];
+    for (const el of document.querySelectorAll("input,select,textarea,[role=combobox],[role=listbox]")) {
+      const t = (el.type || el.tagName).toLowerCase();
+      if (["hidden", "submit", "button", "reset"].includes(t)) continue;
+      if (!vis2(el)) continue;
+      const req = el.required || el.getAttribute("aria-required") === "true";
+      if (!req) continue;
+      let empty = comboEmpty(el, t);
+      if (empty) un.push(el);
+    }
+    L.push("");
+    L.push("--- required & still-empty (" + un.length + ") — outerHTML ---");
+    un.slice(0, 14).forEach((el, i) => {
+      const par = el.parentElement;
+      L.push("[req " + i + "] label=" + JSON.stringify(labelText(el).slice(0, 55)) +
+        " parent=" + (par ? "<" + par.tagName.toLowerCase() + " class=" + JSON.stringify(elClass(par)) + ">" : ""));
+      L.push("        " + (el.outerHTML || "").replace(/\s+/g, " ").slice(0, 520));
+    });
+    return L.join("\n");
+  }
+
+  // Copy the report to the clipboard (execCommand under a real user gesture works even in iCIMS's
+  // iframe, where navigator.clipboard is often policy-blocked) AND show it in a selectable overlay
+  // so it can always be copied by hand + a "закрыть" button.
+  function copyReport() {
+    const rep = buildReport();
+    try { console.log("[TP Assist] REPORT:\n" + rep); } catch (e) {}
+    let ok = false;
+    let host = document.getElementById("__tpReport");
+    if (host) host.remove();
+    host = document.createElement("div");
+    host.id = "__tpReport";
+    host.style.cssText = "position:fixed;z-index:2147483647;left:10px;right:10px;bottom:10px;max-height:60vh;" +
+      "background:#0c1116;color:#e6edf3;border:2px solid #0c47c2;border-radius:10px;padding:10px;" +
+      "font:12px -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.5);display:flex;flex-direction:column";
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:6px";
+    const msg = document.createElement("b"); msg.textContent = "Отчёт скопирован — вставь его мне в чат";
+    const x = document.createElement("button");
+    x.textContent = "закрыть"; x.style.cssText = "border:0;background:#233;color:#fff;padding:5px 10px;border-radius:7px;cursor:pointer";
+    x.onclick = () => host.remove();
+    bar.appendChild(msg); bar.appendChild(x);
+    const ta = document.createElement("textarea");
+    ta.readOnly = true; ta.value = rep;
+    ta.style.cssText = "flex:1;min-height:180px;width:100%;box-sizing:border-box;background:#06090d;color:#cfe;" +
+      "border:1px solid #234;border-radius:7px;font:11px ui-monospace,Menlo,Consolas,monospace;white-space:pre;overflow:auto";
+    host.appendChild(bar); host.appendChild(ta);
+    document.documentElement.appendChild(host);
+    try { ta.focus(); ta.select(); ok = document.execCommand("copy"); } catch (e) {}
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(rep).catch(() => {}); } catch (e) {}
+    msg.textContent = ok ? "✓ Отчёт скопирован — вставь его мне в чат"
+                         : "Выдели весь текст ниже (Ctrl+A) и скопируй (Ctrl+C) — вставь мне в чат";
+    return ok;
+  }
+
   let lastCount = 0;
   function fillTP() {
     let n = 0;
@@ -302,15 +461,16 @@
       n += fillText("last name|surname|family name", P.last_name) ? 1 : 0;
       if (P.middle_name) fillText("middle name", P.middle_name);
       fillPasswords();
-      // phone: Type = Mobile (its own select) + Number as digits
-      pickSelect("^\\s*type\\b|phone type", P.phone_type || "Mobile");
+      // phone: Type = Mobile (its own select) + Number as digits. Fall back to a custom dropdown
+      // widget when there is no native <select> (iCIMS iForms render these as widgets).
+      if (!pickSelect("^\\s*type\\b|phone type", P.phone_type || "Mobile")) openAndPickCustom("^\\s*type\\b|phone type", P.phone_type || "Mobile");
       fillText("^\\s*number|include country code|^phone|mobile number", P.phone_digits, true);
       // how did you hear + its dependent specify-further
       fillHowHeard();
       // residence: Country FIRST (unlocks State), then State, address Type, then the address fields
-      pickSelect("country", P.country || "United States");
-      pickSelect("state|province", P.state_full || "Ohio");
-      pickSelect("^\\s*type\\b", "Physical");                     // address Type (phone Type already set)
+      if (!pickSelect("country", P.country || "United States")) openAndPickCustom("country", P.country || "United States");
+      if (!pickSelect("state|province", P.state_full || "Ohio")) openAndPickCustom("state|province", P.state_full || "Ohio");
+      if (!pickSelect("^\\s*type\\b", "Physical")) openAndPickCustom("^\\s*type\\b", "Physical");   // address Type (phone Type already set)
       fillText("^\\s*address\\b(?!\\s*(2|line))|^\\s*street", P.address, false);
       fillText("^\\s*city\\b|city/town|^town\\b", P.city, true);
       fillText("zip|postal", P.zip, true);
@@ -336,7 +496,7 @@
   // required, visible, still-empty fields (the ones that block Submit) — for the badge + console
   function unfilledReport() {
     const out = [];
-    for (const el of document.querySelectorAll("input,select,textarea")) {
+    for (const el of document.querySelectorAll("input,select,textarea,[role=combobox],[role=listbox]")) {
       const t = (el.type || el.tagName).toLowerCase();
       if (["hidden", "submit", "button", "file", "reset"].includes(t)) continue;
       const r = el.getBoundingClientRect();
@@ -347,10 +507,7 @@
       if (t === "checkbox" || t === "radio") {
         const nm = el.name;
         empty = nm ? ![...document.querySelectorAll('[name="' + (window.CSS && CSS.escape ? CSS.escape(nm) : nm) + '"]')].some((x) => x.checked) : !el.checked;
-      } else if (el.tagName === "SELECT") {
-        const cur = el.options[el.selectedIndex];
-        empty = !el.value || isPlaceholder(cur && cur.text);
-      } else empty = !norm(el.value);
+      } else empty = comboEmpty(el, t);
       if (!empty) continue;
       const lab = norm(labelText(el)).replace(/\s*\*\s*$/, "").slice(0, 55) || (el.name || "field");
       if (lab && !out.includes(lab)) out.push(lab);
@@ -376,11 +533,16 @@
     }
     if (unfilled && unfilled.length) {
       b.style.background = "#b3541e";
+      b.style.cursor = "pointer";
       b.textContent = "TP Assist: не заполнил " + unfilled.length + " — " +
-        unfilled.slice(0, 8).join(" · ") + (unfilled.length > 8 ? " …" : "") + "  (заполни вручную + реши капчу)";
+        unfilled.slice(0, 8).join(" · ") + (unfilled.length > 8 ? " …" : "") +
+        "  ▸ НАЖМИ, чтобы отправить структуру формы (или Alt+Shift+D)";
+      b.onclick = () => { try { copyReport(); } catch (e) {} };
     } else {
       b.style.background = "#1a7f37";
+      b.style.cursor = "default";
       b.textContent = "TP Assist: всё заполнено ✓ — реши капчу и жми Submit";
+      b.onclick = null;
     }
   }
 
@@ -389,9 +551,25 @@
   const schedule = () => { clearTimeout(deb); deb = setTimeout(fillTP, 700); };
   const mo = new MutationObserver(schedule);
   try { mo.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
+  // Several bounded initial passes: the first render, then the Country->State + how-heard->specify
+  // cascades (State's options only appear AFTER Country is set), then any late-loading iframe form.
   setTimeout(fillTP, 1200);
+  setTimeout(fillTP, 2800);
+  setTimeout(fillTP, 4600);
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener((m) => { if (m && m.type === "fill") fillTP(); });
+    chrome.runtime.onMessage.addListener((m) => {
+      if (!m) return;
+      if (m.type === "fill") fillTP();
+      else if (m.type === "report") { try { copyReport(); } catch (e) {} }
+    });
   }
-  window.__tpFill = fillTP;   // test hook (page.evaluate('__tpFill()'))
+  // Alt+Shift+D → copy the DOM report (a real keydown gesture in THIS frame, so clipboard works even
+  // inside the iCIMS iframe). Click into any form field first so the form frame has focus.
+  window.addEventListener("keydown", (e) => {
+    if (e.altKey && e.shiftKey && (e.code === "KeyD" || (e.key || "").toLowerCase() === "d")) {
+      e.preventDefault(); try { copyReport(); } catch (err) {}
+    }
+  }, true);
+  window.__tpFill = fillTP;       // test hook (page.evaluate('__tpFill()'))
+  window.__tpReport = buildReport; // test hook — returns the report string
 })();

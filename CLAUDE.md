@@ -1375,7 +1375,37 @@ Country→State / how-heard+specify-further / CSR screeners / EEO-decline / priv
 from `applier/strategies/icims.py::_tp_fill`/`_screener_answer`/`_decline_demographics`). It NEVER clicks
 Next/Submit and NEVER touches the captcha — **the owner solves the captcha + Submits himself** (real IP +
 real mouse ⇒ easy hCaptcha, no noVNC/proxy/solver). Fills on load + DOM-change + `Alt+Shift+F`. Verified
-2026-08-31: loads live on icims.com (badge shows), 22/22 fields on a mock form. Persona =
+2026-08-31: loads live on icims.com (badge shows), 22/22 fields on a mock form.
+**v1.4 (2026-08-31) — dropdowns robust + one-click DOM report.** Owner reported the SELECTS
+(Country/State/phone Type/how-heard/specify) never filled on the REAL form while every TEXT field did — a
+clean text-works/selects-fail split. Un-diagnosable because we had NO capture of the profile-form DOM:
+`icims_recon.py`'s 26 snapshots (`logs/icims_recon/459/`) are ALL the email+hCaptcha register wall
+(`#email[name=css_loginName]` + `#accept_gdpr` in `iframe#icims_content_iframe`) — the bot's automated
+Next-click parks the captcha, so it never reached the Candidate Profile step; FINDINGS.md's field list is
+human-noVNC-observed, not a DOM dump. So the earlier "23/23" was only ever against my OWN mock — circular.
+Fix without the real DOM: handle BOTH plausible shapes. (1) Native `<select>` with the label in an
+`aria-labelledby <span id>` OR a **previous table cell** (`<td>State</td><td><select></td>` — `labelText`
+now climbs `td.previousElementSibling`). (2) **CUSTOM widget** dropdowns (iCIMS iForms render these as
+`<div role=combobox aria-haspopup=listbox>` + a popup `<ul role=listbox>`, NOT a `<select>`):
+`openAndPickCustom` opens the widget and clicks the `[role=option]` matching by text — fired only as a
+FALLBACK when the native path found nothing (text-matched, never blind). `comboEmpty` makes a placeholder
+combobox (`— Make a Selection —`) count as empty. Country→State / how-heard→specify cascades covered by
+extra bounded re-runs (`setTimeout fillTP` @1200/2800/4600ms) + the MutationObserver. (3) **One-click DOM
+report** so the owner sends the REAL markup with zero F12: the orange "не заполнил N" badge is CLICKABLE
+(or `Alt+Shift+D`, or the popup "Отправить структуру формы") → `copyReport` dumps every native select (with
+options), every custom dropdown widget (tag/role/class/label/label-source/shown), and the **outerHTML of
+every required-and-empty field** to the clipboard (`execCommand` under the gesture, works inside the iCIMS
+iframe where `navigator.clipboard` is policy-blocked) + a selectable overlay fallback. Tests (scratchpad,
+patchright): native-select mock 23/23, custom-widget iForm mock 14/14, table-layout PASS. NB patchright's
+stealth `evaluate` runs in an ISOLATED world so `window.__tpFill/__tpReport` read back `undefined` there
+even though the DOM fills work — verify the report via the `Alt+Shift+D` overlay, not the window hook. If a
+dropdown STILL misses on the live form, the report's outerHTML is the ground truth to finish
+`openAndPickCustom`/`labelText` precisely.
+**Résumé auto-attach NOT yet built** (owner asked for "an external python script in tandem with the
+plugin"): a content script can't set `<input type=file>`. The real path = `chrome.downloads` the persona
+résumé PDF (served by the server) to disk → `chrome.debugger` + CDP `DOM.setFileInputFiles(path)` (needs the
+`debugger` permission; shows a yellow "started debugging" banner). Deferred until the fill is signed off on
+the live form. Persona =
 `olivia.bennett2311@takhet.com` (mailbox provisioned); the account verification code lands in that
 @takhet.com Maildir on the server (read via `verify_code.read_code`) — relay it, or edit `persona.js` to
 the owner's own email. TP allowed-states = 38/39 (`AL AR AZ DE FL GA IA ID IL IN KS KY LA MD ME MI MN MO

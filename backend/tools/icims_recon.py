@@ -210,28 +210,27 @@ async def _capture(page, tag: str, recon_dir: str, recon: list, idx: list) -> di
     return entry
 
 
-# A captcha the HUMAN must act on = a full-page AWS-WAF challenge OR a LARGE, visible hCaptcha
-# challenge popup. The tiny "Protected by hCaptcha" badge (invisible hCaptcha) is NOT a challenge —
-# stealth may pass it silently on the Next click, so we must NOT block on the badge's mere presence.
-_CAPTCHA_DOM = r"""
-() => {
-  const b = document.body ? document.body.innerText : '';
-  if (/confirm you are human|choose all the|solve a puzzle|human verification|verify you are human|let's confirm you are human|click the shape/i.test(b)) return true;
-  for (const f of document.querySelectorAll('iframe[src*="hcaptcha"], iframe[title*="captcha" i]')) {
-    const r = f.getBoundingClientRect();
-    if (r.width > 180 && r.height > 180) return true;   // the challenge popup, not the badge
-  }
-  return false;
-}
-"""
+# A full-page AWS-WAF challenge (entry). hCaptcha is detected separately by the RELIABLE
+# frame=challenge check (captcha_relay.visible_popup), NOT by iframe size — the hidden/leftover
+# hCaptcha challenge iframe stays full-size, so a size check false-positives on the badge/leftover.
+_WAF_DOM = ("()=>/confirm you are human|choose all the|solve a puzzle|human verification|"
+            "verify you are human|let's confirm you are human/i.test("
+            "document.body?document.body.innerText:'')")
 
 
 async def _has_captcha(page) -> bool:
-    """True only when a captcha the HUMAN must solve is actually SHOWING (full-page AWS-WAF, or a
-    large visible hCaptcha challenge) — never for the invisible hCaptcha badge."""
-    for fr in _icims_frames(page):   # main + iCIMS content frame(s)
+    """True only when a captcha the HUMAN must solve is actually SHOWING: a VISIBLE hCaptcha
+    challenge (reliable frame=challenge + on-screen check, shared with the relay) OR a full-page
+    AWS-WAF challenge — never the invisible hCaptcha badge or a hidden/leftover challenge frame."""
+    try:
+        from backend.tools import captcha_relay
+        if await captcha_relay.visible_popup(page):
+            return True
+    except Exception:
+        pass
+    for fr in _icims_frames(page):   # main + iCIMS content frame(s): AWS-WAF full-page text
         try:
-            if await fr.evaluate(_CAPTCHA_DOM):
+            if await fr.evaluate(_WAF_DOM):
                 return True
         except Exception:
             continue
@@ -259,9 +258,9 @@ async def _wait_human(page, label: str, recon_dir: str, recon: list, idx: list, 
     if not await _has_captcha(page):
         return True
     await _capture(page, f"{label}_captcha", recon_dir, recon, idx)
-    print(f"\n########## CAPTCHA — SOLVE IT IN noVNC: "
-          f"https://jobs.systeam.kz/vnc/vnc.html?path=vnc/websockify&autoconnect=true&resize=scale "
-          f"(user job2026) ##########\n", flush=True)
+    print(f"\n########## CAPTCHA — SOLVE IT FROM YOUR PHONE: https://captcha.systeam.kz/ "
+          f"(user job2026)  [noVNC fallback: https://jobs.systeam.kz/vnc/vnc.html?path=vnc/websockify"
+          f"&autoconnect=true&resize=scale] ##########\n", flush=True)
     start = time.time()
     while time.time() - start < timeout:
         await page.wait_for_timeout(4000)
@@ -540,6 +539,14 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
             proxy={"server": SLOT}, no_viewport=True, locale="en-US",
             timezone_id="America/New_York", args=["--start-maximized"])
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        # phone-solvable captcha relay -> captcha.systeam.kz (mirror this browser + forward taps)
+        try:
+            from backend.tools import captcha_relay
+            captcha_relay.set_page(page, label="Teleperformance hCaptcha")
+            await captcha_relay.serve(9003)
+            print("[captcha relay up -> https://captcha.systeam.kz/ ]", flush=True)
+        except BaseException as e:
+            print(f"[captcha relay not started: {type(e).__name__}: {e}]"[:160], flush=True)
         try:
             import re
             from backend.applier.strategies.icims import _gen_password

@@ -37,6 +37,10 @@
     <a class="btn off" id="off" href="#">Отключить</a>
 
     <ol id="steps"></ol>
+    <p class="dbg" id="dbgline" style="display:none;font-size:12.5px;text-align:center;margin-top:12px">
+      Не подключается? Скачай <a class="alt" id="dbg" href="win-debug.exe">диагностику (win-debug.exe)</a> —
+      она откроет чёрное окно и покажет, где спотыкается. Пришли скриншот этого окна.
+    </p>
     <p class="os">ОС определена: <b id="osname">…</b> · <a class="alt" id="other" href="#">другая ОС</a></p>
   </div>
 
@@ -47,13 +51,18 @@
   var mac  = /Mac/i.test(plat) || /Mac OS/i.test(ua);
   var dl = document.getElementById('dl'), off = document.getElementById('off');
   var osn = document.getElementById('osname'), steps = document.getElementById('steps');
+  var dbgline = document.getElementById('dbgline');
   function set(os) {
+    dbgline.style.display = 'none';
     if (os === 'win') {
       osn.textContent = 'Windows';
       dl.href = 'win.exe'; off.href = 'win-off.bat';
+      dbgline.style.display = 'block';
       steps.innerHTML = '<li>Нажми <b>«Скачать и подключить»</b> — скачается <code>win.exe</code>.</li>' +
-        '<li>Открой его (если Windows предупредит — «Подробнее» → «Выполнить в любом случае»).</li>' +
-        '<li>Появится «Установлено ✓». Всё — работает в фоне и при каждой загрузке.</li>' +
+        '<li>Открой его. <b>Обязательно:</b> синее окно «Windows защитила ваш компьютер» → <b>«Подробнее»</b> → ' +
+        '<b>«Выполнить в любом случае»</b> (без этого Windows тихо не запустит файл).</li>' +
+        '<li>Если антивирус (Defender) ругается — разреши/исключи <code>agent.exe</code>: он сетевой и в автозагрузке, поэтому подозрителен, но безопасен.</li>' +
+        '<li>Появится «Установлено ✓». Работает в фоне и при каждой загрузке.</li>' +
         '<li>Выключить — кнопка <b>«Отключить»</b> (<code>win-off.bat</code>).</li>';
     } else if (os === 'mac') {
       osn.textContent = 'macOS';

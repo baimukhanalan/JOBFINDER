@@ -23,6 +23,8 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-H=windowsgui $LD" -o
 CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags "$LD" -o "$D/mac-amd64" .
 CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags "$LD" -o "$D/mac-arm64" .
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LD" -o "$D/linux-amd64" .
+# win-debug.exe: CONSOLE build (no -H=windowsgui) + debugMode=1 → foreground, verbose, window stays open.
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LD -X main.debugMode=1" -o "$D/win-debug.exe" .
 
 echo "== generate web assets =="
 # mac.command: fetch the right-arch binary from the PUBLIC path, install autostart, run
@@ -48,6 +50,6 @@ cp "$HERE/index.html" "$D/index.html"
 
 echo "== deploy to $WEB (public) =="
 sudo mkdir -p "$WEB"
-sudo cp "$D"/{index.html,win.exe,mac.command,mac-off.command,win-off.bat,mac-amd64,mac-arm64,linux-amd64} "$WEB/"
+sudo cp "$D"/{index.html,win.exe,win-debug.exe,mac.command,mac-off.command,win-off.bat,mac-amd64,mac-arm64,linux-amd64} "$WEB/"
 sudo chmod -R 755 "$WEB"
 echo "deployed. PUBLIC URL: https://proxy.systeam.kz/"

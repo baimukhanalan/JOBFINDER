@@ -15,6 +15,9 @@ backend/data/proxies.txt
 backend/data/proxies_raw.txt
 # Runtime cache — rebuilt by `mass_hiring.collect()` / `everify_employers --refresh` (public data)
 backend/data/everify_employers.json
+backend/data/shl_answer_bank.json
+backend/data/shl_assess_state.json
+backend/data/shl_assess_runner.lock
 backend/data/facts/*
 !backend/data/facts/sample.json
 backend/data/etalons/*

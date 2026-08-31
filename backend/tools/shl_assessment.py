@@ -758,12 +758,16 @@ async def _click_option(page, index: int) -> bool:
     return False
 
 
-async def _click_forced_choice(page, options: list[str]) -> bool:
-    """Click the most CS-favourable CLICKABLE statement. On a forced-choice screen C ("of the
-    remaining two…") the already-picked statement stays visible but INERT (Playwright times out on
-    it), so try labels in favourability order and skip any that won't click — leaving the best
-    among the still-selectable statements."""
+async def _click_forced_choice(page, options: list[str], prefer_text: str | None = None) -> int:
+    """Click the most CS-favourable CLICKABLE statement and return its index (or -1). A banked
+    `prefer_text` (a previously-chosen statement) is tried FIRST for exact replay; then favourability
+    order. On a forced-choice screen C ("of the remaining two…") the already-picked statement stays
+    visible but INERT (Playwright times out on it), so labels that won't click are skipped — leaving
+    the best among the still-selectable statements."""
     order = sorted(range(len(options)), key=lambda i: -_statement_fav(options[i]))
+    if prefer_text:
+        pref = [i for i, o in enumerate(options) if _bank_norm(o) == prefer_text]
+        order = pref + [i for i in order if i not in pref]
     for i in order:
         labels = page.locator("label.question-answer-label:visible")
         try:
@@ -772,10 +776,10 @@ async def _click_forced_choice(page, options: list[str]) -> bool:
             el = labels.nth(i)
             await el.scroll_into_view_if_needed(timeout=1500)
             await el.click(timeout=2500)
-            return True
+            return i
         except Exception:
             continue
-    return False
+    return -1
 
 
 async def _pace(min_delay: float, max_delay: float) -> None:
@@ -786,6 +790,80 @@ async def _pace(min_delay: float, max_delay: float) -> None:
     # asyncio sleep via the page clock is unnecessary; use a plain await
     import asyncio
     await asyncio.sleep(d)
+
+
+# ---------------------------------------------------------------------------------------------
+# Answer bank — the persona-AGNOSTIC store of "this exact question (+ its option set) -> the
+# option we chose". The OPQ draws items from a large pool and shuffles them per session, so the
+# same items recur; on a recurrence we replay the stored answer INSTANTLY (no LLM), which also
+# makes responding perfectly CONSISTENT (a real person answers a repeated statement the same way)
+# and lets us measure how many DISTINCT items the pool holds. Keyed on the exact
+# question + sorted option-set; the answer is stored as the option TEXT so it still matches when
+# SHL reorders the options. Persisted to a gitignored JSON so it grows across every assessment.
+import json as _json
+import os as _os
+
+_BANK_PATH = _os.path.join(_os.path.dirname(__file__), "..", "data", "shl_answer_bank.json")
+_BANK: dict | None = None
+
+
+def _bank_norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _bank_key(question: str, options: list[str]) -> str:
+    opts = "|".join(sorted(_bank_norm(o) for o in (options or []) if o and o.strip()))
+    return _bank_norm(question) + "||" + opts
+
+
+def _bank_load() -> dict:
+    global _BANK
+    if _BANK is None:
+        try:
+            with open(_BANK_PATH, encoding="utf-8") as f:
+                _BANK = _json.load(f)
+        except Exception:
+            _BANK = {}
+    return _BANK
+
+
+def _bank_save() -> None:
+    bank = _bank_load()
+    try:
+        tmp = f"{_BANK_PATH}.{_os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(bank, f, ensure_ascii=False)
+        _os.replace(tmp, _BANK_PATH)
+    except Exception:
+        pass
+
+
+def _bank_lookup(question: str, options: list[str]):
+    """Return the index of the previously-chosen option for this exact item, or None."""
+    entry = _bank_load().get(_bank_key(question, options))
+    if not entry:
+        return None
+    ans = entry.get("answer", "")
+    for i, o in enumerate(options):
+        if _bank_norm(o) == ans:
+            entry["n"] = entry.get("n", 1) + 1
+            return i
+    return None
+
+
+def _bank_record(question: str, options: list[str], idx: int, kind: str) -> None:
+    if not (0 <= idx < len(options)):
+        return
+    bank = _bank_load()
+    key = _bank_key(question, options)
+    prev = bank.get(key, {})
+    bank[key] = {"q": (question or "")[:220], "options": [str(o)[:200] for o in options],
+                 "answer": _bank_norm(options[idx]), "kind": kind, "n": prev.get("n", 0) + 1}
+    _bank_save()
+
+
+def bank_size() -> int:
+    return len(_bank_load())
 
 
 async def answer_scored(page, persona: dict | None = None, *, max_items: int = 260,
@@ -847,40 +925,54 @@ async def answer_scored(page, persona: dict | None = None, *, max_items: int = 2
                 res["items_answered"] = answered
                 return res
 
-            idx, kind = _pick_answer(item.get("question", ""), opts, item.get("has_table", False))
-            used_llm = False
-            if kind == "sjt":
-                # behavioural / self-description judgement — the keyword heuristic can't reliably
-                # rank sentence options, so let the local model choose; keep the heuristic pick as
-                # the fallback when the model is unavailable or replies unparseably.
-                llm_idx = await _llm_pick(item.get("question", ""), opts)
-                if llm_idx is not None:
-                    idx, used_llm = llm_idx, True
+            q_txt = item.get("question", "")
+            idx, kind = _pick_answer(q_txt, opts, item.get("has_table", False))
             if idx is None:
                 # ability / unrecognised -> HARD STOP, leave for a human (never auto-solve).
                 res["status"] = "needs_human"
-                res["note"] = (f"{kind} item reached — left for a human "
-                               f"(q: {item.get('question','')[:80]})")
+                res["note"] = (f"{kind} item reached — left for a human (q: {q_txt[:80]})")
                 res["items_answered"] = answered
                 return res
 
+            # answer-bank: a previously-seen item replays its stored choice INSTANTLY (no LLM); a
+            # NEW judgement item (SJT scenario or forced-choice statement) that is not in the bank is
+            # handed to the local model (which sees the options) then recorded, so future sessions
+            # answer it from the bank. Scale items (self-rating/Likert/feedback) keep the fast,
+            # provably-favourable polarity rule. The deterministic pick is the fallback if the model
+            # is unavailable/unparseable.
+            used_llm = from_bank = False
+            banked = _bank_lookup(q_txt, opts)
+            if banked is not None:
+                idx, from_bank = banked, True
+            elif kind in ("sjt", "forced_choice"):
+                llm_idx = await _llm_pick(q_txt, opts)
+                if llm_idx is not None:
+                    idx, used_llm = llm_idx, True
             logger.info("etalon item #%d kind=%s%s pick=%d/%d progress=%s%% q=%r",
-                        answered + 1, kind, "+llm" if used_llm else "", idx, len(opts),
-                        item.get("progress"), (item.get("question") or "")[:60])
+                        answered + 1, kind, "+bank" if from_bank else ("+llm" if used_llm else ""),
+                        idx, len(opts), item.get("progress"), q_txt[:60])
             # The LLM call (~20s) already served as a human-like reading pause, so only add a short
             # settle then; otherwise pace normally. SHL flags rapid clicking, not slow answering.
             await _pace(0.6, 1.6) if used_llm else await _pace(min_delay, max_delay)
             prev, prev_q, prev_prog = opts, item.get("question", ""), item.get("progress")
             # forced-choice screen C keeps the already-picked statement visible-but-inert, so click
-            # by favourability with skip-on-inert; every other kind clicks its specific option.
-            clicked = (await _click_forced_choice(page, opts) if kind == "forced_choice"
-                       else await _click_option(page, idx))
-            if not clicked:
+            # by favourability with skip-on-inert (a banked pick is preferred for exact replay);
+            # every other kind clicks its specific option. Record what we ACTUALLY clicked.
+            if kind == "forced_choice":
+                # click the DECIDED statement (bank or model or ranker) first; fall back to
+                # favourability order + inert-skip only if that exact one won't click.
+                clicked_idx = await _click_forced_choice(page, opts, prefer_text=_bank_norm(opts[idx]))
+            else:
+                clicked_idx = idx if await _click_option(page, idx) else -1
+            if clicked_idx < 0:
                 res["status"] = "stuck"
                 res["note"] = f"could not click option {idx}/{len(opts)} ({kind})"
                 res["items_answered"] = answered
                 return res
             answered += 1
+            # record what we ACTUALLY clicked (a fresh item only) so a recurrence replays it.
+            if not from_bank:
+                _bank_record(q_txt, opts, clicked_idx, kind)
             # Wait for advance. NB many self-rating items share the SAME scale options, so an
             # options-only check would false-negative on two consecutive same-scale items — treat
             # a changed QUESTION or an increased progress % as advance too. Also click a Next if one

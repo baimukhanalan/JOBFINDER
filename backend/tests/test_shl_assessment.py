@@ -202,6 +202,22 @@ def test_attention_check_selects_instructed_option():
     assert kind == "attention" and idx == 4
 
 
+def test_answer_bank_record_and_replay(tmp_path, monkeypatch):
+    # the bank replays a previously-chosen answer by its TEXT, so it still matches when SHL
+    # reorders the options — and needs no LLM on a recurrence.
+    monkeypatch.setattr(sa, "_BANK_PATH", str(tmp_path / "bank.json"))
+    monkeypatch.setattr(sa, "_BANK", None)
+    q = "Which statement describes you best?"
+    opts = ["I remain calm under pressure", "I prefer to work alone", "I learn about other countries"]
+    assert sa._bank_lookup(q, opts) is None
+    sa._bank_record(q, opts, 0, "forced_choice")
+    assert sa._bank_lookup(q, opts) == 0            # exact replay
+    reordered = ["I prefer to work alone", "I learn about other countries", "I remain calm under pressure"]
+    assert sa._bank_lookup(q, reordered) == 2        # reorder-robust (matched by text)
+    assert sa._bank_lookup(q, ["totally", "different", "options"]) is None  # different option set
+    assert sa.bank_size() == 1
+
+
 def test_run_intro_requires_headful_page():
     import asyncio
     r = asyncio.run(sa.run_intro("https://x.shl.com/ce/1", {}, page=None))

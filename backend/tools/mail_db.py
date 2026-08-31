@@ -441,6 +441,7 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
                COUNT(*) FILTER (WHERE kind='offer' AND NOT outbound) AS n_offer,
                COUNT(*) FILTER (WHERE kind='rejection' AND NOT outbound) AS n_rejection,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) AS n_action,
+               COUNT(*) FILTER (WHERE kind='assessment_done' AND NOT outbound) AS n_assessment_done,
                COUNT(*) FILTER (WHERE kind='ack' AND NOT outbound) AS n_ack,
                bool_or(outbound) AS has_sent
           FROM mail_index
@@ -473,8 +474,9 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
         # Same ranking as furthest_stage()/_FURTHEST_STAGE_SQL, from the group's per-kind
         # inbound counts, so the badge on each row matches the stage FILTER it appears under.
         present = {k for k, col in (("offer", "n_offer"), ("interview", "n_interview"),
-                                    ("action_needed", "n_action"), ("rejection", "n_rejection"),
-                                    ("ack", "n_ack")) if g[col]}
+                                    ("action_needed", "n_action"),
+                                    ("assessment_done", "n_assessment_done"),
+                                    ("rejection", "n_rejection"), ("ack", "n_ack")) if g[col]}
         return furthest_stage(present)
 
     for g in groups:

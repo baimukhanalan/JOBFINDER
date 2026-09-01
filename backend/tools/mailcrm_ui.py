@@ -110,7 +110,10 @@ def _linkify(text: str) -> str:
 # TEXT and drops the URL. We prefer the plain part (renders cleanly on iOS), so that link is lost.
 # _html_links pulls the http(s) anchors out of the HTML so they can be surfaced as a clickable
 # block whenever the plain body carries no URL of its own (the link-loss case).
-_A_TAG = _re.compile(r'<a\b[^>]*?href=(["\']?)(https?://[^"\'>\s]+)\1[^>]*>(.*?)</a>', _re.I | _re.S)
+# href may be quoted OR bare with spaces around '=' (AMCAT/TP assessment mail ships the real test
+# link as `<a href = https://…token=…>` — unquoted, spaced — which the old `href=` regex missed, so
+# only the quoted troubleshooting link surfaced and the user clicked the wrong one).
+_A_TAG = _re.compile(r'<a\b[^>]*?href\s*=\s*(["\']?)(https?://[^"\'>\s]+)\1[^>]*>(.*?)</a>', _re.I | _re.S)
 _STRIP_TAGS = _re.compile(r'<[^>]+>')
 _LINK_SKIP = _re.compile(r'(unsubscribe|list-manage|/preferences|/privacy|email_preferences|opt[-_]?out)', _re.I)
 _HAS_URL = _re.compile(r'https?://', _re.I)

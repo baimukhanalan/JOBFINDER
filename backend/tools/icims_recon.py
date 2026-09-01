@@ -930,6 +930,30 @@ def _app_confirmed(email: str, since_ts: float) -> bool:
     return False
 
 
+async def _is_dead_search_page(page) -> bool:
+    """True when the apply URL landed on the careers job-SEARCH / listing page (the search box +
+    Category select, 'start your job search', 'no jobs found') instead of a job's apply form — i.e. the
+    posting is EXPIRED/gone and iCIMS bounced to search. Lets the run bail in seconds instead of idling
+    out the whole --keep window (this was the real cause of the 14.5-min `ERROR timeout` jobs)."""
+    try:
+        for f in page.frames:
+            try:
+                hit = await f.evaluate(
+                    """()=>{
+                      if(document.querySelector('input[type=email], #email, input[name="css_loginName"]')) return false;
+                      if(document.querySelector('#jsb_f_keywords_i,[name="searchKeyword"],[name="searchCategory"],#jsb_f_position_s')) return true;
+                      const t=(document.body&&document.body.innerText||'').toLowerCase();
+                      return /start your job search|no jobs found|no results were found|the (job|position) you (are|were) looking for/.test(t);
+                    }""")
+                if hit:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse: bool = True) -> None:
     from patchright.async_api import async_playwright
 
@@ -1044,6 +1068,16 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                     page, lambda f: f.get_by_role("button", name=re.compile(r"^Apply", re.I)), 8)
             await _capture(page, "job", recon_dir, recon, idx)
 
+            # FAST-FAIL: an expired posting bounces to the careers SEARCH page (no Apply link, no email
+            # form) — bail in seconds instead of idling out --keep (was the 14.5-min timeout cause).
+            if not apply_btn and await _is_dead_search_page(page):
+                print("[no application form — posting expired / job-search page — skipping fast]", flush=True)
+                try:
+                    await _capture(page, "expired", recon_dir, recon, idx)
+                except Exception:
+                    pass
+                return
+
             # 2) Apply -> the email-first register wall
             if apply_btn:
                 try:
@@ -1074,6 +1108,11 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                 except Exception as e:
                     print(f"[email prefill: {type(e).__name__}: {e}]"[:120], flush=True)
             await _capture(page, "after_apply", recon_dir, recon, idx)
+
+            # FAST-FAIL #2: Apply led nowhere (no email/register form + a search/expired page) → bail.
+            if not em and await _is_dead_search_page(page):
+                print("[no register form after Apply — posting expired — skipping fast]", flush=True)
+                return
 
             print("\n" + "=" * 72, flush=True)
             print("AUTONOMOUS — the bot fills every field (Country->State/Ohio, phone, screeners, EEO)", flush=True)

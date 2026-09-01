@@ -910,6 +910,10 @@ class ICIMSStrategy(ApplyStrategy):
             return ["Yes"]
         if re.search(r"ethernet|hardwired|hard-wired|wired", t):
             return ["Yes, my home internet is hardwired", "Yes"]
+        if re.search(r"type of internet|internet connection.*(type|use)|what.*(internet|connection).*(type|use)", t):
+            # a TYPE select (Cable/Fiber/DSL/Mobile Hotspot/Satellite) — prefer a reliable WIRED option
+            # over the weak default ("Mobile Hotspot") a remote CSR role would frown on.
+            return ["Cable", "Fiber", "Cable/Fiber", "Broadband", "Fiber Optic", "DSL", "Wired"]
         if re.search(r"download speed|\bmbps\b|high.?speed|cable or fiber|internet|connection", t):
             return ["Yes"]
         if re.search(r"documentation|diploma or ged|provide.*if needed|verify.*education|"

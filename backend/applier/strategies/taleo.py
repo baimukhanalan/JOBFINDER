@@ -771,37 +771,76 @@ class TaleoStrategy(AvatureStrategy):
         mdyy = f"{_t.month}/{_t.day}/{_t.strftime('%y')}"   # M/d/yy, e.g. 9/1/26
         nm = (profile_form or {}).get("full_name") or (profile_form or {}).get("name") or \
             ((profile_form or {}).get("first_name", "") + " " + (profile_form or {}).get("last_name", "")).strip()
-        _SELFID_JS = """([nm,dt])=>{
+        # DETECT the CC-305 frame + its numeric field ids and CURRENT state. We then fill with NATIVE
+        # Playwright actions (trusted events JSF registers), NOT JS .value=/.checked= — the JS path was
+        # flaky: setting .value + also clicking the checkbox's <label> double-toggled the box back off, and
+        # the checkbox's JSF postback re-rendered the form CLEARING the .value=-set Name/Date, so the page
+        # bounced 'not completed all mandatory fields'. Native fill/click is deterministic (incident: 504
+        # healthcare-USA looped 2-17 on CC-305 while the identical 508 won the race).
+        _DETECT_JS = """()=>{
                   const sid=/self-identification|voluntary self|cc-?305/.test((document.body&&document.body.innerText||'').toLowerCase());
-                  if(!sid) return false;
-                  let did=false;
+                  if(!sid) return null;
+                  const tx=[...document.querySelectorAll('input[type=text]')].filter(e=>/^\\d+$/.test(e.id||''));
+                  const nums=tx.map(e=>e.id), vals=tx.map(e=>(e.value||'').trim());
+                  const cbs=[...document.querySelectorAll('input[type=checkbox]')].filter(e=>/^\\d+-shadow$/.test(e.id||'')).map(e=>e.id);
+                  let done=false; if(cbs.length){const a=cbs[cbs.length-1], b=a.replace('-shadow','');
+                    const e=document.getElementById(a), r=document.getElementById(b); done=!!((e&&e.checked)||(r&&r.checked));}
+                  return {nums, vals, cbs, done};
+                }"""
+        # fallback for a NON-numeric-id CC-305 variant (label-based, rare): decline checkbox + Name/Date.
+        _SELFID_LABEL_JS = """([nm,dt])=>{
+                  const sid=/self-identification|voluntary self|cc-?305/.test((document.body&&document.body.innerText||'').toLowerCase());
+                  if(!sid) return false; let did=false;
                   const fire=el=>{el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
-                  // CC-305 rendered fields carry PURELY-NUMERIC ids (10040=Name, 10041=Date, 10045=EmpID) with
-                  // NO labels; the 3 disability checkboxes are '<num>-shadow' in order Yes/No/I-don't-wish.
-                  const nums=[...document.querySelectorAll('input[type=text]')].filter(e=>/^\\d+$/.test(e.id||''));
-                  if(nums[0]&&nm){nums[0].value=nm;fire(nums[0]);did=true;}          // Name
-                  if(nums[1]&&dt){nums[1].value=dt;fire(nums[1]);did=true;}          // Date (M/d/yy)
-                  const cbs=[...document.querySelectorAll('input[type=checkbox]')].filter(e=>/^\\d+-shadow$/.test(e.id||''));
-                  if(cbs.length){const c=cbs[cbs.length-1];                         // LAST = 'I Don't Wish To Answer'
-                    if(!c.checked){c.checked=true;c.dispatchEvent(new Event('click',{bubbles:true}));fire(c);did=true;}
-                    if(c.id){const l=document.querySelector('label[for="'+c.id+'"]'); if(l){try{l.click();}catch(e){}}
-                      const real=document.getElementById(c.id.replace('-shadow','')); if(real&&!real.checked){real.checked=true;fire(real);}}}
-                  if(!did){   // fallback: label-based (a non-numeric-id CC-305 variant)
-                    const labOf=el=>{const w=el.closest('div,td,li,fieldset'); return ((w&&w.innerText)||'').toLowerCase().slice(0,220);};
-                    for(const c of document.querySelectorAll('input[type=checkbox],input[type=radio]')){const w=c.closest('div,li,td,label');const t=((w&&w.innerText)||'').toLowerCase();
-                      if(/do ?n[o'\\u2019]?t want to answer|do ?n[o'\\u2019]?t wish to answer|prefer not to answer|decline to (answer|self)/.test(t)&&!c.checked){c.checked=true;c.dispatchEvent(new Event('click',{bubbles:true}));fire(c);did=true;}}
-                    for(const el of document.querySelectorAll('input[type=text]')){const lab=labOf(el);
-                      if(/\\bdate\\b/.test(lab)&&dt){el.value=dt;fire(el);did=true;} else if(/\\bname\\b/.test(lab)&&nm&&!(el.value||'').trim()){el.value=nm;fire(el);did=true;}}}
+                  const labOf=el=>{const w=el.closest('div,td,li,fieldset'); return ((w&&w.innerText)||'').toLowerCase().slice(0,220);};
+                  for(const c of document.querySelectorAll('input[type=checkbox],input[type=radio]')){const w=c.closest('div,li,td,label');const t=((w&&w.innerText)||'').toLowerCase();
+                    if(/do ?n[o'\\u2019]?t want to answer|do ?n[o'\\u2019]?t wish to answer|prefer not to answer|decline to (answer|self)/.test(t)&&!c.checked){const l=c.id?document.querySelector('label[for="'+c.id+'"]'):null; if(l)l.click(); else c.click(); did=true;}}
+                  for(const el of document.querySelectorAll('input[type=text]')){const lab=labOf(el);
+                    if(/\\bdate\\b/.test(lab)&&dt&&!(el.value||'').trim()){el.value=dt;fire(el);did=true;} else if(/\\bname\\b/.test(lab)&&nm&&!(el.value||'').trim()){el.value=nm;fire(el);did=true;}}
                   return did;
                 }"""
-        # The CC-305 Self-ID form is often an EMBEDDED iframe — run the fill in EVERY frame, not just main.
+        # The CC-305 Self-ID form is often an EMBEDDED iframe — check EVERY frame, not just main.
         did_any = False
         for _fr in page.frames:
+            info = None
             try:
-                r = await _fr.evaluate(_SELFID_JS, [nm, mdyy])
-                did_any = did_any or bool(r)
+                info = await _fr.evaluate(_DETECT_JS)
             except Exception:
-                pass
+                info = None
+            if info is not None:
+                nums = info.get("nums") or []
+                vals = info.get("vals") or []
+                cbs = info.get("cbs") or []
+                # native Name (nums[0]) + Date (nums[1]) — only if not already set (avoid re-firing change)
+                if nums and nm and not (vals and vals[0]):
+                    try:
+                        await _fr.fill(f'[id="{nums[0]}"]', nm, timeout=3000); did_any = True
+                    except Exception:
+                        pass
+                if len(nums) >= 2 and not (len(vals) >= 2 and vals[1]):
+                    try:
+                        await _fr.fill(f'[id="{nums[1]}"]', mdyy, timeout=3000); did_any = True
+                    except Exception:
+                        pass
+                # native click the LAST shadow ('I do not wish to answer'), idempotent (skip if already done)
+                if cbs and not info.get("done"):
+                    last = cbs[-1]
+                    for _sel in (f'label[for="{last}"]', f'[id="{last}"]'):
+                        try:
+                            loc = _fr.locator(_sel).first
+                            if await loc.count():
+                                await loc.click(timeout=3000); did_any = True
+                                break
+                        except Exception:
+                            continue
+                elif cbs:
+                    did_any = True
+                # no numeric ids on this CC-305 variant → label-based JS fallback
+                if not nums:
+                    try:
+                        r = await _fr.evaluate(_SELFID_LABEL_JS, [nm, mdyy]); did_any = did_any or bool(r)
+                    except Exception:
+                        pass
             # diagnostic: dump the CC-305 frame's inputs ONCE so we can see why Name/Date don't fill
             try:
                 is_sid = await _fr.evaluate("()=>/self-identification|voluntary self|cc-?305/.test((document.body&&document.body.innerText||'').toLowerCase())")

@@ -24,6 +24,7 @@ from backend.applier.strategies.amazon_apply import AmazonStrategy
 from backend.applier.strategies.ashby import AshbyStrategy
 from backend.applier.strategies.avature import AvatureStrategy
 from backend.applier.strategies.base import GenericStrategy
+from backend.applier.strategies.taleo import TaleoStrategy
 from backend.applier.strategies.greenhouse import GreenhouseStrategy
 from backend.applier.strategies.icims import ICIMSStrategy
 from backend.applier.strategies.kelly import KellyStrategy
@@ -107,7 +108,7 @@ def _url_keywords(url: str, company: str = "") -> str:
 # careers.conduent.com wrapper host, so its position is not order-sensitive.
 STRATEGIES = [GreenhouseStrategy, LeverStrategy, AshbyStrategy, WorkableStrategy,
               PhenomWorkdayStrategy, WorkdayMassHiringStrategy, WorkdayStrategy,
-              ICIMSStrategy, AvatureStrategy,
+              ICIMSStrategy, AvatureStrategy, TaleoStrategy,
               KellyStrategy, PhenomStrategy, OracleORCStrategy, WorkingSolutionsStrategy,
               SmartRecruitersStrategy, AmazonStrategy]  # GenericStrategy is the fallback
 

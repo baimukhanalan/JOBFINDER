@@ -252,7 +252,8 @@ class TaleoStrategy(AvatureStrategy):
             if _re.search(r"thank you for (your interest|applying|submitting)|your application (has been|was) "
                           r"submitted|application (is )?complete|submission (is )?(complete|confirmed|successful)|"
                           r"successfully submitted|we (have )?received your (application|submission)|"
-                          r"thank you for taking the time", body):
+                          r"thank you for taking the time|congratulations on completing your application|"
+                          r"completing your application|successfully taken the first step", body):
                 report["submitted"] = True
                 logger.info("taleo: confirmation reached")
                 return
@@ -273,6 +274,11 @@ class TaleoStrategy(AvatureStrategy):
                 await self._taleo_wotc(page, profile_form, _dbg)      # Work Opportunity Tax Credit screening
             except Exception as _we:
                 print(f"[taleo wotc EXC: {type(_we).__name__}: {str(_we)[:120]}]", flush=True)
+            try:   # CC-305 Self-ID — own step so an upstream throw in _fill_avature_gaps can't skip it
+                if await self._taleo_selfid(page, profile_form):
+                    print(f"[taleo self-ID (CC-305) filled at step {_step}]", flush=True)
+            except Exception as _se:
+                print(f"[taleo selfid EXC: {type(_se).__name__}: {str(_se)[:120]}]", flush=True)
             await self._taleo_attach_resume(page)
             await self._taleo_esign(page, name)
             clicked = await self._taleo_click_advance(page)
@@ -595,6 +601,11 @@ class TaleoStrategy(AvatureStrategy):
         city = (profile_form or {}).get("city", "")
         _BASICS_JS = """([zc,city,st])=>{
                   const stRe = st ? new RegExp('^\\\\s*'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'i') : null;
+                  const stIn = st ? new RegExp('\\\\b'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\b','i') : null;  // persona state named anywhere
+                  // TTEC restricted-location screener: 'are you planning to work FROM <these states/territories>?'
+                  // -> truthful answer is Yes iff the persona's own state is in the listed set, else No.
+                  const RESTRICT_Q=/(planning|plan|intend|going) to work (from|in)|work(ing)? (from|in) (the state|one of|any of)|located in|reside in|residing in/i;
+                  const RESTRICT_PLACES=/alaska|colorado|hawaii|illinois|massachusetts|minnesota|montana|washington,?\\s*d\\.?\\s?c|district of columbia|american samoa|\\bguam\\b|northern mariana|puerto rico|virgin islands/i;
                   const ph=t=>!t||/select one|no selection|make a selection|not specified|please select|^--|^\\s*$|choose|select\\.\\.\\.|^select$/i.test((t||'').trim());
                   const labOf=el=>{  // the field's OWN label: native label[for] -> aria -> nearest SHORT
                     if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]'); if(l&&(l.innerText||'').trim()) return l.innerText.trim().toLowerCase().slice(0,160);}
@@ -632,6 +643,9 @@ class TaleoStrategy(AvatureStrategy):
                     else if(/employed by|worked for|former employee|current(ly)? employ/.test(lab)){ set(sel,/^\\s*no\\s*$/i)||firstValid(sel); }
                     else if(/weekend|willing to work|able to work|overtime|different shift|any shift/.test(lab)){ set(sel,/^\\s*yes|able|willing/i)||firstValid(sel); }
                     else if(/experience/.test(lab)){ set(sel,/1 year or more|more than|3\\+|5\\+|1\\+|1-3|3-5|1 year/i)||firstValid(sel); }
+                    else if(RESTRICT_Q.test(lab) && RESTRICT_PLACES.test(lab)){  // TTEC restricted-state/territory screener
+                      const inList = stIn && stIn.test(lab);
+                      (inList ? set(sel,/^\\s*yes\\s*$/i) : set(sel,/^\\s*no\\s*$/i)) || firstValid(sel); }
                     else { firstValid(sel); }  // any OTHER leftover blank select (e.g. a Source-Type dependent sub-select) -> don't block
                   }
                   // radio-group questionnaires (experience level, weekend availability, employed-before) —
@@ -646,6 +660,12 @@ class TaleoStrategy(AvatureStrategy):
                     else if(/weekend|willing|able to work|any shift/.test(glab)){ pick=rs.find(r=>/^\\s*yes|able|willing/.test(rlab(r))); }
                     else if(/employed|worked for|former employee/.test(glab)){ pick=rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
                     else if(/ethnic|hispanic|latino|\\brace\\b|gender|veteran|protected|disabilit/.test(glab)){ pick=rs.find(r=>DEC.test(rlab(r)))||rs.find(r=>/none|not a protected|i am not/.test(rlab(r))); }
+                    else if(RESTRICT_Q.test(glab) && RESTRICT_PLACES.test(glab)){  // TTEC restricted-state/territory screener
+                      const inList = stIn && stIn.test(glab);
+                      pick = inList ? rs.find(r=>/^\\s*yes\\b/.test(rlab(r))) : rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
+                    else if(/authorized to work|legally (authorized|able) to work|eligible to work/.test(glab)){ pick=rs.find(r=>/^\\s*yes\\b/.test(rlab(r))); }
+                    else if(/require sponsorship|need sponsorship|visa sponsorship|require.*visa/.test(glab)){ pick=rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
+                    else if(/high school|diploma|\\bged\\b|equivalent/.test(glab)){ pick=rs.find(r=>/^\\s*yes\\b/.test(rlab(r))); }
                     if(pick){ pick.checked=true; pick.dispatchEvent(new Event('click',{bubbles:true})); pick.dispatchEvent(new Event('change',{bubbles:true})); }
                   }
                   // military 'share your status' checkbox group -> 'None of the above'
@@ -735,7 +755,17 @@ class TaleoStrategy(AvatureStrategy):
                         pass
         except Exception:
             pass
-        # Self-Identification / CC-305 Disability form: decline checkbox + Name + Date (M/d/yy).
+        # CC-305 Self-Identification is filled as its OWN walk step (_taleo_selfid, called from
+        # _taleo_walk) so an upstream throw in this long method can never skip it. Delegate here too
+        # (idempotent) for the non-Taleo Avature path that also reaches _fill_avature_gaps.
+        await self._taleo_selfid(page, profile_form)
+
+    async def _taleo_selfid(self, page: Page, profile_form: dict) -> bool:
+        """CC-305 Voluntary Self-Identification of Disability: fill Name + Date (M/d/yy) and check the
+        'I do not want to answer' box. Runs in EVERY frame (often an embedded iframe). Returns True if it
+        filled anything. Called as an independent step in _taleo_walk — do NOT bury it behind another
+        method's success (incident: on the healthcare-CSR form an upstream throw in _fill_avature_gaps
+        skipped it, so the form bounced 'not completed all mandatory fields' 18x and never submitted)."""
         import datetime as _dt2
         _t = _dt2.date.today()
         mdyy = f"{_t.month}/{_t.day}/{_t.strftime('%y')}"   # M/d/yy, e.g. 9/1/26
@@ -765,9 +795,11 @@ class TaleoStrategy(AvatureStrategy):
                   return did;
                 }"""
         # The CC-305 Self-ID form is often an EMBEDDED iframe — run the fill in EVERY frame, not just main.
+        did_any = False
         for _fr in page.frames:
             try:
-                await _fr.evaluate(_SELFID_JS, [nm, mdyy])
+                r = await _fr.evaluate(_SELFID_JS, [nm, mdyy])
+                did_any = did_any or bool(r)
             except Exception:
                 pass
             # diagnostic: dump the CC-305 frame's inputs ONCE so we can see why Name/Date don't fill
@@ -782,3 +814,4 @@ class TaleoStrategy(AvatureStrategy):
                     print(f"[CC305 inputs: {dmp}]", flush=True)
                 except Exception as _de:
                     print(f"[CC305 dump err {type(_de).__name__}]", flush=True)
+        return did_any

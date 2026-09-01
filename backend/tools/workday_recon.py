@@ -44,7 +44,8 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, REPO)
 
 from backend.tools import mail_db, mass_hiring_apply as mha, icims_recon  # noqa: E402
 
@@ -215,13 +216,42 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                     await sp.close()
                 except Exception as e:
                     print(f"[nopecha setup: {type(e).__name__}: {e}]"[:120], flush=True)
+            import os as _os
+            shotdir = _os.path.join(REPO, "logs", "workday_recon", str(row["id"]))
+            _os.makedirs(shotdir, exist_ok=True)
+
+            async def _shot(tag):
+                try:
+                    await page.screenshot(path=_os.path.join(shotdir, f"{tag}.png"), full_page=False)
+                    print(f"[shot {tag}] url={page.url[:90]}", flush=True)
+                except Exception as _e:
+                    print(f"[shot {tag} failed: {_e}]"[:100], flush=True)
+
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-                await page.wait_for_timeout(3000)
+                # Workday CxS is a React SPA — the job + Apply button load via XHR AFTER
+                # domcontentloaded. Wait for networkidle + the job content to hydrate, else the
+                # page is a blank shell and open_form finds no Apply button.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=25000)
+                except Exception:
+                    pass
+                for _sel in ('[data-automation-id="jobPostingHeader"]',
+                             '[data-automation-id="applyFlowButton"]',
+                             'a[role="button"]:has-text("Apply")',
+                             'button:has-text("Apply")',
+                             '[data-automation-id="jobPostingPage"]'):
+                    try:
+                        await page.wait_for_selector(_sel, timeout=8000, state="visible")
+                        break
+                    except Exception:
+                        continue
+                await page.wait_for_timeout(2500)
             except Exception as e:
                 out["error"] = f"goto: {type(e).__name__}: {e}"
                 await ctx.close()
                 return out
+            await _shot("01_landed")
 
             # 3) route to the built strategy + fill the whole wizard (account creation + reCAPTCHA
             #    handled inside prefill; the NopeCHA extension solves the on-page challenge).
@@ -235,9 +265,13 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                                              profile_id=profile_id, niche="")
                 out["filled"] = {"filled": (result or {}).get("filled"),
                                  "unfilled": (result or {}).get("unfilled"),
-                                 "review_items": (result or {}).get("review_items")}
+                                 "review_items": (result or {}).get("review_items"),
+                                 "page_type": (result or {}).get("page_type"),
+                                 "note": (result or {}).get("note")}
+                await _shot("02_after_prefill")
             except Exception as e:
                 out["error"] = f"prefill: {type(e).__name__}: {e}"
+                await _shot("02_prefill_error")
                 await ctx.close()
                 return out
 

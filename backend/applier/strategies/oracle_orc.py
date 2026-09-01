@@ -180,8 +180,308 @@ class OracleORCStrategy(GenericStrategy):
             except Exception:
                 pass
         # Pre-screening Yes/No + experience/education/language questions the analyzer misses
-        # (they're JET selects / radiosets), answered deterministically & TRUTHFULLY.
+        # (classic JET selects / radiosets), answered deterministically & TRUTHFULLY.
         await self._answer_screeners(page, facts)
+        # Redwood JET (oj-c-*) tenants (e.g. Alorica) render selects as input[role=combobox] and
+        # every Yes/No / Title / screener as button[role=radio] — invisible to the classic
+        # oj-select-single / input[type=radio] fillers above. Handle that DOM shape too (additive;
+        # no-ops on a classic-JET tenant that has no role=combobox / button[role=radio]).
+        try:
+            await self._fill_orc_redwood(page, profile_form, facts)
+        except Exception as exc:
+            logger.debug("oracle_orc: redwood fill raised: %s", exc)
+
+    # ---- Redwood JET (oj-c-*) fill: input[role=combobox] + button[role=radio] + committed text ----
+    _NEAR_JS = (
+        "el=>{const byId=el.getAttribute('aria-labelledby');"
+        "if(byId){const t=byId.split(/\\s+/).map(i=>{const n=document.getElementById(i);"
+        "return n?n.innerText:'';}).join(' ').trim();if(t)return t;}"
+        "if(el.getAttribute('aria-label'))return el.getAttribute('aria-label');"
+        "let p=el,h=0;while(p&&h<6){p=p.parentElement;h++;if(!p)break;"
+        "const c=p.cloneNode(true);c.querySelectorAll('input,button,select,[role=combobox],"
+        "[role=radio],[role=listbox],svg').forEach(x=>x.remove());"
+        "const t=(c.innerText||'').replace(/\\s+/g,' ').trim();"
+        "if(t.length>=3&&t.length<130)return t;}return el.getAttribute('placeholder')||'';}")
+
+    async def _fill_orc_redwood(self, page: Page, profile_form: dict, facts) -> None:
+        facts = facts or {}
+        await self._commit_orc_text(page, profile_form)
+        await self._fill_orc_comboboxes(page, profile_form, facts)
+        await self._fill_orc_radiobuttons(page, profile_form, facts)
+
+    async def _commit_orc_text(self, page: Page, profile_form: dict) -> None:
+        """Redwood oj-c text inputs don't accept a plain Playwright .fill() into their bound model
+        (value shows but never commits -> 'is required'). Re-set via the NATIVE value setter +
+        input/change/blur so the JET/React binding registers it."""
+        data = {
+            "first": profile_form.get("first_name") or "",
+            "last": profile_form.get("last_name") or "",
+            "email": profile_form.get("email") or "",
+            "phone": profile_form.get("phone") or "",
+            "addr": profile_form.get("street_address") or profile_form.get("address") or "",
+        }
+        try:
+            await page.evaluate(
+                "(d)=>{const near=" + self._NEAR_JS + ";"
+                "const set=(el,v)=>{try{const p=Object.getOwnPropertyDescriptor("
+                "window.HTMLInputElement.prototype,'value');p.set.call(el,v);}catch(e){el.value=v;}"
+                "el.dispatchEvent(new Event('input',{bubbles:true}));"
+                "el.dispatchEvent(new Event('change',{bubbles:true}));"
+                "el.dispatchEvent(new Event('blur',{bubbles:true}));};"
+                "const map=[['first name',d.first],['last name',d.last],['email address',d.email],"
+                "['phone number',d.phone],['address line 1',d.addr],['full name',d.first+' '+d.last]];"
+                "for(const ip of document.querySelectorAll('input')){"
+                "const ty=(ip.getAttribute('type')||'text').toLowerCase();"
+                "if(['hidden','file','checkbox','radio','submit','button'].includes(ty))continue;"
+                "const r=ip.getBoundingClientRect();if(r.width===0&&r.height===0)continue;"
+                "const lab=(near(ip)+' '+(ip.id||'')+' '+(ip.name||'')+' '+"
+                "(ip.getAttribute('autocomplete')||'')).toLowerCase();"
+                "const alt={'last name':['lastname','family','surname'],'first name':['firstname','given'],"
+                "'full name':['fullname','signature','legalname'],'phone number':['phone','tel']};"
+                "for(const [k,v] of map){if(!v)continue;let hit=lab.includes(k);"
+                "if(!hit&&alt[k])hit=alt[k].some(a=>lab.includes(a));"
+                "if(hit){set(ip,v);break;}}}}",
+                data)
+        except Exception as exc:
+            logger.debug("oracle_orc: commit text raised: %s", exc)
+
+    async def _map_comboboxes(self, page: Page) -> list:
+        try:
+            return await page.evaluate(
+                "()=>{const near=" + self._NEAR_JS + ";const out=[];let i=0;"
+                "for(const cb of document.querySelectorAll('input[role=combobox],[role=combobox]')){"
+                "const r=cb.getBoundingClientRect();if(r.width===0&&r.height===0)continue;"
+                "cb.setAttribute('data-jfcb',i);"
+                "out.push({i:i,label:near(cb).toLowerCase(),"
+                "val:(cb.value||cb.innerText||'').trim()});i++;}return out;}")
+        except Exception:
+            return []
+
+    async def _fill_orc_combobox_by(self, page: Page, boxes: list, want: str, val: str,
+                                    match, first_ok: bool = False) -> bool:
+        for b in boxes:
+            lab = b.get("label") or ""
+            if not match(lab):
+                continue
+            if (b.get("val") or "").strip() and not first_ok:
+                return True
+            return await self._pick_combobox(page, f"[data-jfcb='{b['i']}']", val, first_ok=first_ok)
+        return False
+
+    async def _fill_orc_comboboxes(self, page: Page, profile_form: dict, facts) -> None:
+        """Redwood address selects (Country / State / City / Postal Code / County) are
+        input[role=combobox] typeaheads. Country MUST be set FIRST — City/State/Postal/County only
+        render after it (cascading), so we fill Country, wait, then re-query the DOM. Also declines
+        the Veteran Self-ID and Gender comboboxes (never claiming a protected characteristic)."""
+        boxes = await self._map_comboboxes(page)
+        # 1) Country first (label 'country' but not the phone 'country code').
+        try:
+            await self._fill_orc_combobox_by(
+                page, boxes, "country", "United States",
+                lambda l: "country" in l and "code" not in l)
+        except Exception:
+            pass
+        # 2) poll for the address sub-fields to render (cascade off Country), then fill them.
+        boxes = []
+        for _ in range(8):
+            await page.wait_for_timeout(700)
+            boxes = await self._map_comboboxes(page)
+            labs = " ".join((b.get("label") or "") for b in boxes)
+            if "city" in labs or "state" in labs or "postal" in labs:
+                break
+        addr = [
+            ("state", profile_form.get("state") or "", lambda l: "state" in l or "province" in l, False),
+            ("city", profile_form.get("city") or "", lambda l: "city" in l, False),
+            ("postal", profile_form.get("zip") or profile_form.get("postal_code") or "",
+             lambda l: "postal" in l or "zip" in l, False),
+            ("county", "", lambda l: "county" in l, True),
+        ]
+        for _key, val, match, first_ok in addr:
+            try:
+                await self._fill_orc_combobox_by(page, boxes, _key, val, match, first_ok=first_ok)
+            except Exception:
+                pass
+        # 3) EEO comboboxes: decline (Veteran Self-ID / Gender) — open + pick the non-disclosure
+        # option (never claiming a protected characteristic; never typed as free text).
+        boxes = await self._map_comboboxes(page)
+        for b in boxes:
+            lab = (b.get("label") or "")
+            if (b.get("val") or "").strip():
+                continue
+            if "veteran" in lab or lab.strip().startswith("gender") or "self-identif" in lab \
+                    or "disability" in lab:
+                try:
+                    await self._decline_combobox(page, f"[data-jfcb='{b['i']}']")
+                except Exception:
+                    pass
+
+    async def _decline_combobox(self, page: Page, sel: str) -> bool:
+        """Open a JET EEO combobox and click its non-disclosure option (decline / prefer-not /
+        'I do not want to answer' / 'not a protected veteran'). Never types a protected characteristic."""
+        dec_re = re.compile(
+            r"do not (want|wish)|don't want|decline|prefer not|not to answer|choose not|"
+            r"not a protected veteran|i am not a|not applicable", re.I)
+        try:
+            el = page.locator(sel).first
+            if not await el.count():
+                return False
+            await el.scroll_into_view_if_needed(timeout=2000)
+            await el.click(timeout=2500)
+            await page.wait_for_timeout(600)
+            opts = page.locator("[role=option], .oj-listbox-result, li[role=option], "
+                                ".oj-collection-item")
+            n = await opts.count()
+            for i in range(min(n, 40)):
+                o = opts.nth(i)
+                try:
+                    t = (await o.inner_text()) or ""
+                except Exception:
+                    continue
+                if dec_re.search(t):
+                    await o.click(timeout=2000)
+                    await page.wait_for_timeout(250)
+                    return True
+            await page.keyboard.press("Escape")
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+        return False
+
+    async def _pick_combobox(self, page: Page, sel: str, val: str, first_ok: bool = False) -> bool:
+        try:
+            el = page.locator(sel).first
+            if not await el.count():
+                return False
+            await el.scroll_into_view_if_needed(timeout=2000)
+            await el.click(timeout=2500)
+            await page.wait_for_timeout(400)
+            if val:
+                try:
+                    await el.fill(val, timeout=2000)
+                except Exception:
+                    await page.keyboard.type(val, delay=45)
+                await page.wait_for_timeout(900)
+            opts = page.locator("[role=option], .oj-listbox-result, li[role=option], "
+                                ".oj-collection-item")
+            target = None
+            if val:
+                target = opts.filter(has_text=re.compile(re.escape(val.split()[0]), re.I)).first
+            if (target is None or not await target.count()) and first_ok:
+                target = opts.filter(
+                    has_not_text=re.compile("no matches|no results|searching|select", re.I)).first
+            if target is not None and await target.count():
+                await target.click(timeout=2500)
+                await page.wait_for_timeout(300)
+                return True
+            # no listbox match — commit the typed text (some Redwood address fields are free-text)
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(200)
+            await page.keyboard.press("Tab")
+            return bool(val)
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
+    async def _fill_orc_radiobuttons(self, page: Page, profile_form: dict, facts) -> None:
+        """Redwood renders Title (Mr./Mrs./Ms.) and every Yes/No screener as button[role=radio]
+        groups (no native input[type=radio]). Answer each UNANSWERED group truthfully: Title by the
+        persona's sex, screeners via _screener_answer."""
+        try:
+            groups = await page.evaluate(
+                "()=>{const btns=[...document.querySelectorAll('button[role=radio],[role=radio]')]"
+                ".filter(b=>{const r=b.getBoundingClientRect();return r.width>0&&r.height>0;});"
+                "const boxOf=b=>{let g=b.closest('[role=radiogroup]');if(g)return g;"
+                "let p=b.parentElement,h=0,box=b;while(p&&h<6){"
+                "if([...p.querySelectorAll('[role=radio]')].length>=2){box=p;break;}"
+                "p=p.parentElement;h++;}return box;};"
+                "const seen=new Map();let gid=0;const res=[];"
+                "for(const b of btns){const box=boxOf(b);if(seen.has(box))continue;seen.set(box,gid);"
+                "const rc=[...box.querySelectorAll('[role=radio]')];"
+                "const opts=rc.map((r,i)=>{r.setAttribute('data-jfrb',gid+'_'+i);"
+                "return {text:(r.innerText||'').replace(/\\s+/g,' ').trim().slice(0,60),"
+                "sel:'[data-jfrb=\"'+gid+'_'+i+'\"]',checked:r.getAttribute('aria-checked')==='true'};});"
+                # question = climb until the container text (minus options) is a real prompt
+                "let q='',cur=box,hop=0;while(cur&&hop<5){const c=cur.cloneNode(true);"
+                "c.querySelectorAll('[role=radio],button').forEach(x=>x.remove());"
+                "const t=(c.innerText||'').replace(/\\s+/g,' ').trim();"
+                "if(t.length>12){q=t;break;}cur=cur.parentElement;hop++;}"
+                "res.push({gid:gid,q:q.slice(0,220),opts:opts,"
+                "answered:opts.some(o=>o.checked)});gid++;}return res;}")
+        except Exception:
+            groups = []
+        sex = (profile_form.get("sex") or "").strip().lower()
+        for grp in groups:
+            if grp.get("answered"):
+                continue
+            opts = grp.get("opts") or []
+            texts = [(o.get("text") or "") for o in opts]
+            joined = " ".join(texts).lower()
+            picked = None
+            # Title / salutation group
+            if any(re.match(r"^(mr|mrs|ms|mx)\.?$", (t or "").strip(), re.I) for t in texts):
+                want = "mr." if sex in ("male", "m", "man") else "ms."
+                for o in opts:
+                    if (o.get("text") or "").strip().lower().startswith(want[:2]):
+                        # prefer exact Mr./Ms.; Ms. beats Mrs. (no marital assumption)
+                        if want == "ms." and (o.get("text") or "").strip().lower().startswith("mrs"):
+                            continue
+                        picked = o
+                        break
+                if not picked:
+                    picked = opts[0] if opts else None
+            else:
+                ql = (grp.get("q") or "").lower()
+                st = (profile_form.get("state") or "").strip().lower()
+                # TRUTHFULNESS guard: a residency screener naming a SPECIFIC state that isn't the
+                # persona's is answered No (never a fabricated "yes, I reside in <other state>").
+                m = re.search(r"resident of ([a-z][a-z .]+?)(?:\s*\(|,|\?|\.|$)", ql)
+                if m and st:
+                    named = m.group(1).strip()
+                    if named and named not in st and st not in named:
+                        cands = ["No"]
+                    else:
+                        cands = ["Yes"]
+                else:
+                    cands = self._screener_answer(ql, facts)
+                if not cands:
+                    continue
+                for c in cands:
+                    cl = c.strip().lower()
+                    for o in opts:
+                        if self._opt_match(cl, (o.get("text") or "").strip().lower()):
+                            picked = o
+                            break
+                    if picked:
+                        break
+            if not picked:
+                continue
+            sel = picked["sel"]
+            try:
+                b = page.locator(sel).first
+                if await b.count():
+                    await b.scroll_into_view_if_needed(timeout=1500)
+                    await b.click(timeout=2500)
+                    await page.wait_for_timeout(250)
+                    # Redwood button[role=radio] sometimes ignores the synthetic Playwright click —
+                    # verify aria-checked flipped, else dispatch a full pointer sequence.
+                    ok = await page.evaluate(
+                        "(s)=>{const e=document.querySelector(s);"
+                        "return !!e&&e.getAttribute('aria-checked')==='true';}", sel)
+                    if not ok:
+                        await page.evaluate(
+                            "(s)=>{const e=document.querySelector(s);if(!e)return;"
+                            "e.scrollIntoView({block:'center'});"
+                            "['pointerover','pointerenter','pointerdown','mousedown','pointerup',"
+                            "'mouseup','click'].forEach(t=>e.dispatchEvent("
+                            "new MouseEvent(t,{bubbles:true,cancelable:true,view:window})));}", sel)
+                        await page.wait_for_timeout(250)
+            except Exception:
+                pass
 
     async def _answer_screeners(self, page: Page, facts) -> None:
         """Answer every UNANSWERED pre-screening question truthfully for a synthetic US persona
@@ -516,7 +816,10 @@ class OracleORCStrategy(GenericStrategy):
 
     async def _dismiss_cookie_banner(self, page: Page) -> None:
         """Close a cookie/consent banner (OneTrust/Oracle) that floats over the action bar and
-        can intercept the Apply / Continue / Submit clicks."""
+        can intercept the Apply / Continue / Submit clicks. Also dismisses Oracle CX's
+        'Are You Still With Us?' session-idle modal, which pops repeatedly during a slow fill and
+        otherwise resets the cascade / blocks Submit."""
+        await self._dismiss_idle_modal(page)
         for name in ("Reject Optional Cookies", "Reject All", "Accept All Cookies",
                      "Accept Cookies", "Accept All", "I Agree"):
             try:
@@ -524,6 +827,29 @@ class OracleORCStrategy(GenericStrategy):
                 if await b.count():
                     await b.first.click(timeout=1500)
                     await page.wait_for_timeout(250)
+                    return
+            except Exception:
+                continue
+
+    async def _dismiss_idle_modal(self, page: Page) -> None:
+        """Click the keep-alive button of Oracle CX's 'Are You Still With Us?' idle dialog."""
+        try:
+            present = await page.evaluate(
+                "()=>/still with us|still there|are you there|session.{0,20}(expir|time out|timeout)/i"
+                ".test(document.body?document.body.innerText:'')")
+        except Exception:
+            return
+        if not present:
+            return
+        for sel in ("button:has-text('Yes')", "button:has-text('Continue')",
+                    "button:has-text(\"I'm still here\")", "button:has-text('Stay')",
+                    "button:has-text('Keep')", "oj-button:has-text('Yes') button",
+                    "button:has-text('OK')"):
+            try:
+                b = page.locator(sel).first
+                if await b.count() and await b.is_visible(timeout=600):
+                    await b.click(timeout=1200)
+                    await page.wait_for_timeout(500)
                     return
             except Exception:
                 continue

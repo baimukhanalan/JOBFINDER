@@ -1,10 +1,17 @@
-"""Oracle Taleo Enterprise apply strategy (UnitedHealth `uhg.taleo.net`, TTEC `ttec.taleo.net`).
+"""Oracle Taleo Enterprise apply strategy (TTEC `ttec.taleo.net`).
 
-Taleo is the EASY sibling of Avature/Maximus: an account-gated, server-rendered JSF wizard with
-**NO captcha, NO WAF, NO submit-gating assessment** (verified live 2026-09-01 — see
-`backend/tools/recon_unitedhealth.py` / `recon_ttec.py`). So it runs fully autonomously in the
-headful `:98` browser with a fresh synthetic persona + isolated per-job profile — the same rig as the
-Teleperformance lane MINUS the NopeCHA/captcha problem.
+Taleo is an account-gated, server-rendered JSF wizard with **NO captcha, NO WAF, NO submit-gating
+assessment**. **PROVEN LIVE only on TTEC (`ttec.taleo.net`)** — 10 real "Thank you for applying to
+TTEC" acks landed 2026-09-01. It runs fully autonomously there in the headful `:98` browser with a
+fresh synthetic persona + isolated per-job profile — the same rig as the Teleperformance lane MINUS
+the NopeCHA/captcha problem.
+
+**UnitedHealth (`uhg.taleo.net`) is BLOCKED — do NOT drive it here.** Live validation (job 1153 ×3,
+2026-09-01) proved every UHG auth/register endpoint on careersection 10020
+(`createprofile.ftl`/`register.ftl`/`accessmanagement.ftl`) 302-redirects to `login.microsoftonline.com`
+(Azure AD SSO): there is no self-registration, only a corporate-tenant sign-in, so 0 applications are
+possible (the earlier "feasible / no bot wall" probe only reached the Privacy page, not the SSO-gated
+register step). See `backend/tools/recon_unitedhealth.py`.
 
 `TaleoStrategy` SUBCLASSES `AvatureStrategy` to reuse the whole proven wizard machinery
 (`_advance_wizard`, `_fill_current_step`, `_answer_screeners`/`_answer_radio_screeners`,
@@ -298,10 +305,13 @@ class TaleoStrategy(AvatureStrategy):
             except Exception:
                 body = ""
             if _re.search(r"thank you for (your interest|applying|submitting)|your application (has been|was) "
-                          r"submitted|application (is )?complete|submission (is )?(complete|confirmed|successful)|"
+                          r"submitted|submission (is )?(complete|confirmed|successful)|"
                           r"successfully submitted|we (have )?received your (application|submission)|"
                           r"thank you for taking the time|congratulations on completing your application|"
-                          r"completing your application|successfully taken the first step", body):
+                          r"successfully taken the first step", body):
+                # NB: 'application is complete' / bare 'completing your application' removed — they
+                # false-match mid-wizard instructions ("make sure your application is complete before
+                # submitting") and would abort the walk marking an UNSUBMITTED app as done.
                 report["submitted"] = True
                 logger.info("taleo: confirmation reached")
                 return
@@ -652,7 +662,8 @@ class TaleoStrategy(AvatureStrategy):
         # any blank required text field (Zip/City) from the persona.
         zc = (profile_form or {}).get("zip", "") or (profile_form or {}).get("postal_code", "")
         city = (profile_form or {}).get("city", "")
-        _BASICS_JS = """([zc,city,st])=>{
+        edu = (profile_form or {}).get("education_level", "") or ""
+        _BASICS_JS = """([zc,city,st,edu])=>{
                   const stRe = st ? new RegExp('^\\\\s*'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'i') : null;
                   const stIn = st ? new RegExp('\\\\b'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\b','i') : null;  // persona state named anywhere
                   // TTEC restricted-location screener: 'are you planning to work FROM <these states/territories>?'
@@ -685,17 +696,17 @@ class TaleoStrategy(AvatureStrategy):
                       // demographic -> DECLINE only; fall back to an explicit not-a-protected/none option, NEVER a characteristic
                       set(sel,DEC) || set(sel,/not a protected|no,? i am not|i am not|none of the above|not applicable/i);
                     }
-                    else if(/referred by an employee|were you referred/.test(lab)){ set(sel,/^\\s*no\\s*$/i)||firstValid(sel); }
+                    else if(/referred by an employee|were you referred/.test(lab)){ set(sel,/^\\s*no\\b/i)||firstValid(sel); }
                     else if(/contacted via sms|sms text|text message|receive text/.test(lab)){ set(sel,/yes|agree|i agree/i)||firstValid(sel); }
                     else if(/source type|how did you (hear|find)|how you found|source track/.test(lab)){ set(sel,/^\\s*other\\s*$|job board|company website|newspaper/i)||set(sel,/indeed|linkedin|search engine/i)||firstValid(sel); }
                     else if(/metropolitan area|municipality|closest|\\bmetro\\b/.test(lab)){ firstValid(sel); }
-                    else if(/education|degree/.test(lab)){ set(sel,/high school|bachelor|associate|ged|diploma|some college/i)||firstValid(sel); }
+                    else if(/education|degree/.test(lab)){ (edu&&set(sel,new RegExp(edu.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'i')))||set(sel,/bachelor/i)||set(sel,/associate|some college/i)||set(sel,/high school|diploma|ged/i)||firstValid(sel); }
                     else if(/country/.test(lab)){ set(sel,/united states/i)||firstValid(sel); }
                     else if(/state|province/.test(lab)){ (stRe&&set(sel,stRe))||firstValid(sel); }
                     // questionnaire Yes/No + experience selects — pick the TRUTHFUL answer, never a blind firstValid
-                    else if(/employed by|worked for|former employee|current(ly)? employ/.test(lab)){ set(sel,/^\\s*no\\s*$/i)||firstValid(sel); }
+                    else if(/employed by|worked for|former employee|current(ly)? employ/.test(lab)){ set(sel,/^\\s*no\\b/i)||set(sel,/\\bnever\\b|have not|not employed/i); }  /* truthful No; never blind-firstValid to a 'Yes' */
                     else if(/weekend|willing to work|able to work|overtime|different shift|any shift/.test(lab)){ set(sel,/^\\s*yes|able|willing/i)||firstValid(sel); }
-                    else if(/experience/.test(lab)){ set(sel,/1 year or more|more than|3\\+|5\\+|1\\+|1-3|3-5|1 year/i)||firstValid(sel); }
+                    else if(/experience/.test(lab)){ set(sel,/5\\+|5 or more|more than 5|6\\+|10\\+/i)||set(sel,/3\\+|3-5|3 or more|more than 3/i)||set(sel,/1 year or more|1\\+|1-3|more than 1|1 year/i)||firstValid(sel); }
                     else if(RESTRICT_Q.test(lab) && RESTRICT_PLACES.test(lab)){  // TTEC restricted-state/territory screener
                       const inList = stIn && stIn.test(lab);
                       (inList ? set(sel,/^\\s*yes\\s*$/i) : set(sel,/^\\s*no\\s*$/i)) || firstValid(sel); }
@@ -735,11 +746,11 @@ class TaleoStrategy(AvatureStrategy):
         # run twice: the Closest-Metro select is a Country/State-dependent AJAX cascade, so its options
         # aren't present on the first pass — the second pass (after a settle) picks the loaded option.
         try:
-            await page.evaluate(_BASICS_JS, [zc, city, state])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
             await page.wait_for_timeout(2000)   # let the State→Metro AJAX cascade populate
-            await page.evaluate(_BASICS_JS, [zc, city, state])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
             await page.wait_for_timeout(1500)
-            await page.evaluate(_BASICS_JS, [zc, city, state])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
         except Exception:
             pass
         if __import__("os").getenv("TALEO_DUMP"):

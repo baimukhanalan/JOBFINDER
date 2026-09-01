@@ -843,6 +843,10 @@ class ICIMSStrategy(ApplyStrategy):
         if len(cand) <= 4:
             return (opt.startswith(cand + " ") or opt.startswith(cand + ",")
                     or (" " + cand + " ") in (" " + opt + " "))
+        if cand[0].isdigit():
+            # numeric tier ("5+ years") must not left-match a bigger number ("15+ years")
+            return (bool(re.search(r"(?<!\d)" + re.escape(cand), opt))
+                    or bool(re.search(r"(?<!\d)" + re.escape(opt), cand)))
         return cand in opt or opt in cand
 
     @staticmethod
@@ -860,8 +864,13 @@ class ICIMSStrategy(ApplyStrategy):
             return ["No"]                                 # a fresh persona never worked for TP
         if re.search(r"legal right to work|right to work in|proof of your legal|proof of.*right to work", t):
             return ["Yes"]                                # US persona is authorized
-        if re.search(r"graduate (from|of)|alumni|attended.*\b(uma|ultimate medical academy)\b|"
-                     r"\buma\b.*(degree|graduate)|(degree|graduate).*\buma\b", t):
+        if re.search(r"graduate.*high school|high school (graduate|diploma|equivalent)|"
+                     r"completed high school|do you have a (high school|hs) (diploma|ged)", t):
+            return ["Yes"]                                # a US persona has a HS diploma (truthful)
+        if re.search(r"graduate (from|of) (uma|ultimate medical academy)|"
+                     r"attended.*\b(uma|ultimate medical academy)\b|"
+                     r"\buma\b.*(degree|graduate)|(degree|graduate).*\buma\b|"
+                     r"\balumni\b.*\b(uma|ultimate medical academy)\b", t):
             return ["No", "N/A", "Not applicable"]        # persona is not an alum of the named school
         if re.search(r"preferred shift|indicate your (preferred )?shift|which shift|shift preference|"
                      r"select.*shift|shift.*(prefer|choose|available to work)", t):
@@ -891,6 +900,10 @@ class ICIMSStrategy(ApplyStrategy):
                      r"how (much|many years?).*experience|years of experience", t):
             return ["4-5 years", "5+ years", "6+ years", "3-5 years", "5 years", "More than",
                     "1-3 years", "Yes"]
+        if re.search(r"reside (outside|abroad)|located outside|live outside|"
+                     r"outside (of )?the (u\.?s\.?|united states)|"
+                     r"not (currently )?(reside|located|living|live)\b", t):
+            return ["No"]                                 # a US persona does not reside outside the US
         if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat|"
                      r"located in the state of|located in [a-z]+\?|resident of|"
                      r"based in the state|do you (currently )?live in", t):
@@ -919,11 +932,16 @@ class ICIMSStrategy(ApplyStrategy):
         if re.search(r"documentation|diploma or ged|provide.*if needed|verify.*education|"
                      r"able to provide", t):
             return ["Yes"]
-        if re.search(r"18 (years|and older)|older|authorized|eligible to work", t):
-            return ["Yes"]
+        if re.search(r"18 (years|and older)|at least 18|over 18|18 or older|18\+|"
+                     r"authorized|eligible to work", t):
+            return ["Yes"]                                # 18+ age gate is truthful; NOT bare 'older' (age = protected)
         if re.search(r"seasonal|interested in (the |this )?(season|temporary|position|role|opportunity)", t):
             return ["Yes"]
-        if re.search(r"\bcitizen(ship)?\b|u\.?s\.? citizen", t):
+        if re.search(r"citizen of (a country )?other than|dual citizen|non.?u\.?s\.? citizen|"
+                     r"citizen of another", t):
+            return ["No"]                                 # a US persona is not a non-US / dual citizen
+        if re.search(r"u\.?s\.? citizen|united states citizen|american citizen|"
+                     r"citizen of the (u\.?s\.?|united states)|are you a (u\.?s\.?|us) citizen", t):
             return ["Yes"]
         if re.search(r"require sponsor|need sponsor|visa sponsor", t):
             return ["No"]

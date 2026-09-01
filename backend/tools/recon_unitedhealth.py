@@ -47,12 +47,24 @@ GATE (hardest thing between us and "Thanks for Applying"):
   emailed activation code, the persona's @takhet.com mailbox + verify_code.read_code handles it, same
   as the Greenhouse/Ashby "security code" path.
 
-FEASIBILITY: feasible_needs_live_iteration.  NOT blocked_real_antibot.
+FEASIBILITY: **BLOCKED — Azure AD SSO, no self-registration** (CORRECTED 2026-09-01 by live validation).
+  The earlier "feasible / NOT blocked_real_antibot" verdict below was WRONG: it was based on a GET of
+  the Taleo *Privacy Agreement* page only, which is NOT the account step. A live run (job 1153 ×3) plus
+  repeated GETs proved every auth/register endpoint on careersection 10020
+  (`createprofile.ftl` / `register.ftl` / `accessmanagement.ftl`) 302-redirects to
+  `login.microsoftonline.com` (Azure AD SSO, SAML, RelayState=referrals.unitedhealthgroup.com) and
+  demands a corporate-tenant email+password. There is NO candidate self-signup, so 0 applications are
+  possible. Evidence: `logs/taleo_recon/1153/02_after_prefill.html` = `<title>Sign in to your account</title>`
+  (33 hits of login.microsoftonline); the 3 UHG persona Maildirs are empty. It is NOT captcha/WAF (those
+  probes were right) — it is a hard IDENTITY wall. ACTION: deactivate the 36 UHG rows from any drive-set;
+  do NOT wire TaleoStrategy onto uhg.taleo.net. TaleoStrategy itself is fine — it is PROVEN on TTEC
+  (ttec.taleo.net, 10 confirmed), which has no SSO redirect.
+
+  --- original (superseded) probe note, kept for context ---
   (The old CLAUDE.md "do NOT build" list tagged UnitedHealth as Taleo/BLOCKED under a blanket
   "stacked account + captcha/WAF + video". The probe contradicts the captcha/WAF/video parts: the ONLY
-  real obstacle is the account + the JSF wizard, both fully driveable by a headful Playwright browser
-  on DISPLAY=:98 — no captcha to solve, so no NopeCHA cost. It just needs live iteration to walk the
-  akira wizard, exactly like avature.py / oracle_orc.py were iterated.)
+  real obstacle is the account + the JSF wizard — but that "account" turns out to be Azure AD SSO, i.e.
+  the blanket verdict was right for the wrong reason.)
 
 ================================================================================================
 FLOW MAP a driver must walk (Playwright, headful :98, fresh synthetic US persona + isolated profile)
@@ -119,11 +131,11 @@ REUSE — closest existing strategies to adapt
     (d) Taleo's page-at-a-time wizard uses full-page JSF navigations (not an SPA), so the walker must
     wait for each server round-trip / re-analyze the DOM per step.
 
-DELTA vs TP/iCIMS (why this is the EASY sibling): TP was hCaptcha-on-every-submit -> needed paid
-NopeCHA + real mouse + the owner's own browser. Taleo has NO captcha and NO WAF, so the whole thing
-runs autonomously in the server's headful :98 browser with a fresh synthetic persona + isolated
-per-job profile — the same rig, minus the captcha problem. It is closer to the Avature/Maximus lane
-(fully autonomous to "Thank you for applying") than to the TP lane.
+DELTA vs TP/iCIMS: TP was hCaptcha-on-every-submit -> needed paid NopeCHA. Taleo has NO captcha/WAF,
+so the wizard itself is autonomous — but that autonomy is only realized on **TTEC (ttec.taleo.net)**,
+which is proven live (10 confirmed). For **UnitedHealth (uhg.taleo.net) it is moot: the account step
+is Azure AD SSO with no self-registration (see FEASIBILITY above) — 0 applications possible.** The
+"fully autonomous to Thank you for applying" claim applies to TTEC, NOT to UHG.
 """
 from __future__ import annotations
 

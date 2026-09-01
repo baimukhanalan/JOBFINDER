@@ -202,8 +202,10 @@ class AvatureStrategy(ApplyStrategy):
                         "e=>{const c=e.closest('div,li,fieldset,form');return c?c.innerText:'';}")
                         or "").lower()
                     if re.search(r"newsletter|marketing|promotional|subscribe|"
-                                 r"contact you about|talent community|opportunities", ctx):
-                        continue
+                                 r"contact you about|talent community|opportunities|"
+                                 r"gender|race|ethnic|hispanic|latino|disabilit|veteran|"
+                                 r"armed forces|self-?identif|orientation|pronoun|protected", ctx):
+                        continue    # never tick a marketing opt-in OR a demographic self-ID checkbox
                     try:
                         await cb.check(timeout=2500)
                     except Exception:
@@ -562,6 +564,10 @@ class AvatureStrategy(ApplyStrategy):
         if len(cand) <= 4:
             return (opt.startswith(cand + " ") or opt.startswith(cand + ",")
                     or (" " + cand + " ") in (" " + opt + " "))
+        if cand[0].isdigit():
+            # numeric tier ("5+ years") must not left-match a bigger number ("15+ years")
+            return (bool(re.search(r"(?<!\d)" + re.escape(cand), opt))
+                    or bool(re.search(r"(?<!\d)" + re.escape(opt), cand)))
         return cand in opt or opt in cand
 
     async def _click_radio(self, page: Page, name: str, value) -> bool:
@@ -604,9 +610,9 @@ class AvatureStrategy(ApplyStrategy):
                 const real=[...el.options].filter(o=>o.value &&
                   !/select an option|select a |prefer not|decline/.test(n(o.text)));
                 if(!real.length)return null;
-                let o = high ? (real.find(o=>/native/.test(n(o.text)))||
-                                real.find(o=>hi.test(n(o.text)))||real[real.length-1])
-                             : (real.find(o=>lo.test(n(o.text)))||real[0]);
+                let o = high ? (real.find(o=>/native/.test(n(o.text)))||real.find(o=>hi.test(n(o.text))))
+                             : (real.find(o=>lo.test(n(o.text))));
+                if(!o) return null;   // no worded tier match -> leave for the human, never a positional guess
                 el.setAttribute('data-jf','1');return {value:o.value};
               }return null;}""", [label_key.lower(), high])
         if not info:
@@ -638,7 +644,18 @@ class AvatureStrategy(ApplyStrategy):
         if re.search(r"able to (speak|read|write|translate|converse)|"
                      r"(speak|read|write|translate)\b.{0,30}(and|,|/).{0,30}(read|write|translate|english)|"
                      r"fluent in .+ and english|bilingual in|proficient in .+ and english", t):
-            return ["Yes"]
+            # Answer Yes ONLY if the persona actually has the asked language — never fabricate fluency.
+            langs = [str(l).lower() for l in (facts.get("languages") or [])]
+            if facts.get("bilingual"):
+                langs.append("spanish")
+            asked = next((L for L in ("spanish", "vietnamese", "tagalog", "mandarin", "cantonese",
+                                      "chinese", "korean", "russian", "farsi", "persian", "arabic",
+                                      "french", "portuguese", "hmong", "khmer", "cambodian",
+                                      "armenian", "laotian", "haitian", "creole", "german",
+                                      "italian", "japanese") if L in t), None)
+            if asked is None:
+                return None                    # can't tell which language -> leave for the human
+            return ["Yes"] if any(asked in L or L in asked for L in langs) else ["No"]
         if re.search(r"spanish", t):
             return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
                     else ["None", "No proficiency", "Basic", "Beginner", "Limited"])

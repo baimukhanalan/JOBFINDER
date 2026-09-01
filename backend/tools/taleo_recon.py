@@ -195,9 +195,26 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
             locale="en-US", timezone_id="America/New_York",
             args=[] if headless else ["--start-maximized"])
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        shot_dir = os.path.join(REPO, "logs", "taleo_recon", str(job_id))
+        os.makedirs(shot_dir, exist_ok=True)
+        _n = [0]
+
+        async def _shot(tag):
+            _n[0] += 1
+            try:
+                await page.screenshot(path=os.path.join(shot_dir, f"{_n[0]:02d}_{tag}.png"),
+                                      full_page=True)
+                html = await page.content()
+                with open(os.path.join(shot_dir, f"{_n[0]:02d}_{tag}.html"), "w") as fh:
+                    fh.write(html)
+                print(f"[shot {_n[0]:02d} {tag}] url={page.url[:90]}", flush=True)
+            except Exception as e:
+                print(f"[shot {tag} err: {type(e).__name__}]", flush=True)
+
         try:
             await page.goto(taleo_url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(2500)
+            await _shot("landing")
             strat = TaleoStrategy()
             result = await strat.prefill(
                 page, pf, p["resume_path"], job={"title": row["title"], "company": row["company"]},
@@ -205,6 +222,7 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
             print(f"[filled: unfilled={result.get('unfilled')} "
                   f"review_items={len(result.get('review_items') or [])} "
                   f"page_type={result.get('page_type')}]", flush=True)
+            await _shot("after_prefill")
             # wait for the confirmation (or idle out --keep). Only meaningful with TALEO_ADVANCE=1.
             deadline = start_ts + keep_minutes * 60
             confirmed = False

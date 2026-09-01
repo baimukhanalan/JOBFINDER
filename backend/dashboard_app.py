@@ -2015,7 +2015,8 @@ def mail_candidates_thread(mailbox: str = ""):
     """Expand one candidate's thread (its messages) inside the grouped inbox."""
     from backend.tools import mailcrm, candidates_inbox
     msgs = mailcrm.list_messages(mailbox=mailbox, limit=100) if mailbox else []
-    return HTMLResponse(candidates_inbox.render_thread_fragment(mailbox, msgs))
+    return HTMLResponse(candidates_inbox.render_thread_fragment(mailbox, msgs),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/mail/candidates/message", response_class=HTMLResponse)
@@ -2025,7 +2026,10 @@ def mail_candidates_message(id: str = ""):
     m = mailcrm.get_message(id, mark=True) if id else None
     if not m:
         return HTMLResponse('<div class="cg-msg-err">Письмо не найдено</div>', status_code=404)
-    return HTMLResponse(candidates_inbox.render_message_fragment(m))
+    # no-store: never let the browser serve a STALE cached copy of a message body (a mail rendered
+    # before a parsing fix was deployed would otherwise stay blank in the client's HTTP cache).
+    return HTMLResponse(candidates_inbox.render_message_fragment(m),
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/candidates/{cid}", response_class=HTMLResponse)
@@ -2062,7 +2066,7 @@ def mail_message(id: str = ""):
     if not t:
         return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
                             "<p style='font-family:sans-serif;padding:16px'>\u041f\u0438\u0441\u044c\u043c\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e. <a href='/mail'>\u041a \u0441\u043f\u0438\u0441\u043a\u0443</a></p>", status_code=404)
-    return HTMLResponse(mailcrm_ui.render_thread(t))
+    return HTMLResponse(mailcrm_ui.render_thread(t), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/mail/attachment")

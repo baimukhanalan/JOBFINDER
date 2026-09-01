@@ -655,7 +655,7 @@ class ICIMSStrategy(ApplyStrategy):
         try:
             rids = await root.evaluate(
                 """()=>{const out=[];const groups={};
-                  const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want|don't wish|wish not/i;
+                  const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want|don't wish|wish not|opt[\\s-]?out|not specified|not to answer|prefer not to say/i;
                   const dq=/choose to disclose|wish to disclose|like to disclose|self-?identify|do you wish/i;
                   const lab=r=>{const l=r.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]'):null;
                     return ((l&&l.innerText)||(r.closest('label')?r.closest('label').innerText:'')||'').trim();};
@@ -674,7 +674,7 @@ class ICIMSStrategy(ApplyStrategy):
             rids = []
         try:
             await root.evaluate(
-                """()=>{const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want/i;
+                """()=>{const dec=/not to disclose|choose not|prefer not|decline|do not wish|do not want|opt[\\s-]?out|not specified|not to answer|prefer not to say/i;
                   const demo=/gender|race|ethnic|hispanic|latino|disabilit|veteran|armed forces|self-?identif|self-?classif|orientation|pronoun/i;
                   for(const el of document.querySelectorAll('select:not([multiple])')){
                     const cur=el.options[el.selectedIndex];
@@ -854,17 +854,33 @@ class ICIMSStrategy(ApplyStrategy):
         CSR / insurance-rep / healthcare-rep, so the CSR-experience + eligibility families apply.
         Ported from the Avature/Oracle mass-hiring lanes."""
         facts = facts or {}
-        if re.search(r"acknowledge|i certify|i attest", t):
-            return None                                   # handled by _tick_acknowledge
+        # --- Teleperformance-specific screeners (deterministic, truthful for a synthetic US persona) ---
+        if re.search(r"employed by (a )?(tp|teleperformance|tpusa|senture|alliance ?one)\b|"
+                     r"(currently|ever|previously).{0,30}employed by (a )?(tp|teleperformance|company)", t):
+            return ["No"]                                 # a fresh persona never worked for TP
+        if re.search(r"legal right to work|right to work in|proof of your legal|proof of.*right to work", t):
+            return ["Yes"]                                # US persona is authorized
+        if re.search(r"graduate (from|of)|alumni|attended.*\b(uma|ultimate medical academy)\b|"
+                     r"\buma\b.*(degree|graduate)|(degree|graduate).*\buma\b", t):
+            return ["No", "N/A", "Not applicable"]        # persona is not an alum of the named school
+        if re.search(r"preferred shift|indicate your (preferred )?shift|which shift|shift preference|"
+                     r"select.*shift|shift.*(prefer|choose|available to work)", t):
+            return ["Any", "Flexible", "Any shift", "All shifts", "Open", "No preference",
+                    "First Shift", "First", "Day", "Morning"]
+        if re.search(r"acknowledge|i certify|i attest|certify that all|true and accurate", t):
+            # a certify/acknowledge SELECT or radio -> the affirmative; a certify CHECKBOX is handled
+            # by _tick_acknowledge and never reaches the select/radio screener paths, so no conflict.
+            return ["Yes", "I certify", "I agree", "I acknowledge", "Agree", "Confirm", "True"]
         if re.search(r"spanish", t):
             return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
                     else ["None", "No proficiency", "Basic", "Beginner", "Limited"])
         if re.search(r"english", t):
             # A US persona is a native English speaker — lead the strongest tier.
             return ["Native", "Native or bilingual", "Fluent", "Advanced", "Professional"]
-        if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
-            return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
-                    "Associate", "GED"]
+        if re.search(r"highest level of (completed )?education|level of (completed )?education|"
+                     r"education (you have )?achieved|\beducation level\b", t):
+            return [facts.get("education_level") or "Bachelor", "Bachelor's", "Bachelor",
+                    "High School Diploma", "High School", "Some College", "Associate", "GED"]
         # Customer-service / call-center experience — pick the HIGHEST believable tier (the
         # tailored résumé shows ~8 yrs), never a weak middle one that undersells + contradicts it.
         if re.search(r"experience.*(customer service|call center|contact center|retail|customer)", t):

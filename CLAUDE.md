@@ -1358,7 +1358,66 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     live at deploy (~300 employers). Only the dashboard restarts for panel display changes. Tests:
     `test_everify_employers.py` (parser + segmentation + graceful-degrade + stale-gated cache, no network).
 
-## Teleperformance (iCIMS) apply — full-auto is captcha-walled; the SHIPPED path is a browser EXTENSION the owner runs in HIS OWN browser (`extension_tp/`, 2026-08-31)
+## Teleperformance (iCIMS) apply — SERVER-SIDE FULL-AUTO NOW WORKS END-TO-END (paid NopeCHA, 2026-09-01)
+> **BREAKTHROUGH 2026-09-01 — a full TP application was submitted AUTONOMOUSLY, server-side, from the
+> DATACENTER IP (no residential tunnel), NopeCHA solving every captcha.** Ground truth: two real emails
+> landed in the persona's `@takhet.com` box — **"Thank You for Applying at Remote (United States)"**
+> (`teleperformance+autoreply@talent.icims.com`) AND the next-step SHL assessment invite
+> (`talentcentral@shl.com`, "TP Assessment - Test Login Details"). The driver is
+> `backend/tools/icims_recon.py` (`DISPLAY=:98 ICIMS_NOPECHA=1 ICIMS_PROXY= sg mail -c 'python3 -m
+> backend.tools.icims_recon --job <mass_hiring_id>'` — `ICIMS_PROXY=` forces DIRECT; the tunnel is NOT
+> needed). It walks all wizard steps: **1 Candidate Profile (+ résumé + emailed code) → 2 Candidate
+> Questions (screeners) → 3 EEO → 4 per-job screener → submit** and reaches the post-apply Digital
+> Interview / SHL assessment. **The `State/Province` blocker (the weeks-long wall) is SOLVED and was
+> NEVER an IP problem** — see the two gotchas below. The extension (`extension_tp/`, still documented
+> below) remains the FREE / no-key path the owner runs in his own browser; the server path needs the
+> paid NopeCHA key. **The remaining human step is the SHL "Digital Interview" assessment — but it's the
+> SAME SHL/TalentCentral system Maximus uses, so the existing `tools/shl_assessment.py` /
+> `shl_assess_runner.py` etalon engine likely auto-completes it for synthetic personas** (verify item
+> type: OPQ/SJT auto-OK, cognitive/knowledge = human — see the SHL section). Memory:
+> [[jobfinder-tp-nopecha-livetest]].
+>
+> **GOTCHA 1 — the iCIMS `State/Province` "No states available" was `parentValue=-999`, NOT IP-gating
+> (root cause, 2026-09-01).** Country/State are iCIMS AJAX **searchable** dropdowns
+> (`icimsdropdown-ajax=1 icimsdropdown-search=1`): the native `<select>` holds ONLY the committed value
+> (so `el.options.length==1` is normal, NOT "empty AJAX" — the earlier datacenter-IP-gating diagnosis was
+> a red herring from reading the wrong element). Options come from
+> `GET /jobs/profileoptions?in_iframe=1&q=<query>&page=0&size=25&parentValue=<countryValue>&id=PersonProfileFields.AddressState&hash=<stateHash>`.
+> The widget auto-fired it with **`parentValue=-999`** (the no-parent sentinel) → `{"total":0}` →
+> "No states available", even though Country's `icimsdropdown-selected` was already `12781` (United
+> States). Fetching the SAME endpoint with `parentValue=12781` returns `{"total":54, ...Ohio=12819...}`
+> **from the datacenter IP** (200, proven direct). Fix (`icims_recon._load_state_via_fetch`): read
+> Country's committed value, `fetch()` profileoptions with it (in the iCIMS content frame → same-origin,
+> carries cookies), find the state, **inject it into the native `<select>` (add option + set value +
+> sync the fake `_fakeSelected_icimsDropdown` overlay)**. `q=Ohio` alone also returns just Ohio, but the
+> widget's own type-search never renders into `#<id>_listbox` where a click could reach it, so the
+> fetch-and-inject is the robust path. Do NOT re-fire the country change to "reload" states — that makes
+> iCIMS re-render + WIPE the injection.
+>
+> **GOTCHA 2 — the injected State gets WIPED by the loop's per-tick re-fill, so ADVANCE IN THE SAME TICK
+> (2026-09-01).** iCIMS's AJAX dropdowns keep the committed value in the WIDGET, not the native
+> `<select>`, so the readiness check must also read the fake-overlay text (`_fakeSelected_icimsDropdown`),
+> not just `el.options[selectedIndex]` (`icims_recon._residence_ready`/`_state_diag` now do, scoped to
+> `AddressState/AddressCountry/AddressProvince` field ids — a loose `'state'` substring falsely matched
+> the step-2 screener "right to work in the United **State**s"). And because `_tp_fill` re-fills the whole
+> form every tick (re-rendering the address block), a state set on tick N is wiped on tick N+1 → it never
+> survived to Submit. Fix: after the fetch-inject, if residence is ready THIS tick, fall straight through
+> to `_advance` (Submit Profile) in the same tick instead of `continue`-ing. Verified: step 1 then accepts
+> and advances to step 2.
+>
+> **GOTCHA 3 — step 2-4 screener / EEO coverage (`applier/strategies/icims.py`, 2026-09-01).** After state,
+> the wizard blocked on required fields the deterministic `_screener_answer`/`_decline_demographics` didn't
+> cover. Added (truthful for a synthetic US persona): **legal right to work → Yes; employed by a TP company
+> (currently/ever) → No; preferred shift → Any/Flexible; "I certify … true and accurate" SELECT → the
+> affirmative; education regex now matches "highest level of **completed** education"; per-job "graduate
+> from UMA" → No.** The free-text "Who is your internet service provider?" is filled via a new
+> `icims_recon._fill_text_by_question` (matches the CONTAINER text, since iForm screeners have no
+> `<label for>`). **EEO decline: the TP decline option is literally "Opt Out"** — the `dec` regex in
+> `_decline_demographics` had no token for it (so Gender/Race stayed blank while Disability/Veteran fell to
+> "No"), now includes `opt[\s-]?out`, so all four self-ID selects pick **Opt Out** (never claims a
+> characteristic). These fills are native-`<select>` sets that STICK (unlike the AJAX State widget) — the
+> step-2/3 screeners are plain selects with inline options.
+
 The TP/iCIMS apply is gated by **hCaptcha on EVERY submit** (email Next, Submit Profile, each Continue).
 Established by a long investigation (don't re-derive): (1) **stealth (patchright) beats the entry
 AWS-WAF but NOT the hCaptcha**; (2) a **synthetic/Playwright click PARKS the challenge** (hCaptcha

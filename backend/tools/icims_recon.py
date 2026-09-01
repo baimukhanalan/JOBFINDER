@@ -325,6 +325,30 @@ async def _force_text(root, label_re: str, value: str) -> bool:
           return false;}""", [label_re, value]))
 
 
+async def _fill_text_by_question(root, q_re: str, value: str) -> bool:
+    """Fill a free-text screener input whose nearby QUESTION text matches q_re. Unlike _force_text this
+    also reads the CONTAINER text — iForm screeners put the question in a sibling div, not a
+    <label for> — and fills only an EMPTY input (e.g. 'Who is your internet service provider?')."""
+    if not value:
+        return False
+    return bool(await root.evaluate(
+        """([re_src,val])=>{const rx=new RegExp(re_src,'i');
+          const qOf=el=>{let t='';const id=el.id;
+            if(id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');if(l)t=l.innerText;}
+            if(!t){const w=el.closest('label');if(w)t=w.innerText;}
+            if(!t)t=el.getAttribute('aria-label')||el.getAttribute('placeholder')||'';
+            if(!t){const b=el.closest('div,li,fieldset,tr,td'); if(b&&(b.innerText||'').length<200)t=b.innerText;}
+            return t;};
+          for(const el of document.querySelectorAll('input[type=text],input:not([type]),textarea')){
+            const ty=(el.type||'').toLowerCase();
+            if(['hidden','submit','button','file','password','checkbox','radio'].includes(ty))continue;
+            if((el.value||'').trim())continue;
+            if(!rx.test(qOf(el)))continue;
+            el.focus();el.value=val;el.dispatchEvent(new Event('input',{bubbles:true}));
+            el.dispatchEvent(new Event('change',{bubbles:true}));return true;}
+          return false;}""", [q_re, value]))
+
+
 async def _select_first_real(root, label_substr: str) -> bool:
     """Pick the first non-placeholder option of the <select> whose label contains label_substr
     (for a required dependent select like 'Please specify further')."""
@@ -398,6 +422,9 @@ async def _fill_how_heard(page, root) -> bool:
     return False
 
 
+_DEMO_DUMPED = [False]
+
+
 async def _tp_fill(page, root, pf, facts, strat) -> None:
     """Fill the Teleperformance iCIMS Candidate Profile / screener step COMPLETELY (frame-aware,
     idempotent, no résumé re-attach). Order matters: Country BEFORE State (the State dropdown is
@@ -454,6 +481,12 @@ async def _tp_fill(page, root, pf, facts, strat) -> None:
         pass
     await _force_text(root, r"^\s*city\b|city/town|^town\b", pf.get("city") or "")
     await _force_text(root, r"zip|postal", pf.get("zip") or "")
+    # free-text screener: internet service provider (required on the TP Candidate-Questions step)
+    try:
+        await _fill_text_by_question(
+            root, r"internet service provider|internet provider|who is your internet|\bisp\b", "Spectrum")
+    except Exception:
+        pass
     # required acknowledgements / consent / EEO decline / deterministic screeners
     for fn in (lambda: strat._tick_acknowledge(page, root),
                lambda: strat._tick_required_checkboxes(page, root),
@@ -461,6 +494,24 @@ async def _tp_fill(page, root, pf, facts, strat) -> None:
                lambda: strat._answer_screeners(page, root, facts or {})):
         try:
             await fn()
+        except Exception:
+            pass
+    # DIAGNOSTIC (once): dump the EEO demographic selects' options + selected value, so we know the
+    # exact decline-option text when the decline pass leaves Gender/Race blank.
+    if not _DEMO_DUMPED[0]:
+        try:
+            demo = await root.evaluate(
+                """()=>{const out=[];const demo=/gender|race|ethnic|hispanic|disabilit|veteran/i;
+                  for(const el of document.querySelectorAll('select:not([multiple])')){
+                    const lab=(el.getAttribute('data-label')||el.id||'');
+                    if(!demo.test(lab)) continue;
+                    const cur=el.options[el.selectedIndex];
+                    out.push({label:lab.slice(0,20), val:(cur&&cur.text)||'',
+                              opts:[...el.options].map(o=>o.text).slice(0,12)});}
+                  return out;}""")
+            if demo:
+                _DEMO_DUMPED[0] = True
+                print(f"[DEMO DUMP] {demo}", flush=True)
         except Exception:
             pass
 
@@ -501,13 +552,23 @@ async def _residence_ready(root) -> bool:
         empty = await root.evaluate(
             """()=>{const n=s=>(s||'').toLowerCase();
               const ph=t=>!t||/make a selection|please select|no states available|select a source/.test(n(t));
+              // Scope ONLY to the real residence selects (by iCIMS field id / exact data-label) — NOT a
+              // loose 'state' substring, which mis-matches screeners like 'right to work in the United
+              // States' and would falsely block step 2.
+              const isRes=el=>/address(state|country|province)/i.test(el.id||'')||
+                ['country','state/province','state','province'].includes(n((el.getAttribute('data-label')||'')).trim());
               for(const el of document.querySelectorAll('select')){
-                let t=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
-                t=t||el.getAttribute('data-label')||'';
-                const lab=n(t);
-                if(lab.includes('state')||lab.includes('province')||lab.includes('country')){
+                if(isRes(el)){
                   const cur=el.options[el.selectedIndex];
-                  if(!el.value||ph(cur&&cur.text)) return true;}}
+                  let filled = el.value && !ph(cur&&cur.text);
+                  // iCIMS AJAX dropdowns keep the committed value in their widget, NOT the native
+                  // <select> — the display shows in the fake overlay span. Treat a non-placeholder
+                  // overlay text as filled.
+                  if(!filled && el.id){
+                    const f=document.getElementById(el.id+'_fakeSelected_icimsDropdown');
+                    const ft=f?(f.innerText||f.textContent||''):'';
+                    if(ft && !ph(ft)) filled=true;}
+                  if(!filled) return true;}}
               return false;}""")
         return not empty
     except Exception:
@@ -519,13 +580,16 @@ async def _state_diag(root) -> str:
     try:
         return await root.evaluate(
             """()=>{const n=s=>(s||'').toLowerCase();const out=[];
+              const isRes=el=>/address(state|country|province)/i.test(el.id||'')||
+                ['country','state/province','state','province'].includes(n((el.getAttribute('data-label')||'')).trim());
               for(const el of document.querySelectorAll('select')){
                 let t=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
                 t=t||el.getAttribute('data-label')||'';
-                const lab=n(t);
-                if(lab.includes('state')||lab.includes('province')||lab.includes('country')){
+                if(isRes(el)){
                   const cur=el.options[el.selectedIndex];
-                  out.push((t||el.id).replace(/\\s+/g,' ').slice(0,20)+': n='+el.options.length+' val='+JSON.stringify((cur&&cur.text)||''));}}
+                  let ov='';
+                  if(el.id){const f=document.getElementById(el.id+'_fakeSelected_icimsDropdown'); if(f)ov=(f.innerText||f.textContent||'').replace(/\\s+/g,' ').trim();}
+                  out.push((t||el.id).replace(/\\s+/g,' ').slice(0,20)+': n='+el.options.length+' val='+JSON.stringify((cur&&cur.text)||'')+' ov='+JSON.stringify(ov.slice(0,24)));}}
               return out.join(' | ');}""")
     except Exception:
         return "?"
@@ -575,6 +639,7 @@ async def _icims_overlay_select(page, root, label_substr: str, value_substr: str
         await root.click(f'[id="{sid}_icimsDropdown"]', timeout=4000)
     except Exception:
         return False
+    cnt = 0
     for _ in range(18):                                   # wait for the listbox to populate (AJAX)
         await page.wait_for_timeout(400)
         try:
@@ -585,6 +650,7 @@ async def _icims_overlay_select(page, root, label_substr: str, value_substr: str
             cnt = 0
         if cnt and cnt > 0:
             break
+    print(f"[overlay-select {label_substr}: listbox opts={cnt}]", flush=True)
     clicked = await root.evaluate(
         """([sid,val])=>{const n=s=>(s||'').toLowerCase();
           const lb=document.getElementById(sid+'_listbox'); if(!lb) return false;
@@ -596,7 +662,119 @@ async def _icims_overlay_select(page, root, label_substr: str, value_substr: str
     return bool(clicked)
 
 
+async def _load_state_via_fetch(page, root, state_full: str, state_code: str) -> bool:
+    """The State dropdown's options come from GET /jobs/profileoptions?...&parentValue=<countryValue>
+    &id=PersonProfileFields.AddressState&hash=<stateHash>. On this form it auto-fired with
+    parentValue=-999 (the no-parent sentinel) → 'No states available'. Re-fetch it with the REAL
+    selected Country value, find the state, and commit it into the native <select> + fake overlay so
+    both the residence gate and the iCIMS submit see it. Runs in the iCIMS content frame (same-origin,
+    carries the session cookies)."""
+    try:
+        res = await root.evaluate(
+            """async ([full,code])=>{
+              const n=s=>(s||'').toLowerCase();
+              const sels=[...document.querySelectorAll('select')];
+              const csel=sels.find(s=>/country/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
+              const ssel=sels.find(s=>/state|province/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
+              if(!ssel) return {ok:false, why:'no state select'};
+              const parentVal = csel ? (csel.getAttribute('icimsdropdown-selected') || csel.value || '') : '';
+              const hash = ssel.getAttribute('hash')||'';
+              const url='/jobs/profileoptions?in_iframe=1&q=&page=0&size=200&parentValue='+
+                        encodeURIComponent(parentVal)+'&id=PersonProfileFields.AddressState&hash='+encodeURIComponent(hash);
+              let body='';
+              try{ const r=await fetch(url,{headers:{'X-Requested-With':'XMLHttpRequest'},credentials:'same-origin'}); body=await r.text(); }
+              catch(e){ return {ok:false, why:'fetch '+e}; }
+              let opts=[];
+              try{ const j=JSON.parse(body);
+                const arr=j.results||j.items||j.options||j.data||(Array.isArray(j)?j:[]);
+                opts=arr.map(o=>({v:String(o.id!=null?o.id:(o.value!=null?o.value:'')), t:String(o.text!=null?o.text:(o.label!=null?o.label:(o.name||'')))}));
+              }catch(e){
+                const d=document.createElement('div'); d.innerHTML=body;
+                d.querySelectorAll('option,li,[role=option]').forEach(o=>{const v=o.getAttribute('value')||o.getAttribute('data-value')||''; const t=(o.textContent||'').trim(); if(t) opts.push({v:v||t, t});});
+              }
+              const want=[full,code].map(n).filter(Boolean);
+              const hit=opts.find(o=>want.includes(n(o.t))) || opts.find(o=>n(o.t).includes(n(full))) || opts.find(o=>n(o.v)===n(code));
+              if(!hit) return {ok:false, why:'no match', count:opts.length, sample:opts.slice(0,6), bodyhead:body.slice(0,220), parentVal};
+              let ex=[...ssel.options].find(o=>String(o.value)===String(hit.v));
+              if(!ex){ const op=document.createElement('option'); op.value=hit.v; op.text=hit.t; ssel.add(op); ex=op; }
+              ssel.value=hit.v;
+              try{ ssel.setAttribute('icimsdropdown-selected', hit.v); }catch(e){}
+              ssel.dispatchEvent(new Event('input',{bubbles:true}));
+              ssel.dispatchEvent(new Event('change',{bubbles:true}));
+              try{ const f=document.getElementById(ssel.id+'_fakeSelected_icimsDropdown');
+                   if(f){f.innerHTML='<span class="dropdown-text">'+hit.t+'</span>';}
+                   const ov=document.getElementById(ssel.id+'_icimsDropdown'); if(ov){const d=ov.querySelector('.dropdown-text'); if(d)d.textContent=hit.t;} }catch(e){}
+              return {ok:true, v:hit.v, t:hit.t, count:opts.length, parentVal};
+            }""", [state_full, state_code])
+        print(f"[state-fetch] {res}", flush=True)
+        return bool(res and res.get("ok"))
+    except Exception as e:
+        print(f"[state-fetch err] {type(e).__name__}: {e}", flush=True)
+        return False
+
+
+async def _pick_icims_state(page, root, full: str, code: str) -> bool:
+    """Select the State the iCIMS-native way (survives the widget's async re-render, unlike a direct
+    native-<select> poke). The widget is a SEARCHABLE AJAX dropdown (icimsdropdown-search=1): its first
+    page is only 25 options, so a mid-alphabet state (Ohio ~#37) isn't shown until you TYPE — typing
+    fires profileoptions?q=<state>&parentValue=<country> → the filtered listbox → click the match, which
+    commits via iCIMS's own handler (selectedprofileoption). Requires the Country already committed so
+    the dependent list loads (parentValue=<id>, not the -999 sentinel)."""
+    sid = await root.evaluate(
+        """()=>{const n=s=>(s||'').toLowerCase();
+          for(const el of document.querySelectorAll('select')){
+            if(/state|province/.test(n(el.getAttribute('data-label')||'')+' '+n(el.id||''))) return el.id;} return null;}""")
+    if not sid:
+        return False
+    await _fire_country_change(root)                       # ensure the dependent state list is loaded
+    await page.wait_for_timeout(1000)
+    try:
+        await root.click(f'[id="{sid}_icimsDropdown"]', timeout=5000)   # open the widget
+    except Exception:
+        return False
+    await page.wait_for_timeout(500)
+    # type the state name into the widget's search input to trigger the filtered AJAX load
+    typed = await root.evaluate(
+        """([sid,q])=>{
+          const cand=[];
+          document.querySelectorAll('input[aria-controls="'+sid+'_listbox"]').forEach(i=>cand.push(i));
+          const ov=document.getElementById(sid+'_icimsDropdown');
+          if(ov){const box=ov.closest('.iCIMS_Forms_IdDropDown,.customFieldContainer,div')||document; box.querySelectorAll('input[type=text],input:not([type]),input[role=combobox],input[role=searchbox]').forEach(i=>cand.push(i));}
+          const inp=cand.find(i=>i.offsetParent!==null)||cand[0];
+          if(!inp) return false;
+          inp.focus(); inp.value=q;
+          inp.dispatchEvent(new Event('input',{bubbles:true}));
+          inp.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:q.slice(-1)}));
+          inp.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:q.slice(-1)}));
+          return true;}""", [sid, full])
+    cnt = 0
+    for _ in range(22):                                    # wait for the (filtered) listbox
+        await page.wait_for_timeout(400)
+        try:
+            cnt = await root.evaluate(
+                """(sid)=>{const lb=document.getElementById(sid+'_listbox'); if(!lb) return 0;
+                   return [...lb.querySelectorAll('li,[role=option]')].filter(o=>(o.textContent||'').trim()).length;}""", sid)
+        except Exception:
+            cnt = 0
+        if cnt and cnt > 0:
+            break
+    print(f"[state pick: typed={typed} listbox opts={cnt}]", flush=True)
+    clicked = await root.evaluate(
+        """([sid,full,code])=>{const n=s=>(s||'').toLowerCase();
+          const lb=document.getElementById(sid+'_listbox'); if(!lb) return false;
+          const opts=[...lb.querySelectorAll('li,[role=option]')].filter(o=>(o.textContent||'').trim());
+          let o=opts.find(x=>n(x.textContent).trim()===n(full)) || opts.find(x=>n(x.textContent).includes(n(full)));
+          if(!o) return false;
+          try{o.scrollIntoView();}catch(e){}
+          for(const t of ['mouseover','mousedown','mouseup','click'])
+            o.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
+          return true;}""", [sid, full, code])
+    await page.wait_for_timeout(700)
+    return bool(clicked)
+
+
 _DUMPED = [False]
+_DUMPED2 = [False]
 
 
 async def _residence_dump(root) -> str:
@@ -610,7 +788,20 @@ async def _residence_dump(root) -> str:
               const csel=sels.find(s=>/country/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
               const ssel=sels.find(s=>/state|province/i.test((s.getAttribute('data-label')||'')+' '+(s.id||'')));
               if(csel){out.country_attrs=attrs(csel); out.country_onchange=csel.getAttribute('onchange')||'';}
-              if(ssel){out.state_attrs=attrs(ssel);}
+              if(ssel){out.state_attrs=attrs(ssel);
+                const sid=ssel.id;
+                // the iCIMS fake overlay + listbox + any typeahead search input for the State widget
+                const ov=document.getElementById(sid+'_icimsDropdown');
+                out.state_overlay_html=ov?ov.outerHTML.slice(0,900):null;
+                const lb=document.getElementById(sid+'_listbox');
+                out.state_listbox_html=lb?lb.outerHTML.slice(0,900):null;
+                out.state_listbox_optcount=lb?lb.querySelectorAll('li,[role=option]').length:0;
+                // hunt for a text input tied to this widget (search box)
+                const ins=[];
+                if(ov) ov.querySelectorAll('input').forEach(i=>ins.push(attrs(i)));
+                document.querySelectorAll('input[aria-controls="'+sid+'_listbox"]').forEach(i=>ins.push(attrs(i)));
+                out.state_inputs=ins.slice(0,4);
+              }
               // inline scripts that mention the dependent-dropdown machinery
               const scr=[];
               for(const s of document.querySelectorAll('script')){
@@ -618,7 +809,7 @@ async def _residence_dump(root) -> str:
                   const m=t.match(/.{0,60}(AddressState|ddd|Dependent|loadState|childDropdown).{0,90}/i); if(m)scr.push(m[0].replace(/\\s+/g,' '));}}
               out.scripts=scr.slice(0,4);
               return out;}""")
-        return str(info)[:2400]
+        return str(info)[:4000]
     except Exception as e:
         return f"dump err {type(e).__name__}: {e}"
 
@@ -725,6 +916,31 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
             print("[proxy: DIRECT — no residential tunnel; NopeCHA solves the captcha regardless of IP]", flush=True)
         ctx = await pw.chromium.launch_persistent_context(STEALTH_PROFILE, **_lk)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        # DIAGNOSTIC: log iCIMS dependent-dropdown / typeahead AJAX so we can SEE whether the
+        # Country->State load actually fires and what it returns (status). Cheap, url+status only.
+        import re as _re_net
+        _AJAX_RE = _re_net.compile(r"profileoptions|selectedprofileoption", _re_net.I)
+        _seen_ajax: set = set()
+
+        async def _log_body(resp):
+            try:
+                body = await resp.text()
+                print(f"[AJAX-BODY {resp.url[:160]}] {body[:600]}", flush=True)
+            except Exception:
+                pass
+
+        def _log_resp(resp):
+            try:
+                u = resp.url
+                if _AJAX_RE.search(u):
+                    if u not in _seen_ajax:            # dedup on FULL url (keep distinct parentValue)
+                        _seen_ajax.add(u)
+                        print(f"[AJAX {resp.status}] {u[:220]}", flush=True)
+                        if "profileoptions?" in u:
+                            asyncio.create_task(_log_body(resp))
+            except Exception:
+                pass
+        page.on("response", _log_resp)
         # preseed NopeCHA config (keyless hCaptcha auto-solve; JS input to avoid CDP contention). A
         # paid key, if ever needed, goes in NOPECHA_KEY -> the same setup URL.
         if _ext_args:
@@ -917,27 +1133,21 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                     try:
                         stt = (pf.get("state") or "").strip()
                         code = (p.get("state_code") or "").strip()
-                        # real-user gesture: open the Country overlay + pick US → fires the widget's
-                        # dependent-load AJAX that populates the State list; then open State + pick it.
-                        await _icims_overlay_select(page, root, "country", "united states")
-                        for st_val in (stt, code):
-                            if not st_val:
-                                continue
-                            for _ in range(3):
-                                if await _icims_overlay_select(page, root, "state", st_val.lower()):
-                                    break
-                                await page.wait_for_timeout(700)
-                            if await _residence_ready(root):
-                                break
-                        if not await _residence_ready(root):   # fallbacks: direct loader + JS set
-                            await _fire_country_change(root)
-                            await page.wait_for_timeout(1500)
-                            if stt:
-                                await strat._select_by_label(root, "state", stt)
-                    except Exception:
-                        pass
-                    await page.wait_for_timeout(2500)
-                    continue
+                        # Fetch the State options with the committed Country value (icimsdropdown-selected
+                        # =12781, set at page load — the widget's own auto-load used the -999 sentinel →
+                        # empty) and inject the match into the native <select>. Do NOT re-fire the country
+                        # change: that makes iCIMS reload+re-render the State widget and WIPE the value.
+                        ok = await _load_state_via_fetch(page, root, stt, code)
+                        print(f"[state-pick ok={ok} -> {await _state_diag(root)}]", flush=True)
+                    except Exception as e:
+                        print(f"[state-pick err {type(e).__name__}: {str(e)[:90]}]", flush=True)
+                    # If the State stuck THIS tick, advance immediately — the next tick's full re-fill
+                    # (_tp_fill) would re-render the address block and wipe the injected value before we
+                    # ever reach Submit. So fall straight through to _advance in the same tick.
+                    if not await _residence_ready(root):
+                        await page.wait_for_timeout(1500)
+                        continue
+                    print("[residence set — advancing THIS tick before re-fill can wipe it]", flush=True)
                 kind = await _advance(page, root)
                 advanced = True
                 if kind == "final":

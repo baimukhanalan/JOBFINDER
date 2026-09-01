@@ -23,6 +23,7 @@ import argparse
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -30,9 +31,15 @@ from backend.tools import mail_db  # noqa: E402
 from backend.tools.workday_recon import drive_apply, _row  # noqa: E402  (shared headful drive loop)
 
 _CONFIRM_SUBJECT_RE = re.compile(
-    r"thank you for applying|application (was )?received|we received your application|"
-    r"your application (to|for)|application confirmation", re.I)
+    r"thank you for applying|application (was |has been )?received|we(['’ ]?ve| have)? received your "
+    r"application|your application (to|for|has been received)|application (confirmation|submitted)", re.I)
 _CONFIRM_FROM_RE = re.compile(r"conduent|oracle|oraclecloud|phenom|no-?reply@", re.I)
+# A recruiting-MARKETING mail (Conduent 'Talent Community' / job alerts) is NOT an application receipt —
+# it comes from careeralerts.conduent.com with a 'Join …' subject; exclude it so it never counts as a
+# confirmation (owner audit 2026-09-01). Ground truth stays the real ack subject above.
+_CONFIRM_EXCLUDE_RE = re.compile(
+    r"talent community|job alert|careeralert|newsletter|subscrib|stay connected|"
+    r"join .{0,20}(talent|community|network)|new jobs? (that )?match", re.I)
 
 
 def phenom_job_ids(limit: int | None = None) -> list[int]:
@@ -71,9 +78,14 @@ def _confirmed(email: str, since_ts: float) -> bool:
                 continue
             frm = re.search(r"^From:.*$", head, re.I | re.M)
             subj = re.search(r"^Subject:.*$", head, re.I | re.M)
-            if subj and _CONFIRM_SUBJECT_RE.search(subj.group(0)):
+            subj_t = subj.group(0) if subj else ""
+            frm_t = frm.group(0) if frm else ""
+            # never count a recruiting-marketing / talent-community / job-alert mail as a receipt
+            if _CONFIRM_EXCLUDE_RE.search(subj_t) or _CONFIRM_EXCLUDE_RE.search(frm_t):
+                continue
+            if subj and _CONFIRM_SUBJECT_RE.search(subj_t):
                 return True
-            if frm and _CONFIRM_FROM_RE.search(frm.group(0)) and subj and "appl" in subj.group(0).lower():
+            if frm and _CONFIRM_FROM_RE.search(frm_t) and "appl" in subj_t.lower():
                 return True
     return False
 
@@ -103,8 +115,17 @@ def main() -> None:
         if not row:
             print(f"job {jid}: no row", flush=True)
             continue
-        res = asyncio.run(drive_apply(row, advance_env="PHENOM_ADVANCE",
-                                      keep_minutes=args.keep, confirm=_confirmed))
+        # Retry a TRANSIENT browser crash (TargetClosedError from an OOM-killed renderer when the box
+        # is oversubscribed by the other lanes) — up to 3 attempts, brief backoff.
+        res = {}
+        for attempt in range(3):
+            res = asyncio.run(drive_apply(row, advance_env="PHENOM_ADVANCE",
+                                          keep_minutes=args.keep, confirm=_confirmed))
+            err = (res.get("error") or "")
+            if res.get("confirmed") or not re.search(r"TargetClosed|has been closed|Timeout.*context", err):
+                break
+            print(f"job {jid} attempt {attempt+1}: transient {err[:60]} — retrying", flush=True)
+            time.sleep(15)
         conf += 1 if res.get("confirmed") else 0
         print(f"job {jid} persona={res.get('persona')} strategy={res.get('strategy')} "
               f"clicked={res.get('clicked')} confirmed={res.get('confirmed')} "

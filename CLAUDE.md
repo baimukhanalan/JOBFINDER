@@ -1417,6 +1417,30 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
 > "No"), now includes `opt[\s-]?out`, so all four self-ID selects pick **Opt Out** (never claims a
 > characteristic). These fills are native-`<select>` sets that STICK (unlike the AJAX State widget) — the
 > step-2/3 screeners are plain selects with inline options.
+>
+> **AUTOMATED TP LANE — `backend/tools/mass_hiring_apply_tp_cron.py` (2026-09-01).** The TP analogue of
+> the Maximus cron, but **STRICTLY SEQUENTIAL** (never parallel — TP shares the ONE NopeCHA browser on
+> `:98`; Maximus fans out only because Avature has no captcha). It loops every active TP job
+> (`apply_url ILIKE '%icims%' AND active`), and per job spawns `icims_recon --job <id> --fresh` in a
+> **fresh isolated `ICIMS_PROFILE_DIR`** (so a fresh synthetic persona registers a NEW account, not a
+> resumed session), then reads the persona's Maildir for the "Thank You for Applying" confirmation.
+> fcntl-locked (`logs/tp_apply.lock`); logs to `logs/tp_apply.log`. Run it (and its `icims_recon`
+> subprocess) under `sg mail` + `DISPLAY=:98`; ~5-8 min/job (registration + ~5 captcha solves + 5 wizard
+> steps), so a full 39-job pass is hours — it's a background lane. `icims_recon` now **EXITS EARLY**
+> once the confirmation email lands (`_app_confirmed`), instead of idling out `--keep`. Cron:
+> `python3 -m backend.tools.mass_hiring_apply_tp_cron` (schedule chosen conservatively — each run creates
+> ~39 real synthetic-persona accounts; dial via `--limit`/frequency). Tests: `test_tp_apply_cron.py`.
+>
+> **State-specific TP postings → put the persona IN that state (2026-09-01).** Some TP jobs carry
+> `location_raw` like `'TN, United States'` and gate on a bespoke screener **"Are you located in the
+> state of <X>?"**. `icims_recon._pick_state(title, location)` now reads the job LOCATION first
+> (`_state_from_text` — 2-letter code or full name, skipping "US") so the persona's address + résumé are
+> in the job's state (e.g. Nashville, TN), and `_screener_answer` answers "located in the state of X" →
+> **Yes** truthfully (residence is a synthetic-persona DESIGN attribute, like the Avature lane). The
+> `run()` row SELECT now includes `location_raw`. Verified live: job 502 (`TN`) → persona Ruby Lloyd
+> (Nashville TN) → real "Thank You for Applying at TPUS **Tennessee** WAH". Per-job bespoke screeners are
+> a TAIL (job 1821 asked "graduate from UMA?" → No, job 502 asked "located in TN?" → Yes); add patterns
+> to `_screener_answer` as new ones surface — a blocked job shows its unanswered question in the recon log.
 
 The TP/iCIMS apply is gated by **hCaptcha on EVERY submit** (email Next, Submit Profile, each Continue).
 Established by a long investigation (don't re-derive): (1) **stealth (patchright) beats the entry

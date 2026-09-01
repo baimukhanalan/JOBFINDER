@@ -35,7 +35,9 @@ from backend.tools import mail_db  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RECON_ROOT = os.path.join(REPO, "logs", "icims_recon")
-STEALTH_PROFILE = os.path.join(REPO, "backend", "data", "icims_stealth_profile")
+# Chromium profile dir. Overridable so the multi-job apply lane can give each job a FRESH, isolated
+# profile (no logged-in session from a previous persona) — a fresh persona must register a NEW account.
+STEALTH_PROFILE = os.getenv("ICIMS_PROFILE_DIR") or os.path.join(REPO, "backend", "data", "icims_stealth_profile")
 SLOT = os.getenv("ICIMS_PROXY", "socks5://127.0.0.1:8120")   # empty = DIRECT (no residential tunnel)
 
 
@@ -86,10 +88,36 @@ _STATE_CITY = {
 }
 
 
-def _pick_state(title: str) -> tuple[str, str, str, str]:
-    """Choose an allowed (full, code, city, zip). If the title names a hard "X Only" subset,
-    take the first listed allowed state; else default Ohio."""
+def _state_from_text(text: str) -> str | None:
+    """Return an ALLOWED state CODE named in `text` — a 2-letter code (e.g. 'TN, United States') or a
+    full state name ('Work at Home - Tennessee') — else None. Used so a persona applying to a
+    state-specific TP posting is LOCATED in that state (consistent address + a truthful 'are you
+    located in <state>?' screener). Skips the 'US' code so 'United States' doesn't false-match."""
     import re
+    t = text or ""
+    for m in re.finditer(r"\b([A-Z]{2})\b", t):        # 2-letter code
+        c = m.group(1)
+        if c in ALLOWED_STATES:
+            return c
+    low = t.lower()
+    for c, full in ALLOWED_STATES.items():             # full name
+        if full.lower() in low:
+            return c
+    return None
+
+
+def _pick_state(title: str, location: str = "") -> tuple[str, str, str, str]:
+    """Choose an allowed (full, code, city, zip). Prefer a state named in the job LOCATION (e.g.
+    'TN, United States') so the persona is located where a state-specific posting requires; else a
+    title "X Only" subset / trailing "- XX"; else default Ohio."""
+    import re
+    def _ret(c):
+        city, zc = _STATE_CITY.get(c, (ALLOWED_STATES[c].split()[0], "00000"))
+        return ALLOWED_STATES[c], c, city, zc
+    # 1) the job's own location wins (a "TN, United States" posting -> a Tennessee persona)
+    loc_c = _state_from_text(location)
+    if loc_c:
+        return _ret(loc_c)
     t = title or ""
     m = re.search(r"\b((?:[A-Z]{2})(?:\s*,\s*[A-Z]{2})*)\s*Only\b", t)
     codes = []
@@ -97,14 +125,11 @@ def _pick_state(title: str) -> tuple[str, str, str, str]:
         codes = [c.strip() for c in m.group(1).split(",")]
     for c in codes:
         if c in ALLOWED_STATES:
-            city, zc = _STATE_CITY.get(c, (ALLOWED_STATES[c].split()[0], "00000"))
-            return ALLOWED_STATES[c], c, city, zc
+            return _ret(c)
     # trailing bare "- OH" style
     m2 = re.search(r"[-–]\s*([A-Z]{2})\b\s*$", t.strip())
     if m2 and m2.group(1) in ALLOWED_STATES:
-        c = m2.group(1)
-        city, zc = _STATE_CITY.get(c, (ALLOWED_STATES[c].split()[0], "00000"))
-        return ALLOWED_STATES[c], c, city, zc
+        return _ret(m2.group(1))
     return "Ohio", "OH", "Columbus", "43215"
 
 
@@ -825,7 +850,7 @@ def _build_persona(row: dict, reuse: bool = True) -> dict:
 
     from backend.tools.catalog_drafts import PREFILL_ROOT
 
-    full, code, city, zc = _pick_state(row.get("title") or "")
+    full, code, city, zc = _pick_state(row.get("title") or "", row.get("location_raw") or row.get("location") or "")
     jobid = f"mh_{row['id']}"
     pdir = None
     if reuse:
@@ -873,17 +898,49 @@ def _build_persona(row: dict, reuse: bool = True) -> dict:
 
 
 # ---- driver -------------------------------------------------------------------------------------
+def _app_confirmed(email: str, since_ts: float) -> bool:
+    """True once the iCIMS 'Thank You for Applying' / autoreply confirmation for this application has
+    landed in the persona's Maildir (received at/after since_ts) — the proof the app was SUBMITTED. Lets
+    the run exit early instead of idling out the whole --keep window (saves time + NopeCHA solves)."""
+    local = (email or "").split("@", 1)[0]
+    if not local:
+        return False
+    base = f"/var/mail/vhosts/takhet.com/{local}"
+    import re as _re2
+    for sub in ("new", "cur"):
+        d = os.path.join(base, sub)
+        try:
+            names = os.listdir(d)
+        except Exception:
+            continue
+        for n in names:
+            p = os.path.join(d, n)
+            try:
+                if os.path.getmtime(p) < since_ts - 30:
+                    continue
+                with open(p, "rb") as f:
+                    head = f.read(4000).decode("utf-8", "ignore")
+            except Exception:
+                continue
+            frm = _re2.search(r"^From:.*$", head, _re2.I | _re2.M)
+            subj = _re2.search(r"^Subject:.*$", head, _re2.I | _re2.M)
+            if (frm and "teleperformance+autoreply@talent.icims.com" in frm.group(0).lower()) or \
+               (subj and "thank you for applying" in subj.group(0).lower()):
+                return True
+    return False
+
+
 async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse: bool = True) -> None:
     from patchright.async_api import async_playwright
 
     from backend.applier.strategies.icims import ICIMSStrategy
 
     with mail_db.conn() as c, c.cursor() as cur:
-        cur.execute("SELECT id, title, apply_url, company FROM mass_hiring_jobs WHERE id=%s", (job_id,))
+        cur.execute("SELECT id, title, apply_url, company, location_raw FROM mass_hiring_jobs WHERE id=%s", (job_id,))
         r = cur.fetchone()
     if not r:
         print(f"no mass_hiring_jobs row id={job_id}", flush=True); return
-    row = {"id": r[0], "title": r[1], "apply_url": r[2], "company": r[3]}
+    row = {"id": r[0], "title": r[1], "apply_url": r[2], "company": r[3], "location_raw": r[4]}
     job_url = url or row["apply_url"]
 
     print(f"=== iCIMS recon: job {row['id']} — {row['title']}", flush=True)
@@ -1043,7 +1100,14 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
             resume_attached = False
             step_started = time.time()
             advanced = False
+            _conf_tick = 0
             while time.time() < deadline:
+                # exit early once the application is CONFIRMED submitted (the ATS emailed the receipt) —
+                # no point idling out the rest of --keep on the post-submit assessment page.
+                _conf_tick += 1
+                if _conf_tick % 3 == 0 and _app_confirmed(pf["email"], start_ts - 60):
+                    print("[application CONFIRMED submitted — exiting early]", flush=True)
+                    break
                 try:
                     await page.bring_to_front()   # keep OUR browser topmost on the shared :98 (noVNC)
                 except Exception:

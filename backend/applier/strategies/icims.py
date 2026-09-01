@@ -891,7 +891,12 @@ class ICIMSStrategy(ApplyStrategy):
                      r"how (much|many years?).*experience|years of experience", t):
             return ["4-5 years", "5+ years", "6+ years", "3-5 years", "5 years", "More than",
                     "1-3 years", "Yes"]
-        if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
+        if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat|"
+                     r"located in the state of|located in [a-z]+\?|resident of|"
+                     r"based in the state|do you (currently )?live in", t):
+            # A state-specific TP posting ('are you located in <state>?') — the persona is DESIGNED
+            # to reside in the job's state (icims_recon._pick_state reads location_raw), so Yes is
+            # truthful + consistent with the registered address.
             return ["Yes"]
         # A schedule-conflict/attendance screener -> No. Scoped so a behavioural "describe a time
         # you resolved a conflict" open-text prompt isn't mistaken for a Yes/No screener.

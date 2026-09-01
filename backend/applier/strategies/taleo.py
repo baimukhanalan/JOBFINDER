@@ -71,6 +71,49 @@ def _taleo_advance() -> bool:
     return os.getenv("TALEO_ADVANCE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+import json as _json
+import threading as _threading
+from pathlib import Path as _Path
+
+_ACCOUNTS_FILE = _Path(__file__).resolve().parents[2] / "data" / "taleo_accounts.json"
+_ACCOUNTS_LOCK = _threading.RLock()
+
+
+def _save_taleo_account(email: str, username: str, password: str) -> None:
+    """Persist a Taleo candidate-account credential (email → {username, password}) so a human can log
+    back in to take the assessment. Atomic read-modify-write under a lock (concurrent Taleo runs)."""
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    try:
+        with _ACCOUNTS_LOCK:
+            data = {}
+            try:
+                data = _json.loads(_ACCOUNTS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            data[email] = {"username": username, "password": password}
+            _ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _ACCOUNTS_FILE.with_suffix(f".json.tmp{os.getpid()}")
+            tmp.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, _ACCOUNTS_FILE)
+            try:
+                os.chmod(_ACCOUNTS_FILE, 0o600)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def taleo_account(email: str) -> dict | None:
+    """Look up a saved Taleo account credential by email (for taking the assessment / portal login)."""
+    try:
+        data = _json.loads(_ACCOUNTS_FILE.read_text(encoding="utf-8"))
+        return data.get((email or "").strip().lower())
+    except Exception:
+        return None
+
+
 class TaleoStrategy(AvatureStrategy):
     name = "taleo"
     advance_wizard = _taleo_advance()
@@ -158,6 +201,11 @@ class TaleoStrategy(AvatureStrategy):
         username = email.split("@", 1)[0] if email else ""
         pw = getattr(self, "_account_pw", None) or _gen_password()
         self._account_pw = pw
+        # PERSIST the Taleo candidate-account credentials — the account is created here with a random
+        # password Taleo never emails, so without saving it we can't log back in to take the assessment
+        # (a human needs it later). Saved to data/taleo_accounts.json keyed by email.
+        if email:
+            _save_taleo_account(email, username, pw)
         # username field (name/id/label contains userName / username / user name)
         if username:
             for sel in ('input[name*="userName" i]', 'input[id*="userName" i]',

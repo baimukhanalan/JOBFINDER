@@ -327,6 +327,11 @@ class TaleoStrategy(AvatureStrategy):
                     print(f"[taleo self-ID (CC-305) filled at step {_step}]", flush=True)
             except Exception as _se:
                 print(f"[taleo selfid EXC: {type(_se).__name__}: {str(_se)[:120]}]", flush=True)
+            try:   # 'Select all languages spoken fluently' — check ONLY facts.languages (no fabricated fluency)
+                if await self._taleo_languages(page, facts):
+                    print(f"[taleo languages-spoken checked at step {_step}]", flush=True)
+            except Exception as _le:
+                print(f"[taleo languages EXC: {type(_le).__name__}: {str(_le)[:120]}]", flush=True)
             await self._taleo_attach_resume(page)
             await self._taleo_esign(page, name)
             clicked = await self._taleo_click_advance(page)
@@ -902,3 +907,52 @@ class TaleoStrategy(AvatureStrategy):
                 except Exception as _de:
                     print(f"[CC305 dump err {type(_de).__name__}]", flush=True)
         return did_any
+
+    async def _taleo_languages(self, page: Page, facts: dict) -> bool:
+        """TTEC 'Select all languages spoken fluently' MANDATORY checkbox group (on the CA bilingual reqs):
+        check ONLY the languages the persona is DESIGNED to speak (facts.languages, e.g. English/Spanish) —
+        NEVER a language it doesn't have (no fabricated fluency; a role needing a language the persona
+        lacks is an honest non-fit, not something to fake). Native clicks (trusted, JSF-safe), idempotent."""
+        try:
+            langs = [str(l).strip() for l in ((facts or {}).get("languages") or []) if str(l).strip()]
+        except Exception:
+            langs = []
+        if not langs:
+            langs = ["English"]
+        did = False
+        for _fr in page.frames:
+            try:
+                present = await _fr.evaluate(
+                    "()=>/languages spoken fluently|select all languages/i.test((document.body&&document.body.innerText)||'')")
+            except Exception:
+                present = False
+            if not present:
+                continue
+            for lang in langs:
+                try:
+                    info = await _fr.evaluate(
+                        """(lang)=>{ const low=lang.toLowerCase();
+                          for(const c of document.querySelectorAll('input[type=checkbox]')){
+                            const l=c.id?document.querySelector('label[for="'+c.id+'"]'):null;
+                            const t=((l&&l.innerText)||(c.closest('label')?c.closest('label').innerText:'')||'').trim().toLowerCase();
+                            const base=t.split(/[\\/(]/)[0].trim();
+                            if(t===low||base===low){ return {id:c.id||'', checked:!!c.checked}; } }
+                          return null; }""", lang)
+                except Exception:
+                    info = None
+                if not info:
+                    continue
+                if info.get("checked"):
+                    did = True
+                    continue
+                cid = info.get("id") or ""
+                sels = ([f'label[for="{cid}"]', f'[id="{cid}"]'] if cid else [])
+                for _sel in sels:
+                    try:
+                        loc = _fr.locator(_sel).first
+                        if await loc.count():
+                            await loc.click(timeout=3000); did = True
+                            break
+                    except Exception:
+                        continue
+        return did

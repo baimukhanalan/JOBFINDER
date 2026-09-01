@@ -1437,8 +1437,15 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
 > step-2/3 screeners are plain selects with inline options.
 >
 > **AUTOMATED TP LANE — `backend/tools/mass_hiring_apply_tp_cron.py` (2026-09-01).** The TP analogue of
-> the Maximus cron, but **STRICTLY SEQUENTIAL** (never parallel — TP shares the ONE NopeCHA browser on
-> `:98`; Maximus fans out only because Avature has no captcha). It loops every active TP job
+> the Maximus cron. **`--workers N` runs N applications CONCURRENTLY** — each `icims_recon --job` gets its
+> OWN isolated `ICIMS_PROFILE_DIR` → its OWN Chromium+NopeCHA instance, so N browsers coexist on the
+> shared `:98` X display (they interact via CDP, not window focus; the paid NopeCHA API is fine with
+> concurrent solves). The box (~12 cores/47GB) has headroom for ~3 (measured: 3 workers → load ~6, ~3GB
+> free + reclaimable cache); a stuck job then only blocks 1/N throughput instead of the whole pass. **The
+> earlier "STRICTLY SEQUENTIAL" claim was wrong** — sequential just left 11 cores idle and let two hung
+> jobs (bespoke-screener / hard-captcha, `persona=None -> ERROR timeout`) eat the full `--keep` back to
+> back. Now: `--workers 3 --keep 8` (cron `0 1,6,11,15,20`), `--skip-confirmed` resumes a partial pass
+> (skips jobids already `confirmed=True` in `tp_apply.log`). It loops every active TP job
 > (`apply_url ILIKE '%icims%' AND active`), and per job spawns `icims_recon --job <id> --fresh` in a
 > **fresh isolated `ICIMS_PROFILE_DIR`** (so a fresh synthetic persona registers a NEW account, not a
 > resumed session), then reads the persona's Maildir for the "Thank You for Applying" confirmation.

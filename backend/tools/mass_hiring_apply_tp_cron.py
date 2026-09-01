@@ -169,12 +169,42 @@ def apply_one(jobid: int, keep: int) -> dict:
     return {"jobid": jobid, "persona": persona, "confirmed": confirmed, "error": error}
 
 
+def _confirmed_jobids_in_log() -> set:
+    """Jobids already logged confirmed=True in tp_apply.log (so a relaunch with --skip-confirmed can
+    resume the remaining ones instead of re-applying to the ones already done this pass)."""
+    ids = set()
+    try:
+        with open(os.path.join(REPO, "logs", "tp_apply.log")) as f:
+            for line in f:
+                m = re.search(r"applied job (\d+).*confirmed=True", line)
+                if m:
+                    ids.add(int(m.group(1)))
+    except Exception:
+        pass
+    return ids
+
+
+def _do_one(jobid: int, keep: int) -> dict:
+    res = apply_one(jobid, keep)
+    if res.get("error"):
+        logger.info("applied job %s persona=%s -> ERROR %s", jobid, res.get("persona"), res["error"])
+    else:
+        logger.info("applied job %s persona=%s -> confirmed=%s",
+                    jobid, res.get("persona"), res.get("confirmed"))
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="apply to only the first N TP jobs (0 = all)")
     ap.add_argument("--only", type=int, default=0, help="apply to just this one mass_hiring_jobs id")
     ap.add_argument("--keep", type=int, default=13, help="minutes cap per application")
     ap.add_argument("--rounds", type=int, default=1, help="applications per TP job this run")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="concurrent applications (each its own Chromium+NopeCHA on :98). "
+                         "The box has headroom for ~3; a stuck job then only blocks 1/N throughput.")
+    ap.add_argument("--skip-confirmed", action="store_true",
+                    help="skip jobids already confirmed=True in tp_apply.log (resume a partial pass)")
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
@@ -189,27 +219,30 @@ def main() -> None:
         ids = [args.only]
     else:
         ids = tp_job_ids()
+        if args.skip_confirmed:
+            done = _confirmed_jobids_in_log()
+            ids = [i for i in ids if i not in done]
         if args.limit and args.limit > 0:
             ids = ids[:args.limit]
     if not ids:
         logger.info("no Teleperformance (icims) jobs on the board")
         return
 
-    batch = ids * max(1, args.rounds)  # one application per id per round, sequential
-    logger.info("applying to %d TP jobs x %d round(s) = %d applications", len(ids), args.rounds, len(batch))
+    batch = ids * max(1, args.rounds)
+    workers = max(1, args.workers)
+    logger.info("applying to %d TP jobs x %d round(s) = %d applications (workers=%d)",
+                len(ids), args.rounds, len(batch), workers)
 
-    submitted = confirmed = 0
-    for jobid in batch:
-        res = apply_one(jobid, args.keep)
-        if res.get("error"):
-            logger.info("applied job %s persona=%s -> ERROR %s", jobid, res.get("persona"), res["error"])
-        else:
-            submitted += 1
-            if res.get("confirmed"):
-                confirmed += 1
-            logger.info("applied job %s persona=%s -> confirmed=%s",
-                        jobid, res.get("persona"), res.get("confirmed"))
+    results = []
+    if workers > 1:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(lambda j: _do_one(j, args.keep), batch))
+    else:
+        results = [_do_one(j, args.keep) for j in batch]
 
+    submitted = sum(1 for r in results if not r.get("error"))
+    confirmed = sum(1 for r in results if r.get("confirmed"))
     logger.info("tp apply run done: %d jobs, submitted=%d, confirmed=%d", len(batch), submitted, confirmed)
 
 

@@ -312,10 +312,10 @@ async def _wait_human(page, label: str, recon_dir: str, recon: list, idx: list, 
           f"&autoconnect=true&resize=scale] ##########\n", flush=True)
     start = time.time()
     while time.time() - start < timeout:
-        await page.wait_for_timeout(4000)
-        if not await _has_captcha(page):
+        await page.wait_for_timeout(1000)   # NopeCHA solves an hCaptcha in ~1.5-5s — poll FINELY so we
+        if not await _has_captcha(page):    # notice the moment it clears instead of losing up to 4s/round
             print(f"[captcha cleared after {int(time.time()-start)}s]", flush=True)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(800)   # brief settle for the post-solve submit, not 2.5s
             return True
     print("[captcha wait timed out]", flush=True)
     return False
@@ -1087,7 +1087,7 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                     print(f"[apply click: {type(e).__name__}: {e}]"[:120], flush=True)
             else:
                 print("[Apply link not found — click it in noVNC]", flush=True)
-            await page.wait_for_timeout(5000)
+            await page.wait_for_timeout(3000)
             await _wait_human(page, "apply", recon_dir, recon, idx)
 
             # 3) PRE-FILL email + tick privacy — but do NOT click Next. The hCaptcha spins forever on
@@ -1258,7 +1258,7 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                     await _capture(page, "final_form", recon_dir, recon, idx)
                     break
                 print(f"[step filled + advance={kind} -> waiting for next step / captcha]", flush=True)
-                await page.wait_for_timeout(5000)
+                await page.wait_for_timeout(2500)   # the finer _wait_human below handles the captcha
         except Exception as e:
             # A page error (the human closed/navigated a tab in noVNC, a transient crash) must NOT
             # tear the whole browser down — keep it alive until the run window ends so the human can

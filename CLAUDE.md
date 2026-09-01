@@ -1445,9 +1445,12 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
 > fcntl-locked (`logs/tp_apply.lock`); logs to `logs/tp_apply.log`. Run it (and its `icims_recon`
 > subprocess) under `sg mail` + `DISPLAY=:98`; ~5-8 min/job (registration + ~5 captcha solves + 5 wizard
 > steps), so a full 39-job pass is hours — it's a background lane. `icims_recon` now **EXITS EARLY**
-> once the confirmation email lands (`_app_confirmed`), instead of idling out `--keep`. Cron:
-> `python3 -m backend.tools.mass_hiring_apply_tp_cron` (schedule chosen conservatively — each run creates
-> ~39 real synthetic-persona accounts; dial via `--limit`/frequency). Tests: `test_tp_apply_cron.py`.
+> once the confirmation email lands (`_app_confirmed`), instead of idling out `--keep`. **Cron: `0 1,6,11,15,20`
+> (5×/day, same schedule as the Maximus lane — owner wants TP at the same cadence).** Because a full
+> 39-job pass takes ~4-5h (sequential + captcha-bound) and the fcntl lock skips an overlapping run, the
+> 5 scheduled starts chain back-to-back into ~4-5 passes/day rather than 5 disjoint ones. That is
+> ~4-5×39 real synthetic-persona accounts/day + ~5 NopeCHA solves each ≈ ~800-1000 solves/day — heavy on
+> NopeCHA credit; dial the schedule / `--limit` down if it's too much. Tests: `test_tp_apply_cron.py`.
 >
 > **State-specific TP postings → put the persona IN that state (2026-09-01).** Some TP jobs carry
 > `location_raw` like `'TN, United States'` and gate on a bespoke screener **"Are you located in the

@@ -191,7 +191,19 @@ Versant voice, Amazon VJT, SHL) — so end-to-end "auto-apply to hire" is imposs
 (Maximus, cleanest — no captcha/assessment gating submit), **Oracle ORC** (Alorica — guest apply), and
 **Workday** (Centene/Cigna/CVS/Humana — partial, per-tenant reCAPTCHA). iCIMS/Taleo(TTEC,UnitedHealth)/
 Phenom(Conduent)/Amazon/SmartRecruiters(Sutherland)/Kelly/WorkingSolutions are BLOCKED (stacked account +
-live-captcha/WAF + video assessment) — do NOT build. **`strategies/avature.py` — COMPLETES A REAL
+live-captcha/WAF + video assessment) — do NOT build.
+> **CORRECTIONS (audited 2026-09-01):** (1) **iCIMS is NO LONGER "do NOT build" — Teleperformance/iCIMS
+> full-auto is DONE** (paid NopeCHA solves the per-step hCaptcha; the sequential `mass_hiring_apply_tp_cron`
+> lane submits end-to-end — see the Teleperformance section). (2) **Oracle ORC + Workday strategies now
+> EXIST and are unit-tested** (`backend/applier/strategies/oracle_orc.py` ~618 lines `OracleORCStrategy`,
+> gated `ORC_ADVANCE`; `backend/applier/strategies/workday.py` ~980 lines `WorkdayStrategy` +
+> `WorkdayMassHiringStrategy`) — but are **UNDRIVEN**: no cron/button applies to them, so 0 applications
+> ever (board has ~6 Oracle/Alorica + ~46 Workday/insurer jobs idle). To go live they need a DRIVER
+> (analogous to `maximus_ids()`/`tp_job_ids()`) + live validation. **Oracle ORC (Alorica) is the higher-value
+> next lane** — its only submit gate is an emailed PIN (machine-readable, like GH/Ashby) + invisible
+> reCAPTCHA v3 (no solver key), closest to Avature's autonomous ceiling; Workday needs a per-tenant
+> register-step reCAPTCHA solver key + ideally a residential IP. Not yet wired.
+**`strategies/avature.py` — COMPLETES A REAL
 SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
 email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the
 board's `Job-Application?folderId=` URL to the real `/careers/Register?folderId=` wizard; `super().prefill`
@@ -1371,10 +1383,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
 > Interview / SHL assessment. **The `State/Province` blocker (the weeks-long wall) is SOLVED and was
 > NEVER an IP problem** — see the two gotchas below. The extension (`extension_tp/`, still documented
 > below) remains the FREE / no-key path the owner runs in his own browser; the server path needs the
-> paid NopeCHA key. **The remaining human step is the SHL "Digital Interview" assessment — but it's the
-> SAME SHL/TalentCentral system Maximus uses, so the existing `tools/shl_assessment.py` /
-> `shl_assess_runner.py` etalon engine likely auto-completes it for synthetic personas** (verify item
-> type: OPQ/SJT auto-OK, cognitive/knowledge = human — see the SHL section). Memory:
+> paid NopeCHA key. **The remaining human step is TP's post-application assessment — and (CORRECTION,
+> audited 2026-09-01) it is NOT the SHL OPQ Maximus uses.** Although the invite is from
+> `talentcentral@shl.com` ("TP Assessment - Test Login Details"), the actual test link is
+> **`amcatglobal.aspiringminds.com/?autoLoginVersion=3&token=…` — AMCAT (Aspiring Minds)**, a DIFFERENT
+> platform (SHL acquired them). AMCAT is an **aptitude/cognitive** battery (numerical / logical / English
+> / domain), which the project's HARD BOUNDARY says is **NEVER auto-solved — human-only**. So
+> `tools/shl_assessment.py` does NOT handle it, and **do NOT wire `talentcentral@shl.com` into
+> `mail_indexer._maybe_trigger_shl` or `shl_assess_runner.discover_invites`** (that hook is Maximus-OPQ
+> only; the 4 real TP invites already indexed for the demo personas are an AMCAT human step, not a
+> config gap). The TP loop is therefore: **auto-apply ✅ (submitted), assessment = human.** Memory:
 > [[jobfinder-tp-nopecha-livetest]].
 >
 > **GOTCHA 1 — the iCIMS `State/Province` "No states available" was `parentValue=-999`, NOT IP-gating

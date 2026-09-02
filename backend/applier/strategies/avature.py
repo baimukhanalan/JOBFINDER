@@ -669,9 +669,24 @@ class AvatureStrategy(ApplyStrategy):
         # pick the HIGHEST believable experience tier — never a weak middle one that undersells
         # AND contradicts the résumé the recruiter sees. Candidates are ordered strongest-first;
         # the first that matches an actual option wins.
-        if re.search(r"experience.*(customer service|call center|contact center|retail|customer)", t):
+        if re.search(r"experience.*(customer service|call center|contact center|retail|customer)"
+                     r"|(customer service|call center|contact center|retail)\s*"
+                     r"(environment|setting|industry|experience)"
+                     r"|(how (long|many years?)|years? (of|in)|length of).{0,30}"
+                     r"(customer service|call center|contact center)", t):
             return ["5+ years", "5 or more", "More than 5", "6+ years", "5 years", "3-5 years",
                     "3+ years", "1-3 years", "Yes"]
+        # Experience in a HEALTH-related / clinical setting: a synthetic CSR persona is not a
+        # healthcare veteran — answer a MODEST honest tier (never the top 5+), leading low so a
+        # required select proceeds without over-claiming health-sector tenure.
+        if re.search(r"(health.?(related|care)|clinical|medical|patient).{0,30}"
+                     r"(environment|setting|experience|industry|field)", t):
+            return ["1-3 years", "1 year", "2 years", "Less than 1 year", "1-2 years",
+                    "3-5 years", "Yes"]
+        # "Temporary capacity / temp assignment" for a seasonal posting -> Yes.
+        if re.search(r"temporary capacity|temp(orary)? (assignment|position|basis|role)|"
+                     r"seasonal (or )?temporary", t):
+            return ["Yes"]
         # supervisor/leadership/management/general "years of experience" screeners (e.g. the
         # Supervisor - Call Center role's "How much supervisor or leadership experience…").
         # Lead 4-5y (consistent with a supervisor-since-2022 + senior-CSR résumé), then higher.

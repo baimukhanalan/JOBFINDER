@@ -864,6 +864,20 @@ class ICIMSStrategy(ApplyStrategy):
             return ["No"]                                 # a fresh persona never worked for TP
         if re.search(r"legal right to work|right to work in|proof of your legal|proof of.*right to work", t):
             return ["Yes"]                                # US persona is authorized
+        # Professional insurance/producer/adjuster license POSSESSION — a synthetic persona holds
+        # NONE (and has no NPN). Answer honestly "No"; NEVER fabricate a license. This MUST precede
+        # the `reside` rule below: "Do you hold a RESIDENT P&C producer license?" contains "reside"
+        # (inside "resident") and would otherwise false-match it and fabricate a self-disqualifying
+        # "Yes". A willingness question ("willing to OBTAIN a license") is NOT possession — it falls
+        # through to the affirmative willingness rule, so it is excluded here.
+        if (re.search(r"(insurance|producer|adjusters?|p ?& ?c|property (and|&) casualty|"
+                      r"life (and|&) health)\s*licen[sc]e?"
+                      r"|(hold|held|have|possess|carry|maintain)\b.{0,25}\blicen[sc]e?\b"
+                      r"|licen[sc]e?d?\s*(insurance|producer|adjuster)", t)
+                and not re.search(r"willing|able to (obtain|get)|\bobtain\b|pursue|acquire|"
+                                  r"get licensed|licen[sc]e?d?\s*(driver|to work|clinical|nurse|"
+                                  r"practitioner|therapist|counselor|social worker)", t)):
+            return ["No"]                                 # honest: holds no professional license/NPN
         if re.search(r"graduate.*high school|high school (graduate|diploma|equivalent)|"
                      r"completed high school|do you have a (high school|hs) (diploma|ged)", t):
             return ["Yes"]                                # a US persona has a HS diploma (truthful)

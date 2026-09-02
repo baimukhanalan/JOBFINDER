@@ -135,11 +135,15 @@ def pending_invites() -> list[tuple[str, str]]:
 
 # ---- run one assessment to completion ------------------------------------------------------------
 async def _already_done(page) -> bool:
+    """RELIABLE done-signal only: the assessment overview genuinely showing '0 assessment(s) left',
+    OR an explicit SHL completion confirmation (_COMPLETE_RE). The old loose `"completed" in body and
+    "assessment" in body` matched the overview chrome / a partially-done page and marked NOT-done
+    assessments completed (owner-verified false-completion — a persona at 0%/Start was flagged done)."""
     try:
         body = (await page.inner_text("body", timeout=3000)).lower()
     except Exception:
         body = ""
-    return ("0 assessment" in body and "left" in body) or ("completed" in body and "assessment" in body)
+    return ("0 assessment" in body and "left" in body) or bool(sa._COMPLETE_RE.search(body))
 
 
 async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
@@ -166,7 +170,9 @@ async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
             logger.info("[%s] attempt %d: %s progress=%s%% answered=%s note=%s", name, attempt,
                         last, res.get("last_progress"), res.get("items_answered"),
                         (res.get("note", "") or "")[:70])
-            done = last == "completed" or await _already_done(pg)
+            # Only a real completion signal marks done; never let a stale/overview page override a
+            # needs_human (ability item) or an error into a false "completed".
+            done = last == "completed" or (last != "needs_human" and await _already_done(pg))
             await b.close()
         if done:
             _mark(link, "completed")

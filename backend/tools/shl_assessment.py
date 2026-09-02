@@ -912,16 +912,19 @@ async def answer_scored(page, persona: dict | None = None, *, max_items: int = 2
             opts = item.get("options") or []
             if not opts:
                 body = item.get("body", "")
-                if _COMPLETE_RE.search(body) or (item.get("progress") or 0) >= 99 \
-                        or "/opq/" not in (page.url or ""):
+                if _COMPLETE_RE.search(body):
                     res["status"] = "completed"
                     res["note"] = f"assessment completed ({answered} items answered)"
                     res["items_answered"] = answered
                     return res
-                # _await_item already clicked through any interstitial + tolerated re-render frames,
-                # so a still-empty page here is a genuine stall.
+                # No options AND no explicit completion text. Leaving the /opq/ URL or progress>=99 is
+                # NOT proof of a real submission (owner-verified false-completion: a run that never even
+                # reached /opq/ — 0%, stuck on consent/overview/error — was marked done because the URL
+                # lacked "/opq/"). Treat it as a stall so run_one retries / leaves it incomplete; the
+                # runner's strict _already_done (overview "0 assessments left") is the reliable done sig.
                 res["status"] = "stuck"
-                res["note"] = f"no options after settle (body: {body[:80]})"
+                res["note"] = (f"no options + no completion text (progress={item.get('progress')}, "
+                               f"off_opq={'/opq/' not in (page.url or '')}, body={body[:60]})")
                 res["items_answered"] = answered
                 return res
 
@@ -997,15 +1000,16 @@ async def answer_scored(page, persona: dict | None = None, *, max_items: int = 2
                     except Exception:
                         pass
             if not advanced:
-                # maybe finished on the last click
+                # maybe finished on the last click — but ONLY an explicit completion confirmation
+                # counts (NOT merely leaving /opq/, which fires on any error/redirect/stall).
                 body = (await _read_item(page)).get("body", "")
-                if _COMPLETE_RE.search(body) or "/opq/" not in (page.url or ""):
+                if _COMPLETE_RE.search(body):
                     res["status"] = "completed"
                     res["note"] = f"assessment completed ({answered} items answered)"
                     res["items_answered"] = answered
                     return res
                 res["status"] = "stuck"
-                res["note"] = f"item did not advance after answering ({answered} done)"
+                res["note"] = f"item did not advance, no completion text ({answered} done)"
                 res["items_answered"] = answered
                 return res
 

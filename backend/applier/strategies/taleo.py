@@ -684,7 +684,10 @@ class TaleoStrategy(AvatureStrategy):
                     const box=el.closest('div,td,li,fieldset,tr');
                     if(box){const t=(box.innerText||'').replace(/\\s+/g,' ').trim(); if(t.length<260) return t.toLowerCase();}
                     return '';};
-                  const set=(sel,re)=>{const o=[...sel.options].find(o=>o.value&&re.test(o.text)); if(o){sel.value=o.value; sel.dispatchEvent(new Event('change',{bubbles:true})); return true;} return false;};
+                  // NEVER match a placeholder option: '/^\\s*no\\b/i' would otherwise pick 'No Selection'
+                  // (a Taleo prescreening placeholder, value present) instead of the real 'No' answer,
+                  // leaving a mandatory Yes/No screener effectively unanswered and blocking submit.
+                  const set=(sel,re)=>{const o=[...sel.options].find(o=>o.value&&!ph(o.text)&&re.test(o.text)); if(o){sel.value=o.value; sel.dispatchEvent(new Event('change',{bubbles:true})); return true;} return false;};
                   const firstValid=sel=>{const o=[...sel.options].find(o=>o.value && !ph(o.text)); if(o){sel.value=o.value; sel.dispatchEvent(new Event('change',{bubbles:true})); return true;} return false;};
                   // broad decline match for demographic self-ID (never claim a protected characteristic)
                   const DEC=/decline|prefer not|not wish|wish not|do ?n[o'\\u2019]?t wish|not to (answer|disclose|say)|choose not|no answer|undisclosed|not disclosed|do ?n[o'\\u2019]?t (wish|want)/i;

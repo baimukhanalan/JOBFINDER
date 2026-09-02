@@ -1577,6 +1577,27 @@ superseded by noVNC), `captcha.systeam.kz` → **repointed to the :98 noVNC** (`
 For full-auto later: buy a NopeCHA key → `NOPECHA_KEY` env → `icims_recon.py` runs autonomously. Memory:
 [[jobfinder-teleperformance-extension]].
 
+## TTEC (Oracle Taleo) apply — full-auto, no captcha (lane: `taleo_recon` + `mass_hiring_apply_taleo_cron`)
+`backend/tools/taleo_recon.py --job <mass_hiring_id>` drives the whole `ttec.taleo.net` wizard
+(register → emailed verification code → personal info + languages → prescreening questionnaire → WOTC →
+CC-305 self-ID → submit) to a real ack; ground truth = **"Thank you for applying to TTEC Government
+Services!"** from `jobopportunities@ttec.com` in the fresh persona's `@takhet.com` Maildir (a
+"Your Application - Required Assessments" mail follows — the post-apply assessment is AMCAT/aspiring-minds
+cognitive = human-only, same ceiling as elsewhere). Run under `DISPLAY=:98` + `sg mail` +
+`TALEO_ADVANCE=1` (headful — Taleo rejects headless). Cron: `mass_hiring_apply_taleo_cron.py --workers N`
+at `0 1,6,11,15,20`, doable set `[504,505,507,508,509,510,512,514,515,518,528,530]` (English-only +
+Spanish/Russian-bilingual; exotic-language & license-gated jobs are `job_is_staffable→False` → skipped,
+no fabrication). The prescreening/basics selects are filled by `taleo.py::_BASICS_JS` (analyzer can't see
+them). **Gotcha (fixed 2026-09-02, verified live on 518 Russian-bilingual → real ack for
+elizabeth.carver6911):** the `set(sel,re)` helper picked the FIRST option whose text matched, so
+`set(sel,/^\s*no\b/i)` for a "Have you ever been employed by TTEC?" Yes/No select matched the **placeholder
+"No Selection"** (its value is present) instead of the real "No" → the mandatory question stayed
+effectively unanswered, Save-and-Continue bounced, and `_advance_wizard` spun ~17× on the same page (looked
+like a transient flake; it was not). Fix: `set` now skips placeholder options (`!ph(o.text)` — `ph` already
+excludes "No Selection"/"Not Specified"/"Please select"/…), a safe general fix (no real Yes/No/country/
+degree answer matches `ph`). Only bit selects whose placeholder starts "No…"; referral ("Not Specified")
+was unaffected, which is why other TTEC jobs already submitted. Tests: `test_taleo.py` (59 green).
+
 ## Interview Scheduler & Responsible Cabinet (`backend/interviews/`, added 2026-08-28)
 Assign an incoming interview (a `kind=interview` mail) into a free time-slot of a "responsible"
 (ответственный — the human who attends the interview as the persona), modelled on **orta.study**'s

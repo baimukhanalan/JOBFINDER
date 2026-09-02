@@ -5,6 +5,7 @@ page. No auto-apply anywhere — this is a discovery surface, decoupled from the
 from __future__ import annotations
 
 import html
+import re
 import time
 
 from backend.tools import mailcrm_ui, mass_hiring
@@ -112,6 +113,9 @@ details[open] .mh-caret{transform:rotate(90deg);}
 .mh-job:first-child{border-top:none;}
 .mh-jtitle{font-weight:600;font-size:14px;color:var(--ink);text-decoration:none;}
 .mh-jtitle:hover{text-decoration:underline;color:var(--accent,#2f6fed);}
+.mh-lang{flex:0 0 auto;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:11px;
+  font-weight:600;color:#8a94a6;background:rgba(138,148,166,.10);white-space:nowrap;}
+.mh-lang.ok{color:#1f8f4e;border-color:#1f8f4e;background:rgba(31,143,78,.12);}
 .mh-jloc{color:var(--ink-soft);font-size:12.5px;}
 .mh-apply{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--accent,#2f6fed);text-decoration:none;white-space:nowrap;}
 .mh-empty{text-align:center;color:var(--ink-soft);padding:60px 20px;}
@@ -164,6 +168,26 @@ def _status_badge(j: dict) -> str:
     return f'<span class="mh-st {s[1]}" title="{_esc(s[2])}">{s[0]}</span>'
 
 
+_BILINGUAL_RE = re.compile(r"\b([A-Z][a-z]+)-English\s+Bilingual", re.I)
+# Languages we can staff HONESTLY: persona = English + Russian, and the team passes a Russian test.
+_STAFFABLE_LANGS = {"russian", "english"}
+
+
+def _lang_badge(j: dict) -> str:
+    """A bilingual job names its required language in the title (e.g. 'Russian-English Bilingual …').
+    Surface it so the owner sees at a glance which language each needs, and mark the ones we can
+    actually staff (English+Russian) green vs the rest muted (no native speaker → honest dead-end)."""
+    m = _BILINGUAL_RE.search(j.get("title") or "")
+    if not m:
+        return ""
+    lang = m.group(1)
+    doable = lang.lower() in _STAFFABLE_LANGS
+    cls = "mh-lang ok" if doable else "mh-lang"
+    tip = ("Можем подать: персона англ+рус, языковой тест сдаёт команда"
+           if doable else f"Требует язык: {lang} — не покрываем (нет носителя)")
+    return f'<span class="{cls}" title="{_esc(tip)}">🌐 {_esc(lang)}</span>'
+
+
 def _job_row(j: dict) -> str:
     url = _esc(j.get("apply_url"))
     title = _esc(j.get("title"))
@@ -176,7 +200,7 @@ def _job_row(j: dict) -> str:
         fill = (f'<button class="mh-fill" type="button" onclick="mhFill({int(j.get("id") or 0)},this)" '
                 f'title="Заполнить форму автоматически (тест — ничего не отправляется)">Заполнить (тест)</button>')
     return (f'<div class="mh-job">{star}<a class="mh-jtitle" href="{url}" target="_blank" '
-            f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_pay_html(j)}'
+            f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_lang_badge(j)}{_pay_html(j)}'
             f'{_status_badge(j)}'
             f'<a class="mh-apply" href="{url}" target="_blank" rel="noopener">подать вручную →</a>{fill}</div>')
 

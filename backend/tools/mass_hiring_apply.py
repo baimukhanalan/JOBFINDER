@@ -68,7 +68,12 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # iframe iForm is account-gated with AWS-WAF + reCAPTCHA on submit
                    # (strategies/icims.py). Account creation + submit gated behind ICIMS_ADVANCE;
                    # needs a CapSolver key + a US residential egress to go live.
-                   "icims.com")
+                   "icims.com",
+                   # Oracle Taleo family (strategies/taleo.py) — UnitedHealth (uhg.taleo.net) + TTEC
+                   # (ttec.taleo.net). The board rows store the Radancy TalentBrew LISTING url, which
+                   # taleo_recon resolves to the real *.taleo.net apply URL; NO captcha/WAF, account
+                   # create + JSF wizard only. Submit gated behind TALEO_ADVANCE.
+                   "taleo.net", "careers.unitedhealthgroup.com", "ttecjobs.com")
 
 
 def is_supported(apply_url: str) -> bool:

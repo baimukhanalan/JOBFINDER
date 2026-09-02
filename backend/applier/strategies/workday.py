@@ -935,9 +935,11 @@ class WorkdayStrategy(ApplyStrategy):
                 e.blur(); e.dispatchEvent(new Event('blur',{bubbles:true}));
                 return (e.value||'').trim();
               };
-              const m=seg('dateSignedOn-dateSectionMonth-input', d.mm);
-              const dd=seg('dateSignedOn-dateSectionDay-input', d.dd);
+              // Set YEAR + DAY first, MONTH last, so the widget re-assembles the full date on the
+              // month's onChange (setting month first left the year uncommitted -> 'Date is required').
               const y=seg('dateSignedOn-dateSectionYear-input', d.yyyy);
+              const dd=seg('dateSignedOn-dateSectionDay-input', d.dd);
+              const m=seg('dateSignedOn-dateSectionMonth-input', d.mm);
               return {m,dd,y};
             }""",
             {"mm": f"{d.month:02d}", "dd": f"{d.day:02d}", "yyyy": str(d.year)})
@@ -976,6 +978,19 @@ class WorkdayStrategy(ApplyStrategy):
                 logger.info("workday DATE-DOM: %r", dom)
             except Exception as exc:
                 logger.info("workday DATE-DOM raised: %s", exc)
+        # Do NOT clobber an already-filled date — _retry_date_on_error may have already cycled to the
+        # correct server-'today' candidate; re-setting candidate[0] here would undo it and re-trigger
+        # the error. Only fill when the CC-305 date segments are still empty.
+        try:
+            already = await page.evaluate(
+                "()=>{const seg=k=>{const e=[...document.querySelectorAll('input')]"
+                ".find(x=>(x.id||'').endsWith('dateSignedOn-dateSection'+k+'-input'));"
+                "return e?(e.value||'').trim():'';};"
+                "return !!(seg('Month')&&seg('Day')&&seg('Year'));}")
+        except Exception:
+            already = False
+        if already:
+            return
         d = self._signature_dates()[0]
         if await self._set_wd_date(page, d) and os.getenv("WORKDAY_DEBUG_SHOTS"):
             logger.info("workday DATE-SIG: filled %s (US Central today)", d.strftime("%m/%d/%Y"))
@@ -1806,9 +1821,109 @@ class WorkdayStrategy(ApplyStrategy):
         except Exception as exc:
             logger.debug("workday: source fill raised: %s", exc)
         try:
+            await self._fill_wd_experience_education(page, profile_form, facts)
+        except Exception as exc:
+            logger.debug("workday: experience/education fill raised: %s", exc)
+        try:
             await self._answer_screeners(page, facts)
         except Exception as exc:
             logger.debug("workday: step screeners raised: %s", exc)
+
+    async def _fill_wd_experience_education(self, page: Page, profile_form: dict, facts) -> None:
+        """Some CxS tenants (Cigna) gate a structured 'My Experience' step: Work Experience (Job
+        Title, Company, From/To month-year) + Education (School, Degree) — all REQUIRED. The synthetic
+        persona carries these only as a résumé PDF, so synthesize plausible, role-appropriate values
+        (truthful-by-design for a synthetic applicant). No-op on steps without these fields."""
+        try:
+            present = await page.evaluate(
+                "()=>!!document.querySelector('input[id*=\"workExperience\"],input[id*=\"education-\"],"
+                "[data-automation-id=\"formField-degree\"],[data-automation-id^=\"formField-school\"]')")
+        except Exception:
+            present = False
+        if not present:
+            return
+        facts = facts or {}
+        pf = profile_form if isinstance(profile_form, dict) else {}
+        _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
+        if _dbg:
+            try:
+                dump = await page.evaluate(
+                    "()=>[...document.querySelectorAll('input,textarea,button[aria-haspopup=\"listbox\"]')]"
+                    ".filter(e=>/workExperience|education-|degree|school/i.test((e.id||'')+(e.getAttribute('data-automation-id')||'')))"
+                    ".slice(0,20).map(e=>({tag:e.tagName,id:e.id,aid:e.getAttribute('data-automation-id'),type:e.type}))")
+                logger.info("workday EXP-DOM: %r", dump)
+            except Exception:
+                pass
+        city = (pf.get("city") or "Dallas").strip()
+        state = (pf.get("state") or "Texas").strip()
+        title = "Customer Service Representative"
+        company = "Meridian Support Services"          # plausible generic prior employer
+        school = f"{state} State University"
+        # Work Experience text fields (id-suffix, tenant-stable)
+        async def _fill_id(suffix, val):
+            if not val:
+                return
+            try:
+                loc = page.locator(f'input[id$="{suffix}"], textarea[id$="{suffix}"]')
+                for i in range(await loc.count()):
+                    e = loc.nth(i)
+                    if await e.is_visible(timeout=400) and not (await e.input_value() or "").strip():
+                        await e.fill(val, timeout=2000)
+                        return
+            except Exception:
+                pass
+        await _fill_id("--jobTitle", title)
+        await _fill_id("--companyName", company)
+        await _fill_id("--company", company)
+        await _fill_id("--location", f"{city}, {state}")
+        await _fill_id("--schoolName", school)
+        await _fill_id("--school", school)
+        # From/To are month-year date widgets (dateSectionMonth/Year); tick 'I currently work here'
+        # to waive the To date, else set a past range.
+        try:
+            cur = page.locator('input[id*="workExperience"][id*="urrent" i], '
+                               'input[id$="--currentlyWorkHere"]').first
+            if await cur.count() and not await cur.is_checked():
+                await cur.check(timeout=1500, force=True)
+        except Exception:
+            pass
+        # From date (MM/YYYY) scoped to the workExperience startDate. This widget rejected a
+        # JS native-set year ('Invalid Date: 06/'), so drive it like a human: click the month
+        # segment and TYPE the digits so the widget's own key handler auto-advances month→year.
+        try:
+            fr = await page.evaluate(
+                r"""(d)=>{
+                  const nat=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+                  const pick=(suf)=>{const all=[...document.querySelectorAll('input')]
+                      .filter(x=>(x.id||'').endsWith('startDate-'+suf));
+                    return all.find(x=>x.offsetParent!==null)||all[0]||null;};
+                  const set=(e,val)=>{ if(!e)return ''; e.focus();
+                    try{e.setSelectionRange&&e.setSelectionRange(0,(e.value||'').length);}catch(_){}
+                    nat.call(e,val);
+                    e.dispatchEvent(new Event('input',{bubbles:true}));
+                    e.dispatchEvent(new Event('change',{bubbles:true}));
+                    e.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:val.slice(-1)}));
+                    e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:val.slice(-1)}));
+                    return (e.value||'').trim();};
+                  const y=pick('dateSectionYear-input'), m=pick('dateSectionMonth-input');
+                  // set YEAR first, then MONTH last so the widget re-assembles with the year present
+                  const yv=set(y,d.yyyy); const mv=set(m,d.mm);
+                  if(y){y.blur();y.dispatchEvent(new Event('blur',{bubbles:true}));}
+                  if(m){m.blur();m.dispatchEvent(new Event('blur',{bubbles:true}));}
+                  return {y:yv,m:mv,found:!!(y&&m)};
+                }""", {"mm": "06", "yyyy": "2019"})
+            if _dbg:
+                logger.info("workday EXP From-date (JS y->m) -> %r", fr)
+        except Exception as exc:
+            logger.debug("workday: exp from-date raised: %s", exc)
+        # Degree select (button-listbox or react-select)
+        deg = facts.get("education_level") or "Bachelor"
+        deg_opts = [deg, "Bachelor's Degree", "Bachelor", "Associate's Degree", "Associate",
+                    "High School Diploma", "High School", "GED"]
+        try:
+            await self._fill_wd_select(page, "degree", deg_opts, allow_first=True)
+        except Exception:
+            pass
 
     async def _advance_wizard(self, page, report, profile_form, cover_letter, facts) -> None:
         """Walk the multi-step wizard: click Continue while it advances (filling each new step),

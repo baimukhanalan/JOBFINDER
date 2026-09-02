@@ -203,6 +203,23 @@ live-captcha/WAF + video assessment) — do NOT build.
 > next lane** — its only submit gate is an emailed PIN (machine-readable, like GH/Ashby) + invisible
 > reCAPTCHA v3 (no solver key), closest to Avature's autonomous ceiling; Workday needs a per-tenant
 > register-step reCAPTCHA solver key + ideally a residential IP. Not yet wired.
+> **UPDATE 2026-09-02 — Oracle ORC now has a DRIVER (`backend/tools/orc_recon.py`, modeled on
+> `taleo_recon.py`), first live run done. GOOD: the datacenter IP loads Alorica's CX site with NO
+> WAF, the guest email+terms step fills, NEXT reveals the full form. BAD: this Alorica tenant
+> (`fa-euxw-saasfaprod1`) is Redwood JET SINGLE-PAGE (not the multi-step wizard oracle_orc.py
+> assumed) and on submit Oracle returns "You have 15 issues" — the Redwood fill layer does NOT
+> COMMIT here: Title radio, Address cascade (City/State/Postal/County), the Application-Question
+> `button[role=radio]` Yes/No, EEO decline (Veteran/Disability), and résumé upload all stay unset.
+> TWO STRUCTURAL BLOCKERS beyond fill-tuning: (1) the reserved-fiction **555-01xx persona phone
+> fails Oracle's libphonenumber validator** ("Enter a valid number") — a phone can't be both
+> guaranteed-fake and format-valid, so this is an OWNER POLICY decision, not a code fix; (2) a
+> required **WOTC "Tax Credit Assessment"** sub-flow that isn't built (answerable — eligibility
+> Q&A, not a cognitive test — but not yet written). So Oracle ORC is REACHABLE + structurally
+> automatable but does NOT yet reach an ack; it needs a focused live-iteration pass on
+> `oracle_orc.py`'s Redwood commit (`_fill_orc_redwood`/`_commit_orc_text`/`_fill_orc_comboboxes`/
+> `_fill_orc_radiobuttons`) against `logs/orc_recon/153/*.html` + the phone-policy call + a WOTC
+> filler. `orc_recon.py` is committed (NOT cron-wired — no end-to-end ack yet). Dry run = no
+> ORC_ADVANCE (side-effect-free); real = `ORC_ADVANCE=1`.
 **`strategies/avature.py` — COMPLETES A REAL
 SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
 email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the

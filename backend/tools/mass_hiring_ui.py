@@ -138,7 +138,9 @@ details[open] .mh-caret{transform:rotate(90deg);}
 
 
 def _fmt_rate(x: float) -> str:
-    return f"${x:.0f}" if abs(x - round(x)) < 0.5 else f"${x:.1f}"
+    if abs(x - round(x)) < 0.005:
+        return f"${x:.0f}"
+    return "$" + f"{x:.2f}".rstrip("0").rstrip(".")     # 21.65 -> $21.65, 28.80 -> $28.8
 
 
 def _pay_html(j: dict) -> str:

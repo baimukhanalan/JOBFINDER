@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -120,6 +121,14 @@ def ensure_schema() -> None:
         );""")
         cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS comp_type TEXT;")
         cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS auto_status TEXT;")
+        # Widen pay columns to NUMERIC so a real hourly rate keeps its cents (TTEC "$21.65").
+        # Guarded: the ALTER (a table rewrite) runs ONCE, only while still integer.
+        cur.execute("SELECT data_type FROM information_schema.columns "
+                    "WHERE table_name='mass_hiring_jobs' AND column_name='salary_min'")
+        dt = cur.fetchone()
+        if dt and dt[0] == "integer":
+            cur.execute("ALTER TABLE mass_hiring_jobs ALTER COLUMN salary_min TYPE NUMERIC(10,2)")
+            cur.execute("ALTER TABLE mass_hiring_jobs ALTER COLUMN salary_max TYPE NUMERIC(10,2)")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_company ON mass_hiring_jobs (company_key);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_cat ON mass_hiring_jobs (category);")
         cur.execute("CREATE INDEX IF NOT EXISTS mh_active ON mass_hiring_jobs (active);")
@@ -151,6 +160,34 @@ def backfill_auto_status() -> int:
                         (auto_status(s), s))
             n += cur.rowcount
     return n
+
+
+def backfill_ttec_pay() -> tuple[int, int]:
+    """One-shot: read the posted hourly wage from each active TTEC posting's detail page and
+    store it. Returns (rows_with_a_real_rate, rows_scanned). The nightly collect self-heals
+    new rows; this labels the backlog now. Gentle thread pool, per-row guarded."""
+    ensure_schema()
+    with _cur(dict_rows=False) as cur:
+        cur.execute("SELECT id, apply_url FROM mass_hiring_jobs "
+                    "WHERE source='ttec' AND active AND salary_min IS NULL")
+        rows = cur.fetchall()
+
+    def _one(rec):
+        _id, url = rec
+        lo, hi, raw = _ttec_detail_pay(url or "")
+        return (_id, lo, hi, raw)
+
+    got = 0
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(_one, rows))
+    with _cur(dict_rows=False) as cur:
+        for _id, lo, hi, raw in results:
+            if lo is None:
+                continue
+            cur.execute("UPDATE mass_hiring_jobs SET salary_min=%s, salary_max=%s, salary_raw=%s "
+                        "WHERE id=%s", (lo, hi, raw, _id))
+            got += 1
+    return (got, len(rows))
 
 
 # ---- classification (the two HARD RULES) ---------------------------------------
@@ -312,6 +349,65 @@ def hourly_pay(job: dict) -> tuple[float, float, bool] | None:
     return None
 
 
+# ---- posted-wage parsing (prose) -----------------------------------------------
+# Some employers (TTEC) disclose pay only in the DETAIL page prose, e.g.
+# "Base hourly wage starting at $21.65" — the collector must read it there, since the
+# search-results fragment carries no pay. Reusable for any source whose detail page
+# states an hourly rate. Hourly-context-gated so an annual salary / signing bonus /
+# relocation figure is never mistaken for an hourly wage.
+_MONEY = r"\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)"
+_HOURLY_NEAR = re.compile(r"(?:per\s+hour|/\s?h(?:ou)?rs?\b|hourly|an\s+hour)", re.I)
+_WAGE_RANGE = re.compile(_MONEY + r"\s*(?:-|–|—|to)\s*" + _MONEY, re.I)
+_WAGE_ONE = re.compile(_MONEY)
+
+
+def _wage_num(s: str) -> float | None:
+    try:
+        v = float((s or "").replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    return v if 7.0 <= v <= 150.0 else None       # bound to a plausible US hourly rate
+
+
+def _parse_hourly_wage(text: str) -> tuple[float | None, float | None, str | None]:
+    """Extract an hourly wage from prose. Returns (min, max, raw) or (None, None, None).
+    Only accepts a figure with nearby hourly context, and each value must fall in a
+    plausible hourly band — so annual salaries and bonuses are rejected."""
+    if not text:
+        return (None, None, None)
+    # 1) an explicit range with hourly context in a small window around it
+    for m in _WAGE_RANGE.finditer(text):
+        if _HOURLY_NEAR.search(text[max(0, m.start() - 40): m.end() + 40]):
+            lo, hi = _wage_num(m.group(1)), _wage_num(m.group(2))
+            if lo and hi:
+                lo, hi = min(lo, hi), max(lo, hi)
+                return (lo, hi, f"${lo:g}–${hi:g}/hr")
+    # 2) a single value with hourly context nearby ("starting at $X", "$X per hour")
+    for m in _WAGE_ONE.finditer(text):
+        if _HOURLY_NEAR.search(text[max(0, m.start() - 45): m.end() + 25]):
+            v = _wage_num(m.group(1))
+            if v:
+                return (v, None, f"${v:g}/hr")
+    return (None, None, None)
+
+
+def _ttec_detail_pay(url: str) -> tuple[float | None, float | None, str | None]:
+    """Fetch a TTEC detail page and read its posted hourly wage. Fully guarded — any
+    failure yields no pay (self-heals on the next run)."""
+    if not url:
+        return (None, None, None)
+    try:
+        from bs4 import BeautifulSoup
+        r = httpx.get(url, headers=_UA, timeout=20, follow_redirects=True)
+        if r.status_code != 200:
+            return (None, None, None)
+        text = BeautifulSoup(r.text, "html.parser").get_text(" ")
+        return _parse_hourly_wage(text)
+    except Exception as e:
+        print(f"[ttec detail {url}] {type(e).__name__}: {e}", file=sys.stderr)
+        return (None, None, None)
+
+
 # US-eligibility from a free-text remote-location field. Accept when US is allowed (explicitly, or
 # via anywhere/worldwide/global/americas/north america). Reject region-locked non-US.
 _US_OK = re.compile(r"\b(usa?|united states|u\.s\.?|north america|americas|anywhere|worldwide|"
@@ -346,8 +442,13 @@ def upsert_jobs(rows: list[dict]) -> int:
     if not rows:
         return 0
     ph = ",".join(["%s"] * len(_COLS))
-    # keep first_seen; refresh everything else including last_seen/active
-    upd = ",".join(f"{c}=EXCLUDED.{c}" for c in _COLS if c not in ("source", "source_id", "first_seen"))
+    # keep first_seen; refresh everything else including last_seen/active. Pay columns are
+    # COALESCE'd (new-first): a real posted rate is written, but a transient detail-fetch miss
+    # (EXCLUDED NULL) keeps the previously-known rate instead of wiping it.
+    _PAY = ("salary_min", "salary_max", "salary_raw")
+    upd = ",".join(
+        (f"{c}=COALESCE(EXCLUDED.{c},mass_hiring_jobs.{c})" if c in _PAY else f"{c}=EXCLUDED.{c}")
+        for c in _COLS if c not in ("source", "source_id", "first_seen"))
     with _cur(dict_rows=False) as cur:
         for r in rows:
             cur.execute(
@@ -812,7 +913,25 @@ def fetch_ttec() -> list[dict]:
             if not anchors or new == 0:
                 break
             page += 1
+    _enrich_ttec_pay(rows)
     return rows
+
+
+def _enrich_ttec_pay(rows: list[dict]) -> None:
+    """Populate salary_min/max/raw on TTEC rows from each posting's detail page (pay lives
+    only in the detail prose). Small thread pool so the nightly collect isn't slowed much;
+    a per-row failure just leaves that row's pay None (self-heals next run)."""
+    if not rows:
+        return
+    def _one(row: dict) -> None:
+        lo, hi, raw = _ttec_detail_pay(row.get("apply_url") or "")
+        if lo is not None:
+            row["salary_min"], row["salary_max"], row["salary_raw"] = lo, hi, raw
+    try:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            list(ex.map(_one, rows))
+    except Exception as e:
+        print(f"[ttec enrich] {type(e).__name__}: {e}", file=sys.stderr)
 
 
 # Sutherland — SmartRecruiters public postings API. location.country is lowercase ISO-2 ('us') and
@@ -1329,6 +1448,9 @@ if __name__ == "__main__":
         print(f"comp_type set on {backfill_comp_type()} rows")
     elif "--backfill-autostatus" in sys.argv:
         print(f"auto_status set on {backfill_auto_status()} rows")
+    elif "--backfill-ttec-pay" in sys.argv:
+        got, scanned = backfill_ttec_pay()
+        print(f"ttec posted hourly wage set on {got}/{scanned} scanned rows")
     elif "--stats" in sys.argv:
         import json
         print(json.dumps(stats(), indent=2))

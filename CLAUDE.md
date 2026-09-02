@@ -1150,6 +1150,19 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   2080 h/yr) shown green, or a LABELED category estimate «≈$15–21/ч оц.» (`_HOURLY_EST`) when no pay is
   posted (~94% of rows disclose none). Neutral RU labels (no stack disclosure). Only the dashboard restarts.
   Tests: `test_mass_hiring.py` (comp_type / to_hourly / hourly_pay).
+  **TTEC posts its wage only in the DETAIL-page prose (2026-09-02).** TTEC's search-results fragment
+  carries no pay, but each posting's detail page states «Base hourly wage starting at $21.65» — so all TTEC
+  jobs were falling to the muted `_HOURLY_EST` «≈$15–21/ч» estimate while really paying more (518 = $21.65).
+  Fix: `_parse_hourly_wage(text)` (pure, hourly-context-gated + bound 7–150 so annual/bonus figures are
+  rejected) + `_ttec_detail_pay(url)` (httpx GET the detail page, guarded); `fetch_ttec` now enriches each
+  row's `salary_min/max/raw` via a 6-worker pool (adds ~15s to the nightly collect, self-heals). `salary_min/max`
+  were **widened INTEGER→NUMERIC(10,2)** (guarded one-time ALTER in `ensure_schema`) so cents survive, and
+  `_fmt_rate` shows them ($21.65/ч). `upsert_jobs` **COALESCEs the 3 pay cols new-first** so a transient
+  detail-fetch miss never wipes a known rate. One-shot backfill: `mass_hiring --backfill-ttec-pay` (ran live:
+  26/27 active TTEC rows got a real rate). `_parse_hourly_wage` is reusable for any other source whose detail
+  page states an hourly rate (Maximus/Avature does NOT disclose pay → stays on the estimate). The nightly
+  `mass_hiring --collect` cron self-heals new rows; only the dashboard restarts for the display change.
+  Tests: `test_mass_hiring.py::test_parse_hourly_wage_*`.
   **Auto-fill lane — Maximus/Avature, DRY-RUN pilot (`tools/mass_hiring_apply.py`, 2026-08-30).** Phase 2:
   auto-apply to the STABLE roles, starting with the one mass-hiring ATS that completes without a live
   captcha — **Maximus (Avature)**. `mass_hiring_apply.prepare(row, gender)` reuses the /catalog building

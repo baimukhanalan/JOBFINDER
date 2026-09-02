@@ -429,6 +429,39 @@ def test_hourly_pay_falls_back_to_category_estimate():
     assert mh.hourly_pay({"category": None}) is None
 
 
+# ---- posted-wage prose parsing (TTEC discloses pay only in the detail page) -------
+
+def test_parse_hourly_wage_ttec_starting_at():
+    # the exact TTEC phrasing (job 518): a single starting rate, cents preserved
+    lo, hi, raw = mh._parse_hourly_wage("Base hourly wage starting at $21.65.")
+    assert lo == 21.65 and hi is None and raw == "$21.65/hr"
+
+
+def test_parse_hourly_wage_range_per_hour():
+    lo, hi, raw = mh._parse_hourly_wage("Pay range is $18.00 - $24.50 per hour, plus benefits.")
+    assert lo == 18.0 and hi == 24.5
+    lo, hi, _ = mh._parse_hourly_wage("Earn $17 to $20 an hour")
+    assert (lo, hi) == (17.0, 20.0)
+
+
+def test_parse_hourly_wage_bare_per_hour():
+    lo, hi, _ = mh._parse_hourly_wage("This role pays $19.50 per hour.")
+    assert lo == 19.5 and hi is None
+    lo, hi, _ = mh._parse_hourly_wage("Compensation: $22/hr")
+    assert lo == 22.0 and hi is None
+
+
+def test_parse_hourly_wage_rejects_annual_and_bonus():
+    # annual salary -> not hourly context, and out of the plausible hourly band
+    assert mh._parse_hourly_wage("Salary of $45,000/year plus equity.") == (None, None, None)
+    assert mh._parse_hourly_wage("Base salary $60,000 - $80,000 annually.") == (None, None, None)
+    # a signing bonus mentioned near no hourly context is ignored
+    assert mh._parse_hourly_wage("Enjoy a $5,000 signing bonus!") == (None, None, None)
+    # empty / no money
+    assert mh._parse_hourly_wage("") == (None, None, None)
+    assert mh._parse_hourly_wage("Great remote role, apply today.") == (None, None, None)
+
+
 # ---- mass_hiring_apply: work-city from the title (residence-screener coherence) ---
 
 def test_city_from_title():

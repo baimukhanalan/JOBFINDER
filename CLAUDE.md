@@ -203,25 +203,45 @@ live-captcha/WAF + video assessment) — do NOT build.
 > next lane** — its only submit gate is an emailed PIN (machine-readable, like GH/Ashby) + invisible
 > reCAPTCHA v3 (no solver key), closest to Avature's autonomous ceiling; Workday needs a per-tenant
 > register-step reCAPTCHA solver key + ideally a residential IP. Not yet wired.
-> (3) **SmartRecruiters (Sutherland) — the "BLOCKED" wall verdict is STALE; fill works, submit does NOT
-> yet (audited 2026-09-02, NOT live-validated).** Verified live on job 536 with patchright stealth from the
-> DATACENTER IP: the posting loads with **NO DataDome "verify you are human" interstitial** (the old
-> stacked-account/live-captcha "do NOT build" claim above is WRONG — stealth clears it), and the guest
-> one-click form now FILLS end-to-end including the required City field. The whole one-click form is a
-> **SHADOW-DOM web-component app** (`<spl-autocomplete>`/`<spl-input>`/`<spl-button>`), so a raw
-> `document.querySelectorAll` sees ~1 input. FIXED in `strategies/smartrecruiters.py`: `_fill_location`
-> targets the real `input[data-sr-id="location-autocomplete-search-search-input"]` combobox and commits a
-> `get_by_role("option")` suggestion (so `"Houston, TX, US"` sticks — was the "Please provide your place of
-> residence" blocker), and `_rescan_required` pierces shadow DOM (honest `unfilled`). 28 SR tests pass.
-> Driver `tools/smartrecruiters_recon.py` (patchright + NopeCHA, `SMARTRECRUITERS_ADVANCE=1`, headful `:98`)
-> + cron `tools/mass_hiring_apply_sr_cron.py` are SHIPPED as a **SAFE NO-OP — NOT live-validated, NO cron
-> installed (0 real acks yet).** **Remaining gap:** the form's Next/Submit are `<spl-button>` shadow-DOM
-> controls, but the strategy's wizard walker (`_primary_button`/`_step_signature`) + submit-click use raw
-> `querySelectorAll("button")` (no shadow pierce), so they miss the real primary action and the driver
-> instead clicks the top **"Apply With Indeed"** integration button → the form never submits → the persona
-> Maildir stays EMPTY, NO ack. This is NOT a captcha/video/account wall. TO GO LIVE: make the wizard walker
-> + submit-click shadow-piercing AND exclude the LinkedIn/Indeed integration buttons (`[data-test*=apply]`
-> on those), then re-drive job 536 to a real "application received" ack before installing the cron.
+> (3) **SmartRecruiters (Sutherland) — FULL-AUTO DONE, reaches a REAL ack, cron ENABLED (2026-09-03).**
+> The old "BLOCKED" wall verdict was STALE. Verified live end-to-end on job 536 from the DATACENTER IP
+> (patchright stealth + NopeCHA): the posting loads with **NO DataDome interstitial**, the guest one-click
+> form fills, walks the 2-screen wizard (Personal info → "Preliminary questions"), submits, and lands a
+> real **"Thank you for applying to Sutherland"** (`notification@smartrecruiters.com`) + the next-step SHL
+> assessment invite in the persona's `@takhet.com` Maildir. The whole form is a **SHADOW-DOM web-component
+> app** (`<spl-autocomplete>`/`<spl-input>`/`<spl-radio-group>`/`<spl-checkbox>`/`<oc-button>`), so raw
+> `document.querySelectorAll` sees almost nothing — everything is driven by shadow-piercing walks + element
+> ids. Fixes in `strategies/smartrecruiters.py` (all shadow-aware):
+> - **Wizard buttons (the core bug):** the footer primary action is an `<oc-button data-test="footer-next"
+>   |"footer-submit">` custom element (light DOM), NEVER a `<button>` — the only real `<button>`s are the
+>   **"Apply With Indeed"/LinkedIn** integrations + cookie controls. The old `_primary_button` used
+>   `querySelectorAll("button")`→`find_submit_button` (matched `button:has-text('Apply')`) and clicked the
+>   Indeed button → never submitted. `_PRIMARY_JS` now shadow-walks, EXCLUDES the external-apply
+>   integrations / secondary "Add" / cookie controls, tags the footer primary `data-jf-sr-primary`, and
+>   classifies advance vs submit; `_step_signature` keys off `location.pathname` (→`/screening`); the recon
+>   clicks via `strat.click_submit` (never a raw locator).
+> - **Screeners (all `spl-*`, no native controls):** `_answer_spl_radio_groups` (Yes/No via each
+>   `<spl-radio label= id= role=radio>`; auth/18+/HS-diploma→Yes, worked-here-before→No, disability/veteran
+>   DECLINED via the offered non-disclosure option); `_fill_spl_text_screeners` ("If yes, when…?" conditional
+>   → "N/A" on the INNER `input[id=…]`, since `<spl-input>` shares its id); `_answer_eeo_autocompletes`
+>   declines the required Gender + Race/Ethnicity `<spl-autocomplete>` selects by **type-to-filter** (option
+>   text is in each item's shadow, unreadable — type "prefer not"/"wish"/"decline" and pick the survivor);
+>   `_tick_spl_consent`/`_force_check_spl` tick the required privacy-declaration `<spl-checkbox>` by clicking
+>   its `[slot="label-content"]` (a toggle — verify the component `value==='true'`/ng-valid and STOP; never
+>   double-click). Consent is ticked BEFORE the EEO comboboxes (their open listbox overlay intercepts the
+>   click) + a settled re-tick in `_finalize_screeners`; `_close_listbox` (blur+Escape) closes the overlay.
+>   `_rescan_required` also reports unanswered required `spl-radio-group`s and judges an `spl-checkbox` by
+>   its component value (native `.checked` desyncs). `_fix_phone_country` re-enters the phone as E.164
+>   (`+1…`) so the intl widget auto-selects US (else "Please provide a valid phone number" blocks Next).
+> **GOTCHA (cost a day):** an earlier edit left a DUPLICATE `_tick_spl_consent` — the stale (host-click,
+> no-op) one below won (last def wins in Python), so the consent never ticked. After editing, `grep -c
+> 'async def _tick_spl_consent' == 1`. Driver `tools/smartrecruiters_recon.py` (patchright + NopeCHA,
+> `SMARTRECRUITERS_ADVANCE=1` forced, headful `:98`, single-job `--job N --keep M`) submits only when
+> `unfilled==[]` (honest gate) then polls the Maildir for the ack. Cron `tools/mass_hiring_apply_sr_cron.py`
+> selects jobs by `apply_url ILIKE '%smartrecruiters.com%'` (source is `'sutherland'`, NOT
+> `'smartrecruiters'`), one isolated `SR_PROFILE_DIR` per job so `--workers N` can parallelise. **Cron
+> ENABLED `0 1,6,11,15,20`** (5×/day, mirrors Maximus/TP/Kelly). 35 SR tests pass. NB the SHL assessment
+> is a later HUMAN step (the board stays a discovery+apply surface).
 > **UPDATE 2026-09-02 — Oracle ORC now has a DRIVER (`backend/tools/orc_recon.py`, modeled on
 > `taleo_recon.py`), first live run done. GOOD: the datacenter IP loads Alorica's CX site with NO
 > WAF, the guest email+terms step fills, NEXT reveals the full form. BAD: this Alorica tenant

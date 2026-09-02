@@ -40,7 +40,7 @@ import re
 from playwright.async_api import Page
 
 from backend.applier import captcha_solver
-from backend.applier.analyzer import analyze_page, find_submit_button
+from backend.applier.analyzer import analyze_page
 from backend.applier.dropdowns import (
     fill_demographic_checkboxes_decline,
     fill_demographics_decline,
@@ -56,12 +56,174 @@ logger = logging.getLogger(__name__)
 # continue/next and STOP (record the selector) on the final Apply/Submit.
 _ADVANCE_RE = re.compile(r"^\s*(continue|next|save (and|&) continue)\s*$", re.I)
 _SUBMIT_RE = re.compile(r"submit application|send application|submit|finish|^\s*apply\s*$", re.I)
-# The oneclick submit control is a plain <button> (usually text "Apply" or "Submit
-# application"); some tenants add a data-test hook. Recorded (never clicked) at the end.
-_SUBMIT_SELECTOR = (
-    "button[type='submit'], button:has-text('Submit application'), "
-    "button:has-text('Send Application'), button:has-text('Apply'), "
-    "[data-test*='apply' i][role='button'], button[data-test*='apply' i]")
+# The oneclick submit control is NOT a plain <button> — SmartRecruiters renders the footer
+# action as an <oc-button data-test="footer-submit"> / <oc-button data-test="footer-next">
+# CUSTOM ELEMENT (light DOM) that wraps an <spl-button> whose real <button> lives in a shadow
+# root. The ONLY plain <button>s in the light DOM are the "Apply With Indeed"/"Apply With
+# LinkedIn" INTEGRATION buttons + cookie controls, so a naive querySelectorAll('button') /
+# find_submit_button (which matches `button:has-text('Apply')`) clicks the Indeed button and the
+# real form never submits. So we locate the primary action with a shadow-piercing walk that
+# excludes those integrations (see _PRIMARY_JS) and tag it `data-jf-sr-primary`; the recorded
+# selector below points at that tag (never clicked here — the caller presses it).
+_SUBMIT_SELECTOR = "[data-jf-sr-primary]"
+
+# Shadow-piercing finder for the SmartRecruiters footer PRIMARY action. Walks the document +
+# every open shadow root, collects candidate <oc-button>/<spl-button>/<button>/[role=button]
+# elements, EXCLUDES the LinkedIn/Indeed/Google external-apply integrations, the secondary
+# "Add experience/education" buttons, the avatar/file-browse buttons and cookie/privacy
+# controls, then tags the footer primary (data-test^="footer-" or type="primary") with
+# `data-jf-sr-primary` and returns {kind, text, dtest}. kind='advance' for Continue/Next,
+# 'submit' for the final Submit/Apply/Send. Returns null when no primary action is on screen.
+_PRIMARY_JS = r"""
+() => {
+  function* walk(root){
+    yield* root.querySelectorAll('*');
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) yield* walk(el.shadowRoot);
+  }
+  for (const el of walk(document))
+    if (el.hasAttribute && el.hasAttribute('data-jf-sr-primary')) el.removeAttribute('data-jf-sr-primary');
+  const EXTERNAL = /apply with (indeed|linkedin|google|xing|seek|facebook|glassdoor)/i;
+  const ADV = /^(continue|next|save (and|&) continue)$/i;
+  const SUB = /(submit application|send application|complete application|^submit$|^finish$|^apply$|i'?m interested)/i;
+  const cands = [];
+  for (const el of walk(document)){
+    const tag = (el.tagName || '').toLowerCase();
+    const role = (el.getAttribute && el.getAttribute('role')) || '';
+    if (!(tag === 'oc-button' || tag === 'spl-button' || tag === 'button' || role === 'button')) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;                 // not visible
+    if (el.disabled) continue;
+    const cls = (el.className && el.className.toString) ? el.className.toString() : '';
+    const dtest = (el.getAttribute && (el.getAttribute('data-test') || el.getAttribute('data-sr-id') || '')) || '';
+    const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+    // EXCLUDE integrations / cookie / privacy / avatar / add-more / clear / delete controls.
+    if (tag === 'oc-external-apply-button' || tag === 'oc-external-providers-buttons') continue;
+    if (/external-apply-button/i.test(cls)) continue;
+    if (EXTERNAL.test(text)) continue;
+    if (/indeed|linkedin|google|xing|seek/i.test(dtest)) continue;
+    if (/cookie|ot-sdk|ot-cookie|policy-link/i.test(cls) || /^(cookie settings|cookie policy|cookies settings|privacy notice)$/i.test(text)) continue;
+    if (/^(add-experience|add-education|avatar-browse)$/i.test(dtest)) continue;
+    if (/clearButton|delete-button/i.test(dtest) || /clearButton|delete-button/i.test(cls)) continue;
+    const typeAttr = (el.getAttribute && (el.getAttribute('type') || '')).toLowerCase();
+    const isFooter = /^footer-/i.test(dtest);
+    const isPrimary = typeAttr === 'primary' || /c-spl-button--primary/.test(cls);
+    const isSecondary = typeAttr === 'secondary' || typeAttr === 'tertiary'
+      || /c-spl-button--secondary|c-spl-button--tertiary/.test(cls);
+    if (!(isFooter || isPrimary)) continue;
+    if (isSecondary && !isFooter) continue;                       // an "Add" is secondary, skip
+    cands.push({el, dtest, text, isFooter, isPrimary, y: r.y});
+  }
+  if (!cands.length) return null;
+  // Footer wins over a bare primary; then the lowest-on-page (the action bar sits at the bottom).
+  cands.sort((a, b) => (b.isFooter - a.isFooter) || (b.isPrimary - a.isPrimary) || (b.y - a.y));
+  const p = cands[0];
+  p.el.setAttribute('data-jf-sr-primary', '1');
+  let kind;
+  if (/^footer-next$/i.test(p.dtest) || ADV.test(p.text)) kind = 'advance';
+  else if (/^footer-submit$/i.test(p.dtest) || SUB.test(p.text)) kind = 'submit';
+  else kind = ADV.test(p.text) ? 'advance' : 'submit';
+  return {kind, text: p.text, dtest: p.dtest};
+}
+"""
+
+# ---- SmartRecruiters "Preliminary questions" SPL web-component screeners --------------
+# The screening screen is built from shadow-DOM components with NO native form controls the
+# generic analyzer / native-radio filler can see:
+#   <spl-radio-group><span slot="label-content">Q?</span><spl-radio label="Yes" value="1"
+#       role="radio" id="spl-form-element_12">…</spl-radio-group>   (custom radios)
+#   <spl-autocomplete data-test="question-eeo-gender-select">…<input role="combobox" id="question_…_gender">
+#   <spl-checkbox data-test="consent-box" required>…</spl-checkbox>  (privacy declaration)
+# so we enumerate them with shadow-piercing walks and drive them by element id (Playwright
+# locators pierce open shadow roots). A protected-characteristic question is always DECLINED.
+_SR_DECLINE_RE = re.compile(
+    r"prefer not|do(?:es)? not want to answer|don'?t wish|do not wish|decline|not to answer|"
+    r"not to disclose|not to say|choose not|i do not wish", re.I)
+_SR_DEMO_Q_RE = re.compile(
+    r"disability|protected veteran|veteran status|are you a[n]? .*veteran|gender identity|"
+    r"sexual orientation|\brac(?:e|ial)\b|ethnicit|self-?identif", re.I)
+# Optional marketing/opt-in checkboxes are NOT ticked (only required legal/privacy consent is).
+_MKTG_RE = re.compile(
+    r"contact you|opt.?in|newsletter|marketing|promotional|talent (community|network|pool)|"
+    r"future (job|opportunit)|keep me (posted|informed)", re.I)
+
+# All three enumerators share this generator (yields every node across open shadow roots).
+_WALK_JS = ("function* walk(root){ yield* root.querySelectorAll('*');"
+            " for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot); }")
+
+_RADIO_GROUPS_JS = r"""
+() => {
+  %s
+  const out = [];
+  for (const g of walk(document)) {
+    if (g.tagName.toLowerCase() !== 'spl-radio-group') continue;
+    const span = g.querySelector('[slot="label-content"]');
+    const q = ((span ? span.innerText : g.getAttribute('label')) || '').replace(/\s+/g, ' ').trim();
+    const radios = [...g.querySelectorAll('spl-radio')].map(r => ({
+      label: (r.getAttribute('label') || r.innerText || '').replace(/\s+/g, ' ').trim(),
+      id: r.id || '', checked: r.getAttribute('aria-checked') === 'true'}));
+    const required = g.getAttribute('required') != null || g.getAttribute('aria-required') === 'true';
+    out.push({q, required, answered: radios.some(r => r.checked), radios});
+  }
+  return out;
+}
+""" % _WALK_JS
+
+_TEXT_SCREENERS_JS = r"""
+() => {
+  %s
+  function climb(el){ let node=el,h=0; while(node&&h<8){ let p=node.parentElement;
+    if(!p){const rn=node.getRootNode(); p=rn&&rn.host?rn.host:null;} if(!p) break;
+    const tx=(p.innerText||'').replace(/\s+/g,' ').trim(); if(tx.length>10) return tx.slice(0,180);
+    node=p; h++; } return ''; }
+  const out=[];
+  for (const el of walk(document)){
+    const tag=el.tagName.toLowerCase();
+    if (tag!=='input' && tag!=='textarea') continue;
+    const t=(el.type||'').toLowerCase();
+    if (tag==='input' && t!=='text' && t!=='') continue;
+    if ((el.getAttribute('role')||'')==='combobox') continue;   // EEO select handled elsewhere
+    const id=el.id||'';
+    if (id.indexOf('question_')!==0) continue;                  // only screening question fields
+    const req = el.required || el.getAttribute('aria-required')==='true' || !!el.closest('[aria-required="true"]');
+    out.push({id, required:req, value:(el.value||''), q:climb(el)});
+  }
+  return out;
+}
+""" % _WALK_JS
+
+_AUTOCOMPLETE_JS = r"""
+() => {
+  %s
+  const out=[];
+  for (const el of walk(document)){
+    if (el.tagName.toLowerCase()!=='spl-autocomplete') continue;
+    let native=null;
+    for (const d of walk(el)){ if (d.tagName && d.tagName.toLowerCase()==='input'){ native=d; break; } }
+    out.push({input_id:(native&&native.id)||el.id||'',
+      placeholder: el.getAttribute('placeholder')||'',
+      data_test: el.getAttribute('data-test')||'',
+      required: el.getAttribute('required')!=null || el.getAttribute('aria-required')==='true',
+      value: (native&&native.value)||''});
+  }
+  return out;
+}
+""" % _WALK_JS
+
+_SPL_CHECKBOX_JS = r"""
+() => {
+  %s
+  const out=[];
+  for (const el of walk(document)){
+    if (el.tagName.toLowerCase()!=='spl-checkbox') continue;
+    out.push({id: el.id||'', data_test: el.getAttribute('data-test')||'',
+      required: el.getAttribute('required')!=null || el.getAttribute('aria-required')==='true',
+      checked: el.getAttribute('value')==='true' || el.getAttribute('aria-checked')==='true'
+               || el.hasAttribute('checked'),
+      label: (el.innerText||'').replace(/\s+/g,' ').trim().slice(0,120)});
+  }
+  return out;
+}
+""" % _WALK_JS
 
 # Default oneclick apply-form URL template (used when ONECLICKDATA has no explicit `url`).
 _ONECLICK_TMPL = ("https://jobs.smartrecruiters.com/oneclick-ui/company/{uuid}"
@@ -204,6 +366,12 @@ class SmartRecruitersStrategy(GenericStrategy):
                 await fn(page)
             except Exception:
                 pass
+        # The phone field is an intl widget whose country selector must be set, or the form shows
+        # "Please provide a valid phone number" and Next won't advance (intermittently unset).
+        try:
+            await self._fix_phone_country(page, profile_form)
+        except Exception as exc:
+            logger.debug("smartrecruiters: phone fix raised: %s", exc)
         # The Google-Places LOCATION typeahead (SmartRecruiters' `location` input) is a
         # combobox the analyzer skips — type the persona's city and pick the first suggestion.
         try:
@@ -213,6 +381,39 @@ class SmartRecruitersStrategy(GenericStrategy):
         # Pre-screening Yes/No + experience/education/language questions the analyzer misses
         # (custom radio groups / non-native selects), answered deterministically & TRUTHFULLY.
         await self._answer_screeners(page, facts)
+
+    async def _fix_phone_country(self, page: Page, profile_form: dict) -> None:
+        """SmartRecruiters' phone field is an intl-tel widget with a country selector; when the
+        country isn't set the form shows "Please provide a valid phone number" and Next won't
+        advance (the auto-detect is flaky). Re-enter the US number in E.164 (+1XXXXXXXXXX) so the
+        widget deterministically selects the US country flag and validates."""
+        tel = page.locator('input[type="tel"]').first
+        if not await tel.count():
+            return
+        raw = ((await tel.input_value()) or profile_form.get("phone") or "").strip()
+        digits = re.sub(r"\D", "", raw)
+        if len(digits) == 10:
+            digits = "1" + digits
+        if len(digits) != 11 or not digits.startswith("1"):
+            return
+        e164 = "+" + digits
+        try:
+            await tel.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        try:
+            await tel.click(timeout=2500)
+            try:
+                await tel.press("Control+a")
+                await tel.press("Delete")
+            except Exception:
+                await tel.fill("")
+            # typing "+1" first makes the intl widget switch to the US country as the code is read.
+            await tel.type(e164, delay=45)
+            await page.wait_for_timeout(500)
+            await tel.blur()
+        except Exception as exc:
+            logger.debug("smartrecruiters: phone e164 retype raised: %s", exc)
 
     async def _fill_location(self, page: Page, profile_form: dict) -> bool:
         """Fill the SmartRecruiters location field. It is a custom `<spl-autocomplete
@@ -280,18 +481,303 @@ class SmartRecruitersStrategy(GenericStrategy):
 
     async def _answer_screeners(self, page: Page, facts) -> None:
         """Answer every UNANSWERED screener truthfully for a synthetic US persona located at
-        the job's city: native <select>s via _select_by_label, radio groups via
-        _answer_radio_screeners. Leaves an unmatched question for the human, never guesses."""
+        the job's city. The SmartRecruiters "Preliminary questions" screen is built entirely from
+        SHADOW-DOM web components — `spl-radio-group` (custom radios, no native <input type=radio>),
+        `spl-autocomplete` EEO selects, and a required `spl-checkbox` consent — so alongside the
+        native-<select>/native-radio fillers we run the spl-* widget fillers below. Leaves an
+        unmatched question for the human, never guesses."""
         facts = facts or {}
         await self._tick_acknowledge(page)
+        # order matters: answer the gating radios (e.g. "worked here before? -> No") first, then
+        # the conditional free-text, EEO decline, and the required consent checkbox.
+        # Tick the required consent BEFORE the EEO comboboxes: the EEO autocompletes leave an
+        # overlay open that intercepts the consent label click (its dismissal is timing-bound), so
+        # tick consent while nothing is open, then run EEO, then re-tick as an idempotent safety net.
+        steps = (
+            ("select screeners", self._answer_select_screeners(page, facts)),
+            ("radio screeners", self._answer_radio_screeners(page, facts)),
+            ("spl radio groups", self._answer_spl_radio_groups(page, facts)),
+            ("spl text screeners", self._fill_spl_text_screeners(page)),
+            ("spl consent (pre)", self._tick_spl_consent(page)),
+            ("eeo autocompletes", self._answer_eeo_autocompletes(page)),
+            ("spl consent (post)", self._tick_spl_consent(page)),
+        )
+        for label, coro in steps:
+            try:
+                await coro
+            except Exception as exc:
+                logger.debug("smartrecruiters: %s raised: %s", label, exc)
+
+    # ---- SmartRecruiters SPL web-component screeners (shadow DOM) ----------------
+    async def _answer_spl_radio_groups(self, page: Page, facts) -> None:
+        """Answer every UNANSWERED <spl-radio-group> (custom radios — no native <input type=radio>,
+        so _answer_radio_screeners can't see them). Each group carries its question in a
+        <span slot="label-content"> and its options as <spl-radio label=... value=... role=radio id=...>.
+        A demographic group (disability / veteran / gender / race) is DECLINED via its non-disclosure
+        option; every other group uses the deterministic truthful _screener_answer. Clicks by the
+        spl-radio's id (Playwright locators pierce open shadow roots)."""
+        facts = facts or {}
         try:
-            await self._answer_select_screeners(page, facts)
-        except Exception as exc:
-            logger.debug("smartrecruiters: select screeners raised: %s", exc)
+            groups = await page.evaluate(_RADIO_GROUPS_JS)
+        except Exception:
+            return
+        for grp in groups:
+            if grp.get("answered"):
+                continue
+            q = (grp.get("q") or "").lower()
+            radios = grp.get("radios") or []
+            rid = None
+            if _SR_DEMO_Q_RE.search(q):
+                # protected characteristic — pick the offered non-disclosure option, never claim one.
+                for r in radios:
+                    if _SR_DECLINE_RE.search((r.get("label") or "").lower()):
+                        rid = r.get("id")
+                        break
+            if not rid:
+                cands = self._screener_answer(q, facts)
+                if cands:
+                    for c in cands:
+                        cl = c.strip().lower()
+                        for r in radios:
+                            if self._opt_match(cl, (r.get("label") or "").strip().lower()):
+                                rid = r.get("id")
+                                break
+                        if rid:
+                            break
+            if not rid:
+                continue
+            await self._click_spl_radio(page, rid)
+
+    async def _click_spl_radio(self, page: Page, rid: str) -> bool:
+        loc = page.locator(f'[id="{rid}"]').first
         try:
-            await self._answer_radio_screeners(page, facts)
-        except Exception as exc:
-            logger.debug("smartrecruiters: radio screeners raised: %s", exc)
+            if not await loc.count():
+                return False
+            try:
+                await loc.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
+            await loc.click(timeout=3000)
+            await page.wait_for_timeout(150)
+            return True
+        except Exception:
+            try:
+                await loc.click(timeout=2000, force=True)
+                return True
+            except Exception:
+                return False
+
+    async def _fill_spl_text_screeners(self, page: Page) -> None:
+        """Fill a REQUIRED empty free-text screening question that is a CONDITIONAL follow-up
+        (e.g. "If yes, when? and how many months/years did you work here before?") with "N/A" —
+        truthful for a synthetic persona who answered the gating question negatively. A genuinely
+        open-ended/behavioral prompt is left for the human (never auto-filled with prose)."""
+        try:
+            fields = await page.evaluate(_TEXT_SCREENERS_JS)
+        except Exception:
+            return
+        for f in fields:
+            if not f.get("required") or (f.get("value") or "").strip():
+                continue
+            q = (f.get("q") or "").lower()
+            conditional = bool(re.search(
+                r"if (yes|so|applicable|no)|how many (month|year|hour|day)|how long|"
+                r"when did you|which (company|employer)|previous(ly)? employ|"
+                r"name of (your )?(company|employer)", q))
+            if not (conditional or q == ""):
+                continue                          # open-ended/behavioral → leave for the human
+            fid = f.get("id")
+            if not fid:
+                continue
+            # The <spl-input> HOST shares its id with the inner native <input>, so a bare
+            # [id=…] locator resolves to the host (not fillable) — target the inner input/textarea.
+            try:
+                await page.locator(
+                    f'input[id="{fid}"], textarea[id="{fid}"]').first.fill("N/A", timeout=2500)
+            except Exception:
+                pass
+
+    async def _answer_eeo_autocompletes(self, page: Page) -> None:
+        """Decline the required EEO <spl-autocomplete> self-ID selects (Gender, Race/Ethnicity) by
+        opening each and picking its non-disclosure option — never claims a protected characteristic.
+        The location autocomplete (also spl-autocomplete) is handled by _fill_location and skipped."""
+        try:
+            metas = await page.evaluate(_AUTOCOMPLETE_JS)
+        except Exception:
+            return
+        for m in metas:
+            dt = (m.get("data_test") or "").lower()
+            ph = (m.get("placeholder") or "").lower()
+            blob = f"{dt} {ph}"
+            is_demo = ("eeo" in dt) or bool(re.search(r"gender|race|ethnic|veteran|disab", blob))
+            if not is_demo:
+                continue                          # location / non-demographic autocomplete
+            if (m.get("value") or "").strip():
+                continue
+            fid = m.get("input_id")
+            if fid:
+                await self._pick_autocomplete_decline(page, fid)
+
+    async def _pick_autocomplete_decline(self, page: Page, input_id: str) -> bool:
+        """Pick the non-disclosure option in an EEO <spl-autocomplete>. The option label is rendered
+        inside each item's <spl-typography-body> SHADOW root, so it is NOT readable via text /
+        inner_text — instead we TYPE a decline token to filter the searchable list and click the sole
+        survivor (no other EEO gender/race option contains "wish"/"decline"/"prefer not", so the
+        filtered result is unambiguous). Falls back to the LAST option (EEO decline convention)."""
+        inp = page.locator(f'input[id="{input_id}"]').first
+        try:
+            if not await inp.count():
+                return False
+            await inp.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+
+        async def _open() -> int:
+            try:
+                await inp.click(timeout=2500)
+            except Exception:
+                return 0
+            await page.wait_for_timeout(500)
+            try:
+                return await page.get_by_role("option").count()
+            except Exception:
+                return 0
+
+        # Type-to-filter with decline tokens; the survivor is the non-disclosure option.
+        for token in ("i do not wish", "do not wish", "don't wish", "wish", "decline",
+                      "prefer not", "not to answer", "not to disclose", "no answer"):
+            if not await _open():
+                continue
+            try:
+                await inp.fill("")
+                await inp.type(token, delay=45)
+            except Exception:
+                continue
+            await page.wait_for_timeout(650)
+            opts = page.get_by_role("option")
+            try:
+                n = await opts.count()
+            except Exception:
+                n = 0
+            if 1 <= n <= 2:
+                try:
+                    await opts.first.click(timeout=2500)
+                    await page.wait_for_timeout(300)
+                    if ((await inp.input_value()) or "").strip():
+                        await self._close_listbox(page, inp)
+                        return True
+                except Exception:
+                    pass
+        # Fallback: open with an empty query and pick the LAST option (decline is conventionally last
+        # on an EEO self-ID select). Only reached if no decline token matched.
+        try:
+            await inp.fill("")
+        except Exception:
+            pass
+        n = await _open()
+        if n:
+            opts = page.get_by_role("option")
+            try:
+                await opts.nth(n - 1).click(timeout=2500)
+                await page.wait_for_timeout(300)
+                ok = bool(((await inp.input_value()) or "").strip())
+                await self._close_listbox(page, inp)
+                return ok
+            except Exception:
+                pass
+        await self._close_listbox(page, inp)
+        return False
+
+    async def _close_listbox(self, page: Page, inp=None) -> None:
+        """Close an open autocomplete listbox so its overlay can't intercept the next widget's
+        click (an open EEO dropdown was swallowing the consent-checkbox click). Blur the input and
+        press Escape twice; do NOT click a heading — that scrolls the page and races the next
+        scroll_into_view+click."""
+        try:
+            if inp is not None:
+                await inp.blur()
+        except Exception:
+            pass
+        for _ in range(2):
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            await page.wait_for_timeout(150)
+
+    async def _tick_spl_consent(self, page: Page) -> None:
+        """Tick a REQUIRED <spl-checkbox> that is a legal/privacy declaration (e.g. consent-box:
+        "You declare that you have read and understand the privacy notice") — you can't submit
+        without it. A marketing/opt-in checkbox is left UNticked. Clicking the spl-checkbox HOST or
+        its label does nothing (verified); only a force-click on the inner native <input type=checkbox>
+        toggles it."""
+        try:
+            boxes = await page.evaluate(_SPL_CHECKBOX_JS)
+        except Exception:
+            return
+        for b in boxes:
+            if b.get("checked") or not b.get("required"):
+                continue
+            lab = (b.get("label") or "").lower()
+            if _MKTG_RE.search(lab):
+                continue
+            dt = b.get("data_test") or ""
+            bid = b.get("id") or ""
+            host = (f'spl-checkbox[data-test="{dt}"]' if dt else f'spl-checkbox[id="{bid}"]')
+            # Retry across a few ROUNDS: an autocomplete overlay left open by the EEO step
+            # intercepts the FIRST label click (its own Escape only clears the overlay for the
+            # NEXT round), so close-then-tick, verify, and repeat until it actually sticks.
+            for _ in range(4):
+                await self._close_listbox(page)
+                if await self._force_check_spl(page, host):
+                    break
+                if await self._spl_checkbox_checked(page, host):
+                    break
+
+    async def _spl_checkbox_checked(self, page: Page, host: str) -> bool:
+        """Read whether an spl-checkbox (matched by `host` selector) is checked, across shadow."""
+        try:
+            return await page.evaluate(
+                r"""(sel)=>{function* walk(root){ yield* root.querySelectorAll('*');
+                    for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot); }
+                  for(const el of walk(document)){
+                    if(!(el.matches && el.matches(sel))) continue;
+                    if(el.getAttribute('value')==='true'||el.getAttribute('aria-checked')==='true'
+                       ||el.hasAttribute('checked')) return true;
+                    for(const d of walk(el)) if(d.tagName&&d.tagName.toLowerCase()==='input'
+                       &&d.type==='checkbox'&&d.checked) return true;
+                    return false; }
+                  return false;}""", host)
+        except Exception:
+            return False
+
+    async def _force_check_spl(self, page: Page, host: str) -> bool:
+        """Tick an spl-checkbox reliably. Both the label and the inner native <input> are simple
+        TOGGLES (each flips the component value), so click one, VERIFY the component value, and STOP
+        the instant it reads true — never click again once ticked (a second toggle would clear it).
+        Alternate targets until it sticks; the component value / ng-valid is authoritative."""
+        if await self._spl_checkbox_checked(page, host):
+            return True
+        targets = (f'{host} [slot="label-content"]',
+                   f'{host} input[type="checkbox"]',
+                   f'{host} [slot="label-content"]',
+                   f'{host} input[type="checkbox"]')
+        for target in targets:
+            try:
+                loc = page.locator(target).first
+                if await loc.count():
+                    try:
+                        await loc.scroll_into_view_if_needed(timeout=1500)
+                    except Exception:
+                        pass
+                    # the inner input is often 0x0/visually-hidden → force-click it.
+                    await loc.click(timeout=2000, force=("input" in target))
+            except Exception as exc:
+                logger.debug("smartrecruiters: consent click %s raised: %s", target, exc)
+            await page.wait_for_timeout(400)
+            if await self._spl_checkbox_checked(page, host):
+                return True
+        return await self._spl_checkbox_checked(page, host)
 
     async def _answer_select_screeners(self, page: Page, facts) -> None:
         """Walk labeled, still-unanswered native <select> screeners; for each whose label maps
@@ -509,6 +995,18 @@ class SmartRecruitersStrategy(GenericStrategy):
         if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
             return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
                     "Associate", "GED"]
+        # A Yes/No "do you have a high school diploma / GED / equivalent?" — a synthetic persona
+        # always has at least a HS diploma (its résumé shows a degree), so answer Yes. Distinct
+        # from the "highest level" SELECT above (which returns a level, not Yes/No).
+        if re.search(r"high school diploma|\bg\.?e\.?d\.?\b|diploma.{0,20}equivalent|"
+                     r"(diploma|degree).{0,15}or (higher|equivalent)", t):
+            return ["Yes"]
+        # "Have you worked for <company> before?" / "are you a former employee?" — a FRESH synthetic
+        # persona has not, so answer No (truthful). Scoped so it doesn't catch experience questions.
+        if re.search(r"worked (for|at|with|in).{0,25}(before|previous|prior)|"
+                     r"(previously|ever) (worked|been employed)|former (employee|staff)|"
+                     r"(are|were) you .*(former|previous) (employee|contractor)|rehire", t):
+            return ["No"]
         # Customer-service / sales / call-center experience — pick the HIGHEST believable tier
         # (the tailored résumé shows ~8 yrs), never a weak middle one that undersells +
         # contradicts it. Order-independent: Sutherland's sales roles phrase it both ways
@@ -565,9 +1063,9 @@ class SmartRecruitersStrategy(GenericStrategy):
         try:
             return await page.evaluate(
                 """()=>{const out=[];const seen=new Set();
-                  function* walk(root){
-                    yield* root.querySelectorAll('input,select,textarea');
-                    for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot);
+                  function* walk(root, all){
+                    yield* root.querySelectorAll(all?'*':'input,select,textarea');
+                    for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot, all);
                   }
                   for(const el of walk(document)){
                     const t=(el.type||'').toLowerCase();
@@ -578,8 +1076,15 @@ class SmartRecruitersStrategy(GenericStrategy):
                       ||!!el.closest('[aria-required="true"]');
                     if(!req) continue;
                     const root=el.getRootNode();
+                    const rootHost=(root&&root.host)?root.host:null;
                     let empty;
-                    if(t==='checkbox'||t==='radio'){const nm=el.name;
+                    if(t==='checkbox' && rootHost && rootHost.tagName
+                       && rootHost.tagName.toLowerCase()==='spl-checkbox'){
+                      // spl-checkbox is a controlled component: its native <input>.checked stays
+                      // DESYNCED from the real state, so judge by the component value / ng-valid.
+                      empty=!(rootHost.getAttribute('value')==='true'
+                        ||(rootHost.className||'').toString().indexOf('ng-valid')>=0);}
+                    else if(t==='checkbox'||t==='radio'){const nm=el.name;
                       empty=nm?![...root.querySelectorAll('[name="'+
                         (window.CSS&&CSS.escape?CSS.escape(nm):nm)+'"]')].some(x=>x.checked):!el.checked;}
                     else empty=!(el.value||'').trim();
@@ -592,7 +1097,21 @@ class SmartRecruitersStrategy(GenericStrategy):
                     if(!lab)lab=el.getAttribute('aria-label')||el.getAttribute('label')||'';
                     lab=(lab||'').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||(el.name||el.getAttribute('data-sr-id')||'field');
                     if(!seen.has(lab)){seen.add(lab);out.push(lab);}
-                  } return out;}""")
+                  }
+                  // SmartRecruiters custom radio groups have NO native <input type=radio>; a
+                  // required, UNANSWERED group (no spl-radio aria-checked) is an honest gap the
+                  // native scan above cannot see — report its question so `unfilled` stays truthful.
+                  for(const g of walk(document, true)){
+                    if(g.tagName.toLowerCase()!=='spl-radio-group') continue;
+                    if(!(g.getAttribute('required')!=null||g.getAttribute('aria-required')==='true')) continue;
+                    if([...g.querySelectorAll('spl-radio')].some(r=>r.getAttribute('aria-checked')==='true')) continue;
+                    const rr=g.getBoundingClientRect(); if(rr.width===0&&rr.height===0) continue;
+                    const span=g.querySelector('[slot="label-content"]');
+                    let lab=((span?span.innerText:'')||g.getAttribute('label')||'')
+                      .replace(/\\s+/g,' ').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||'question';
+                    if(!seen.has(lab)){seen.add(lab);out.push(lab);}
+                  }
+                  return out;}""")
         except Exception:
             return []
 
@@ -613,37 +1132,80 @@ class SmartRecruitersStrategy(GenericStrategy):
     # ---- wizard walker (mirrors OracleORCStrategy._advance_wizard) ----
     async def _step_signature(self, page: Page) -> str:
         """A cheap fingerprint of the current screen, to tell whether a Continue click actually
-        advanced (SmartRecruiters re-renders in place, same URL on a multi-screen config)."""
+        advanced (SmartRecruiters re-renders in place, same URL on a multi-screen config). The
+        heading + form controls live in SHADOW DOM (spl-input/spl-select), so this walk must
+        pierce shadow roots — a light-DOM-only count is ~constant and never detects advance."""
         try:
             return await page.evaluate(
-                "()=>{const h=document.querySelector('h1,h2,legend,.section-title,"
-                ".form-section-title');"
-                "return (h?h.innerText.trim().slice(0,40):'')+'|'+"
-                "document.querySelectorAll('input,select,textarea').length;}")
+                r"""()=>{
+                  function* walk(root){
+                    yield* root.querySelectorAll('*');
+                    for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot);
+                  }
+                  let n=0, groups=0;
+                  for(const el of walk(document)){
+                    const tg=el.tagName.toLowerCase();
+                    if(tg==='input'||tg==='select'||tg==='textarea') n++;
+                    else if(tg==='spl-radio-group') groups++;
+                  }
+                  // pathname changes to /screening on advance — the most reliable step signal; the
+                  // page header <h1> is the constant job title, so it is NOT used.
+                  return (location.pathname||'')+'|'+n+'|'+groups;}""")
         except Exception:
             return ""
 
-    async def _primary_button(self, page: Page):
-        """Return (handle, kind) for the screen's primary button: kind='submit' on the final
-        (Apply/Submit) screen, 'advance' on Continue/Next, else None."""
+    async def _tag_primary_button(self, page: Page):
+        """Shadow-piercing: find the SmartRecruiters footer PRIMARY action (oc-button/spl-button),
+        EXCLUDING the Indeed/LinkedIn external-apply integrations, the secondary "Add" buttons and
+        cookie/privacy controls. Tags it `data-jf-sr-primary` and returns {kind,text,dtest} or None."""
         try:
-            for b in await page.query_selector_all("button, a[role='button']"):
-                if not await b.is_visible():
-                    continue
-                txt = ((await b.inner_text()) or "").strip()
-                if _ADVANCE_RE.search(txt):
-                    return b, "advance"
-                if _SUBMIT_RE.search(txt):
-                    return b, "submit"
-            sel = await find_submit_button(page)
-            if sel:
-                b = await page.query_selector(sel)
-                if b:
-                    txt = ((await b.inner_text()) or "").strip()
-                    return b, ("advance" if _ADVANCE_RE.search(txt) else "submit")
+            return await page.evaluate(_PRIMARY_JS)
         except Exception as exc:
-            logger.debug("smartrecruiters: primary_button raised: %s", exc)
-        return None, None
+            logger.debug("smartrecruiters: primary tag raised: %s", exc)
+            return None
+
+    async def _primary_button(self, page: Page):
+        """Return (locator, kind) for the screen's primary button — the shadow-piercing tagger
+        finds the real <oc-button> footer action (never the Indeed/LinkedIn integration) and tags
+        it; the locator targets that tag. kind='submit' on the final screen, 'advance' on
+        Continue/Next, (None, None) when no primary action is on screen."""
+        info = await self._tag_primary_button(page)
+        if not info:
+            return None, None
+        return page.locator("[data-jf-sr-primary]").first, info.get("kind")
+
+    async def click_submit(self, page: Page) -> bool:
+        """Find and click the REAL SmartRecruiters submit button (shadow-piercing; excludes the
+        Indeed/LinkedIn integration + Add/cookie controls). Returns True only when a button
+        classified as the final submit was actually clicked — the caller's honest submit path."""
+        info = await self._tag_primary_button(page)
+        if not info or info.get("kind") != "submit":
+            return False
+        loc = page.locator("[data-jf-sr-primary]").first
+        try:
+            if not await loc.count():
+                return False
+            try:
+                await loc.scroll_into_view_if_needed(timeout=3000)
+            except Exception:
+                pass
+            await loc.click(timeout=5000)
+            return True
+        except Exception as exc:
+            logger.debug("smartrecruiters: click_submit raised: %s", exc)
+            return False
+
+    async def _finalize_screeners(self, page: Page) -> None:
+        """After a screen's fill has SETTLED, close any lingering autocomplete overlay and re-tick
+        the required consent. The in-fill consent attempt only FOCUSES the box while an EEO overlay
+        is still dismissing (leaves it ng-touched but value=false); a settled attempt actually
+        toggles it (verified). Idempotent — a no-op when the consent is already ticked."""
+        try:
+            await self._close_listbox(page)
+            await page.wait_for_timeout(400)
+            await self._tick_spl_consent(page)
+        except Exception as exc:
+            logger.debug("smartrecruiters: finalize screeners raised: %s", exc)
 
     async def _fill_current_step(self, page, profile_form, cover_letter, facts) -> None:
         """Fill an EEO / voluntary / screening screen: decline demographics, tick required
@@ -678,6 +1240,7 @@ class SmartRecruitersStrategy(GenericStrategy):
             if btn is None:
                 # No Continue and no submit button surfaced yet — record the canonical SR
                 # submit selector so the co-pilot gate has a target, and stop.
+                await self._finalize_screeners(page)
                 await captcha_solver.solve_on_page(page)
                 report["submit_selector"] = _SUBMIT_SELECTOR
                 report["wizard_at_submit"] = True
@@ -688,6 +1251,7 @@ class SmartRecruitersStrategy(GenericStrategy):
                 # captcha if one is present (no-op otherwise), then record the true final-submit
                 # button (never a Continue). We do NOT click it.
                 await self._fill_current_step(page, profile_form, cover_letter, facts)
+                await self._finalize_screeners(page)
                 await captcha_solver.solve_on_page(page)
                 report["submit_selector"] = _SUBMIT_SELECTOR
                 report["wizard_at_submit"] = True
@@ -696,13 +1260,40 @@ class SmartRecruitersStrategy(GenericStrategy):
             sig = await self._step_signature(page)
             try:
                 await btn.click()
-                await page.wait_for_timeout(2000)
             except Exception:
                 break
-            if await self._step_signature(page) == sig:
-                # Did not advance -> a required field on this screen is still empty. Stop; the
-                # human / next iteration finishes it (the dry-run screenshot shows what's left).
+            # Poll for the SPA to re-render / navigate (base -> /screening) up to ~6s; a single
+            # instant re-read can miss a still-rendering advance and false-flag "blocked".
+            advanced = await self._await_advance(page, sig)
+            if not advanced:
+                # Validation likely held the click (most often the intl phone country was unset).
+                # Re-fix the phone + re-fill THIS screen and retry the primary click ONCE.
+                try:
+                    await self._fix_phone_country(page, profile_form)
+                except Exception:
+                    pass
+                await self._fill_current_step(page, profile_form, cover_letter, facts)
+                try:
+                    btn2, _k2 = await self._primary_button(page)
+                    if btn2 is not None:
+                        await btn2.click()
+                except Exception:
+                    pass
+                advanced = await self._await_advance(page, sig)
+            if not advanced:
+                # Still didn't advance -> a required field on this screen is genuinely unfilled.
                 report["wizard_blocked_step"] = sig
                 report["unfilled"] = await self._rescan_required(page)
                 return
             await self._fill_current_step(page, profile_form, cover_letter, facts)
+
+    async def _await_advance(self, page: Page, prev_sig: str) -> bool:
+        """Return True once the step signature changes (the screen advanced), polling up to ~6s."""
+        for _ in range(12):
+            await page.wait_for_timeout(500)
+            try:
+                if await self._step_signature(page) != prev_sig:
+                    return True
+            except Exception:
+                pass
+        return False

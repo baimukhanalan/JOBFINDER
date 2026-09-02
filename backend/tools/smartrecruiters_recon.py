@@ -32,9 +32,8 @@ os.environ.setdefault("SMARTRECRUITERS_ADVANCE", "1")  # BEFORE importing the st
 
 from patchright.async_api import async_playwright  # noqa: E402
 
-from backend.applier.analyzer import find_submit_button  # noqa: E402
 from backend.applier.strategies.smartrecruiters import (  # noqa: E402
-    SmartRecruitersStrategy, _SUBMIT_SELECTOR)
+    SmartRecruitersStrategy)
 from backend.profiles.store import Profile  # noqa: E402
 from backend.tools import mail_db, mass_hiring_apply  # noqa: E402
 
@@ -140,22 +139,21 @@ async def apply_job(jobid: int, keep_min: int = 8) -> dict:
             return result_out
 
         if not unfilled:
-            sel = result.get("submit_selector") or _SUBMIT_SELECTOR
+            # The strategy walked to the final screen (SMARTRECRUITERS_ADVANCE=1). Press the REAL
+            # SmartRecruiters submit via its shadow-piercing finder — NOT a raw `button:has-text`
+            # locator, which matches the "Apply With Indeed" integration and never submits.
             try:
-                btn = page.locator(sel).first
-                if not await btn.count():
-                    s2 = await find_submit_button(page)
-                    if s2:
-                        btn = page.locator(s2).first
-                if await btn.count():
-                    print(f"[submit] clicking {((await btn.inner_text()) or '').strip()!r}", flush=True)
-                    await btn.click()
+                clicked = await strat.click_submit(page)
+                if clicked:
+                    print("[submit] clicked the SmartRecruiters primary submit", flush=True)
                     result_out["clicked"] = True
                     await page.wait_for_timeout(5000)
                     body = (await page.evaluate("() => document.body ? document.body.innerText : ''"))[:400]
                     print(f"[post-submit body] {body!r}", flush=True)
                 else:
-                    print("[submit] no submit button found", flush=True)
+                    # Not yet at the submit screen — one guarded advance, then retry the submit.
+                    info = await strat._tag_primary_button(page)
+                    print(f"[submit] primary is {info!r} — not a submit; leaving for the human", flush=True)
             except Exception as e:
                 print(f"[submit err {type(e).__name__}: {e}]", flush=True)
         else:

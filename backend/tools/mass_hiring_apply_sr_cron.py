@@ -42,12 +42,17 @@ _RESULT_RE = re.compile(r"^\[result\]\s*(\{.*\})\s*$", re.M)
 
 def sr_job_ids() -> list[int]:
     """Active SmartRecruiters jobs we can honestly staff (English CSR — no license/exotic-language gate
-    on this source today; `job_is_staffable` still vetoes anything requiring a language we can't fill)."""
+    on this source today; `job_is_staffable` still vetoes anything requiring a language we can't fill).
+
+    Selected by the apply_url HOST, not `source`: SmartRecruiters postings on this board carry
+    source='sutherland' (the employer), not 'smartrecruiters' — the ATS is identified by the
+    jobs.smartrecruiters.com apply_url (mirrors the TP lane keying on '%icims%')."""
     from backend.tools.synth_persona import job_is_staffable
     out: list[int] = []
     with mail_db.conn() as c:
         cur = c.cursor()
-        cur.execute("SELECT id, title FROM mass_hiring_jobs WHERE source='smartrecruiters' AND active ORDER BY id")
+        cur.execute("SELECT id, title FROM mass_hiring_jobs "
+                    "WHERE apply_url ILIKE '%smartrecruiters.com%' AND active ORDER BY id")
         for jid, title in cur.fetchall():
             if job_is_staffable({"title": title}):
                 out.append(jid)

@@ -11,6 +11,14 @@ from backend.applier.runner import STRATEGIES, _pick_strategy
 from backend.applier.strategies.base import GenericStrategy
 from backend.applier.strategies.smartrecruiters import (
     SmartRecruitersStrategy,
+    _AUTOCOMPLETE_JS,
+    _PRIMARY_JS,
+    _RADIO_GROUPS_JS,
+    _SPL_CHECKBOX_JS,
+    _SR_DECLINE_RE,
+    _SR_DEMO_Q_RE,
+    _SUBMIT_SELECTOR,
+    _TEXT_SCREENERS_JS,
     _env_advance,
     _oneclick_url,
 )
@@ -166,6 +174,49 @@ def test_screener_answer_language_and_education():
     assert A("highest level of education achieved?", {})[0] == "Bachelor"
 
 
+def test_screener_answer_hs_diploma_and_worked_before():
+    A = SmartRecruitersStrategy._screener_answer
+    # a synthetic persona always has at least a HS diploma → Yes (Yes/No, not a level select)
+    assert A("do you have a high school diploma, ged, or equivalent?", {}) == ["Yes"]
+    assert A("do you have a high school diploma or equivalent?", {}) == ["Yes"]
+    # the "highest level" SELECT is still a level, not a bare Yes
+    assert A("what is your highest level of education?", {})[0] != "Yes"
+    # a fresh persona has NOT worked for the company before → No
+    assert A("have you worked for sutherland before?", {}) == ["No"]
+    assert A("are you a former employee of the company?", {}) == ["No"]
+
+
+def test_demographic_and_decline_regexes():
+    # protected-characteristic questions are detected (→ declined), non-demographic screeners aren't.
+    assert _SR_DEMO_Q_RE.search("do you have (or have a history of having) a disability?")
+    assert _SR_DEMO_Q_RE.search("are you a protected veteran?")
+    assert not _SR_DEMO_Q_RE.search("are you legally authorized to work in the u.s.?")
+    assert not _SR_DEMO_Q_RE.search("are you at least 18 years of age?")
+    # the offered non-disclosure options match the decline regex (both wordings on this ATS)
+    assert _SR_DECLINE_RE.search("i do not want to answer.")
+    assert _SR_DECLINE_RE.search("prefer not to answer")
+    assert _SR_DECLINE_RE.search("i don't wish to answer")
+    assert not _SR_DECLINE_RE.search("yes, i have a disability, or have had one in the past.")
+
+
+def test_spl_widget_enumerator_js_is_shadow_piercing():
+    # the SPL-widget enumerators must pierce shadow DOM (the screening screen is all web components)
+    # and each key off the right custom-element tag; a light-DOM-only scan sees none of them.
+    for js in (_RADIO_GROUPS_JS, _TEXT_SCREENERS_JS, _AUTOCOMPLETE_JS, _SPL_CHECKBOX_JS):
+        assert "shadowRoot" in js
+        assert "%s" not in js                       # the shared walker was substituted in
+    assert "spl-radio-group" in _RADIO_GROUPS_JS and "aria-checked" in _RADIO_GROUPS_JS
+    assert "spl-autocomplete" in _AUTOCOMPLETE_JS
+    assert "spl-checkbox" in _SPL_CHECKBOX_JS
+    assert "question_" in _TEXT_SCREENERS_JS       # only screening question fields
+
+
+def test_spl_widget_filler_methods_exist():
+    for m in ("_answer_spl_radio_groups", "_fill_spl_text_screeners",
+              "_answer_eeo_autocompletes", "_tick_spl_consent", "_click_spl_radio"):
+        assert hasattr(SmartRecruitersStrategy, m)
+
+
 def test_screener_answer_unknown_returns_none():
     # an unrecognized/behavioral question is LEFT for the human, never guessed
     assert SmartRecruitersStrategy._screener_answer(
@@ -181,6 +232,39 @@ def test_opt_match_boundary():
     assert m("1-3 years", "1-3 years") is True
     assert m("3-5 years", "i do not have any experience") is False
     assert m("", "yes") is False
+
+
+# ---- shadow-piercing primary-button finder (excludes the Indeed/LinkedIn trap) ----
+
+def test_submit_selector_targets_tagged_primary_not_indeed():
+    # The recorded submit selector must point at the shadow-piercing tag, NOT a raw
+    # `button:has-text('Apply')` — which matches the "Apply With Indeed" integration button and
+    # would click the wrong control so the real SmartRecruiters form never submits.
+    assert _SUBMIT_SELECTOR == "[data-jf-sr-primary]"
+    assert "has-text" not in _SUBMIT_SELECTOR
+    assert "Apply" not in _SUBMIT_SELECTOR
+
+
+def test_primary_js_excludes_integrations_and_tags_footer():
+    # The primary-button finder must (a) pierce shadow roots, (b) consider the SmartRecruiters
+    # <oc-button>/<spl-button> custom elements (the footer action is NOT a plain <button>),
+    # (c) EXCLUDE the external LinkedIn/Indeed apply integrations + secondary "Add" buttons, and
+    # (d) tag the chosen primary with data-jf-sr-primary. Guard the whole contract so a refactor
+    # can't silently drop a piece and re-introduce the Indeed-click bug.
+    js = _PRIMARY_JS
+    assert "shadowRoot" in js                       # pierces shadow DOM
+    assert "oc-button" in js and "spl-button" in js  # considers the custom elements
+    assert "external-apply-button" in js             # excludes the integration by class
+    assert "indeed" in js.lower() and "linkedin" in js.lower()  # …and by name
+    assert "add-experience" in js and "add-education" in js      # excludes the secondary Adds
+    assert "footer-" in js                           # keys off the footer action hook
+    assert "data-jf-sr-primary" in js                # tags the chosen primary
+
+
+def test_click_submit_and_tagger_are_exposed():
+    # The driver clicks via the strategy's shadow-piercing submit finder, not a raw locator.
+    assert hasattr(SmartRecruitersStrategy, "click_submit")
+    assert hasattr(SmartRecruitersStrategy, "_tag_primary_button")
 
 
 # ---- captcha solver is wired at the submit step ------------------------------

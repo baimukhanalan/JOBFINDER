@@ -343,6 +343,24 @@ class PhenomStrategy(OracleORCStrategy):
         Verified need live: the DRP box id='businessServicesPlan' ('...OPPORTUNITY TO PRINT, READ AND
         REVIEW THE CONDUENT BUSINESS...') blocked the submit with 'you must agree'."""
         try:
+            # RESET a STUCK agreement checkbox: if the page still shows 'you must agree' while a required
+            # agreement checkbox already reads checked=true, that checked state came from a force/JS set
+            # Conduent's validation rejects (and a re-click would only UNcheck it, so the normal scan
+            # skips it forever — the 141/143 stall). Uncheck it here so the scan re-targets it for a
+            # fresh REAL click.
+            try:
+                body = (await page.inner_text("body"))[:4000].lower()
+                if re.search(r"you must agree|dispute resolution|applicant agreement|this (is a|field is) required", body):
+                    await page.evaluate(
+                        """()=>{const A=/agree|acknowledge|dispute resolution|\\bdrp\\b|applicant agreement|opportunity to (print|read|review)|read and review|i have (had|read)/i;
+                          for(const c of document.querySelectorAll('input[type=checkbox]')){
+                            if(!c.checked) continue;
+                            const req=c.required||c.getAttribute('aria-required')==='true';
+                            const lf=c.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(c.id):c.id)+'"]'):null;
+                            const t=((lf&&lf.innerText)||(c.closest('label,div,li,td')||{}).innerText||'');
+                            if(req&&A.test(t)){c.checked=false;c.dispatchEvent(new Event('change',{bubbles:true}));}}}""")
+            except Exception:
+                pass
             try:                              # the DRP box renders BELOW the long plan text — scroll it in
                 await page.evaluate("()=>window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(500)
@@ -373,25 +391,41 @@ class PhenomStrategy(OracleORCStrategy):
                 # a dozen steps). Dismiss the popup, then try label-click / force-check / input-click,
                 # verifying is_checked, up to 3×.
                 checked = False
-                for attempt in range(3):
+                for attempt in range(4):
                     try:
                         await self._dismiss_feedback_popup(page)
                     except Exception:
                         pass
+                    # scroll the box into view so the click lands on-screen (the DRP box is far down)
+                    try:
+                        await page.locator(t["chk"]).first.evaluate(
+                            "c=>{const l=c.labels&&c.labels[0];(l||c).scrollIntoView({block:'center'});}")
+                        await page.wait_for_timeout(150)
+                    except Exception:
+                        pass
+                    # PREFER a real, actionable (non-force) label click — it waits for the label to be
+                    # visible/stable/hit-testable, so it genuinely fires the checkbox's change handler
+                    # that Conduent's validation requires (a force click / JS set is accepted by
+                    # is_checked but REJECTED by validation → 'you must agree' persists, the 141/143
+                    # failure). Fall back to force only if the real click can't land.
                     if t.get("hasLabel") and t.get("id"):
                         try:
                             lab = page.locator(f'label[for="{t["id"]}"]').first
                             if await lab.count():
-                                await lab.click(timeout=2500, force=True)
+                                await lab.click(timeout=2000)          # real click, no force
+                                await page.wait_for_timeout(250)
                         except Exception:
-                            pass
+                            try:
+                                await page.locator(f'label[for="{t["id"]}"]').first.click(timeout=2000, force=True)
+                            except Exception:
+                                pass
                     try:
                         if await page.locator(t["chk"]).first.is_checked():
                             checked = True
                             break
                     except Exception:
                         pass
-                    try:                       # force-check the input directly (custom-styled → force)
+                    try:                       # last resort: force-check the input directly
                         await page.locator(t["chk"]).first.check(timeout=2000, force=True)
                         if await page.locator(t["chk"]).first.is_checked():
                             checked = True
@@ -399,14 +433,12 @@ class PhenomStrategy(OracleORCStrategy):
                     except Exception:
                         pass
                     await page.wait_for_timeout(500)
-                try:
-                    if not checked and not await page.locator(t["chk"]).first.is_checked():
-                        await page.locator(t["chk"]).first.evaluate(
-                            "c=>{c.checked=true;c.dispatchEvent(new Event('input',{bubbles:true}));"
-                            "c.dispatchEvent(new Event('change',{bubbles:true}));c.dispatchEvent(new Event('click',{bubbles:true}));}")
+                # NO JS `checked=true` fallback: a JS/force-set checked state is REJECTED by Conduent's
+                # validation yet reads as checked, which permanently blocks the scan from re-clicking it
+                # (141/143 stalled this way). Leaving it unchecked lets the next wizard step retry a real
+                # click; over the 14-step loop a genuine click lands.
+                if checked:
                     n += 1
-                except Exception:
-                    pass
             if targets:
                 print(f"[conduent ticked {n}/{len(targets)} agreement checkbox(es): {[t.get('id') for t in targets][:6]}]", flush=True)
             else:

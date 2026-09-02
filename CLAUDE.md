@@ -1382,6 +1382,22 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     no server-side filter, so we page all ~30 pages and filter client-side (`_kelly_row`, `html.unescape`
     the title). **If the pool is empty, Kelly is SKIPPED** (a bare datacenter request just 403s) — so its
     yield depends on a live proxy pool. It's the slow source (~55s, 30 proxied pages).
+    **Kelly APPLY lane (auto-apply, added 2026-09-02) — the "BLOCKED/residential" claim is STALE.**
+    The apply IS the login-less WordPress Gravity Form (`strategies/kelly.py`), and — verified live —
+    the apply PAGE loads 200 through the SAME rotating BD **datacenter** pool gateway that clears the
+    feed's Akamai (`_pool_proxy_url()`); a US RESIDENTIAL zone is NOT required (the strategy docstring's
+    old note is corrected). Two fixes made it drive: (1) `mass_hiring_apply.run_batch_parallel` now
+    passes a pool proxy to the co-pilot `/load` for Akamai/DataDome hosts (`_PROXY_APPLY_HOSTS` =
+    `("mykelly.com",)`, with a fresh-egress retry) — the co-pilot loads DIRECT otherwise and 403s before
+    filling; (2) `KellyStrategy.open_form` now clicks **"Apply Now"** to REVEAL the Gravity Form — it sits
+    in the DOM HIDDEN (`.gform_wrapper` offsetParent null, ~5 visible inputs) until the click, which
+    reveals the full ~36-field form incl. 3 résumé file inputs INLINE (same URL). Without the reveal the
+    analyzer saw no form → `filled=0` → `no_form`. Driver: **`mass_hiring_apply_kelly_cron.py`** (mirrors
+    the Maximus cron; `kelly_ids()` = active `mykelly` jobs; `per_job_timeout=600` — the proxied 894 KB
+    page + several local-LLM calls make the fill heavier than other lanes, and it BALLOONS under
+    multi-fork LLM contention; low worker default so parallel Kelly fills don't starve the one LLM). Run
+    under `sg mail`. NB Kelly's Bullhorn submit sends no emailed code (single-page form), so ground-truth
+    = a Bullhorn/Kelly acknowledgement in the persona's `@takhet.com` box after a confirmed submit.
   - **Maximus (Avature, ~21).** NOT Workday (that tenant is dormant/422). Real ATS = the Avature portal
     (id 4). Two-step, no login/captcha: (1) `GET /careers/Job-Search_US` with a **cookie jar**; the HTML
     embeds a job-list widget whose `data-props` is **nested by device — use `['desktop']`** — carrying a

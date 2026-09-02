@@ -200,6 +200,33 @@ def prepare(row: dict, gender: str | None = None) -> tuple[str, str]:
 # (bulk_pool, ports 8110+) instead of one-at-a-time on the single noVNC co-pilot. Each worker
 # is its own browser (clean session per job), so this is faster AND avoids the shared-login
 # pollution entirely. Workers get AVATURE_ADVANCE=1 so the wizard walks to the real Submit.
+# Apply hosts whose bot-management 403s our datacenter IP but is CLEARED by the rotating BD pool
+# gateway — route the co-pilot's browser context through a pool proxy for these (the co-pilot loads
+# DIRECT otherwise, so an Akamai/DataDome host would 403 before the strategy ever fills). Verified
+# live 2026-09-02: www.mykelly.com (Akamai) returns 200 + the Gravity Form through the pool. Others
+# in SUPPORTED_HOSTS that the comments call "residential" (SmartRecruiters/DataDome, Working
+# Solutions, Amazon/WAF) are NOT added here until the pool is verified to clear them.
+_PROXY_APPLY_HOSTS = ("mykelly.com",)
+
+
+def _host_needs_proxy(row: dict) -> bool:
+    url = (row or {}).get("apply_url") or ""
+    return any(h in url for h in _PROXY_APPLY_HOSTS)
+
+
+def _proxy_for(row: dict) -> dict | None:
+    """A rotating pool proxy (dict with server/username/password) for an apply host that needs one
+    to get past host bot-management, else None (load direct). Best-effort — a dead pool returns
+    None and the load proceeds direct (and 403s, surfaced as a normal fill failure)."""
+    if not _host_needs_proxy(row):
+        return None
+    try:
+        from backend.tools import proxy_pool
+        return proxy_pool.next_proxy()
+    except Exception:
+        return None
+
+
 def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                        dry_run: bool = True, per_job_timeout: int = 360,
                        progress_path: str | None = None) -> list[dict]:
@@ -259,16 +286,32 @@ def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                 pid, jobid = prepare(row, gender=gender)
                 rec["profile"] = pid
                 httpx.post(f"http://127.0.0.1:{port}/release", data={"profile": pid}, timeout=10)
-                r = httpx.post(f"http://127.0.0.1:{port}/load",
-                               data={"jobid": jobid, "profile": pid,
-                                     "dry_run": "1" if dry_run else "0", "wait_submit": "1"},
-                               timeout=per_job_timeout)
-                res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+                # Akamai/DataDome hosts (Kelly) load DIRECT otherwise -> 403 before the strategy can
+                # fill; route the co-pilot context through a pool proxy, and retry with a FRESH egress
+                # if a bad IP still 403s (nothing filled, no click).
+                needs_proxy = _host_needs_proxy(row)
+                attempts = 3 if needs_proxy else 1
+                res: dict = {}
+                for attempt in range(attempts):
+                    data = {"jobid": jobid, "profile": pid,
+                            "dry_run": "1" if dry_run else "0", "wait_submit": "1"}
+                    prox = _proxy_for(row) if needs_proxy else None
+                    if prox and prox.get("server"):
+                        data.update({"proxy_server": prox["server"],
+                                     "proxy_username": prox.get("username", ""),
+                                     "proxy_password": prox.get("password", "")})
+                    r = httpx.post(f"http://127.0.0.1:{port}/load", data=data, timeout=per_job_timeout)
+                    res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+                    rec["http"] = r.status_code
+                    sr = res.get("submit_result") or {}
+                    if (not needs_proxy) or res.get("filled") or sr.get("clicked"):
+                        break  # loaded fine (or a real fill/click) — a 403 leaves filled empty
                 sr = res.get("submit_result") or {}
-                rec.update({"http": r.status_code, "clicked": sr.get("clicked"),
+                rec.update({"clicked": sr.get("clicked"),
                             "confirmed": sr.get("confirmed"), "blocked": sr.get("blocked"),
                             "post_url": sr.get("post_url"), "filled": res.get("filled"),
-                            "unfilled": res.get("unfilled")})
+                            "unfilled": res.get("unfilled"),
+                            "proxy_attempts": (attempt + 1) if needs_proxy else 0})
             except Exception as e:
                 rec["error"] = f"{type(e).__name__}: {e}"[:200]
             with lock:

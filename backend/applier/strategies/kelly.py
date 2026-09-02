@@ -71,11 +71,44 @@ class KellyStrategy(ApplyStrategy):
         return "mykelly.com" in (url or "").lower()
 
     async def open_form(self, page: Page) -> None:
-        # The apply URL IS the job page and the Gravity Form is embedded inline — there is no
-        # "Apply" button to click to reveal it (clicking a generic Apply could scroll away or
-        # hit an unrelated CTA). Just dismiss the cookie banner FIRST (before any fill, so it
-        # never resets a filled field or intercepts the later Submit) and let base.prefill fill.
+        # The apply URL IS the job page, but the Gravity Form is present-yet-HIDDEN until an
+        # "Apply Now" button is clicked (verified live 2026-09-02: the `.gform_wrapper` sits in
+        # the DOM with offsetParent null and only ~5 inputs are visible; clicking "Apply Now"
+        # reveals it inline — same URL — with the full ~36-field form incl. the résumé file
+        # inputs). Without the reveal, base.prefill's analyzer sees no fillable form -> filled=0
+        # -> "no_form". Dismiss the cookie banner FIRST (so it never intercepts the click or a
+        # later field/Submit), THEN reveal the form, then let base.prefill fill.
         await self._dismiss_cookie_banner(page)
+        await self._reveal_apply_form(page)
+
+    async def _reveal_apply_form(self, page: Page) -> None:
+        """Click the 'Apply Now' toggle that reveals the inline Gravity Form and wait for it to
+        render. Idempotent + best-effort: if the form is already visible (or no button is found)
+        it no-ops, so a re-run or a future layout where the form is inline never double-clicks."""
+        try:
+            already = await page.evaluate(
+                "() => { const g = document.querySelector('.gform_wrapper');"
+                " return !!(g && g.offsetParent !== null); }")
+            if already:
+                return
+            clicked = await page.evaluate(
+                "() => { const els = [...document.querySelectorAll("
+                "'a,button,input[type=button],[role=button]')];"
+                " const b = els.find(e => /apply\\s*now/i.test(e.textContent || e.value || ''));"
+                " if (b) { b.scrollIntoView({block:'center'}); b.click(); return true; }"
+                " return false; }")
+            if not clicked:
+                return
+            # Gravity Forms reveals via AJAX; wait (cap ~8s) for the wrapper to become visible.
+            for _ in range(16):
+                await page.wait_for_timeout(500)
+                vis = await page.evaluate(
+                    "() => { const g = document.querySelector('.gform_wrapper');"
+                    " return !!(g && g.offsetParent !== null); }")
+                if vis:
+                    return
+        except Exception as exc:
+            logger.debug("kelly: reveal apply form raised: %s", exc)
 
     async def prefill(self, page: Page, profile_form: dict, resume_path: str,
                       cover_letter: str = "", job: dict | None = None,

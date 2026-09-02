@@ -220,6 +220,25 @@ live-captcha/WAF + video assessment) — do NOT build.
 > `_fill_orc_radiobuttons`) against `logs/orc_recon/153/*.html` + the phone-policy call + a WOTC
 > filler. `orc_recon.py` is committed (NOT cron-wired — no end-to-end ack yet). Dry run = no
 > ORC_ADVANCE (side-effect-free); real = `ORC_ADVANCE=1`.
+> **UPDATE 2026-09-02 — Workday-family (Cigna/Humana/CVS/Concentrix) now has a DRIVER
+> (`backend/tools/mass_hiring_apply_workday_cron.py`, mirrors `mass_hiring_apply_cron.py`: selects
+> supported Workday-tenant ids via `mha.is_supported`, real-submits via `run_batch_parallel(
+> dry_run=False)` with `WORKDAY_ADVANCE=1`), but it ships as a SAFE NO-OP (`_LIVE_TENANTS` EMPTY).
+> A live 4-tenant smoke drove one sacrificial job each (cigna 1221 / humana 1222 / cvshealth 531 /
+> concentrix 328): **all four returned `filled=0`, no guest account created, ZERO mail** — blocked
+> at the account-CREATE gate, and 0 `*@myworkday.com` acks landed across all Maildirs in the
+> following 90 min. Root cause (code + tenant contrast, not fill-tuning): the register-step
+> reCAPTCHA is solved by `captcha_solver.solve_on_page`, a **no-op without `CAPTCHA_SOLVER_KEY`**
+> (only `NOPECHA_KEY` is set, which the Workday solver doesn't use), so account creation never
+> clears → `WorkdayMassHiringStrategy.prefill` returns `login_required` with `filled=0`. A
+> datacenter IP is also risk-scored, so a US residential IP is wanted too. **CONTRAST — Centene
+> (centene.wd5) is the ONE Workday tenant that completes KEYLESS** (18 real "Your Centene
+> application is under review" acks in `mail_index`): its register step has no blocking reCAPTCHA.
+> So the cron's `_BLOCKED` map documents cigna/humana/cvs/concentrix (register-reCAPTCHA solver
+> key + residential IP; may compound with Workday's ~90-account/day `*.workday.com` activation-
+> email throttle). To go live: add `"centene"` to `_LIVE_TENANTS` after one fresh confirm run
+> (works keyless now), and/or set `CAPTCHA_SOLVER_KEY` (capsolver/2captcha) + a residential egress
+> for the other four. NOT cron-wired (no crontab line) until ≥1 tenant is validated.
 **`strategies/avature.py` — COMPLETES A REAL
 SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
 email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the

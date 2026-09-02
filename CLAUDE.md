@@ -1292,6 +1292,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     Solutions_jobs/query` with the PUBLIC referer-restricted search key (in code) + `Referer:
     https://apply.workingsolutions.com/` (mandatory, else 403). 100%-remote contractor CSR; keep the US
     `country` facet. Build `apply_url` from `hits[].id`.
+    **AUTO-APPLY = NOT BUILDABLE (verified live 2026-09-02, `auto_status='blocked'`).** The
+    apply.workingsolutions.com portal (SmartDreamers/Laravel) is a CONTRACTOR-ONBOARDING FUNNEL, not a
+    per-job application. The live job page prints its own "Application Process": (1) Create Profile
+    (fillable apply fields at the page bottom — the ONLY automatable step), (2) Complete Assessments
+    (one attempt), (3) **Pass PC Scan** — download+install+run a NATIVE scanner app on a real Windows/Mac
+    WORK laptop (checks OS/RAM/internet/hardwired) — impossible from a Linux datacenter server, and (4)
+    **Record Video Interview**. Steps 3-4 are a hard wall (native-app + video = human-only); the
+    application is NOT considered without them, and you can't even apply to a specific program until
+    profile+assessment+PC-scan are done. So filling Step 1 reaches no real ack — do NOT build a driver;
+    it's the same onboarding wall as Liveops. Board keeps the rows as a human-apply/discovery signal only.
   - **Shared helpers:** `_fetch_workday`/`_workday_row` (Concentrix + CVS + Centene + Cigna). A row is
     REMOTE if `_is_remote` hits the `locationsText` OR the `externalPath` slug (a multi-location row shows
     loc "16 Locations" while the path is `/job/Tennessee-Work-at-Home/…`). US is taken as given when the

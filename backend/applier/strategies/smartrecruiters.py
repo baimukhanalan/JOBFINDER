@@ -215,57 +215,67 @@ class SmartRecruitersStrategy(GenericStrategy):
         await self._answer_screeners(page, facts)
 
     async def _fill_location(self, page: Page, profile_form: dict) -> bool:
-        """Fill the SmartRecruiters location typeahead (Google Places): type the persona's
-        city and click the first suggestion. Best-effort — an optional/absent field is fine."""
+        """Fill the SmartRecruiters location field. It is a custom `<spl-autocomplete
+        data-test="location-autocomplete">` web component rendered in SHADOW DOM — a real
+        `<input role=combobox aria-required=true>` whose value only STICKS when a suggestion
+        is clicked (an uncommitted typed value is cleared by the component). Playwright locators
+        pierce open shadow roots, so target the input directly; the old label-scan used
+        `document.querySelectorAll` (does NOT pierce shadow) + Google `.pac-item` selectors and
+        so never found the field, leaving City blank → "Please provide your place of residence".
+        Best-effort — an optional/absent field is fine."""
         city = (profile_form.get("city")
                 or (profile_form.get("location") or "").split(",")[0]).strip()
         if not city:
             return False
-        # Find an empty location-ish text/search input by label/placeholder/name.
-        found = await page.evaluate(
-            """()=>{const n=s=>(s||'').toLowerCase();
-              for(const el of document.querySelectorAll(
-                  'input[type=text],input[type=search],input:not([type]),input[role=combobox]')){
-                if((el.value||'').trim())continue;
-                const id=el.id;
-                const l=id?document.querySelector('label[for="'+
-                  (window.CSS&&CSS.escape?CSS.escape(id):id)+'"]'):null;
-                let lt=((l&&l.innerText)||el.getAttribute('aria-label')||
-                        el.getAttribute('placeholder')||el.name||'');
-                lt=n(lt);
-                if(/location|city|where.*based|current.*location|town/.test(lt)){
-                  el.setAttribute('data-jfloc','1'); return true;}}
-              return false;}""")
-        if not found:
+        inp = None
+        for sel in ('input[data-sr-id="location-autocomplete-search-search-input"]',
+                    'spl-autocomplete[data-test="location-autocomplete"] input[role="combobox"]',
+                    'input.c-spl-input[aria-controls^="menu-"]'):
+            try:
+                cand = page.locator(sel).first
+                if await cand.count():
+                    inp = cand
+                    break
+            except Exception:
+                continue
+        if inp is None:
+            try:
+                cand = page.get_by_role(
+                    "combobox", name=re.compile(r"city|location|residence|town", re.I)).first
+                if await cand.count():
+                    inp = cand
+            except Exception:
+                inp = None
+        if inp is None:
             return False
-        picked = False
-        try:
-            loc = page.locator("input[data-jfloc='1']")
-            await loc.click(timeout=2500)
-            await loc.fill(city, timeout=2500)
-            await page.wait_for_timeout(1400)   # Places suggestion load
-            # Google Places renders `.pac-item`; SR also uses a listbox with [role=option].
-            for opt_sel in (".pac-item", "[role='option']", ".oneclick-autocomplete li",
-                            "ul[role='listbox'] li"):
+
+        async def _type_and_pick(query: str) -> bool:
+            try:
+                await inp.click(timeout=2500)
                 try:
-                    opt = page.locator(opt_sel).first
-                    if await opt.count() and await opt.is_visible(timeout=800):
-                        await opt.click(timeout=2000)
-                        picked = True
-                        break
+                    await inp.fill("")
                 except Exception:
-                    continue
-            if not picked:
-                # No suggestion surfaced — commit the typed value via keyboard as a fallback.
-                await loc.press("ArrowDown")
-                await loc.press("Enter")
-        except Exception:
-            pass
-        try:
-            await page.eval_on_selector("input[data-jfloc='1']",
-                                        "e=>e.removeAttribute('data-jfloc')")
-        except Exception:
-            pass
+                    pass
+                await inp.type(query, delay=90)   # >= the component's minquerylength (3)
+                for _ in range(14):               # SR renders role=option items async on type
+                    await page.wait_for_timeout(400)
+                    opts = page.get_by_role("option")
+                    try:
+                        if await opts.count():
+                            await opts.first.click(timeout=2000)
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            return False
+
+        picked = await _type_and_pick(city)
+        if not picked:
+            # retry with just the city's first token (e.g. "New York City" -> "New York")
+            short = city.split(",")[0].split()[0]
+            if short and short != city:
+                picked = await _type_and_pick(short)
         return picked
 
     async def _answer_screeners(self, page: Page, facts) -> None:
@@ -555,7 +565,11 @@ class SmartRecruitersStrategy(GenericStrategy):
         try:
             return await page.evaluate(
                 """()=>{const out=[];const seen=new Set();
-                  for(const el of document.querySelectorAll('input,select,textarea')){
+                  function* walk(root){
+                    yield* root.querySelectorAll('input,select,textarea');
+                    for(const el of root.querySelectorAll('*')) if(el.shadowRoot) yield* walk(el.shadowRoot);
+                  }
+                  for(const el of walk(document)){
                     const t=(el.type||'').toLowerCase();
                     if(['hidden','submit','button','file','reset'].includes(t)) continue;
                     const r=el.getBoundingClientRect();
@@ -563,18 +577,20 @@ class SmartRecruitersStrategy(GenericStrategy):
                     const req=el.required||el.getAttribute('aria-required')==='true'
                       ||!!el.closest('[aria-required="true"]');
                     if(!req) continue;
+                    const root=el.getRootNode();
                     let empty;
                     if(t==='checkbox'||t==='radio'){const nm=el.name;
-                      empty=nm?![...document.querySelectorAll('[name="'+
+                      empty=nm?![...root.querySelectorAll('[name="'+
                         (window.CSS&&CSS.escape?CSS.escape(nm):nm)+'"]')].some(x=>x.checked):!el.checked;}
                     else empty=!(el.value||'').trim();
                     if(!empty) continue;
                     let lab='';const id=el.id;
-                    if(id){const l=document.querySelector('label[for="'+
+                    if(id){const l=root.querySelector('label[for="'+
                       (window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');if(l)lab=l.innerText.trim();}
                     if(!lab){const l=el.closest('label')||
                       (el.parentElement&&el.parentElement.querySelector('label'));if(l)lab=l.innerText.trim();}
-                    lab=(lab||'').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||(el.name||'field');
+                    if(!lab)lab=el.getAttribute('aria-label')||el.getAttribute('label')||'';
+                    lab=(lab||'').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||(el.name||el.getAttribute('data-sr-id')||'field');
                     if(!seen.has(lab)){seen.add(lab);out.push(lab);}
                   } return out;}""")
         except Exception:

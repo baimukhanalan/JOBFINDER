@@ -203,6 +203,25 @@ live-captcha/WAF + video assessment) — do NOT build.
 > next lane** — its only submit gate is an emailed PIN (machine-readable, like GH/Ashby) + invisible
 > reCAPTCHA v3 (no solver key), closest to Avature's autonomous ceiling; Workday needs a per-tenant
 > register-step reCAPTCHA solver key + ideally a residential IP. Not yet wired.
+> (3) **SmartRecruiters (Sutherland) — the "BLOCKED" wall verdict is STALE; fill works, submit does NOT
+> yet (audited 2026-09-02, NOT live-validated).** Verified live on job 536 with patchright stealth from the
+> DATACENTER IP: the posting loads with **NO DataDome "verify you are human" interstitial** (the old
+> stacked-account/live-captcha "do NOT build" claim above is WRONG — stealth clears it), and the guest
+> one-click form now FILLS end-to-end including the required City field. The whole one-click form is a
+> **SHADOW-DOM web-component app** (`<spl-autocomplete>`/`<spl-input>`/`<spl-button>`), so a raw
+> `document.querySelectorAll` sees ~1 input. FIXED in `strategies/smartrecruiters.py`: `_fill_location`
+> targets the real `input[data-sr-id="location-autocomplete-search-search-input"]` combobox and commits a
+> `get_by_role("option")` suggestion (so `"Houston, TX, US"` sticks — was the "Please provide your place of
+> residence" blocker), and `_rescan_required` pierces shadow DOM (honest `unfilled`). 28 SR tests pass.
+> Driver `tools/smartrecruiters_recon.py` (patchright + NopeCHA, `SMARTRECRUITERS_ADVANCE=1`, headful `:98`)
+> + cron `tools/mass_hiring_apply_sr_cron.py` are SHIPPED as a **SAFE NO-OP — NOT live-validated, NO cron
+> installed (0 real acks yet).** **Remaining gap:** the form's Next/Submit are `<spl-button>` shadow-DOM
+> controls, but the strategy's wizard walker (`_primary_button`/`_step_signature`) + submit-click use raw
+> `querySelectorAll("button")` (no shadow pierce), so they miss the real primary action and the driver
+> instead clicks the top **"Apply With Indeed"** integration button → the form never submits → the persona
+> Maildir stays EMPTY, NO ack. This is NOT a captcha/video/account wall. TO GO LIVE: make the wizard walker
+> + submit-click shadow-piercing AND exclude the LinkedIn/Indeed integration buttons (`[data-test*=apply]`
+> on those), then re-drive job 536 to a real "application received" ack before installing the cron.
 > **UPDATE 2026-09-02 — Oracle ORC now has a DRIVER (`backend/tools/orc_recon.py`, modeled on
 > `taleo_recon.py`), first live run done. GOOD: the datacenter IP loads Alorica's CX site with NO
 > WAF, the guest email+terms step fills, NEXT reveals the full form. BAD: this Alorica tenant

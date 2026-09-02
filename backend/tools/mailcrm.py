@@ -867,6 +867,24 @@ def delete_thread(path_hash: str) -> dict[str, Any]:
 
 
 # ---- sending (self-hosted Postfix submission, as the candidate) ------------
+_UNDELIVERABLE_RE = re.compile(
+    r"^(?:no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|bounce)[\w.+-]*@"
+    r"|@(?:[\w-]+\.)*greenhouse-mail\.io$",
+    re.I,
+)
+
+
+def is_undeliverable(addr: str) -> bool:
+    """True when `addr` is a no-reply / automated-notification address a reply would bounce off
+    (e.g. Greenhouse's no-reply@us.greenhouse-mail.io — verified: a cabinet reply to one came back
+    MAILER-DAEMON 550). Such threads must be answered via the link/portal in the message, not by
+    email; sending anyway bounces silently and the recruiter never sees it."""
+    a = (addr or "").strip().lower()
+    if not a or "@" not in a:
+        return True
+    return bool(_UNDELIVERABLE_RE.search(a))
+
+
 def send(from_email: str, to: str, subject: str, body: str,
          in_reply_to: str = "") -> dict[str, Any]:
     """Submit one message via our own Postfix (587, STARTTLS+SASL as the
@@ -889,6 +907,10 @@ def send(from_email: str, to: str, subject: str, body: str,
         return {"ok": False, "error": f"no submission password for {from_email}"}
     if not to:
         return {"ok": False, "error": "no recipient"}
+    if is_undeliverable(to):
+        return {"ok": False, "noreply": True,
+                "error": f"recipient {_email_only(to)} is a no-reply/notification address — "
+                         "a reply would bounce; answer via the link/portal in the message"}
 
     msg = EmailMessage()
     msg["From"] = f'{cand["name"]} <{from_email}>' if cand.get("name") else from_email

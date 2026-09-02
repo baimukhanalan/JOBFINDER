@@ -254,7 +254,7 @@ def _thread_card(m: dict) -> str:
         f'<div class="body">{body}</div></div>')
 
 
-def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None) -> str:
+def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, links=None) -> str:
     subj = thread.get("subject") or "(без темы)"
     mailbox = thread.get("mailbox") or ""
     candidate = thread.get("candidate") or ""
@@ -265,6 +265,19 @@ def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None) -> s
     sent_banner = ""
     if sent == "ok":
         sent_banner = '<div class="note">Ответ отправлен рекрутёру.</div>'
+    elif sent == "noreply":
+        # The thread's sender is a no-reply/automated notification (e.g. Greenhouse) — a reply by
+        # email bounces and never reaches the recruiter. Point the interviewer at the links instead.
+        lk = ""
+        if links:
+            items = "".join(
+                f'<li><a href="{escape(u, quote=True)}" target="_blank" rel="noopener noreferrer">'
+                f'{escape(u[:90])}</a></li>' for u in links)
+            lk = f'<div class="tbox">Ссылки из письма (расписание / портал):<ul>{items}</ul></div>'
+        sent_banner = (
+            '<div class="err">Это автоматическое уведомление (no-reply) — ответить по почте нельзя, '
+            'рекрутёр его не получит. Откройте ссылку из письма (назначение времени / портал) ниже '
+            'или свяжитесь по реальному адресу рекрутёра.</div>' + lk)
     elif sent == "err":
         sent_banner = '<div class="err">Не удалось отправить ответ. Попробуйте ещё раз.</div>'
 

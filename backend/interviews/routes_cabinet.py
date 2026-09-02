@@ -14,6 +14,7 @@ otherwise 404. The shared `mailcrm.get_thread` is left unchanged — the guard l
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -25,6 +26,27 @@ from backend.tools import mail_db, mailcrm
 log = logging.getLogger("cabinet")
 
 router = APIRouter(prefix="/cabinet")
+
+_LINK_RE = re.compile(r'https?://[^\s"<>()\]}]+', re.I)
+_LINK_SKIP_RE = re.compile(r"unsubscribe|/preferences|list-manage|/track|/pixel|utm_|beacon|/wf/open", re.I)
+
+
+def _reply_links(msg: dict) -> list[str]:
+    """Http(s) links from a message (plain + html) — shown to the interviewer when a thread can't
+    be answered by email (a no-reply notification), so they can reach the recruiter via the
+    scheduling/portal link instead. Drops tracking/unsubscribe noise; capped at 6."""
+    text = f"{msg.get('plain') or ''} {msg.get('html') or ''}"
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in _LINK_RE.findall(text):
+        u = u.rstrip('.,;:)"\'>')
+        if not u or _LINK_SKIP_RE.search(u) or u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+        if len(out) >= 6:
+            break
+    return out
 
 
 @router.get("", response_class=HTMLResponse)
@@ -156,13 +178,25 @@ def reply(hash: str = Form(...), body: str = Form(...),
     mid = target.get("message_id") or ""
 
     sent = "err"
-    if to and (body or "").strip():
+    links: list[str] = []
+    if not (body or "").strip():
+        sent = "err"
+    elif mailcrm.is_undeliverable(to):
+        # Greenhouse & co. notify FROM no-reply@…; a reply bounces (MAILER-DAEMON 550) and the
+        # recruiter never sees it. Don't send silently — surface the message's own links so the
+        # interviewer can reach the recruiter via the scheduling/portal link instead.
+        sent = "noreply"
+        links = _reply_links(target)
+    else:
         try:
             res = mailcrm.send(from_email=persona, to=to, subject=subj or "Re:",
                                body=body, in_reply_to=mid)
-            sent = "ok" if res.get("ok") else "err"
+            if res.get("noreply"):
+                sent, links = "noreply", _reply_links(target)
+            else:
+                sent = "ok" if res.get("ok") else "err"
         except Exception as e:
             log.warning("cabinet reply send failed: %s", e)
             sent = "err"
     fresh = mailcrm.get_thread(hash, mark=False) or thread
-    return HTMLResponse(cabinet_ui.thread_page(responsible, fresh, hash=hash, sent=sent))
+    return HTMLResponse(cabinet_ui.thread_page(responsible, fresh, hash=hash, sent=sent, links=links))

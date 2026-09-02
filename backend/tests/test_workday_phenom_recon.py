@@ -46,11 +46,11 @@ def test_workday_job_ids_sql_shape(monkeypatch):
     _patch_conn(monkeypatch, [(101,), (102,), (103,)], sink)
     ids = workday_recon.workday_job_ids()
     assert ids == [101, 102, 103]
-    # source ANY(humana,centene) + the wd5 host filter + active
+    # source ANY(all 5 Workday-CxS mass-hiring tenants) + the wd5|wd1 host filter + active
     assert "source = ANY(%s)" in sink["sql"]
     assert "active" in sink["sql"].lower()
-    assert sink["params"][0] == ["humana", "centene"]
-    assert sink["params"][1] == "%.wd5.myworkdayjobs.com%"
+    assert sink["params"][0] == ["centene", "cigna", "humana", "cvshealth", "concentrix"]
+    assert sink["params"][1] == r"\.(wd5|wd1)\.myworkdayjobs\.com"
 
 
 def test_workday_job_ids_limit(monkeypatch):

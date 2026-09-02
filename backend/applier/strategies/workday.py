@@ -466,8 +466,8 @@ class WorkdayStrategy(ApplyStrategy):
         import asyncio
         since = getattr(self, "_acct_ts", 0.0) - 60
         link = None
-        for _ in range(10):                      # ~100s — the activation email lands within a minute
-            link = _workday_activation_link(email, since)
+        for _ in range(18):                      # ~180s — the activation email usually lands within a
+            link = _workday_activation_link(email, since)   # minute, but can lag under mail-server load
             if link:
                 break
             await asyncio.sleep(10)
@@ -888,43 +888,131 @@ class WorkdayStrategy(ApplyStrategy):
         if _dbg:
             await self._dbg_shot(page, "wotc_after_optout")
 
-    async def _fill_wd_date_signature(self, page: Page) -> None:
-        """The Voluntary Self-ID of Disability form requires a signature Date (today). Workday CxS
-        renders a 3-part MM/DD/YYYY widget (dateSectionMonth/Day/Year-input) or a single date input.
-        Fill any EMPTY date widget with today's date so the disclosure page can advance."""
+    def _signature_dates(self):
+        """Candidate 'today' dates for the CC-305 disability signature, most-likely first. Workday
+        validates the date against ITS server clock (a US-based tenant), NOT ours — so when our host
+        rolls to the next UTC day while it's still 'yesterday' in the US, date.today() (UTC) is
+        rejected as 'Enter today's date'. Try Centene's own timezone (US Central) first, then the
+        other US zones, then UTC and UTC-1 — de-duplicated, so one of them matches the server."""
         import datetime
-        d = datetime.date.today()
-        did = False
-        # 3-part spinner widget (the standard CxS date field)
-        parts = (('input[data-automation-id="dateSectionMonth-input"]', f"{d.month:02d}"),
-                 ('input[data-automation-id="dateSectionDay-input"]', f"{d.day:02d}"),
-                 ('input[data-automation-id="dateSectionYear-input"]', str(d.year)))
-        for sel, val in parts:
+        from zoneinfo import ZoneInfo
+        now = datetime.datetime.now(datetime.timezone.utc)
+        out, seen = [], set()
+        for tz in ("America/Chicago", "America/New_York", "America/Denver",
+                   "America/Los_Angeles", "UTC"):
             try:
-                loc = page.locator(sel)
-                cnt = await loc.count()
-                for i in range(cnt):
-                    e = loc.nth(i)
-                    if await e.is_visible(timeout=400) and not (await e.input_value() or "").strip():
-                        await e.fill(val, timeout=2000)
-                        did = True
+                d = now.astimezone(ZoneInfo(tz)).date()
             except Exception:
                 continue
-        if not did:
-            # single free-text date input on the disability/self-ID form
-            for sel in ('input[id$="--dateSignedOn"]', 'input[id*="isabilit" i][type="text"]',
-                        '[data-automation-id="selfIdentifiedDisabilityData--dateSignedOn"] input'):
-                try:
-                    e = page.locator(sel).first
-                    if await e.count() and await e.is_visible(timeout=400) \
-                            and not (await e.input_value() or "").strip():
-                        await e.fill(d.strftime("%m/%d/%Y"), timeout=2000)
-                        did = True
-                        break
-                except Exception:
-                    continue
-        if did and os.getenv("WORKDAY_DEBUG_SHOTS"):
-            logger.info("workday DATE-SIG: filled today's date %s", d.strftime("%m/%d/%Y"))
+            if d not in seen:
+                seen.add(d); out.append(d)
+        for d in (now.date(), (now - datetime.timedelta(days=1)).date()):
+            if d not in seen:
+                seen.add(d); out.append(d)
+        return out
+
+    async def _set_wd_date(self, page: Page, d) -> bool:
+        """Set the disability form's 3-segment date widget (dateSectionMonth/Day/Year-input, scoped
+        to '…dateSignedOn-…') to date `d`. Playwright's is_visible/fill can no-op on these overlaid
+        segment inputs, so set each via the React-controlled-input protocol in JS (native value
+        setter + input/change/keyup events), then blur to commit. Returns True on a full readback."""
+        res = await page.evaluate(
+            r"""(d)=>{
+              const nat=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+              const pick=(suffix)=>{
+                const all=[...document.querySelectorAll('input')].filter(x=>(x.id||'').endsWith(suffix));
+                if(!all.length)return null;
+                return all.find(x=>x.offsetParent!==null) || all[0];
+              };
+              const seg=(suffix,val)=>{
+                const e=pick(suffix); if(!e)return '';
+                e.focus();
+                nat.call(e,''); e.dispatchEvent(new Event('input',{bubbles:true}));
+                nat.call(e,val);
+                e.dispatchEvent(new Event('input',{bubbles:true}));
+                e.dispatchEvent(new Event('change',{bubbles:true}));
+                e.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:val.slice(-1)}));
+                e.blur(); e.dispatchEvent(new Event('blur',{bubbles:true}));
+                return (e.value||'').trim();
+              };
+              const m=seg('dateSignedOn-dateSectionMonth-input', d.mm);
+              const dd=seg('dateSignedOn-dateSectionDay-input', d.dd);
+              const y=seg('dateSignedOn-dateSectionYear-input', d.yyyy);
+              return {m,dd,y};
+            }""",
+            {"mm": f"{d.month:02d}", "dd": f"{d.day:02d}", "yyyy": str(d.year)})
+        if os.getenv("WORKDAY_DEBUG_SHOTS"):
+            logger.info("workday DATE-SIG segments set -> %r", res)
+        if res and res.get("m") and res.get("dd") and res.get("y"):
+            return True
+        # single free-text date input fallback (rare tenants)
+        for sel in ('input[id$="--dateSignedOn"]', 'input[placeholder="MM/DD/YYYY"]'):
+            try:
+                e = page.locator(sel).first
+                if await e.count():
+                    await e.fill(d.strftime("%m/%d/%Y"), timeout=1500)
+                    await e.press("Tab")
+                    return True
+            except Exception:
+                continue
+        return bool(res and any(res.values()))
+
+    async def _fill_wd_date_signature(self, page: Page) -> None:
+        """The Voluntary Self-ID of Disability (CC-305) form requires a signature Date == the
+        server's 'today'. Fill it with the first candidate (US Central), so the disclosure page
+        advances. _advance_wizard re-fills the NEXT candidate if a 'today's date' error survives a
+        Continue (server-timezone mismatch)."""
+        if os.getenv("WORKDAY_DEBUG_SHOTS"):
+            try:
+                dom = await page.evaluate(
+                    "()=>{const labs=[...document.querySelectorAll('label')]"
+                    ".filter(l=>/^\\s*date\\b/i.test(l.innerText||''));"
+                    "if(!labs.length)return 'no date label';const l=labs[labs.length-1];"
+                    "const ff=l.closest('[data-automation-id^=\"formField\"]')||l.parentElement;"
+                    "const inps=[...ff.querySelectorAll('input')].map(e=>({aid:e.getAttribute('data-automation-id'),"
+                    "id:e.id,ph:e.placeholder,type:e.type,val:e.value}));"
+                    "return {ffAid:ff.getAttribute('data-automation-id'),inputs:inps,"
+                    "html:ff.outerHTML.slice(0,600)};}")
+                logger.info("workday DATE-DOM: %r", dom)
+            except Exception as exc:
+                logger.info("workday DATE-DOM raised: %s", exc)
+        d = self._signature_dates()[0]
+        if await self._set_wd_date(page, d) and os.getenv("WORKDAY_DEBUG_SHOTS"):
+            logger.info("workday DATE-SIG: filled %s (US Central today)", d.strftime("%m/%d/%Y"))
+
+    async def _retry_date_on_error(self, page: Page) -> bool:
+        """After a Continue that failed with 'Enter today's date', cycle the remaining candidate
+        dates into the widget until the error text clears. Returns True if a date was (re)applied."""
+        try:
+            err = await page.evaluate(
+                "()=>/enter today.?s date|date is required|valid.*date|today.?s date/i"
+                ".test(document.body.innerText||'')")
+        except Exception:
+            err = False
+        if not err:
+            return False
+        applied = False
+        for d in self._signature_dates():
+            if not await self._set_wd_date(page, d):
+                break
+            applied = True
+            await page.wait_for_timeout(400)
+            try:
+                await page.keyboard.press("Tab")
+            except Exception:
+                pass
+            await page.wait_for_timeout(400)
+            try:
+                still = await page.evaluate(
+                    "()=>/enter today.?s date|date is required|today.?s date/i"
+                    ".test(document.body.innerText||'')")
+            except Exception:
+                still = True
+            if not still:
+                if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                    logger.info("workday DATE-SIG retry: %s cleared the error", d.strftime("%m/%d/%Y"))
+                break
+        return applied
 
     async def _answer_radio_screeners(self, page: Page, facts) -> None:
         """Answer every UNANSWERED radio-group screener (Workday questionnaire Yes/No) with a
@@ -1823,6 +1911,12 @@ class WorkdayStrategy(ApplyStrategy):
                 # Did not advance -> a required field on this step is still empty (or an inline
                 # validation error). Re-fill once (the error box now pinpoints what's missing) and
                 # retry the advance; if it STILL won't move, stop and leave the gaps for the human.
+                # First: the CC-305 disability step rejects a date != the SERVER's today ('Enter
+                # today's date') when our host is a UTC day ahead — cycle the candidate dates.
+                try:
+                    await self._retry_date_on_error(page)
+                except Exception as exc:
+                    logger.debug("workday: date retry raised: %s", exc)
                 await self._fill_current_step(page, profile_form, cover_letter, facts)
                 btn2, _ = await self._primary_button(page)
                 if btn2 is not None:

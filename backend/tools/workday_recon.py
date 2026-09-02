@@ -58,13 +58,16 @@ def _mha_prefill_root():
     return mha.PREFILL_ROOT
 
 
-def workday_job_ids(sources=("humana", "centene"), limit: int | None = None) -> list[int]:
-    """Active Workday-CxS mass-hiring rows to drive — Humana + Centene, on the *.wd5 host."""
+def workday_job_ids(sources=("centene", "cigna", "humana", "cvshealth", "concentrix"),
+                    limit: int | None = None) -> list[int]:
+    """Active Workday-CxS mass-hiring rows to drive across the WHOLE family that
+    WorkdayMassHiringStrategy owns — Centene / Cigna / Humana on the *.wd5 host + CVS Health /
+    Concentrix on the *.wd1 host (all four covered by _MASSHIRING_HOST_RE in workday.py)."""
     with mail_db.conn() as c:
         cur = c.cursor()
         q = ("SELECT id FROM mass_hiring_jobs WHERE source = ANY(%s) AND active "
-             "AND apply_url ILIKE %s ORDER BY id")
-        params = [list(sources), "%.wd5.myworkdayjobs.com%"]
+             "AND apply_url ~* %s ORDER BY id")
+        params = [list(sources), r"\.(wd5|wd1)\.myworkdayjobs\.com"]
         if limit:
             q += " LIMIT %s"
             params.append(int(limit))
@@ -297,13 +300,19 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                 print("[dry-run — filled, NOT clicking Submit (set "
                       f"{advance_env}=1 to really apply)]", flush=True)
 
-            # 5) poll the Maildir for the real confirmation (exit early once seen)
+            # 5) poll the Maildir for the real confirmation (exit early once seen). Only worth polling
+            #    when a Submit was actually clicked on a live application form — if the prefill stalled
+            #    at the account gate (login_required / captcha / expired) or never clicked, no receipt
+            #    is coming, so don't idle the full --keep window (a fresh-persona retry is far cheaper).
+            _pt = (result or {}).get("page_type")
+            poll_worthwhile = (advance and out.get("clicked")
+                               and _pt not in ("login_required", "captcha", "expired"))
             while time.time() < deadline:
                 if email and confirm(email, started):
                     out["confirmed"] = True
                     print("[application CONFIRMED — receipt in the persona mailbox]", flush=True)
                     break
-                if not advance:            # dry-run: no receipt is coming, don't idle
+                if not poll_worthwhile:    # dry-run OR a failed/gated prefill: no receipt is coming
                     break
                 await page.wait_for_timeout(10000)
             try:

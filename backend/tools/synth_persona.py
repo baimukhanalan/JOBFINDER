@@ -377,6 +377,32 @@ def _job_bilingual(job: dict) -> bool:
     return "bilingual" in text and ("spanish" in text or "bilingual" in (job.get("title") or "").lower())
 
 
+_STAFFABLE_SECOND_LANGS = ("Spanish", "Russian")  # we (or the team) can staff these honestly
+_BILINGUAL_LANG_RE = re.compile(r"\b([A-Za-z]+)-English\s+Bilingual", re.I)
+
+
+def _job_required_language(job: dict) -> str | None:
+    """The specific second language a bilingual role requires, Title-cased ('Russian' from a
+    'Russian-English Bilingual …' title; 'Spanish' for a generic Spanish-bilingual role); else None."""
+    title = job.get("title", "") or ""
+    m = _BILINGUAL_LANG_RE.search(title)
+    if m:
+        return m.group(1).capitalize()
+    text = f"{title} {job.get('location', '')}".lower()
+    if "bilingual" in text and "spanish" in text:
+        return "Spanish"
+    return None
+
+
+def job_is_staffable(job: dict) -> bool:
+    """False when a bilingual role requires a language we cannot HONESTLY staff (no native speaker),
+    so the caller SKIPS it rather than fabricating fluency. English-only + Spanish/Russian-bilingual
+    roles are staffable (the persona is DESIGNED bilingual — a persona attribute, never a claim on a
+    real person; a Russian language test downstream is passed by the team)."""
+    lang = _job_required_language(job)
+    return lang is None or lang in _STAFFABLE_SECOND_LANGS
+
+
 _CITIES = {
     "United States": ["Austin, TX", "Denver, CO", "Columbus, OH", "Seattle, WA"],
     "Canada": ["Toronto, ON", "Vancouver, BC", "Ottawa, ON", "Calgary, AB"],
@@ -670,8 +696,9 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
         "skills_grouped": {"Skills": skills} if skills else {},
         "certifications": [], "education": edu,
     }
-    bilingual = _job_bilingual(job) if job else False
-    languages = ["English", "Spanish"] if bilingual else ["English"]
+    req_lang = _job_required_language(job) if job else None
+    bilingual = bool(req_lang and req_lang in _STAFFABLE_SECOND_LANGS)
+    languages = ["English", req_lang] if bilingual else ["English"]
     profile = {
         "id": pid, "full_name": name, "email": email, "phone": phone,
         "location": loc, "city": city, "state": state, "street_address": street,
@@ -683,7 +710,8 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     facts = {"salary_annual": None, "english_level": "Fluent",
              "education_level": "Bachelor's" if edu else "", "tools": skills[:10],
              "languages": languages, "bilingual": bilingual,
-             "spanish_level": "Fluent" if bilingual else ""}
+             "second_language": (req_lang if bilingual else ""),
+             "spanish_level": "Fluent" if (bilingual and req_lang == "Spanish") else ""}
     return {"profile": profile, "facts": facts}
 
 

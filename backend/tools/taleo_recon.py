@@ -61,7 +61,10 @@ def _pick_state(source: str, title: str, location_raw: str) -> tuple[str, str, s
 
 
 def taleo_job_ids() -> list[int]:
-    """Active Taleo (UnitedHealth + TTEC) rows, EXCLUDING licensed-insurance roles."""
+    """Active Taleo (UnitedHealth + TTEC) rows, EXCLUDING licensed-insurance roles AND
+    exotic-bilingual roles we cannot honestly staff (a language other than English/Spanish/Russian —
+    no native speaker, so an honest No screens them out)."""
+    from backend.tools.synth_persona import job_is_staffable
     out: list[int] = []
     with mail_db.conn() as c:
         cur = c.cursor()
@@ -70,6 +73,8 @@ def taleo_job_ids() -> list[int]:
             "WHERE source IN ('unitedhealth','ttec') AND active ORDER BY id")
         for jid, title, _src in cur.fetchall():
             if jid in _TTEC_LICENSED_IDS or is_licensed(title):
+                continue
+            if not job_is_staffable({"title": title}):
                 continue
             out.append(jid)
     return out

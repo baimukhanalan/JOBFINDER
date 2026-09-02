@@ -1395,9 +1395,37 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     analyzer saw no form → `filled=0` → `no_form`. Driver: **`mass_hiring_apply_kelly_cron.py`** (mirrors
     the Maximus cron; `kelly_ids()` = active `mykelly` jobs; `per_job_timeout=600` — the proxied 894 KB
     page + several local-LLM calls make the fill heavier than other lanes, and it BALLOONS under
-    multi-fork LLM contention; low worker default so parallel Kelly fills don't starve the one LLM). Run
+    multi-fork LLM contention; low worker default (2) so parallel Kelly fills don't starve the one LLM). Run
     under `sg mail`. NB Kelly's Bullhorn submit sends no emailed code (single-page form), so ground-truth
     = a Bullhorn/Kelly acknowledgement in the persona's `@takhet.com` box after a confirmed submit.
+    **LIVE + CRON ENABLED 2026-09-02 — a REAL ack landed** (`From: "myKelly.com"
+    <noreply_mykelly@kellyservices.com>`, `Subject: Your Kelly application for Mechanical Claims Adjuster
+    was successful!`) in a fresh synthetic persona's `@takhet.com` Maildir, via the deployed co-pilot path
+    (`confirmed:true`). Cron `0 1,6,11,15,20` = 5×/day, mirrors the Maximus/TP/Taleo lanes (`--workers 2`) →
+    `logs/kelly_apply.log`. **The earlier "only failed because of LLM-timeout contention" belief was WRONG —
+    running ALONE still failed; there were 4 real GRAVITY-FORM fill gaps, now fixed in `strategies/kelly.py`
+    (all live-verified via the proxy pool):**
+    (1) **Cookiebot (Usercentrics) consent modal** overlays the whole form (its `Deny`/`Allow all` buttons
+    match no generic name) and SWALLOWS the Submit click — `_dismiss_cookie_banner` now clicks the stable
+    `#CybotCookiebotDialogBodyButtonDecline` first.
+    (2) **Name field First/Last** are Gravity Forms sub-inputs (`input_<id>.3`/`.6`) whose visible sub-labels
+    are just "First"/"Last" — the analyzer's single-"name" heuristic missed them; `_fill_name` splits the
+    persona name and fills them (matched by sub-label, or the `.3`/`.6` suffix WITHIN a `.ginput_container_name`
+    so a same-suffix address field isn't hit).
+    (3) **Résumé is gated behind a REQUIRED radio group** ("how would you like to provide your résumé? —
+    Upload resume / LinkedIn profile / Most recent employment"), and the upload lives in a **branch-specific**
+    file input (e.g. `input_110` on the field_67=110/field_99=No branch, NOT `input_5`) that GF conditional
+    logic only ENABLES once "Upload resume" is chosen. `_choose_resume_source_upload` picks it with a **REAL
+    Playwright click** (a synthetic `.checked=true`+dispatch left the branch input DISABLED ⇒ not submitted ⇒
+    "Resume document is required"), then `_attach_resume_active` sets the PDF on the enabled+visible file
+    input — and this runs LAST (after identity/state/screeners), because any downstream field change
+    re-evaluates the conditional logic and can re-disable the input.
+    (4) **`KellyStrategy.attach_resume` is now a no-op:** `base.prefill`'s generic early attach set the résumé
+    on the FIRST (still-disabled, wrong-branch) file input, and that write re-triggered GF conditional logic
+    and DETACHED the active branch (a clean fill keeps it enabled+filled) → the résumé is attached only in the
+    Kelly gap fill instead. Tests: `test_kelly.py` (+ an attach_resume-no-op guard), 26 pass. Only the bulk
+    HEADLESS workers respawn fresh per run, so no pm2 restart is needed for the cron; the single persistent
+    co-pilot (8102) would need a restart to pick up `kelly.py` for the one-click `/catalog` path.
   - **Maximus (Avature, ~21).** NOT Workday (that tenant is dormant/422). Real ATS = the Avature portal
     (id 4). Two-step, no login/captcha: (1) `GET /careers/Job-Search_US` with a **cookie jar**; the HTML
     embeds a job-list widget whose `data-props` is **nested by device — use `['desktop']`** — carrying a

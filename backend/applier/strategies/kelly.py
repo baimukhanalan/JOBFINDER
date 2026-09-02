@@ -70,6 +70,19 @@ class KellyStrategy(ApplyStrategy):
     def matches(cls, url: str) -> bool:
         return "mykelly.com" in (url or "").lower()
 
+    async def attach_resume(self, page: Page, resume_path: str) -> bool:
+        """No-op on Kelly — the résumé is handled by the Kelly gap fill instead.
+
+        Kelly gates the résumé behind a REQUIRED "how would you like to provide your résumé?"
+        radio group, and the actual upload lives in a branch-specific file input that GF
+        conditional logic only ENABLES once "Upload resume" is chosen. If base.prefill's generic
+        attach_resume sets the file on the FIRST (still-disabled, wrong-branch) file input early,
+        that write re-triggers GF conditional logic and DETACHES the active branch's input, so the
+        submit fails "Resume document is required" (root-caused live 2026-09-02: a clean fill
+        keeps the branch input enabled + filled; the early generic set breaks it). So we skip it
+        here and attach the résumé LAST, in _fill_kelly_gaps, right after picking "Upload resume"."""
+        return False
+
     async def open_form(self, page: Page) -> None:
         # The apply URL IS the job page, but the Gravity Form is present-yet-HIDDEN until an
         # "Apply Now" button is clicked (verified live 2026-09-02: the `.gform_wrapper` sits in
@@ -130,7 +143,7 @@ class KellyStrategy(ApplyStrategy):
         if report.get("page_type") in ("login_required", "captcha", "expired"):
             return report
         try:
-            await self._fill_kelly_gaps(page, profile_form, facts)
+            await self._fill_kelly_gaps(page, profile_form, facts, resume_path)
         except Exception as exc:
             logger.debug("kelly: gap fill raised: %s", exc)
         # ALWAYS clear the honeypot LAST — a spam-reject is worse than any unfilled field, and a
@@ -153,7 +166,8 @@ class KellyStrategy(ApplyStrategy):
         return report
 
     # ---- Kelly-specific gap fill (label-driven so it generalizes across postings) ----
-    async def _fill_kelly_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
+    async def _fill_kelly_gaps(self, page: Page, profile_form: dict, facts=None,
+                               resume_path: str = "") -> None:
         # EEO / diversity self-ID + required legal consent — belt-and-suspenders (base.prefill
         # already ran these on the single page; re-running is idempotent and never claims a
         # protected characteristic — the demographic answer is always the decline option).
@@ -163,6 +177,13 @@ class KellyStrategy(ApplyStrategy):
                 await fn(page)
             except Exception:
                 pass
+        # Gravity Forms Name field: the required First/Last are sub-inputs of one Name field
+        # (input_<id>.3 / .6) whose visible sub-labels are just "First"/"Last" — the generic
+        # analyzer's single "name" heuristic misses them, so fill them from the persona name.
+        try:
+            await self._fill_name(page, profile_form)
+        except Exception as exc:
+            logger.debug("kelly: name fill raised: %s", exc)
         # Country-dependent State/Province: Gravity Forms renders it as a native <select> whose
         # options load once Country is set; the shared pipeline usually set Country already, so
         # pick the persona's state now.
@@ -176,6 +197,143 @@ class KellyStrategy(ApplyStrategy):
         # available / Desired locations / Employment preference / Years of experience /
         # Education / language proficiency), answered deterministically & TRUTHFULLY.
         await self._answer_screeners(page, facts)
+        # Résumé source is filled LAST — on purpose. Kelly gates the résumé behind a REQUIRED
+        # radio group ("How would you like to provide your résumé? — Upload resume / LinkedIn
+        # profile / Most recent employment"). Picking "Upload resume" fires GF conditional logic
+        # that ENABLES + SHOWS the branch's résumé file input (the others stay disabled ⇒ not
+        # submitted). Any OTHER field change re-evaluates that conditional logic and can
+        # re-disable the input — so this must run after every other fill, or a State/screener
+        # change downstream silently strips the attached file and the submit fails
+        # "Resume document is required" (root-caused live 2026-09-02: the enabled input is
+        # branch-specific, e.g. input_110 on the field_67=110 branch, NOT input_5).
+        try:
+            if await self._choose_resume_source_upload(page):
+                await page.wait_for_timeout(1000)
+                await self._attach_resume_active(page, resume_path)
+        except Exception as exc:
+            logger.debug("kelly: résumé-source fill raised: %s", exc)
+
+    async def _fill_name(self, page: Page, profile_form: dict) -> None:
+        """Fill the Gravity Forms Name field's First/Last sub-inputs from the persona name.
+        Matched by sub-label ('First'/'Last') or, within a `.ginput_container_name` only, the
+        GF sub-field name suffix (`.3` first / `.6` last) — the container guard keeps a DIFFERENT
+        complex field (e.g. an address group whose inputs also end `.3`/`.6`) from being hit."""
+        full = (profile_form.get("full_name") or "").strip()
+        if not full:
+            return
+        parts = full.split()
+        first = parts[0]
+        last = " ".join(parts[1:]) or parts[0]
+        await page.evaluate(
+            """([first,last])=>{
+              const norm=s=>(s||'').replace(/\\s+/g,' ').trim().toLowerCase();
+              const setv=(el,v)=>{if(!el||(el.value||'').trim())return false;
+                try{el.focus();}catch(e){}
+                el.value=v;
+                el.dispatchEvent(new Event('input',{bubbles:true}));
+                el.dispatchEvent(new Event('change',{bubbles:true}));
+                el.dispatchEvent(new Event('blur',{bubbles:true}));return true;};
+              const lab=el=>{let t='';if(el.id){const l=document.querySelector('label[for="'+
+                  (window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
+                if(!t){const w=el.closest('.gfield,li,span,div');const gl=w&&w.querySelector('label');
+                  if(gl)t=gl.innerText;}
+                return norm(t);};
+              let fset=false,lset=false;
+              for(const el of document.querySelectorAll('input[type=text]')){
+                if(el.closest('.gform_validation_container'))continue;
+                const nm=el.name||'';const l=lab(el);
+                const inName=!!el.closest('.ginput_container_name');
+                const isFirst=l==='first'||l==='first name'||(inName&&/\\.3$/.test(nm));
+                const isLast=l==='last'||l==='last name'||(inName&&/\\.6$/.test(nm));
+                if(!fset&&isFirst){fset=setv(el,first)||fset;}
+                else if(!lset&&isLast){lset=setv(el,last)||lset;}
+              } return {fset,lset};}""", [first, last])
+
+    async def _choose_resume_source_upload(self, page: Page) -> bool:
+        """Select 'Upload resume' on the required résumé-source radio group (options include both
+        'Upload resume' and 'LinkedIn profile') with a REAL click. Kelly renders ~25 hidden
+        conditional-logic duplicates — only the VISIBLE group is the active one — and each résumé
+        SOURCE group gates a DIFFERENT résumé file field via GF conditional logic. That logic
+        fires on a genuine user event: a synthetic `.checked=true`+dispatch left the branch's file
+        input DISABLED (⇒ not submitted ⇒ "Resume document is required"), so we locate the option
+        id in JS but click it through Playwright. Returns True if selected (or already selected)."""
+        info = await page.evaluate(
+            """()=>{
+              const norm=s=>(s||'').replace(/\\s+/g,' ').trim().toLowerCase();
+              const lab=r=>{let t='';if(r.id){const l=document.querySelector('label[for="'+
+                  (window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]');if(l)t=l.innerText;}
+                if(!t&&r.closest('label'))t=r.closest('label').innerText;return norm(t)||norm(r.value);};
+              const byName={};
+              for(const r of document.querySelectorAll('input[type=radio]')){
+                if(!r.name)continue;(byName[r.name]=byName[r.name]||[]).push(r);}
+              for(const nm in byName){const rs=byName[nm];
+                if(!rs.some(r=>r.offsetParent!==null))continue;       // hidden dup — skip
+                const opts=rs.map(r=>({r,id:r.id,t:lab(r),checked:r.checked}));
+                const up=opts.find(o=>o.t.includes('upload resume'));
+                const linked=opts.some(o=>o.t.includes('linkedin'));
+                if(!up||!linked)continue;                            // not a résumé-source group
+                return {id:up.id, checked:up.checked};}
+              return null;}""")
+        if not info:
+            return False
+        if info.get("checked"):
+            return True
+        oid = info.get("id")
+        if not oid:
+            return False
+        css = "#" + re.sub(r'([^\w-])', r'\\\1', oid)
+        for target in (f'label[for="{oid}"]', css):
+            try:
+                await page.click(target, timeout=4000)
+                return True
+            except Exception:
+                continue
+        try:
+            await page.check(css, force=True, timeout=4000)
+            return True
+        except Exception:
+            return False
+
+    async def _attach_resume_active(self, page: Page, resume_path: str) -> int:
+        """Set the résumé PDF on the ACTIVE résumé file input — the one GF conditional logic just
+        ENABLED (not [disabled]) after 'Upload resume' was chosen. Kelly renders several duplicate
+        'Resume document' inputs, one per branch; only the active branch's input is enabled and
+        submitted (a disabled input is skipped by GF serialization even if it holds a file — hence
+        setting it is useless). We target `input[type=file]:not([disabled])`, skipping any
+        image/avatar/autofill input. Falls back to every non-image file input only if none is
+        enabled yet (best-effort)."""
+        if not resume_path:
+            return 0
+
+        async def _is_resume_input(inp) -> bool:
+            info = await inp.evaluate(
+                '(el)=>{const c=el.closest("div,section,fieldset,form");'
+                'return {acc:(el.accept||"").toLowerCase(),'
+                ' blob:((el.id||"")+" "+(el.name||"")+" "+(c?c.innerText:""))'
+                '.toLowerCase()};}')
+            if "image/" in (info.get("acc") or ""):
+                return False
+            return not re.search(r"photo|avatar|picture|headshot|logo|autofill",
+                                 info.get("blob") or "")
+
+        n = 0
+        try:
+            enabled = await page.query_selector_all('input[type="file"]:not([disabled])')
+            targets = [i for i in enabled if await _is_resume_input(i)]
+            if not targets:                       # branch input not enabled yet — set them all
+                targets = [i for i in await page.query_selector_all('input[type="file"]')
+                           if await _is_resume_input(i)]
+            for inp in targets:
+                try:
+                    await inp.set_input_files(resume_path)
+                    n += 1
+                except Exception:
+                    continue
+            if n:
+                await page.wait_for_timeout(2500)
+        except Exception as exc:
+            logger.debug("kelly: attach résumé raised: %s", exc)
+        return n
 
     async def _clear_honeypot(self, page: Page) -> int:
         """Empty the Gravity Forms honeypot input so the form is never spam-rejected.
@@ -503,10 +661,25 @@ class KellyStrategy(ApplyStrategy):
             return []
 
     async def _dismiss_cookie_banner(self, page: Page) -> None:
-        """Close a cookie/consent banner (OneTrust etc.) that floats over the form and can
-        intercept the Submit click."""
-        for name in ("Reject Optional Cookies", "Reject All", "Accept All Cookies",
-                     "Accept Cookies", "Accept All", "I Agree", "Got it"):
+        """Close a cookie/consent banner that floats over the form and would intercept the
+        Submit click. Kelly runs Cookiebot (Usercentrics): a full-screen modal whose buttons
+        ('Deny' / 'Allow all' / 'Allow selection') don't match the generic names below, so
+        without this the whole Gravity Form sits behind the overlay and the click is swallowed.
+        Click Cookiebot's Decline button by its stable Cybot id first, then fall back to the
+        generic OneTrust-style names."""
+        for sel in ("#CybotCookiebotDialogBodyButtonDecline",
+                    "#CybotCookiebotDialogBodyLevelButtonLevelOptinDeclineAll",
+                    "#CybotCookiebotDialogBodyButtonAccept"):
+            try:
+                loc = page.locator(sel)
+                if await loc.count() and await loc.first.is_visible(timeout=1000):
+                    await loc.first.click(timeout=1500)
+                    await page.wait_for_timeout(300)
+                    return
+            except Exception:
+                continue
+        for name in ("Reject Optional Cookies", "Reject All", "Deny", "Accept All Cookies",
+                     "Accept Cookies", "Accept All", "Allow all", "I Agree", "Got it"):
             try:
                 b = page.get_by_role("button", name=re.compile(re.escape(name), re.I))
                 if await b.count():

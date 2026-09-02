@@ -155,3 +155,15 @@ def test_opt_match_boundary():
     assert m("1-3 years", "1-3 years") is True
     assert m("3-5 years", "i do not have any experience") is False
     assert m("", "yes") is False
+
+
+def test_attach_resume_is_a_noop_on_kelly():
+    """Kelly's résumé lives in a conditional-logic BRANCH file input that GF only enables once
+    'Upload resume' is chosen; base.prefill's generic early attach (first file input) detaches
+    the active branch and the submit fails 'Resume document is required'. So KellyStrategy
+    overrides attach_resume to a no-op — the résumé is attached LAST, in the Kelly gap fill.
+    Guards against a well-meaning revert to the generic attach (root-caused live 2026-09-02).
+    """
+    import asyncio
+    # The override never touches the page — safe to call with page=None.
+    assert asyncio.run(KellyStrategy().attach_resume(None, "/tmp/resume.pdf")) is False

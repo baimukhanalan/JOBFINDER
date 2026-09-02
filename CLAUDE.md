@@ -259,25 +259,29 @@ live-captcha/WAF + video assessment) — do NOT build.
 > `_fill_orc_radiobuttons`) against `logs/orc_recon/153/*.html` + the phone-policy call + a WOTC
 > filler. `orc_recon.py` is committed (NOT cron-wired — no end-to-end ack yet). Dry run = no
 > ORC_ADVANCE (side-effect-free); real = `ORC_ADVANCE=1`.
-> **UPDATE 2026-09-02 — Workday-family (Cigna/Humana/CVS/Concentrix) now has a DRIVER
-> (`backend/tools/mass_hiring_apply_workday_cron.py`, mirrors `mass_hiring_apply_cron.py`: selects
-> supported Workday-tenant ids via `mha.is_supported`, real-submits via `run_batch_parallel(
-> dry_run=False)` with `WORKDAY_ADVANCE=1`), but it ships as a SAFE NO-OP (`_LIVE_TENANTS` EMPTY).
-> A live 4-tenant smoke drove one sacrificial job each (cigna 1221 / humana 1222 / cvshealth 531 /
-> concentrix 328): **all four returned `filled=0`, no guest account created, ZERO mail** — blocked
-> at the account-CREATE gate, and 0 `*@myworkday.com` acks landed across all Maildirs in the
-> following 90 min. Root cause (code + tenant contrast, not fill-tuning): the register-step
-> reCAPTCHA is solved by `captcha_solver.solve_on_page`, a **no-op without `CAPTCHA_SOLVER_KEY`**
-> (only `NOPECHA_KEY` is set, which the Workday solver doesn't use), so account creation never
-> clears → `WorkdayMassHiringStrategy.prefill` returns `login_required` with `filled=0`. A
-> datacenter IP is also risk-scored, so a US residential IP is wanted too. **CONTRAST — Centene
-> (centene.wd5) is the ONE Workday tenant that completes KEYLESS** (18 real "Your Centene
-> application is under review" acks in `mail_index`): its register step has no blocking reCAPTCHA.
-> So the cron's `_BLOCKED` map documents cigna/humana/cvs/concentrix (register-reCAPTCHA solver
-> key + residential IP; may compound with Workday's ~90-account/day `*.workday.com` activation-
-> email throttle). To go live: add `"centene"` to `_LIVE_TENANTS` after one fresh confirm run
-> (works keyless now), and/or set `CAPTCHA_SOLVER_KEY` (capsolver/2captcha) + a residential egress
-> for the other four. NOT cron-wired (no crontab line) until ≥1 tenant is validated.
+> **UPDATE 2026-09-03 — Centene (Workday CxS) auto-apply lane is LIVE + cron-wired (HEADFUL).**
+> `backend/tools/mass_hiring_apply_workday_cron.py` drives each live-validated Workday-tenant job via
+> `workday_recon.drive_apply(advance_env="WORKDAY_ADVANCE")` — a HEADFUL persistent-context Chromium
+> on `DISPLAY=:98` (Apply → create the guest account → confirm the emailed activation link → fill the
+> 7-step wizard → click Submit → poll the persona `@takhet.com` Maildir for the ack), the same way the
+> TP lane runs `icims_recon`. **It does NOT use the headless `run_batch_parallel`** — Workday CxS
+> bounces a plain headless Chromium straight back to the job posting (verified 2026-09-03: two headless
+> Centene attempts stalled at `filled=0`/`page_type=job_listing`; the same job 1195 under the headful
+> recon reached account `created=True`, register captcha ABSENT (grecaptcha False / sitekey None), and
+> a real "Your Centene application is under review" ack from `centene@myworkday.com` landed in the
+> fresh synthetic persona's Maildir). `_LIVE_TENANTS = {"centene"}` (proven KEYLESS — no register
+> reCAPTCHA). **Cron:** `0 1,6,11,15,20` `DISPLAY=:98 sg mail -c 'cd /home/projects/jobfinder &&
+> WORKDAY_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_workday_cron --workers 1 --tenant
+> centene'` → `logs/workday_apply.log`, fcntl-locked; ~17 active Centene jobs/pass. `--workers 1` is
+> main-thread sequential (byte-identical to the proven `workday_recon.main` invocation, one headful
+> browser at a time on :98); `--workers N>1` runs N headful browsers at once (kept for throughput, not
+> the default). Per-attempt completion is variable (the live SPA wizard walk sometimes stops one step
+> short — verified: 2 of 3 fresh confirm runs reached the final Submit + a real ack), so the lane
+> accumulates real applications across the 17 jobs × 5 runs/day rather than 100% per attempt — same
+> partial-success shape as the Maximus lane. **cigna/humana/cvshealth/concentrix stay in `_BLOCKED`** — their register
+> step needs a `CAPTCHA_SOLVER_KEY` + a US residential IP (not keyless); do NOT enable without a solver
+> key + residential egress AND a fresh live-validated ack. NB the 18 earlier `mail_index` Centene acks
+> + this validation came via the headful recon, never the headless pool.
 **`strategies/avature.py` — COMPLETES A REAL
 SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
 email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the

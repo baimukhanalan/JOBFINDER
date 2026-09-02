@@ -143,7 +143,10 @@ async def _already_done(page) -> bool:
         body = (await page.inner_text("body", timeout=3000)).lower()
     except Exception:
         body = ""
-    return ("0 assessment" in body and "left" in body) or bool(sa._COMPLETE_RE.search(body))
+    # NB the real SHL overview renders "0Assessment(s) left" with NO space, so match \b0\s*assessment
+    # (a plain "0 assessment" substring never matched — which is why the old code leaned on the weak
+    # "/opq/ not in url" heuristic that caused the false completions).
+    return (bool(re.search(r"\b0\s*assessment", body)) and "left" in body) or bool(sa._COMPLETE_RE.search(body))
 
 
 async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:

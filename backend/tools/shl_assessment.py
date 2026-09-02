@@ -1077,6 +1077,16 @@ async def run_intro(link: str, persona: dict | None = None, *, page=None,
                 text = await page.inner_text("body", timeout=4000)
             except Exception:
                 text = ""
+            # ALREADY-COMPLETED overview: SHL shows "0 Assessment(s) left" (every card Completed).
+            # This is the RELIABLE done-signal that discriminates a genuinely-finished assessment
+            # (0 left) from a not-started one (N left / Start) — the discriminator the removed
+            # `"/opq/" not in url` heuristic lacked (it marked BOTH as done). `\b0` avoids matching
+            # "10 assessment(s) left". Report completed here, and ONLY here, on the real overview.
+            _tl = text.lower()
+            if (re.search(r"\b0\s*assessment", _tl) and "left" in _tl) or _COMPLETE_RE.search(text):
+                result["status"] = "completed"
+                result["note"] = "already completed (overview shows 0 assessments left)"
+                return result
             # Already inside the OPQ item player? A RESUMED session lands directly on an item (its
             # option labels are `label.question-answer-label`, not counted answer-widgets, and its
             # text needn't match `_SCORED_RE`), so hand off on the labels themselves.

@@ -280,7 +280,12 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
 
             # 4) submit ONLY on the advance gate — best-effort generic submit (needs live tuning per
             #    Workday tenant); default OFF = dry-run fill that never files an application.
-            if advance:
+            #    Skip entirely when the account/sign-in gate wasn't cleared (page still /login, a
+            #    captcha, or an expired posting): there is no application form to submit there, and a
+            #    generic submit would only click the sign-in button's invisible click_filter overlay
+            #    and time out (~8s) with a misleading "div intercepts pointer events" error.
+            _pt = (result or {}).get("page_type")
+            if advance and _pt not in ("login_required", "captcha", "expired"):
                 try:
                     from backend.applier import analyzer, filler
                     ok = False
@@ -296,6 +301,9 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                     out["clicked"] = bool(ok)
                 except Exception as e:
                     out["error"] = f"submit: {type(e).__name__}: {e}"
+            elif advance:
+                out["note"] = f"skipped submit: page_type={_pt} (account/sign-in gate not cleared)"
+                print(f"[skip submit — page_type={_pt}, not an application form]", flush=True)
             else:
                 print("[dry-run — filled, NOT clicking Submit (set "
                       f"{advance_env}=1 to really apply)]", flush=True)

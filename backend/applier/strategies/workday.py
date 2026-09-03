@@ -518,20 +518,68 @@ class WorkdayStrategy(ApplyStrategy):
                     break
             except Exception:
                 continue
-        for sel in ('button[data-automation-id="signInSubmitButton"]',
-                    'button[data-automation-id="click_filter"]',
-                    'button:has-text("Sign In")'):
+        # Submit the sign-in. Workday overlays the real <button data-automation-id="signInSubmitButton">
+        # with an invisible proxy <div data-automation-id="click_filter" role="button" tabindex="0"> that
+        # INTERCEPTS pointer events, so a coordinate/force click on the button lands on the div and never
+        # reaches the button's handler -> the page stays on /login and the wizard is never released
+        # (~68% of Centene runs died here). The old loop also looked for a <button> click_filter (wrong
+        # tag). Try several ways and stop the moment we leave /login.
+        async def _left_login() -> bool:
             try:
-                b = page.locator(sel).first
-                if await b.count():
-                    try:
-                        await b.scroll_into_view_if_needed(timeout=3000)
-                    except Exception:
-                        pass
-                    await b.click(force=True, timeout=5000)
-                    break
+                return "/login" not in (page.url or "")
+            except Exception:
+                return False
+
+        async def _try_submit(coro) -> bool:
+            try:
+                await coro
+            except Exception:
+                return False
+            try:
+                await page.wait_for_url(lambda u: "/login" not in u, timeout=6000)
+                return True
+            except Exception:
+                return await _left_login()
+
+        submitted = False
+        # 1) Native form submit via Enter in the password field — most reliable for a login form.
+        for sel in ('input[data-automation-id="password"]', 'input[type="password"]'):
+            try:
+                e = page.locator(sel).first
+                if await e.count():
+                    submitted = await _try_submit(e.press("Enter", timeout=4000))
+                    if submitted:
+                        break
             except Exception:
                 continue
+        # 2) JS .click() on the ARIA button div (the real interactive target; bypasses hit-testing).
+        if not submitted:
+            submitted = await _try_submit(page.evaluate(
+                """() => { const d = document.querySelector('div[data-automation-id="click_filter"][role="button"]')
+                              || document.querySelector('div[data-automation-id="click_filter"]');
+                          if (d) { d.click(); return true; } return false; }"""))
+        # 3) JS .click() straight on the real submit button element (fires its handler despite the overlay).
+        if not submitted:
+            submitted = await _try_submit(page.evaluate(
+                """() => { const b = document.querySelector('button[data-automation-id="signInSubmitButton"]');
+                          if (b) { b.click(); return true; } return false; }"""))
+        # 4) Coordinate/force-click fallbacks — note the div selector uses the correct tag now.
+        if not submitted:
+            for sel in ('div[data-automation-id="click_filter"][role="button"]',
+                        'button[data-automation-id="signInSubmitButton"]',
+                        'button:has-text("Sign In")'):
+                try:
+                    b = page.locator(sel).first
+                    if await b.count():
+                        try:
+                            await b.scroll_into_view_if_needed(timeout=3000)
+                        except Exception:
+                            pass
+                        submitted = await _try_submit(b.click(force=True, timeout=5000))
+                        if submitted:
+                            break
+                except Exception:
+                    continue
         # Sign-in navigates to the redirect target (the application wizard) — give the SPA time to
         # leave /login and hydrate the first wizard step before base.prefill analyzes it.
         try:

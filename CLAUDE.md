@@ -282,6 +282,29 @@ live-captcha/WAF + video assessment) — do NOT build.
 > step needs a `CAPTCHA_SOLVER_KEY` + a US residential IP (not keyless); do NOT enable without a solver
 > key + residential egress AND a fresh live-validated ack. NB the 18 earlier `mail_index` Centene acks
 > + this validation came via the headful recon, never the headless pool.
+>
+> **GOTCHA (2026-09-03) — the post-activation Sign-In click was intercepted, dropping ~68% of Centene
+> applies; fixed.** After the emailed activation link is clicked, Workday lands on `/login` and the
+> Sign-In `<button data-automation-id="signInSubmitButton">` is covered by an INVISIBLE proxy
+> `<div data-automation-id="click_filter" role="button" aria-label="Sign In">` that intercepts pointer
+> events (verified verbatim: `<div ... data-automation-id="click_filter"></div> intercepts pointer
+> events`). `_sign_in()` looked for a `button[data-automation-id="click_filter"]` (WRONG tag — it's a
+> `div`) and a `force` click on the real button still lands on the div, so sign-in silently failed, the
+> page stayed on `/login`, and the driver's generic `button[type="submit"]` fallback then hit the same
+> overlay and timed out (8000ms) — a real gap that killed 73/108 (~68%) of Centene applies (35 completed
+> vs 108 stuck at the verify email). **Fix (`applier/strategies/workday.py::_sign_in`):** submit via
+> several ways, stopping the moment the URL leaves `/login` — Enter in the password field (native form
+> submit), then a JS `.click()` on the `div[data-automation-id="click_filter"][role="button"]` (the real
+> ARIA target, bypasses hit-testing), then a JS `.click()` on the real button, then coordinate/force
+> fallbacks (with the div tag corrected). **Also (`tools/workday_recon.py`):** the generic submit is now
+> SKIPPED when `page_type ∈ {login_required, captcha, expired}` (a `/login` page has no application form
+> to submit; running it only clicked the sign-in overlay and threw the misleading `click_filter` timeout).
+> `test_workday.py` 30/30 green. **Live end-to-end re-validation is currently GATED by Workday's
+> ~90-account/domain activation-email throttle** — two fresh confirm runs (2026-09-03 ~21:50) got NO
+> "Verify your candidate account" email at all (last successful ack was ~9h earlier; 32 verify / 17 acks
+> in the prior 24h), so sign-in was never reachable to re-prove on a live account. The fix is correct by
+> diagnosis (div-not-button) + unit-tested; re-run one `--tenant centene --limit 1` drive once the
+> activation throttle clears to capture a fresh ack. Only the code changed — no cron/tenant change.
 **`strategies/avature.py` — COMPLETES A REAL
 SUBMISSION end-to-end (2026-08-28, verified: a live Maximus "Application Complete — Thank You For Applying"
 email landed in the persona's `@takhet.com` box).** `matches` `avature.net`; `open_form` navigates the

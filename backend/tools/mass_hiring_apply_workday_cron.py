@@ -101,7 +101,8 @@ def workday_ids(only: str | None = None) -> list[int]:
         if tenant not in _LIVE_TENANTS:
             continue
         out.append(jid)
-    return out
+    from backend.tools import mh_settings
+    return mh_settings.drop_spanish(out)
 
 
 def _drive_job(jid: int, keep: int) -> dict:

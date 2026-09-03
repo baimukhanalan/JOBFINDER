@@ -105,3 +105,5 @@ backend/data/icims_stealth_profile/
 
 # Taleo candidate-account credentials (passwords) — PII, never commit
 backend/data/taleo_accounts.json
+backend/data/mh_settings.json
+logs/crontab.bak-*

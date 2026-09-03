@@ -32,7 +32,8 @@ def maximus_ids() -> list[int]:
     with mail_db.conn() as c:
         cur = c.cursor()
         cur.execute("SELECT id FROM mass_hiring_jobs WHERE apply_url ILIKE %s ORDER BY id", ("%avature%",))
-        return [r[0] for r in cur.fetchall()]
+        from backend.tools import mh_settings
+        return mh_settings.drop_spanish([r[0] for r in cur.fetchall()])
 
 
 def main() -> None:

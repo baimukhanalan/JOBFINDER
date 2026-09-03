@@ -56,7 +56,8 @@ def sr_job_ids() -> list[int]:
         for jid, title in cur.fetchall():
             if job_is_staffable({"title": title}):
                 out.append(jid)
-    return out
+    from backend.tools import mh_settings
+    return mh_settings.drop_spanish(out)
 
 
 def apply_one(jobid: int, keep: int) -> dict:

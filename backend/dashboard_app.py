@@ -1109,6 +1109,51 @@ def mass_hiring_fill_status(row_id: int):
     return JSONResponse(_MH_FILL.get(row_id, {"state": "idle"}))
 
 
+# ---- Mass Hiring on-demand bulk apply (button/modal — start now, not only cron) ----
+@app.post("/mass-hiring/apply_all")
+def mass_hiring_apply_all(count: str = Form(""), workers: str = Form("2"),
+                          lanes: str = Form(""), show_spanish: str = Form("0"),
+                          schedule: str = Form("")):
+    from backend.tools import mh_ondemand, mh_settings
+    mh_settings.set(hide_spanish=(str(show_spanish).lower() not in ("1", "true", "on")))
+    lane_list = [l for l in (lanes.split(",") if lanes else []) if l]
+    c: int | None = None
+    try:
+        if str(count).strip():
+            c = max(1, min(20000, int(count)))
+    except ValueError:
+        c = None
+    try:
+        w = max(1, min(8, int(workers)))
+    except ValueError:
+        w = 2
+    if schedule:
+        try:
+            mh_ondemand.set_schedule(lane_list or None, schedule)
+        except Exception as e:
+            logging.getLogger("dashboard").warning("mh set_schedule failed: %s", e)
+    return JSONResponse(mh_ondemand.start(lane_list, workers=w, count=c))
+
+
+@app.get("/mass-hiring/apply_all_status")
+def mass_hiring_apply_all_status():
+    from backend.tools import mh_ondemand
+    return JSONResponse(mh_ondemand.status())
+
+
+@app.post("/mass-hiring/apply_all_stop")
+def mass_hiring_apply_all_stop():
+    from backend.tools import mh_ondemand
+    return JSONResponse(mh_ondemand.stop())
+
+
+@app.post("/mass-hiring/settings")
+def mass_hiring_settings(show_spanish: str = Form("0")):
+    from backend.tools import mh_settings
+    d = mh_settings.set(hide_spanish=(str(show_spanish).lower() not in ("1", "true", "on")))
+    return JSONResponse({"ok": True, "hide_spanish": d["hide_spanish"]})
+
+
 # ---- Bulk "apply to all" ---------------------------------------------------
 # The co-pilot has ONE shared headful browser, so a bulk run is a SEQUENTIAL queue
 # (one job filled+submitted at a time), never parallel. Only one bulk run at a time.

@@ -75,11 +75,6 @@ _CSS = """
 .mh-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);
   color:var(--ink);border-radius:9px;padding:8px 13px;font:inherit;font-weight:600;font-size:13px;cursor:pointer;}
 .mh-refresh:hover{background:var(--panel-2);}
-.mh-chips{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 18px;}
-.mh-chip{border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600;
-  color:var(--ink-soft);text-decoration:none;background:var(--panel);white-space:nowrap;}
-.mh-chip.on{background:var(--accent,#2f6fed);border-color:var(--accent,#2f6fed);color:#fff;}
-.mh-chip-star.on{background:#f5a623;border-color:#f5a623;color:#fff;}
 .mh-star{flex:0 0 auto;color:#f5a623;font-size:15px;line-height:1;margin-right:5px;
   text-shadow:0 1px 3px rgba(245,166,35,.45);}
 .mh-pay{font-size:12.5px;font-weight:700;color:#0f7b3e;font-variant-numeric:tabular-nums;white-space:nowrap;}
@@ -92,7 +87,6 @@ _CSS = """
 .mh-fill:disabled{opacity:.6;cursor:default;}
 .mh-st{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;white-space:nowrap;}
 .mh-st.st-auto{background:#0f7b3e;color:#fff;}
-.mh-st.st-lap{background:#f5a623;color:#3a2a00;}
 .mh-st.st-blk{background:var(--panel-2);color:var(--ink-soft);border:1px solid var(--line);}
 .mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
@@ -157,8 +151,6 @@ def _pay_html(j: dict) -> str:
 
 
 _STATUS = {"auto": ("🤖 Авто", "st-auto", "Наш сервер подаёт автоматически, без человека"),
-           "needs_laptop": ("💻 Нужен ноут", "st-lap",
-                            "Автоматизируемо, но нужен твой ноут (резидентный IP / решить капчу)"),
            "blocked": ("⛔ Ассессмент", "st-blk",
                        "Обязательный человеческий видео/голос-ассессмент — авто невозможно")}
 
@@ -260,47 +252,134 @@ def _everify_panel(limit: int = 40) -> str:
         return ""
 
 
-def _qs(category: str | None, comp: str | None) -> str:
-    parts = []
-    if category:
-        parts.append(f"category={category}")
-    if comp:
-        parts.append(f"comp={comp}")
-    return ("?" + "&".join(parts)) if parts else ""
+_MODAL_CSS = """
+<style>
+.mh-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px;}
+.mh-run{border:1px solid var(--accent,#2f6fed);background:var(--accent,#2f6fed);color:#fff;border-radius:9px;
+  padding:8px 14px;font:inherit;font-weight:700;font-size:13px;cursor:pointer;}
+.mh-run:hover{filter:brightness(1.07);}
+.mhm-back{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:80;}
+.mhm-back.on{display:block;}
+.mhm{position:fixed;z-index:81;left:50%;top:50%;transform:translate(-50%,-50%);width:min(480px,94vw);
+  max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.35);}
+.mhm h2{margin:0 0 4px;font-size:19px;}
+.mhm .mhm-note{color:var(--ink-soft);font-size:12.5px;margin:0 0 8px;}
+.mhm label{display:block;font-size:13px;font-weight:600;margin:12px 0 5px;color:var(--ink);}
+.mhm input[type=number],.mhm select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel-2);color:var(--ink);font:inherit;font-size:14px;box-sizing:border-box;}
+.mhm-row{display:flex;gap:12px;}.mhm-row>div{flex:1;}
+.mhm-lanes{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px;margin-top:6px;}
+.mhm-lanes label{display:flex;align-items:center;gap:7px;font-weight:600;margin:0;cursor:pointer;}
+.mhm-lanes input,.mhm-check input{width:auto;}
+.mhm-check{display:flex;align-items:center;gap:8px;font-weight:600;margin-top:14px;cursor:pointer;}
+.mhm-status{margin-top:14px;font-size:12.5px;color:var(--ink-soft);white-space:pre-line;line-height:1.5;
+  font-variant-numeric:tabular-nums;}
+.mhm-foot{display:flex;gap:8px;margin-top:18px;}
+.mhm-foot button{flex:1;border-radius:9px;padding:10px;font:inherit;font-weight:700;font-size:14px;
+  cursor:pointer;border:1px solid var(--line);}
+.mhm-go{background:#0f7b3e;color:#fff;border-color:#0f7b3e;}
+.mhm-stop{background:var(--panel-2);color:var(--ink);}
+.mhm-x{background:transparent;color:var(--ink-soft);flex:0 0 auto;padding:10px 14px;}
+</style>
+"""
+
+
+def _run_modal() -> str:
+    from backend.tools import mh_ondemand, mh_settings
+    lanes = "".join(
+        f'<label><input type="checkbox" name="lane" value="{_esc(k)}" checked> {_esc(v["label"])}'
+        + ('' if v["limit"] else ' <span style="color:var(--ink-soft);font-weight:400">(все)</span>')
+        + '</label>'
+        for k, v in mh_ondemand.LANES.items())
+    show_sp = "" if mh_settings.hide_spanish() else "checked"
+    freq = "".join(f'<option value="{_esc(k)}">{_esc(lbl)}</option>'
+                   for k, lbl in mh_ondemand.SCHEDULE_LABELS.items())
+    return (
+        '<div class="mhm-back" id="mhmBack" onclick="if(event.target===this)mhCloseRun()"></div>'
+        '<div class="mhm" id="mhm" hidden>'
+        '<h2>Запуск подачи</h2>'
+        '<p class="mhm-note">Стартует сейчас, без ожидания крона. «(все)» — лейн подаёт на все свои вакансии.</p>'
+        '<div class="mhm-row">'
+        '<div><label>Сколько подач</label><input type="number" id="mhCount" min="1" placeholder="все"></div>'
+        '<div><label>Потоков</label><input type="number" id="mhWorkers" min="1" max="8" value="2"></div>'
+        '</div>'
+        '<label>Лейны</label>'
+        f'<div class="mhm-lanes">{lanes}</div>'
+        f'<label class="mhm-check"><input type="checkbox" id="mhSpanish" {show_sp} onchange="mhSaveSpanish(this)">'
+        ' Показывать испанские вакансии</label>'
+        '<label>Частота автозапуска (расписание)</label>'
+        f'<select id="mhFreq"><option value="">— не менять —</option>{freq}</select>'
+        '<div class="mhm-status" id="mhStatus"></div>'
+        '<div class="mhm-foot">'
+        '<button class="mhm-go" type="button" onclick="mhStartRun()">▶ Запустить сейчас</button>'
+        '<button class="mhm-stop" type="button" onclick="mhStopRun()">■ Стоп</button>'
+        '<button class="mhm-x" type="button" onclick="mhCloseRun()">Закрыть</button>'
+        '</div></div>')
+
+
+_RUN_JS = """
+<script>
+function mhOpenRun(){document.getElementById('mhmBack').classList.add('on');
+  document.getElementById('mhm').hidden=false;mhStatusPoll();}
+function mhCloseRun(){document.getElementById('mhmBack').classList.remove('on');
+  document.getElementById('mhm').hidden=true;if(window._mhTimer)clearTimeout(window._mhTimer);}
+async function mhSaveSpanish(cb){var fd=new FormData();fd.append('show_spanish',cb.checked?'1':'0');
+  try{await fetch('/mass-hiring/settings',{method:'POST',body:fd});}catch(e){}}
+async function mhStartRun(){
+  var lanes=[].slice.call(document.querySelectorAll('#mhm input[name=lane]:checked')).map(function(c){return c.value;});
+  if(!lanes.length){alert('Выбери хотя бы один лейн');return;}
+  var fd=new FormData();
+  fd.append('count',document.getElementById('mhCount').value||'');
+  fd.append('workers',document.getElementById('mhWorkers').value||'2');
+  fd.append('lanes',lanes.join(','));
+  fd.append('show_spanish',document.getElementById('mhSpanish').checked?'1':'0');
+  fd.append('schedule',document.getElementById('mhFreq').value||'');
+  document.getElementById('mhStatus').textContent='Запускаю…';
+  try{var r=await fetch('/mass-hiring/apply_all',{method:'POST',body:fd});mhRender(await r.json());mhStatusPoll();}
+  catch(e){document.getElementById('mhStatus').textContent='Ошибка запуска';}
+}
+async function mhStopRun(){try{var r=await fetch('/mass-hiring/apply_all_stop',{method:'POST'});mhRender(await r.json());}catch(e){}}
+async function mhStatusPoll(){
+  try{var r=await fetch('/mass-hiring/apply_all_status');var j=await r.json();mhRender(j);
+    if(j.active){window._mhTimer=setTimeout(mhStatusPoll,3000);}}catch(e){window._mhTimer=setTimeout(mhStatusPoll,5000);}
+}
+function mhRender(j){
+  var s=document.getElementById('mhStatus');if(!s)return;
+  if(j&&j.error){s.textContent='⚠ '+j.error;}
+  if(!j||(!j.active&&!(j.lanes&&Object.keys(j.lanes).length))){if(!(j&&j.error))s.textContent='';return;}
+  var lines=[];
+  if(j.lanes)for(var k in j.lanes){var L=j.lanes[k];
+    var ic=L.state==='running'?'⏳':(L.state==='done'?'✓':(L.state==='error'?'✕':'·'));
+    lines.push(ic+' '+L.label+' — '+L.state);}
+  var hd=j.active?('Идёт '+(j.elapsed||0)+'с · потоков '+j.workers+(j.count?(' · '+j.count+' подач'):' · все')):'Остановлено';
+  s.textContent=hd+'\\n'+lines.join('\\n');
+}
+</script>
+"""
 
 
 def render_page(category: str | None = None, comp: str | None = None) -> str:
+    # Filters were removed by owner request — the board shows all active jobs; the only
+    # display toggle is «Показывать испанские» (persisted in mh_settings, default hidden).
     st = mass_hiring.stats()
-    cos = mass_hiring.companies(category=category or None, limit=200, comp=comp or None)
-    # category chips (preserve the active comp filter)
-    chips = [f'<a class="mh-chip {"" if category else "on"}" '
-             f'href="/mass-hiring{_qs(None, comp)}">Все</a>']
-    for k, lbl in mass_hiring.CATEGORY_LABELS.items():
-        n = st["by_category"].get(k, 0)
-        if not n and k != category:
-            continue
-        on = "on" if category == k else ""
-        chips.append(f'<a class="mh-chip {on}" href="/mass-hiring{_qs(k, comp)}">{lbl} · {n}</a>')
-    # stable-comp toggle (★) — preserve the active category
-    stable_on = "on" if comp == "fixed" else ""
-    stable_href = _qs(category, None if comp == "fixed" else "fixed")
-    chips.append(f'<a class="mh-chip mh-chip-star {stable_on}" '
-                 f'href="/mass-hiring{stable_href}">★ Стабильная зп</a>')
+    cos = mass_hiring.companies(limit=200)
 
-    body = "".join(_company_card(c, category or None, comp or None) for c in cos) or \
+    body = "".join(_company_card(c, None, None) for c in cos) or \
         ('<div class="mh-empty">Пока пусто. Нажми «Обновить», чтобы собрать вакансии '
          'из источников (Conduent / Alorica / Himalayas / …).</div>')
 
     head = (
-        f'<div class="mh-wrap">{_CSS}'
+        f'<div class="mh-wrap">{_CSS}{_MODAL_CSS}'
         f'<div class="mh-head"><div><h1>Mass Hiring</h1>'
-        f'<p class="mh-sub">Remote · US · масс-хайринг — подаёшься вручную (бот сюда не подаёт)<br>'
+        f'<p class="mh-sub">Remote · US · масс-хайринг · '
         f'<span style="color:#f5a623">★</span> — стабильная оплата (не комиссия) · ставка «оц.» — оценка по типу роли</p></div>'
         f'<div class="mh-meta">{st["active"]} вакансий · {st["companies"]} компаний<br>'
         f'обновлено {_ago(st.get("last_collected", 0))}'
-        f'<form method="post" action="/mass-hiring/collect" style="margin-top:8px">'
-        f'<button class="mh-refresh" type="submit">↻ Обновить</button></form></div></div>'
-        f'<div class="mh-chips">{"".join(chips)}</div>'
+        f'<div class="mh-actions">'
+        f'<button class="mh-run" type="button" onclick="mhOpenRun()">▶ Запустить подачу</button>'
+        f'<form method="post" action="/mass-hiring/collect" style="display:inline">'
+        f'<button class="mh-refresh" type="submit">↻ Обновить</button></form></div></div></div>'
         f'{_everify_panel()}'
-        f'{body}</div>{_JS}')
+        f'{body}{_run_modal()}</div>{_JS}{_RUN_JS}')
     return mailcrm_ui._page("masshiring", head)

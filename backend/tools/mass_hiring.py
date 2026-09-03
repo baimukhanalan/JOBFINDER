@@ -1356,6 +1356,15 @@ def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:
 
 
 # ---- reads (for the tab) -------------------------------------------------------
+def _hide_spanish() -> bool:
+    """Whether to hide Spanish-required jobs from the board (reversible operator setting)."""
+    try:
+        from backend.tools import mh_settings
+        return mh_settings.hide_spanish()
+    except Exception:
+        return False
+
+
 def companies(category: str | None = None, limit: int = 100,
               comp: str | None = None) -> list[dict]:
     """Companies ranked by mass_hiring_score: active remote mass-hiring reqs + posting velocity."""
@@ -1368,6 +1377,9 @@ def companies(category: str | None = None, limit: int = 100,
     if comp:
         where.append("comp_type=%s")
         args.append(comp)
+    if _hide_spanish():
+        where.append("title NOT ILIKE %s")
+        args.append("%spanish%")
     w = " AND ".join(where)
     with _cur() as cur:
         cur.execute(f"""
@@ -1400,6 +1412,8 @@ def jobs(company_key: str | None = None, category: str | None = None, limit: int
         where.append("category=%s"); args.append(category)
     if comp:
         where.append("comp_type=%s"); args.append(comp)
+    if _hide_spanish():
+        where.append("title NOT ILIKE %s"); args.append("%spanish%")
     with _cur() as cur:
         cur.execute(f"SELECT * FROM mass_hiring_jobs WHERE {' AND '.join(where)} "
                     f"ORDER BY posted_at DESC NULLS LAST LIMIT %s", args + [limit])

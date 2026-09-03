@@ -70,7 +70,8 @@ def ttec_job_ids() -> list[int]:
             if not job_is_staffable({"title": title}):
                 continue
             out.append(jid)
-    return out
+    from backend.tools import mh_settings
+    return mh_settings.drop_spanish(out)
 
 
 def _persona_email_from_output(out: str) -> str | None:

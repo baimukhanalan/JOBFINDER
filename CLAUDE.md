@@ -601,18 +601,27 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   was losing track). Each card whose persona has an assessment invite shows in `cg-metaline` a status
   chip + a one-click button (`candidates_inbox._assessment_control(g)` → `assessment_inner(mailbox,
   done)`): **«✓ Пройдено»** (green) + **«↺»** un-mark when passed, **«⏳ Осталось»** (amber) +
-  **«✓ Отметить пройденным»** when a pending «complete your assessment» invite exists; nothing
+  **«✓ Отметить пройденным»** when a pending, not-yet-passed TEST/assessment invite exists; nothing
   otherwise. Passed = an `assessment_done` row OR the mailbox is in `shl_assess_done.json` (the override
   that survives re-index). The card reads it from two `candidate_groups` aggregate cols: existing
-  `n_assessment_done` + NEW `n_asmt_pending` (COUNT of `action_needed` rows whose subject ILIKE
-  `%complete your assessment%` — note the `%%` escaping in that filter since the query runs with `%s`
-  params). Routes `POST /mail/assessment/mark` / `/unmark` (Form `mailbox`, admin-gated by dash_auth,
-  return the refreshed fragment for an in-place `.cg-asmt-wrap` swap via `cgMarkAsmt`). **The mark/unmark
-  logic is ONE shared helper `mailcrm.mark_assessment_done` / `unmark_assessment_done`** (writes
-  `shl_assess_done.json` atomically + re-tags the invite rows in `mail_index`) — `shl_assess_runner._mark_assessment_done`
-  now delegates to it, so the auto-completer and the operator button are the same source of truth. Reindex-
-  survival is already handled by `mailcrm.assessment_done_mailboxes()` + `build_index_row` (done.json wins),
-  so ONLY the dashboard restarts (not the indexer). Visible labels are neutral («Ассессмент/Пройдено/
+  `n_assessment_done` + `n_asmt_pending`. **BROADENED 2026-09-03 (owner: manually mark ANY human test,
+  not just Maximus-SHL):** `n_asmt_pending` now COUNTs `action_needed` rows matching **`mail_db._TEST_SUBJECT_SQL`**
+  — any test/assessment/proctor/aptitude/skillcheck/amcat/aspiringminds/harver/`video interview`/`magic link`
+  subject (word-boundaried `~*'\y…\y'`, `assessments?`/`tests?` plural-safe; `%%`-escaped since the query
+  binds `%s`), NOT just the SHL «complete your assessment». So the button now shows on ALL test items under
+  the **«Действие»** filter (~210 candidates: TP-AMCAT, Conduent-SkillCheck, TTEC-Harver/«Required Assessments»,
+  Sutherland, SHL). Marking re-tags the persona's test rows `action_needed → assessment_done`, so the item
+  **LEAVES «Действие»** (owner's model — «Действие» then shows only unpassed tests); un-mark reverses it.
+  **NO «Тесты» funnel filter** (owner rejected it) — tests live under «Действие» and drop out when marked.
+  Routes `POST /mail/assessment/mark` / `/unmark` (Form `mailbox`, admin-gated, return the refreshed fragment
+  for an in-place `.cg-asmt-wrap` swap via `cgMarkAsmt`). **The mark/unmark logic is ONE shared helper
+  `mailcrm.mark_assessment_done` / `unmark_assessment_done`** (writes `shl_assess_done.json` atomically +
+  `_reclassify_assessment` re-tags the test rows via the SAME `mail_db._TEST_SUBJECT_SQL`) — `shl_assess_runner`
+  delegates to it. Reindex-survival: `build_index_row` → `_kind_with_done_override` now keeps a done mailbox's
+  test rows `assessment_done` via **`mailcrm._TEST_SUBJECT_RE`** (the Python mirror of `_TEST_SUBJECT_SQL` —
+  **KEEP THE TWO IN SYNC**). Because `_kind_with_done_override` (used by the indexer's `build_index_row`)
+  changed, **BOTH the dashboard AND `jobfinder-mail-indexer` restart** for this change (the immediate
+  mark effect is DB-only via `_reclassify_assessment`, but the indexer restart makes the override durable). Visible labels are neutral («Ассессмент/Пройдено/
   Осталось») — no stack disclosure. Tests: `test_candidates_inbox.py` (`test_assessment_*`).
 - **Custom-ATS form scrape: WAIT for the React form to render, then RETRY on empty/partial**
   (`tools/catalog_forms.py`). Ashby/Lever/Workable apply pages are React SPAs — `networkidle` fires

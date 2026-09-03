@@ -226,6 +226,22 @@ _ASSESS_DONE_PATH = Path(__file__).resolve().parent.parent / "data" / "shl_asses
 _assess_done_cache = {"mtime": None, "set": frozenset()}
 
 
+# Python mirror of mail_db._TEST_SUBJECT_SQL (KEEP IN SYNC): a subject that looks like a
+# test / assessment / proctored-exam / async-video / magic-link invite. Broad on purpose so
+# the operator can mark EVERY human-completed test passed (SHL/OPQ, AMCAT, SkillCheck, Harver,
+# video interview), not just the Maximus-SHL «complete your assessment» one. Word-boundaried
+# (\b…\b) so a bare 'test' matches the standalone word only. Decides which action_needed items
+# get the «Отметить пройденным» control and get re-tagged assessment_done when marked (so a
+# passed test leaves the «Действие» list and stays out across a re-index).
+_TEST_SUBJECT_RE = re.compile(
+    r"\b(?:assessments?|skillcheck|amcat|aspiringminds|harver|aptitude|tests?|proctor)\b"
+    r"|video interview|magic link", re.I)
+
+
+def _is_test_subject(subject: str) -> bool:
+    return bool(_TEST_SUBJECT_RE.search(subject or ""))
+
+
 def assessment_done_mailboxes() -> frozenset:
     try:
         m = _ASSESS_DONE_PATH.stat().st_mtime
@@ -251,15 +267,17 @@ def _write_assess_done(done: set) -> None:
 
 
 def _reclassify_assessment(email: str, to_done: bool) -> None:
-    """Re-tag this mailbox's «complete your assessment» rows in mail_index NOW so the CRM
-    reflects the change without waiting for a re-index. Best-effort."""
+    """Re-tag this mailbox's test/assessment rows in mail_index NOW so the CRM reflects the
+    change without waiting for a re-index — a marked test leaves «Действие» (action_needed →
+    assessment_done) immediately; un-marking reverses it. Any test kind (SHL/AMCAT/SkillCheck/
+    Harver/video), not just the SHL subject. Best-effort."""
     frm, to = ("action_needed", "assessment_done") if to_done else ("assessment_done", "action_needed")
     try:
         with mail_db.conn() as c:
             cur = c.cursor()
-            cur.execute("UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind=%s "
-                        "AND subject ILIKE %s",
-                        (to, email, frm, "%complete your assessment%"))
+            cur.execute(f"UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind=%s "
+                        f"AND {mail_db._TEST_SUBJECT_SQL}",
+                        (to, email, frm))
     except Exception:
         pass
 
@@ -304,7 +322,7 @@ def unmark_assessment_done(name: str) -> None:
 
 def _kind_with_done_override(subject: str, body: str, mailbox: str) -> str:
     kind = classify(subject, body)
-    if (kind == "action_needed" and "complete your assessment" in (subject or "").lower()
+    if (kind == "action_needed" and _is_test_subject(subject)
             and mailbox in assessment_done_mailboxes()):
         return "assessment_done"
     return kind

@@ -322,6 +322,19 @@ _FURTHEST_STAGE_SQL = """
         END"""
 
 
+# A candidate "has a test/assessment item" when an INBOUND subject looks like a test /
+# assessment / proctored-exam / async-video / magic-link invite. Broad on purpose so the
+# operator can track EVERY human-completed test (SHL/OPQ, AMCAT/TP, SkillCheck/Conduent,
+# Harver/TTEC, video interviews), not just the SHL «complete your assessment» one. Word-
+# boundaried (~*'\y…\y') so a bare 'test' matches the standalone word only (not 'latest'/
+# 'contest'). Doubled %% because it is embedded in queries that also bind %s params — pass an
+# empty () to execute() when it appears in a param-less query so psycopg2 still de-doubles it.
+_TEST_SUBJECT_SQL = (
+    "(subject ~* '\\y(assessments?|skillcheck|amcat|aspiringminds|harver|aptitude|tests?|proctor)\\y' "
+    "OR subject ILIKE '%%video interview%%' OR subject ILIKE '%%magic link%%')"
+)
+
+
 def _furthest_stage_counts(cur) -> dict:
     """{stage: number of DISTINCT candidate mailboxes whose FURTHEST inbound kind is that
     stage}. Pure read; the caller supplies a plain (non-dict) cursor."""
@@ -400,7 +413,8 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
     interview message, so the «Собес» control links the right thread).
 
     Row keys: mailbox, last_ts, msg_count, unread, n_interview, n_offer, n_rejection,
-      n_action, n_assessment_done, n_asmt_pending (open «complete your assessment» invites),
+      n_action, n_assessment_done, n_asmt_pending (open, not-yet-passed test/assessment
+      items — any kind: SHL/AMCAT/SkillCheck/Harver/video, see _TEST_SUBJECT_SQL),
       n_ack, has_sent, stage (furthest inbound kind), last_hash, last_thread,
       last_subject, last_snippet, last_from, last_candidate, last_kind, last_outbound,
       has_att, iv_hash, iv_thread.
@@ -444,7 +458,7 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) AS n_action,
                COUNT(*) FILTER (WHERE kind='assessment_done' AND NOT outbound) AS n_assessment_done,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound
-                   AND subject ILIKE '%%complete your assessment%%') AS n_asmt_pending,
+                   AND {_TEST_SUBJECT_SQL}) AS n_asmt_pending,
                COUNT(*) FILTER (WHERE kind='ack' AND NOT outbound) AS n_ack,
                bool_or(outbound) AS has_sent
           FROM mail_index

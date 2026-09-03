@@ -563,6 +563,16 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   inbox) → this page. Résumé download **reuses the existing `/resume/{jobid}?profile=<id>`** route
   (serves `uploads/prefill/<id>/<jobid>/resume.pdf`). Those artifacts are pruned at 20 days by the
   `prefill_retention` cron (above), so this page naturally only lists the last 20 days.
+  **The «📄 N» chip was RE-ADDED to the merged grouped inbox (2026-09-03).** The 2026-08-29 merge
+  replaced the old roster (`render_candidate_rows`, which carried the chip) with the candidate-grouped
+  inbox (`candidates_inbox.py`), whose cards had NO chip — so the résumé/apps click-through silently
+  vanished (files were fine: 12k `resume.pdf` on disk, NOT a retention prune). Fix: `candidates_inbox._apps_chip(mailbox)`
+  renders «📄 N» in the card's `cg-metaline` (class `.cg-apps`, `event.stopPropagation()` so it opens
+  the apps page, not the card). The grouped card only has `mailbox`, so `candidate_apps.id_for_email(email)`
+  maps it → the `cid` (uploads/prefill/<id>): roster via a cached profiles.json email→id index, synthetic
+  via a cached `demo_personas.json` (email→{id}) map — both cheap. Chip shows when the candidate has ≥1
+  application OR a render-worthy base résumé, else nothing (no dead link). Only the dashboard restarts.
+  Tests: `test_candidates_inbox.py` (`test_apps_chip_*`).
 - **Custom-ATS form scrape: WAIT for the React form to render, then RETRY on empty/partial**
   (`tools/catalog_forms.py`). Ashby/Lever/Workable apply pages are React SPAs — `networkidle` fires
   before the fields hydrate, so the old fixed 2.2s sleep-then-extract silently stored partial/empty

@@ -24,6 +24,7 @@ from __future__ import annotations
 from html import escape
 from urllib.parse import urlencode
 
+from backend.tools import candidate_apps
 from backend.tools.mailcrm_ui import (
     _page, _initial, _avatar_color, maildate, _kind_tag, _msg_card,
     _iv_sobes, _iv_modal, _COMPOSE_MODAL,
@@ -57,6 +58,28 @@ def _clink(tab: str, stage: str, q: str) -> str:
     if q:
         params["q"] = q
     return "/mail/candidates?" + urlencode(params)
+
+
+def _apps_chip(mailbox: str) -> str:
+    """«📄 N» chip → the candidate's applications page (/candidates/<id>): where they applied
+    + each tailored résumé PDF (downloadable). Restored 2026-09-03 — the 2026-08-29 merge to
+    this grouped inbox dropped the old roster's chip, so résumés were no longer clickable.
+    Resolves the mailbox → candidate id (roster or synthetic demo). stopPropagation so the
+    click opens the apps page, not the card. Returns "" for a candidate with no résumé/apps
+    or on any failure (never breaks the card)."""
+    try:
+        cid = candidate_apps.id_for_email(mailbox)
+        if not cid:
+            return ""
+        na = candidate_apps.app_count(cid)
+        if not (na or cid in candidate_apps.resume_profile_ids()):
+            return ""
+        label = f"📄 {na}" if na else "📄"
+        return (f'<span class="cg-apps" title="Резюме + куда подавались" '
+                f'onclick="event.stopPropagation();'
+                f"location.href='/candidates/{escape(cid)}'\">{label}</span>")
+    except Exception:
+        return ""
 
 
 def _iv_assigned(mailbox: str, thread: str, name: str) -> str:
@@ -117,7 +140,7 @@ def _group_card(g: dict) -> str:
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview"><span class="cg-subj">{escape(subject)}</span>'
         f'<span class="cg-snip">{escape(snip_prefix + snippet)}</span></div>'
-        f'<div class="cg-metaline">{stage_tag}{count_chip}{sobes}</div>'
+        f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}{sobes}</div>'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -328,6 +351,8 @@ _CG_CSS = """
 .cg-metaline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:1px;}
 .cg-metaline:empty{display:none;}
 .cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}
+.cg-apps{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:1px 8px;cursor:pointer;white-space:nowrap;}
+.cg-apps:hover{background:#d7e6fd;}
 .cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
 .cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}

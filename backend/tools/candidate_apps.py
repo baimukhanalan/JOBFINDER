@@ -7,8 +7,11 @@ from pathlib import Path
 
 PREFILL_ROOT = Path(__file__).resolve().parents[2] / "uploads" / "prefill"
 _PROFILES = Path(__file__).resolve().parents[1] / "data" / "profiles.json"
+_DEMO_FILE = Path(__file__).resolve().parents[1] / "data" / "demo_personas.json"
 # mtime-guarded cache of profiles.json keyed by id (loaded once, refreshed on change).
-_prof_cache: dict = {"mtime": -1.0, "by_id": {}, "resume_ids": set()}
+_prof_cache: dict = {"mtime": -1.0, "by_id": {}, "resume_ids": set(), "email_to_id": {}}
+# mtime-guarded cache of the synthetic demo registry (email -> id).
+_demo_cache: dict = {"mtime": -1.0, "by_email": {}}
 
 
 def _safe(cid: str) -> str:
@@ -38,8 +41,47 @@ def _profiles_by_id() -> dict:
             by_id = {}
         _prof_cache.update(mtime=mt, by_id=by_id,
                            resume_ids={cid for cid, p in by_id.items()
-                                       if _render_worthy((p or {}).get("resume"))})
+                                       if _render_worthy((p or {}).get("resume"))},
+                           email_to_id={str((p or {}).get("email") or "").lower(): cid
+                                        for cid, p in by_id.items() if (p or {}).get("email")})
     return _prof_cache["by_id"]
+
+
+def _demo_email_to_id() -> dict:
+    """The synthetic demo registry (backend/data/demo_personas.json, {email: {id,name}})
+    as {email: id}, cached until the file changes. Lets the candidate-apps chip resolve a
+    demo persona's mailbox → its uploads/prefill/<id> dir without scanning every persona."""
+    try:
+        mt = _DEMO_FILE.stat().st_mtime
+    except OSError:
+        return {}
+    if mt != _demo_cache["mtime"]:
+        by_email: dict = {}
+        try:
+            d = json.loads(_DEMO_FILE.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                for email, info in d.items():
+                    cid = (info or {}).get("id") if isinstance(info, dict) else None
+                    if email and cid:
+                        by_email[str(email).lower()] = str(cid)
+        except Exception:
+            by_email = {}
+        _demo_cache.update(mtime=mt, by_email=by_email)
+    return _demo_cache["by_email"]
+
+
+def id_for_email(email: str) -> str | None:
+    """Map a candidate mailbox -> candidate id (the uploads/prefill/<id> dir + /candidates/<id>
+    page), for the résumé/applications chip. Roster (profiles.json email) first, then the
+    synthetic demo registry. None if unknown. Both lookups are cheap cached dicts."""
+    e = (email or "").strip().lower()
+    if not e:
+        return None
+    _profiles_by_id()  # warm the roster cache (builds email_to_id)
+    cid = _prof_cache["email_to_id"].get(e)
+    if cid:
+        return cid
+    return _demo_email_to_id().get(e) or None
 
 
 def resume_profile_ids() -> set:

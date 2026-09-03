@@ -101,6 +101,31 @@ def test_group_card_shows_sobes_when_interview_but_not_assigned():
     assert "iv-assigned" not in out
 
 
+def test_apps_chip_links_to_candidate_apps(monkeypatch):
+    # Restored 2026-09-03: the résumé/applications «📄 N» chip → /candidates/<cid>.
+    from backend.tools import candidate_apps
+    monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: "demo_x" if e else None)
+    monkeypatch.setattr(candidate_apps, "app_count", lambda cid: 3)
+    monkeypatch.setattr(candidate_apps, "resume_profile_ids", lambda: set())
+    out = ci.render_groups([_g(mailbox="x@takhet.com")])
+    assert 'class="cg-apps"' in out
+    assert "📄 3" in out
+    assert "/candidates/demo_x" in out
+    assert "event.stopPropagation()" in out  # chip click must not toggle the card
+
+
+def test_apps_chip_absent_without_resume_or_apps(monkeypatch):
+    from backend.tools import candidate_apps
+    # unknown mailbox → no cid → no chip
+    monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: None)
+    monkeypatch.setattr(candidate_apps, "app_count", lambda cid: 0)
+    monkeypatch.setattr(candidate_apps, "resume_profile_ids", lambda: set())
+    assert 'class="cg-apps"' not in ci.render_groups([_g(mailbox="ghost@takhet.com")])
+    # known cid but 0 apps AND no base résumé → still no chip (no dead link)
+    monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: "demo_y")
+    assert 'class="cg-apps"' not in ci.render_groups([_g(mailbox="y@takhet.com")])
+
+
 def test_unread_badge_only_when_positive():
     seven = ci.render_groups([_g(unread=7)])
     none = ci.render_groups([_g(unread=0)])

@@ -1268,6 +1268,25 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   bucket (drops senior/dev via `_NOT_MASS`/`_DEV`). `categorize`'s healthcare/insurance bucket matches bare
   `rep` (not only `representative`) so "Licensed Health Insurance Rep" survives (guarded so "Sales Rep"/
   "Legal Rep" don't leak).
+  **On-demand apply modal + hide-Spanish + UI declutter (2026-09-03).** `/mass-hiring` got a prominent
+  **«▶ Запустить подачу»** button → a config modal (`mass_hiring_ui._run_modal`/`_RUN_JS`): count, workers,
+  per-lane checkboxes (TTEC/Teleperformance/Centene/Sutherland/Kelly/Maximus — Conduent has no cron driver;
+  cigna/humana/cvs/concentrix stay `_BLOCKED`), and a **«частота»** cron-cadence selector. Execution is
+  `backend/tools/mh_ondemand.py` — it REUSES each lane's proven cron driver verbatim (`start()` spawns
+  `python -m backend.tools.mass_hiring_apply_<lane>_cron --workers N [--limit count]` as a subprocess with
+  the same env as the crontab line; `--limit` only where the driver accepts it — NOT kelly/maximus). Routes
+  `POST /mass-hiring/apply_all|apply_all_stop`, `GET /mass-hiring/apply_all_status`, `POST /mass-hiring/settings`
+  (admin-gated). `set_schedule()` rewrites ONLY the cron-schedule field of the matching lane lines (backup to
+  `logs/crontab.bak-*`, never add/remove lines). **Hide-Spanish** is a reversible setting
+  (`mh_settings.hide_spanish`, default ON, `backend/data/mh_settings.json` gitignored): it excludes
+  `title ILIKE '%spanish%'` from BOTH the board display (`mass_hiring.jobs`/`companies`) AND the apply engine
+  (`mh_settings.drop_spanish` called by every lane's job-id selector) — flip «Показывать испанские» in the modal
+  when Spanish-speaking staff exist. **Removed** the category/comp filter chips + the «💻 Нужен ноут» badge
+  (owner request). **`/catalog` got the matching «▶ Запустить подачу» CTA** (opens its existing Фильтры sheet's
+  «Массовая подача» — reuses `_do_fill_all_adaptive`, region filter kept). Only the dashboard restarts. ILIKE
+  patterns are passed as PARAMS (never inline `%spanish%`, which psycopg2 misreads as a `%s` placeholder).
+  Tests: `test_mass_hiring.py` (53). Memory: none.
+
   **⭐ Stable-comp marker + hourly pay (2026-08-30, owner focus).** Owner wants to target STABLE fixed-pay
   roles (not commission) and auto-apply to them first. `comp_type(title, category)` → `variable` iff
   `category=='sales'` OR the title carries a commission signal (`_COMMISSION_RE`: commission / OTE /

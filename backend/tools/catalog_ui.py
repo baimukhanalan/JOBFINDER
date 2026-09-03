@@ -242,9 +242,12 @@ def render_page(company: str = "", q: str = "", region: str = "",
     head = (
         '<div class="cat-head">'
         f'<div class="cat-h-row"><div class="cat-h-title">{title_txt} {head_n}</div>'
+        '<div class="cat-h-btns">'
+        '<button class="cat-run" onclick="toggleFilters()" '
+        'title="Настроить и запустить массовую подачу">▶ Запустить подачу</button>'
         '<button class="cat-filters-btn" id="fltBtn" onclick="toggleFilters()" '
         f'aria-expanded="false">Фильтры<span class="cat-filters-tag">{reg_tag}</span></button>'
-        f'</div>{search}</div>')
+        f'</div></div>{search}</div>')
 
     # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
     # settings sheet, so the main view is just search + jobs.
@@ -356,6 +359,9 @@ _CAT_CSS = """<style>
 .cat-q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
 /* Filters button — opens the settings sheet; shows the active region as a tag. */
 .cat-filters-btn{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-h-btns{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.cat-run{display:inline-flex;align-items:center;gap:7px;background:var(--accent,#2f6fed);color:#fff;border:1px solid var(--accent,#2f6fed);border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;min-height:38px;white-space:nowrap}
+.cat-run:hover{filter:brightness(1.07)}
 .cat-filters-btn:hover{border-color:var(--accent);color:var(--ink)}
 .cat-filters-btn[aria-expanded=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}

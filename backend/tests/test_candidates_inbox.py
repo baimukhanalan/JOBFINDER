@@ -322,3 +322,30 @@ def test_mailcrm_candidate_groups_wrapper_adds_identity_keys():
         assert "name" in r
         assert "is_demo" in r
         assert _WRAPPER_KEYS <= set(r.keys()), sorted(_WRAPPER_KEYS - set(r.keys()))
+
+
+# ---- assessment status chip + mark/un-mark control -------------------------------------
+def test_assessment_inner_done_shows_passed_and_revert():
+    h = ci.assessment_inner("x@takhet.com", done=True)
+    assert "Пройдено" in h
+    assert "data-mark=\"0\"" in h        # the button un-marks
+    assert "cgMarkAsmt" in h
+
+
+def test_assessment_inner_pending_shows_remaining_and_mark():
+    h = ci.assessment_inner("x@takhet.com", done=False)
+    assert "Осталось" in h
+    assert "Отметить" in h
+    assert "data-mark=\"1\"" in h        # the button marks passed
+
+
+def test_assessment_control_absent_without_assessment():
+    # a candidate with neither a done nor a pending assessment gets no chip
+    g = {"mailbox": "nobody@takhet.com", "n_assessment_done": 0, "n_asmt_pending": 0}
+    assert ci._assessment_control(g) == ""
+
+
+def test_assessment_control_pending_renders_chip():
+    g = {"mailbox": "p@takhet.com", "n_assessment_done": 0, "n_asmt_pending": 1}
+    h = ci._assessment_control(g)
+    assert "cg-asmt-wrap" in h and "Осталось" in h

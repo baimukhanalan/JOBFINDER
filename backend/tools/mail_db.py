@@ -400,7 +400,8 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
     interview message, so the «Собес» control links the right thread).
 
     Row keys: mailbox, last_ts, msg_count, unread, n_interview, n_offer, n_rejection,
-      n_action, n_ack, has_sent, stage (furthest inbound kind), last_hash, last_thread,
+      n_action, n_assessment_done, n_asmt_pending (open «complete your assessment» invites),
+      n_ack, has_sent, stage (furthest inbound kind), last_hash, last_thread,
       last_subject, last_snippet, last_from, last_candidate, last_kind, last_outbound,
       has_att, iv_hash, iv_thread.
 
@@ -442,6 +443,8 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
                COUNT(*) FILTER (WHERE kind='rejection' AND NOT outbound) AS n_rejection,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) AS n_action,
                COUNT(*) FILTER (WHERE kind='assessment_done' AND NOT outbound) AS n_assessment_done,
+               COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound
+                   AND subject ILIKE '%%complete your assessment%%') AS n_asmt_pending,
                COUNT(*) FILTER (WHERE kind='ack' AND NOT outbound) AS n_ack,
                bool_or(outbound) AS has_sent
           FROM mail_index

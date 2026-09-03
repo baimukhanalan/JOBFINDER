@@ -240,6 +240,68 @@ def assessment_done_mailboxes() -> frozenset:
     return _assess_done_cache["set"]
 
 
+def _write_assess_done(done: set) -> None:
+    """Atomically rewrite shl_assess_done.json + invalidate the mtime cache so
+    assessment_done_mailboxes() reloads immediately."""
+    tmp = f"{_ASSESS_DONE_PATH}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(sorted(done), f)
+    os.replace(tmp, _ASSESS_DONE_PATH)
+    _assess_done_cache["mtime"] = None
+
+
+def _reclassify_assessment(email: str, to_done: bool) -> None:
+    """Re-tag this mailbox's «complete your assessment» rows in mail_index NOW so the CRM
+    reflects the change without waiting for a re-index. Best-effort."""
+    frm, to = ("action_needed", "assessment_done") if to_done else ("assessment_done", "action_needed")
+    try:
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute("UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind=%s "
+                        "AND subject ILIKE %s",
+                        (to, email, frm, "%complete your assessment%"))
+    except Exception:
+        pass
+
+
+def mark_assessment_done(name: str) -> None:
+    """Mark a persona's assessment as passed — the single source of truth, called by BOTH the
+    auto-completion runner (shl_assess_runner) and the operator «Отметить пройденным» button:
+    (1) persist the mailbox to shl_assess_done.json so a re-index keeps the `assessment_done`
+    tag (build_index_row reads it), and (2) re-tag the already-indexed invite row now for an
+    immediate CRM effect. Best-effort; never raises."""
+    email = name if "@" in name else f"{name}@takhet.com"
+    try:
+        done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
+    except Exception:
+        done = set()
+    if email not in done:
+        done.add(email)
+        try:
+            _write_assess_done(done)
+        except Exception:
+            pass
+    _reclassify_assessment(email, to_done=True)
+
+
+def unmark_assessment_done(name: str) -> None:
+    """Reverse mark_assessment_done — the operator «↺ Вернуть» button: drop the mailbox from
+    shl_assess_done.json (so a re-index no longer forces `assessment_done`) and re-tag its
+    invite rows back to `action_needed`. Best-effort; never raises."""
+    email = name if "@" in name else f"{name}@takhet.com"
+    try:
+        done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
+    except Exception:
+        done = set()
+    if email in done:
+        done.discard(email)
+        try:
+            _write_assess_done(done)
+        except Exception:
+            pass
+    _reclassify_assessment(email, to_done=False)
+
+
 def _kind_with_done_override(subject: str, body: str, mailbox: str) -> str:
     kind = classify(subject, body)
     if (kind == "action_needed" and "complete your assessment" in (subject or "").lower()

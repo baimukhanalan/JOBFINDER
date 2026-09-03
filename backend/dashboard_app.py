@@ -2099,6 +2099,24 @@ def mail_delete(id: str = Form(...)):
     return JSONResponse(res, status_code=200 if res.get("ok") else 400)
 
 
+@app.post("/mail/assessment/mark", response_class=HTMLResponse)
+def mail_assessment_mark(mailbox: str = Form(...)):
+    """Operator marks a persona's assessment PASSED (the «Отметить пройденным» button on the
+    candidate card). Persists to shl_assess_done.json + re-tags the invite; returns the
+    refreshed chip+button fragment for the in-place swap. Admin-gated by dash_auth."""
+    from backend.tools import mailcrm, candidates_inbox
+    mailcrm.mark_assessment_done(mailbox)
+    return HTMLResponse(candidates_inbox.assessment_inner(mailbox, done=True))
+
+
+@app.post("/mail/assessment/unmark", response_class=HTMLResponse)
+def mail_assessment_unmark(mailbox: str = Form(...)):
+    """Reverse the operator mark — assessment back to «Осталось» («↺ Вернуть»)."""
+    from backend.tools import mailcrm, candidates_inbox
+    mailcrm.unmark_assessment_done(mailbox)
+    return HTMLResponse(candidates_inbox.assessment_inner(mailbox, done=False))
+
+
 @app.post("/mail/mark_read")
 def mail_mark_read(ids: str = Form("")):
     """Flag the selected messages read (Gmail-style select → mark read)."""

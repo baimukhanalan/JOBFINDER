@@ -24,7 +24,7 @@ from __future__ import annotations
 from html import escape
 from urllib.parse import urlencode
 
-from backend.tools import candidate_apps
+from backend.tools import candidate_apps, mailcrm
 from backend.tools.mailcrm_ui import (
     _page, _initial, _avatar_color, maildate, _kind_tag, _msg_card,
     _iv_sobes, _iv_modal, _COMPOSE_MODAL,
@@ -80,6 +80,39 @@ def _apps_chip(mailbox: str) -> str:
                 f"location.href='/candidates/{escape(cid)}'\">{label}</span>")
     except Exception:
         return ""
+
+
+def assessment_inner(mailbox: str, done: bool) -> str:
+    """Inner HTML (status chip + toggle button) of the assessment control — reused by the card
+    and returned by the /mail/assessment/mark|unmark routes so the control swaps in place."""
+    mb = escape(mailbox, quote=True)
+    if done:
+        return ('<span class="cg-asmt done" title="Ассессмент пройден">✓ Пройдено</span>'
+                f'<button type="button" class="cg-asmt-btn" data-mailbox="{mb}" data-mark="0" '
+                'onclick="event.stopPropagation();cgMarkAsmt(this)" '
+                'title="Вернуть в «Осталось»">↺</button>')
+    return ('<span class="cg-asmt pending" title="Ассессмент не пройден">⏳ Осталось</span>'
+            f'<button type="button" class="cg-asmt-btn primary" data-mailbox="{mb}" data-mark="1" '
+            'onclick="event.stopPropagation();cgMarkAsmt(this)">✓ Отметить пройденным</button>')
+
+
+def _assessment_control(g: dict) -> str:
+    """«✓ Пройдено» / «⏳ Осталось» chip + a one-click mark/un-mark button, shown ONLY for a
+    persona that actually has an assessment invite. Passed = an assessment_done row OR the
+    mailbox is in shl_assess_done.json (the override that survives re-index); else pending if an
+    open «complete your assessment» invite exists. Returns "" (nothing) for everyone else."""
+    mailbox = g.get("mailbox", "") or ""
+    if not mailbox:
+        return ""
+    try:
+        done = (g.get("n_assessment_done") or 0) > 0 or mailbox in mailcrm.assessment_done_mailboxes()
+    except Exception:
+        done = (g.get("n_assessment_done") or 0) > 0
+    pending = (g.get("n_asmt_pending") or 0) > 0
+    if not (done or pending):
+        return ""
+    return (f'<span class="cg-asmt-wrap" data-mailbox="{escape(mailbox, quote=True)}">'
+            f'{assessment_inner(mailbox, done)}</span>')
 
 
 def _iv_assigned(mailbox: str, thread: str, name: str) -> str:
@@ -140,7 +173,8 @@ def _group_card(g: dict) -> str:
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview"><span class="cg-subj">{escape(subject)}</span>'
         f'<span class="cg-snip">{escape(snip_prefix + snippet)}</span></div>'
-        f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}{sobes}</div>'
+        f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}'
+        f'{_assessment_control(g)}{sobes}</div>'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -353,6 +387,15 @@ _CG_CSS = """
 .cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}
 .cg-apps{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:1px 8px;cursor:pointer;white-space:nowrap;}
 .cg-apps:hover{background:#d7e6fd;}
+.cg-asmt-wrap{display:inline-flex;align-items:center;gap:6px;}
+.cg-asmt{flex:0 0 auto;font-size:10.5px;font-weight:700;border-radius:var(--r-full);padding:1px 8px;white-space:nowrap;}
+.cg-asmt.done{color:#0a7d33;background:#e4f6ea;}
+.cg-asmt.pending{color:#8a5a00;background:#fbeecd;}
+.cg-asmt-btn{flex:0 0 auto;font-size:10.5px;font-weight:700;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-full);padding:1px 9px;cursor:pointer;white-space:nowrap;line-height:1.6;}
+.cg-asmt-btn:hover{background:#f0f4fb;}
+.cg-asmt-btn.primary{border-color:#0a7d33;color:#0a7d33;background:#eafaef;}
+.cg-asmt-btn.primary:hover{background:#d6f2df;}
+.cg-asmt-btn:disabled{opacity:.5;cursor:default;}
 .cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
 .cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}
@@ -410,6 +453,21 @@ _CG_JS = """
     document.body.style.overflow = open ? 'hidden' : '';
   };
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') window.cgFilters(false); });
+
+  // Assessment «Отметить пройденным» / «↺ Вернуть»: POST the mailbox, swap the chip+button in
+  // place with the returned fragment (its inline onclick re-binds automatically). stopPropagation
+  // in the inline handler already kept the click off the card toggle.
+  window.cgMarkAsmt = function(btn){
+    var wrap = btn.closest('.cg-asmt-wrap'); if(!wrap) return;
+    var mailbox = btn.dataset.mailbox || wrap.dataset.mailbox || '';
+    var mark = btn.dataset.mark === '1';
+    btn.disabled = true;
+    var fd = new FormData(); fd.append('mailbox', mailbox);
+    fetch(mark ? '/mail/assessment/mark' : '/mail/assessment/unmark', {method:'POST', body:fd})
+      .then(function(r){ if(!r.ok) throw 0; return r.text(); })
+      .then(function(h){ wrap.innerHTML = h; })
+      .catch(function(){ btn.disabled = false; });
+  };
 
   // Collapse the «Написать» FAB to its icon (and hide the mobile top pill) on scroll-down,
   // restore on scroll-up — the Gmail behaviour the shared inbox handler wires only for the

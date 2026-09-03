@@ -65,29 +65,12 @@ def _mark(link: str, status: str) -> None:
 
 def _mark_assessment_done(name: str) -> None:
     """Record that this persona's OPQ is done so the CRM stops flagging its invite as
-    `action_needed`: (1) persist the mailbox to shl_assess_done.json (so a re-index keeps the
-    `assessment_done` tag — read by mailcrm.build_index_row), and (2) re-tag the already-indexed
-    invite row NOW for an immediate CRM effect. Best-effort; never breaks the run."""
-    email = name if "@" in name else f"{name}@takhet.com"
+    `action_needed`. Delegates to the single source of truth mailcrm.mark_assessment_done
+    (shared with the operator «Отметить пройденным» button): persist to shl_assess_done.json
+    (so a re-index keeps `assessment_done`) + re-tag the indexed invite row now. Best-effort."""
     try:
-        done = set(json.load(open(DONE_PATH))) if os.path.exists(DONE_PATH) else set()
-    except Exception:
-        done = set()
-    if email not in done:
-        done.add(email)
-        try:
-            tmp = f"{DONE_PATH}.{os.getpid()}.tmp"
-            with open(tmp, "w") as f:
-                json.dump(sorted(done), f)
-            os.replace(tmp, DONE_PATH)
-        except Exception:
-            pass
-    try:
-        with mail_db.conn() as c:
-            cur = c.cursor()
-            cur.execute("UPDATE mail_index SET kind='assessment_done' "
-                        "WHERE mailbox=%s AND kind='action_needed' AND subject ILIKE %s",
-                        (email, "%complete your assessment%"))
+        from backend.tools import mailcrm
+        mailcrm.mark_assessment_done(name)
     except Exception:
         pass
 

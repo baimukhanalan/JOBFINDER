@@ -549,7 +549,7 @@ def queue(profile: str = "michael"):
 
 _UNF_REASONS = {
     "incomplete": "Не заполнены обязательные поля",
-    "needs_review": "Требует ручной проверки (флаги [review])",
+    "needs_review": "Требует ручной проверки",
     "page_drift": "Страница ушла на другую вакансию",
     "preempted": "Перехвачено другим прогоном",
     "click_failed": "Submit не нажался (капча / кнопка)",
@@ -567,7 +567,7 @@ def _unf_reason(it: dict) -> str:
     if r in _UNF_REASONS and not (r in ("clicked", "") and it.get("unfilled")):
         return _UNF_REASONS[r]
     if it.get("unfilled"):
-        return f"Не заполнено полей: {it['unfilled']}"
+        return f"Не заполнено полей: {len(it['unfilled'])}"
     return _UNF_REASONS.get(r, "Не подтверждено")
 
 
@@ -635,10 +635,10 @@ def unfinished_index():
            ".unf-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:19px;"
            "font-weight:700;color:var(--ink);margin:0 0 16px;animation:unf-in .4s ease both}"
            ".unf-head b{color:var(--accent)}"
-           ".unf-rerun{margin-left:14px;display:inline-flex;align-items:center;justify-content:center;background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);"
+           ".unf-rerun{margin-left:14px;display:inline-flex;align-items:center;justify-content:center;background:var(--ok);color:#fff;border:none;border-radius:var(--r-full);"
            "height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer;"
            "box-shadow:0 1px 2px rgba(11,128,67,.3);transition:background .16s,transform .12s}"
-           ".unf-rerun:hover{background:#0a7038}.unf-rerun:active{transform:translateY(1px) scale(.985)}"
+           ".unf-rerun:hover{background:var(--ok-hover)}.unf-rerun:active{transform:translateY(1px) scale(.985)}"
            ".unf-rerun:disabled{opacity:.7;cursor:default}"
            ".unf-head .unf-links{font-size:13px;font-weight:600;margin-left:auto;display:flex;gap:14px}"
            ".unf-head a{color:var(--accent);text-decoration:none;transition:opacity .15s}"
@@ -660,7 +660,8 @@ def unfinished_index():
            ".unf-co{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-mute)}"
            ".unf-ats{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);border:1px solid var(--line);"
            "border-radius:6px;padding:1px 7px}"
-           ".unf-title{font-size:15.5px;font-weight:700;color:var(--ink);line-height:1.3}"
+           ".unf-title{font-size:15.5px;font-weight:700;color:var(--ink);line-height:1.3;"
+           "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:calc(1.3em*2)}"
            ".unf-reason{margin-top:6px;font-size:13px;font-weight:600;color:var(--ink-soft);"
            "display:flex;align-items:center;gap:7px}"
            ".unf-reason::before{content:'';width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:var(--ink-mute)}"

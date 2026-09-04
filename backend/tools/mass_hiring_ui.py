@@ -157,8 +157,8 @@ def _pay_html(j: dict) -> str:
     return f'<span class="mh-pay" title="Ставка из вакансии">{rng}/ч</span>'
 
 
-_STATUS = {"auto": ("🤖 Авто", "st-auto", "Наш сервер подаёт автоматически, без человека"),
-           "blocked": ("⛔ Ассессмент", "st-blk",
+_STATUS = {"auto": ("Авто", "st-auto", "Подаётся автоматически, без человека"),
+           "blocked": ("Ассессмент", "st-blk",
                        "Обязательный человеческий видео/голос-ассессмент — авто невозможно")}
 
 
@@ -192,7 +192,7 @@ def _lang_badge(j: dict) -> str:
 def _job_row(j: dict) -> str:
     url = _esc(j.get("apply_url"))
     title = _esc(j.get("title"))
-    loc = _esc(j.get("location_raw") or "Remote")
+    loc = _esc(j.get("location_raw") or "Удалённо")
     star = ('<span class="mh-star" title="Стабильная оплата (не комиссия)">★</span>'
             if j.get("comp_type") != "variable" else "")
     # Auto-fill (dry-run) is supported only where we have a working strategy — Avature (Maximus).
@@ -225,7 +225,7 @@ def _company_card(c: dict, category: str | None, comp: str | None = None) -> str
              'stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>')
     stats = f'{c["active_jobs"]} вакансий'
     if c.get("cs_jobs"):
-        stats += f' · {c["cs_jobs"]} customer support'
+        stats += f' · {c["cs_jobs"]} в поддержке'
     return (
         f'<details class="mh-card"><summary class="mh-crow">'
         f'<div class="mh-score {cls}" title="Индекс масс-хайринга {score}/100">'

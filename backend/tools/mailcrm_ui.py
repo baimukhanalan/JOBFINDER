@@ -13,13 +13,13 @@ from urllib.parse import urlencode
 
 _MONTHS = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 _KIND = {
-    "interview": ("📞", "Собеседование", "#1a73e8", "#e8f0fe"),
+    "interview": ("📞", "Собес", "#1a73e8", "#e8f0fe"),
     "offer": ("🎉", "Оффер", "#188038", "#e6f4ea"),
     "rejection": ("✕", "Отказ", "#d93025", "#fce8e6"),
-    "action_needed": ("⚠️", "Действие нужно", "#b06000", "#feefc3"),
-    "assessment_done": ("🤖", "Тест пройден", "#188038", "#e6f4ea"),
-    "ack": ("•", "Принято", "#5f6368", "#f1f3f4"),
-    "code": ("🔑", "Код", "#5f6368", "#f1f3f4"),
+    "action_needed": ("⚠️", "Действие", "#b06000", "#feefc3"),
+    "assessment_done": ("🤖", "Тест сдан", "#188038", "#e6f4ea"),
+    "ack": ("✅", "Принято", "#5f6368", "#f1f3f4"),
+    "code": ("🔑", "Коды", "#5f6368", "#f1f3f4"),
     "other": ("✉", "", "#80868b", "#f1f3f4"),
 }
 
@@ -195,7 +195,7 @@ _CSS = """
    FULL (buttons, icon-circles, filter pills): --ctl-h/px/fs. COMPACT inline metaline chips
    (📄 apps, assessment toggle, Собес): --chip-h/px/fs. Only two documented exceptions:
    the mobile compose FAB (52px) and the Собес calendar cell (30px). */
---ctl-h:40px;--ctl-px:16px;--ctl-fs:13.5px;--chip-h:32px;--chip-px:12px;--chip-fs:12.5px;}
+--ctl-h:40px;--ctl-px:16px;--ctl-fs:13.5px;--chip-h:32px;--chip-px:12px;--chip-fs:12.5px;--chip-sm-h:20px;--chip-sm-fs:11px;--ok:#0b8043;--ok-hover:#0a7038;--warn:#b06000;--warn-soft:#feefc3;}
 *{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
@@ -288,7 +288,8 @@ button.primary:hover{background:var(--accent-deep);}
 .mbody{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px;}
 .mtop{display:flex;align-items:baseline;gap:8px;}
 .msender{min-width:0;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;color:var(--ink-soft);font-size:13.5px;}
-.tag{flex:0 0 auto;font-family:var(--ff-mono);font-size:10px;padding:1px 8px;border-radius:var(--r-full);}
+.chip{display:inline-flex;align-items:center;gap:4px;height:var(--chip-sm-h);font-family:var(--ff);font-size:var(--chip-sm-fs);font-weight:700;line-height:1;padding:0 8px;border-radius:var(--r-full);white-space:nowrap;flex:0 0 auto;}
+.tag{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-family:var(--ff);font-size:var(--chip-sm-fs);font-weight:700;line-height:1;padding:0 8px;border-radius:var(--r-full);white-space:nowrap;}
 .mbox{flex:0 0 auto;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);}
 .mdate{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);}
 .msubj{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-soft);font-size:13.5px;}
@@ -720,6 +721,15 @@ def _kind_tag(kind: str) -> str:
     if not label:
         return ""
     return f'<span class="tag" style="color:{fg};background:{bg}">{emoji} {escape(label)}</span>'
+
+
+def _fmt(n) -> str:
+    """Integer with a non-breaking-space thousands separator (4411 -> '4 411'), so big
+    counts read cleanly and never wrap. Non-numeric input passes through unchanged."""
+    try:
+        return f"{int(n):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "" if n is None else str(n)
 
 
 def _iv_sobes(mailbox: str, thread: str, hash: str, as_span: bool = False) -> str:

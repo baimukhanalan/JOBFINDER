@@ -2044,6 +2044,22 @@ tz-parametrised (80 pass).
   skip if no DSN — run SEQUENTIALLY, concurrent runs share the DB and interfere).
 
 ## UI / branding (PWA, logo, animations — 2026-08-30)
+- **Text/label/height consistency system (2026-09-04).** Owner complaint: ragged card heights + inconsistent
+  labels/chips. Foundation in `mailcrm_ui.py`: (1) `_KIND` is the ONE canonical stage taxonomy — labels are
+  ≤10 chars and singular/plural-consistent (interview=«Собес» not «Собеседование», action_needed=«Действие»,
+  assessment_done=«Тест сдан», code=«Коды», ack emoji «✅»); every stage tag/funnel reads from it, no
+  hand-copied label sets. (2) A thin list-badge scale `--chip-sm-h:20px/--chip-sm-fs:11px` + a shared `.chip`
+  atom; `.tag` (used by `_kind_tag`) is on it. LIST-ROW badges use `--chip-sm` (20px) — the 32px `--chip-h` is
+  reserved for standalone toolbar/header controls only; never mix the two heights in one row. (3) `_fmt(n)` =
+  space thousands-sep (4411→«4 411»); route counts through it. (4) `--ok/--ok-hover/--warn/--warn-soft` tokens.
+  **Кандидаты** (`candidates_inbox.py`): the `.cg-metaline` is `flex-wrap:nowrap;overflow:hidden;min-height:24px`
+  (dropped `:empty{display:none}`) with a FIXED child order (stage→Собес/Назначено→assessment→apps→count) — this
+  is what makes a 0-badge card the SAME height as a 5-badge one (the actual fix for uneven heights); all its
+  badges (`.cg-apps/.cg-asmt*/.cg-count`) are on `--chip-sm`; `.iv-sobes/.iv-assigned` (operator_ui.py) too, with
+  `.iv-assigned` name capped `max-width:150px`. Message-count chip is «✉ N» (distinct from the unread blue
+  circle, which has no tooltip on mobile). Assessment button pair is symmetric «✓ Отметить» / «↺ Вернуть».
+  Only the dashboard restarts. The other tabs (Каталог/Статистика/Пользователи/Незавершённые/Mass Hiring) still
+  need the same pass — see the spec the audit produced.
 - **Brand mark = serif interlocked "JF" (white) on royal-blue `#0c47c2`** at `backend/static/logo.svg`
   (+ `logo-maskable.svg` and rendered PNG icons). Rendered with Times New Roman Bold (closest installed
   serif). NOT a circle/sans-serif. Rebuild icons after any change: `rsvg-convert -w N -h N

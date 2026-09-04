@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 from backend.tools import candidate_apps, mailcrm
 from backend.tools.mailcrm_ui import (
     _page, _initial, _avatar_color, maildate, _kind_tag, _msg_card,
-    _iv_sobes, _iv_modal, _COMPOSE_MODAL,
+    _iv_sobes, _iv_modal, _COMPOSE_MODAL, _fmt,
 )
 
 # One page of candidate groups. The routes pass this as candidate_groups(limit=PAGE),
@@ -41,10 +41,10 @@ PAGE = 40
 # so a progressed candidate is counted only once under its latest stage.
 _FUNNEL = [
     ("", "Все"),
-    ("sent", "Отправленные"),
+    ("sent", "Отправлено"),
     ("ack", "Принято"),
     ("action_needed", "Действие"),
-    ("interview", "Собеседование"),
+    ("interview", "Собес"),
     ("offer", "Оффер"),
     ("rejection", "Отказ"),
     ("code", "Коды"),
@@ -140,10 +140,10 @@ def assessment_inner(mailbox: str, done: bool) -> str:
         return ('<span class="cg-asmt done" title="Ассессмент пройден">✓ Пройдено</span>'
                 f'<button type="button" class="cg-asmt-btn" data-mailbox="{mb}" data-mark="0" '
                 'onclick="event.stopPropagation();cgMarkAsmt(this)" '
-                'title="Вернуть в «Осталось»">↺</button>')
+                'title="Вернуть в «Осталось»">↺ Вернуть</button>')
     return ('<span class="cg-asmt pending" title="Ассессмент не пройден">⏳ Осталось</span>'
             f'<button type="button" class="cg-asmt-btn primary" data-mailbox="{mb}" data-mark="1" '
-            'onclick="event.stopPropagation();cgMarkAsmt(this)">✓ Отметить пройденным</button>')
+            'onclick="event.stopPropagation();cgMarkAsmt(this)">✓ Отметить</button>')
 
 
 def _assessment_control(g: dict) -> str:
@@ -197,7 +197,7 @@ def _group_card(g: dict) -> str:
     stage_tag = _kind_tag(g.get("stage", "other"))
 
     n_msg = g.get("msg_count", 0)
-    count_chip = f'<span class="cg-count" title="писем в переписке">{n_msg}</span>' if n_msg else ""
+    count_chip = f'<span class="cg-count" title="писем в переписке">✉ {n_msg}</span>' if n_msg else ""
 
     # Interview control (stops its own click propagation → opens the modal, not the card):
     # «Назначено · <name>» once a booking exists (edit / reassign / cancel via the modal),
@@ -230,8 +230,8 @@ def _group_card(g: dict) -> str:
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview">{preview}</div>'
-        f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}'
-        f'{_assessment_control(g)}{sobes}</div>'
+        f'<div class="cg-metaline">{stage_tag}{sobes}{_assessment_control(g)}'
+        f'{_apps_chip(mailbox)}{count_chip}</div>'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -293,7 +293,7 @@ def render_message_fragment(message) -> str:
 def _title(count=None) -> str:
     # Clean page title: «Кандидаты» + a mono total count. Replaces the old lone underlined
     # «Все письма» pseudo-tab (leftover of the removed «Приоритетные» tab).
-    c = f'<span class="cg-h-count">{count}</span>' if count else ""
+    c = f'<span class="cg-h-count">{_fmt(count)}</span>' if count else ""
     return f'<div class="cg-htitle"><span class="cg-h">Кандидаты</span>{c}</div>'
 
 
@@ -447,16 +447,19 @@ _CG_CSS = """
 .cg-snip{color:var(--ink-mute);}
 .cg-card.unread .cg-subj{color:var(--ink);font-weight:600;}
 .cg-card.unread .cg-snip{color:var(--ink-soft);}
-.cg-metaline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:1px;}
-.cg-metaline:empty{display:none;}
-.cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}
-.cg-apps{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-h);font-size:var(--chip-fs);font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:0 var(--chip-px);cursor:pointer;white-space:nowrap;}
+/* Fixed-height single-row meta strip: nowrap + overflow-hidden + a reserved min-height means
+   a card with 0 badges is the SAME height as one with 5 (the fix for ragged card heights).
+   Priority order in markup: stage → Собес/Назначено → assessment → apps → count (count clips
+   first). Every badge is on the ONE thin --chip-sm (20px) scale so no two chip heights coexist. */
+.cg-metaline{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow:hidden;min-height:24px;margin-top:2px;}
+.cg-count{display:inline-flex;align-items:center;flex:0 0 auto;height:var(--chip-sm-h);font-family:var(--ff-mono);font-size:var(--chip-sm-fs);color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:0 8px;white-space:nowrap;}
+.cg-apps{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:0 9px;cursor:pointer;white-space:nowrap;}
 .cg-apps:hover{background:#d7e6fd;}
 .cg-asmt-wrap{display:inline-flex;align-items:center;gap:6px;}
-.cg-asmt{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-h);font-size:var(--chip-fs);font-weight:700;border-radius:var(--r-full);padding:0 var(--chip-px);white-space:nowrap;}
+.cg-asmt{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;border-radius:var(--r-full);padding:0 9px;white-space:nowrap;}
 .cg-asmt.done{color:#0a7d33;background:#e4f6ea;}
 .cg-asmt.pending{color:#8a5a00;background:#fbeecd;}
-.cg-asmt-btn{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-h);font-size:var(--chip-fs);font-weight:700;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-full);padding:0 var(--chip-px);cursor:pointer;white-space:nowrap;}
+.cg-asmt-btn{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-full);padding:0 9px;cursor:pointer;white-space:nowrap;}
 .cg-asmt-btn:hover{background:#f0f4fb;}
 .cg-asmt-btn.primary{border-color:#0a7d33;color:#0a7d33;background:#eafaef;}
 .cg-asmt-btn.primary:hover{background:#d6f2df;}

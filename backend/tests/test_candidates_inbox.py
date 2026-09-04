@@ -102,14 +102,15 @@ def test_group_card_shows_sobes_when_interview_but_not_assigned():
 
 
 def test_apps_chip_links_to_candidate_apps(monkeypatch):
-    # Restored 2026-09-03: the résumé/applications «📄 N» chip → /candidates/<cid>.
+    # Restored 2026-09-03; «Тихая строка» 2026-09-04: a quiet icon+digit count (no pill)
+    # → /candidates/<cid>.
     from backend.tools import candidate_apps
     monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: "demo_x" if e else None)
     monkeypatch.setattr(candidate_apps, "app_count", lambda cid: 3)
     monkeypatch.setattr(candidate_apps, "resume_profile_ids", lambda: set())
     out = ci.render_groups([_g(mailbox="x@takhet.com")])
-    assert 'class="cg-apps"' in out
-    assert "📄 3" in out
+    assert "cg-apps" in out
+    assert "3</button>" in out               # digit next to the file icon, no 📄 pill
     assert "/candidates/demo_x" in out
     assert "event.stopPropagation()" in out  # chip click must not toggle the card
 
@@ -120,10 +121,10 @@ def test_apps_chip_absent_without_resume_or_apps(monkeypatch):
     monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: None)
     monkeypatch.setattr(candidate_apps, "app_count", lambda cid: 0)
     monkeypatch.setattr(candidate_apps, "resume_profile_ids", lambda: set())
-    assert 'class="cg-apps"' not in ci.render_groups([_g(mailbox="ghost@takhet.com")])
+    assert "cg-apps" not in ci.render_groups([_g(mailbox="ghost@takhet.com")])
     # known cid but 0 apps AND no base résumé → still no chip (no dead link)
     monkeypatch.setattr(candidate_apps, "id_for_email", lambda e: "demo_y")
-    assert 'class="cg-apps"' not in ci.render_groups([_g(mailbox="y@takhet.com")])
+    assert "cg-apps" not in ci.render_groups([_g(mailbox="y@takhet.com")])
 
 
 def test_unread_badge_only_when_positive():
@@ -327,28 +328,33 @@ def test_mailcrm_candidate_groups_wrapper_adds_identity_keys():
         assert _WRAPPER_KEYS <= set(r.keys()), sorted(_WRAPPER_KEYS - set(r.keys()))
 
 
-# ---- assessment status chip + mark/un-mark control -------------------------------------
+# ---- assessment action (right slot, «Тихая строка» — no «Осталось» chip) ----------------
 def test_assessment_inner_done_shows_passed_and_revert():
     h = ci.assessment_inner("x@takhet.com", done=True)
     assert "Пройдено" in h
-    assert "data-mark=\"0\"" in h        # the button un-marks
-    assert "cgMarkAsmt" in h
+    assert "data-mark=\"0\"" in h        # the (armed) button un-marks
+    assert "cgAsmtDone" in h             # two-step: arm to «Вернуть», then POST via cgMarkAsmt
+    assert "Осталось" not in h
 
 
-def test_assessment_inner_pending_shows_remaining_and_mark():
+def test_assessment_inner_pending_shows_only_mark_action():
+    # Owner decision 2026-09-04: NO «⏳ Осталось» pending label — the «Отметить» button IS
+    # the signal, a slim text-action in the right slot.
     h = ci.assessment_inner("x@takhet.com", done=False)
-    assert "Осталось" in h
+    assert "Осталось" not in h
     assert "Отметить" in h
+    assert "cgMarkAsmt" in h
     assert "data-mark=\"1\"" in h        # the button marks passed
 
 
 def test_assessment_control_absent_without_assessment():
-    # a candidate with neither a done nor a pending assessment gets no chip
+    # a candidate with neither a done nor a pending assessment gets no action
     g = {"mailbox": "nobody@takhet.com", "n_assessment_done": 0, "n_asmt_pending": 0}
     assert ci._assessment_control(g) == ""
 
 
-def test_assessment_control_pending_renders_chip():
+def test_assessment_control_pending_renders_mark_action():
     g = {"mailbox": "p@takhet.com", "n_assessment_done": 0, "n_asmt_pending": 1}
     h = ci._assessment_control(g)
-    assert "cg-asmt-wrap" in h and "Осталось" in h
+    assert "cg-asmt-wrap" in h and "Отметить" in h
+    assert "Осталось" not in h

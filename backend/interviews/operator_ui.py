@@ -28,6 +28,13 @@ from backend.interviews import service, slots
 
 _DAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
+# «Тихая строка» inline icons for the slim text-controls (13px, currentColor). Keep the JS
+# copies in _IV_SCRIPT's ivSetTrigger in sync — it rebuilds the trigger's innerHTML live.
+_IC_CAL = ('<svg class="iv-ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" '
+           'rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>'
+           '<line x1="3" y1="10" x2="21" y2="10"/></svg>')
+_IC_OK = '<svg class="iv-ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
+
 
 def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес",
                  as_span: bool = False) -> str:
@@ -49,11 +56,12 @@ def sobes_button(mailbox: str, thread: str, hash: str, label: str = "Собес"
         f"event.stopPropagation();event.preventDefault();window._ivTrigger=this;openSobes({args})",
         quote=True,
     )
+    inner = f'{_IC_CAL}<span class="iv-lbl">{escape(label)}</span>'
     if as_span:
         return (f'<span class="iv-sobes" role="button" tabindex="0" onclick="{onclick}" '
-                f'title="Назначить собеседование">{escape(label)}</span>')
+                f'title="Назначить собеседование">{inner}</span>')
     return (f'<button type="button" class="iv-sobes" onclick="{onclick}" '
-            f'title="Назначить собеседование">{escape(label)}</button>')
+            f'title="Назначить собеседование">{inner}</button>')
 
 
 def assigned_button(mailbox: str, thread: str, hash: str, name: str = "",
@@ -67,11 +75,12 @@ def assigned_button(mailbox: str, thread: str, hash: str, name: str = "",
         quote=True,
     )
     label = "Назначено" + (f" · {name}" if name else "")
+    inner = f'{_IC_OK}<span class="iv-lbl">{escape(label)}</span>'
     if as_span:
         return (f'<span class="iv-assigned" role="button" tabindex="0" onclick="{onclick}" '
-                f'title="Изменить назначение">{escape(label)}</span>')
+                f'title="Изменить назначение">{inner}</span>')
     return (f'<button type="button" class="iv-assigned" onclick="{onclick}" '
-            f'title="Изменить назначение">{escape(label)}</button>')
+            f'title="Изменить назначение">{inner}</button>')
 
 
 def grid_fragment(mailbox: str, monday: date,
@@ -213,10 +222,13 @@ _IV_STYLE = """<style>
 .iv-assign-btn:disabled{opacity:.6;cursor:default}
 .iv-toast{font-size:13px;font-weight:600;color:var(--accent-deep,var(--accent));margin-top:10px;min-height:18px}
 .iv-loading{font-size:13px;color:var(--ink-mute);padding:16px 0}
-.iv-sobes{display:inline-flex;align-items:center;gap:4px;height:var(--chip-sm-h);background:var(--accent-soft);color:var(--accent);border:1px solid transparent;border-radius:var(--r-full);padding:0 8px;font-size:var(--chip-sm-fs);font-weight:700;line-height:1;white-space:nowrap;cursor:pointer}
-.iv-sobes:hover{border-color:var(--accent)}
-.iv-assigned{display:inline-flex;align-items:center;gap:4px;height:var(--chip-sm-h);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#e7f6ec;color:#188038;border:1px solid #bcdfc4;border-radius:var(--r-full);padding:0 8px;font-size:var(--chip-sm-fs);font-weight:700;line-height:1;cursor:pointer}
-.iv-assigned:hover{border-color:#188038}
+/* «Тихая строка» slim text-actions: no pill — accent icon+word, underline on hover. */
+.iv-sobes{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;color:var(--accent);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;cursor:pointer;flex:0 0 auto}
+.iv-sobes:hover{text-decoration:underline;text-underline-offset:3px}
+.iv-assigned{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;color:var(--ok,#188038);font-size:12px;font-weight:700;line-height:1;white-space:nowrap;cursor:pointer;flex:0 0 auto;max-width:170px}
+.iv-assigned:hover{text-decoration:underline;text-underline-offset:3px}
+.iv-ic{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+.iv-lbl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iv-current{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#e7f6ec;border:1px solid #bcdfc4;border-radius:10px;padding:10px 14px;margin-bottom:12px}
 .iv-current[hidden]{display:none}
 .iv-current-text{font-size:13px;font-weight:700;color:#188038}
@@ -270,11 +282,16 @@ _IV_SCRIPT = """<script>
     catch(e){ return iso; }
   }
   // Live-update the control that opened the modal (window._ivTrigger) after assign/cancel,
-  // so the card flips «Собес» ↔ «Назначено · <name>» without a page reload.
+  // so the card flips «Собес» ↔ «Назначено · <name>» without a page reload. Rebuilds the
+  // «Тихая строка» inner markup (icon + .iv-lbl) — keep the icons in sync with the Python
+  // _IC_CAL/_IC_OK constants above.
+  var IV_IC_CAL='<svg class="iv-ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
+  var IV_IC_OK='<svg class="iv-ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+  function ivEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g, function(c){ return '&#'+c.charCodeAt(0)+';'; }); }
   function ivSetTrigger(assigned, name){
     var t=window._ivTrigger; if(!t) return;
-    if(assigned){ t.className='iv-assigned'; t.textContent='Назначено'+(name? ' · '+name : ''); }
-    else { t.className='iv-sobes'; t.textContent='Собес'; }
+    if(assigned){ t.className='iv-assigned'; t.innerHTML=IV_IC_OK+'<span class="iv-lbl">Назначено'+(name? ' · '+ivEsc(name) : '')+'</span>'; }
+    else { t.className='iv-sobes'; t.innerHTML=IV_IC_CAL+'<span class="iv-lbl">Собес</span>'; }
   }
   // Read the current booking for this thread and reflect it: the modal title, the top
   // «Назначено: …» banner (+ its «Отменить» button), and the triggering control's label.

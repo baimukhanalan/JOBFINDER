@@ -574,6 +574,20 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   «Кандидаты» + mono total count (`_title(count)`, count from `stage_counts['all']`) replacing the leftover
   «Все письма» pseudo-tab. Don't reintroduce the flush single-panel/rail/mono-tag look. Only the dashboard
   restarts. Verified live at 390px.
+  **«Тихая строка» control row (2026-09-04, owner-approved) — the card's `.cg-metaline` is a QUIET line,
+  no pills.** Left group (`.cg-ml-left`, shrinks/clips as one unit): stage = a colored DOT + word
+  (`_stage_dot`, colors from the shared `_KIND` taxonomy; «other» renders nothing) · a thin `.cg-vsep` ·
+  quiet icon+digit counts (`.cg-ct`, mono/tabular-nums: file icon = the apps chip → `/candidates/<id>`,
+  envelope = message count). Right slot (`.cg-ml-acts`, `margin-left:auto`, NEVER clips): slim text-actions
+  (`.cg-act` and the restyled `.iv-sobes`/`.iv-assigned` in `interviews/operator_ui.py` — accent/green
+  icon+word, underline on hover; `ivSetTrigger` rebuilds icon+`.iv-lbl` innerHTML on live flip). TWO owner
+  rules baked in: (1) the «⏳ Осталось» pending-assessment chip is GONE — a pending test shows ONLY the
+  «✓ Отметить» action (the button IS the signal); (2) marked → a quiet green «✓ Пройдено» whose FIRST tap
+  arms it into a muted «↺ Вернуть» (`cgAsmtDone`, client-only) and only the SECOND tap POSTs the un-mark
+  (`cgMarkAsmt` → `/mail/assessment/unmark`) — no accidental reverts. `assessment_inner(mailbox, done)` is
+  still the fragment the mark/unmark routes return (swap-in-place contract unchanged). When a card has both
+  Собес and an assessment action they share the right slot, Собес first (primary). Uniform card heights via
+  the metaline's fixed `min-height`. Only the dashboard restarts. Tests: `test_candidates_inbox.py`.
   **Button size scale (2026-09-04):** shared control tokens in `mailcrm_ui._CSS` `:root` — `--ctl-h:40px`,
   `--ctl-px:16px`, `--ctl-fs:13.5px` — so every button role is one size everywhere. `.hbtn`, `button.primary`,
   `.ghost` are `height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs)`; `.iconbtn` is a

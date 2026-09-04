@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 from backend.tools import candidate_apps, mailcrm
 from backend.tools.mailcrm_ui import (
     _page, _initial, _avatar_color, maildate, _kind_tag, _msg_card,
-    _iv_sobes, _iv_modal, _COMPOSE_MODAL, _fmt,
+    _iv_sobes, _iv_modal, _COMPOSE_MODAL, _fmt, _KIND,
 )
 
 # One page of candidate groups. The routes pass this as candidate_groups(limit=PAGE),
@@ -110,10 +110,30 @@ def _clink(tab: str, stage: str, q: str) -> str:
     return "/mail/candidates?" + urlencode(params)
 
 
+# «Тихая строка» inline icons (13px stroke icons, colored by currentColor). Shared by the
+# quiet counts (file = résumé/apps, envelope = messages) and the right-slot text-actions.
+_IC_FILE = ('<svg class="cg-ic" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 '
+            '0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>')
+_IC_MAIL = ('<svg class="cg-ic" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" '
+            'rx="2"/><polyline points="22,6 12,13 2,6"/></svg>')
+_IC_CHECK = '<svg class="cg-ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
+
+
+def _stage_dot(kind: str) -> str:
+    """Quiet stage indicator («Тихая строка»): a small colored DOT + the word — no filled
+    pill. Colors come from the shared _KIND taxonomy so the stage palette stays consistent
+    with the message rows / funnel. The neutral «other» bucket renders nothing (same
+    contract as _kind_tag)."""
+    _, label, fg, _ = _KIND.get(kind, _KIND["other"])
+    if not label:
+        return ""
+    return f'<span class="cg-st" style="color:{fg}"><i class="cg-dot"></i>{escape(label)}</span>'
+
+
 def _apps_chip(mailbox: str) -> str:
-    """«📄 N» chip → the candidate's applications page (/candidates/<id>): where they applied
-    + each tailored résumé PDF (downloadable). Restored 2026-09-03 — the 2026-08-29 merge to
-    this grouped inbox dropped the old roster's chip, so résumés were no longer clickable.
+    """Quiet applications count (file icon + digit) → the candidate's applications page
+    (/candidates/<id>): where they applied + each tailored résumé PDF (downloadable).
+    Restored 2026-09-03; restyled 2026-09-04 to the «Тихая строка» icon+digit look (no pill).
     Resolves the mailbox → candidate id (roster or synthetic demo). stopPropagation so the
     click opens the apps page, not the card. Returns "" for a candidate with no résumé/apps
     or on any failure (never breaks the card)."""
@@ -124,30 +144,34 @@ def _apps_chip(mailbox: str) -> str:
         na = candidate_apps.app_count(cid)
         if not (na or cid in candidate_apps.resume_profile_ids()):
             return ""
-        label = f"📄 {na}" if na else "📄"
-        return (f'<span class="cg-apps" title="Резюме + куда подавались" '
+        label = str(na) if na else ""
+        return (f'<button type="button" class="cg-ct cg-apps" title="Резюме + куда подавались" '
                 f'onclick="event.stopPropagation();'
-                f"location.href='/candidates/{escape(cid)}'\">{label}</span>")
+                f"location.href='/candidates/{escape(cid)}'\">{_IC_FILE}{label}</button>")
     except Exception:
         return ""
 
 
 def assessment_inner(mailbox: str, done: bool) -> str:
-    """Inner HTML (status chip + toggle button) of the assessment control — reused by the card
-    and returned by the /mail/assessment/mark|unmark routes so the control swaps in place."""
+    """Inner HTML of the right-slot assessment ACTION — reused by the card and returned by
+    the /mail/assessment/mark|unmark routes so the control swaps in place.
+
+    Owner decision 2026-09-04: there is NO «⏳ Осталось» pending chip any more — the button
+    IS the signal. Pending → a slim accent «✓ Отметить» text-button (marks passed). Done →
+    a quiet green «✓ Пройдено»; the first tap arms it into a muted «↺ Вернуть» (cgAsmtDone),
+    the second tap POSTs the un-mark — so a stray tap never silently reverts."""
     mb = escape(mailbox, quote=True)
     if done:
-        return ('<span class="cg-asmt done" title="Ассессмент пройден">✓ Пройдено</span>'
-                f'<button type="button" class="cg-asmt-btn" data-mailbox="{mb}" data-mark="0" '
-                'onclick="event.stopPropagation();cgMarkAsmt(this)" '
-                'title="Вернуть в «Осталось»">↺ Вернуть</button>')
-    return ('<span class="cg-asmt pending" title="Ассессмент не пройден">⏳ Осталось</span>'
-            f'<button type="button" class="cg-asmt-btn primary" data-mailbox="{mb}" data-mark="1" '
-            'onclick="event.stopPropagation();cgMarkAsmt(this)">✓ Отметить</button>')
+        return (f'<button type="button" class="cg-act done" data-mailbox="{mb}" data-mark="0" '
+                'onclick="event.stopPropagation();cgAsmtDone(this)" '
+                f'title="Ассессмент пройден — нажмите, чтобы вернуть">{_IC_CHECK}Пройдено</button>')
+    return (f'<button type="button" class="cg-act" data-mailbox="{mb}" data-mark="1" '
+            'onclick="event.stopPropagation();cgMarkAsmt(this)" '
+            f'title="Отметить ассессмент пройденным">{_IC_CHECK}Отметить</button>')
 
 
 def _assessment_control(g: dict) -> str:
-    """«✓ Пройдено» / «⏳ Осталось» chip + a one-click mark/un-mark button, shown ONLY for a
+    """The right-slot assessment action («✓ Отметить» / «✓ Пройдено»), shown ONLY for a
     persona that actually has an assessment invite. Passed = an assessment_done row OR the
     mailbox is in shl_assess_done.json (the override that survives re-index); else pending if an
     open «complete your assessment» invite exists. Returns "" (nothing) for everyone else."""
@@ -175,6 +199,20 @@ def _iv_assigned(mailbox: str, thread: str, name: str) -> str:
         return ""
 
 
+def _metaline(stage_dot: str, apps_ct: str, count_ct: str, sobes: str, asmt: str) -> str:
+    """The «Тихая строка» control row under the preview. Left group = stage dot+word, a thin
+    vertical separator, then the quiet icon+digit counts; it shrinks/ellipsis-clips as one
+    unit. Right group = the slim text-actions («Собес»/«Назначено» first — the primary — then
+    the assessment action), pinned by margin-left:auto so it NEVER clips. Always rendered
+    (min-height keeps every card the same height, badges or not)."""
+    counts = apps_ct + count_ct
+    vsep = '<span class="cg-vsep"></span>' if stage_dot and counts else ""
+    acts = sobes + asmt
+    acts_html = f'<span class="cg-ml-acts">{acts}</span>' if acts else ""
+    return (f'<div class="cg-metaline"><span class="cg-ml-left">{stage_dot}{vsep}{counts}'
+            f'</span>{acts_html}</div>')
+
+
 # --------------------------------------------------------------- group cards
 def _group_card(g: dict) -> str:
     """One candidate card (collapsed). The header toggles the card open (cgToggle);
@@ -193,11 +231,12 @@ def _group_card(g: dict) -> str:
     clip = '<span class="cg-clip" title="есть вложение">📎</span>' if g.get("has_att") else ""
     date = maildate(g.get("last_ts", 0))
 
-    # Stage tag (furthest inbound kind). _kind_tag returns "" for the neutral «other» bucket.
-    stage_tag = _kind_tag(g.get("stage", "other"))
+    # Stage («Тихая строка»): colored dot + word, no pill. "" for the neutral «other» bucket.
+    stage_dot = _stage_dot(g.get("stage", "other"))
 
     n_msg = g.get("msg_count", 0)
-    count_chip = f'<span class="cg-count" title="писем в переписке">✉ {n_msg}</span>' if n_msg else ""
+    count_ct = (f'<span class="cg-ct" title="писем в переписке">{_IC_MAIL}{n_msg}</span>'
+                if n_msg else "")
 
     # Interview control (stops its own click propagation → opens the modal, not the card):
     # «Назначено · <name>» once a booking exists (edit / reassign / cancel via the modal),
@@ -230,8 +269,7 @@ def _group_card(g: dict) -> str:
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview">{preview}</div>'
-        f'<div class="cg-metaline">{stage_tag}{sobes}{_assessment_control(g)}'
-        f'{_apps_chip(mailbox)}{count_chip}</div>'
+        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g))}'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -447,23 +485,26 @@ _CG_CSS = """
 .cg-snip{color:var(--ink-mute);}
 .cg-card.unread .cg-subj{color:var(--ink);font-weight:600;}
 .cg-card.unread .cg-snip{color:var(--ink-soft);}
-/* Fixed-height single-row meta strip: nowrap + overflow-hidden + a reserved min-height means
-   a card with 0 badges is the SAME height as one with 5 (the fix for ragged card heights).
-   Priority order in markup: stage → Собес/Назначено → assessment → apps → count (count clips
-   first). Every badge is on the ONE thin --chip-sm (20px) scale so no two chip heights coexist. */
-.cg-metaline{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;overflow:hidden;min-height:24px;margin-top:2px;}
-.cg-count{display:inline-flex;align-items:center;flex:0 0 auto;height:var(--chip-sm-h);font-family:var(--ff-mono);font-size:var(--chip-sm-fs);color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:0 8px;white-space:nowrap;}
-.cg-apps{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:0 9px;cursor:pointer;white-space:nowrap;}
-.cg-apps:hover{background:#d7e6fd;}
-.cg-asmt-wrap{display:inline-flex;align-items:center;gap:6px;}
-.cg-asmt{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;border-radius:var(--r-full);padding:0 9px;white-space:nowrap;}
-.cg-asmt.done{color:#0a7d33;background:#e4f6ea;}
-.cg-asmt.pending{color:#8a5a00;background:#fbeecd;}
-.cg-asmt-btn{flex:0 0 auto;display:inline-flex;align-items:center;height:var(--chip-sm-h);font-size:var(--chip-sm-fs);font-weight:700;border:1px solid var(--line);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-full);padding:0 9px;cursor:pointer;white-space:nowrap;}
-.cg-asmt-btn:hover{background:#f0f4fb;}
-.cg-asmt-btn.primary{border-color:#0a7d33;color:#0a7d33;background:#eafaef;}
-.cg-asmt-btn.primary:hover{background:#d6f2df;}
-.cg-asmt-btn:disabled{opacity:.5;cursor:default;}
+/* «Тихая строка» — the quiet control row (no pills). Left group (stage dot+word · thin vsep ·
+   icon+digit counts) shrinks/clips as one unit; the right text-action group is margin-left:auto
+   + flex:0 0 auto so «Собес»/«Отметить» NEVER clip. nowrap + overflow-hidden + min-height keep
+   a card with 0 badges the SAME height as one with all of them (uniform card heights). */
+.cg-metaline{display:flex;align-items:center;gap:12px;flex-wrap:nowrap;overflow:hidden;min-height:24px;margin-top:3px;}
+.cg-ml-left{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;overflow:hidden;}
+.cg-st{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;white-space:nowrap;flex:0 0 auto;}
+.cg-dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block;flex:0 0 auto;}
+.cg-vsep{width:1px;height:11px;background:var(--line-strong);flex:0 0 auto;}
+.cg-ct{display:inline-flex;align-items:center;gap:4px;font-family:var(--ff-mono);font-size:11.5px;font-variant-numeric:tabular-nums;line-height:1;color:var(--ink-mute);white-space:nowrap;flex:0 0 auto;background:none;border:0;padding:0;font-weight:400;}
+button.cg-ct{cursor:pointer;}
+button.cg-ct:hover{color:var(--accent);}
+.cg-ic{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto;}
+.cg-ml-acts{margin-left:auto;display:inline-flex;align-items:center;gap:14px;flex:0 0 auto;}
+.cg-asmt-wrap{display:inline-flex;align-items:center;}
+.cg-act{display:inline-flex;align-items:center;gap:5px;background:none;border:0;padding:0;color:var(--accent);font-size:12px;font-weight:700;line-height:1;cursor:pointer;white-space:nowrap;flex:0 0 auto;}
+.cg-act:hover{text-decoration:underline;text-underline-offset:3px;}
+.cg-act.done{color:var(--ok);}
+.cg-act.mut{color:var(--ink-mute);font-weight:600;}
+.cg-act:disabled{opacity:.5;cursor:default;}
 .cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
 .cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}
@@ -522,9 +563,20 @@ _CG_JS = """
   };
   document.addEventListener('keydown', function(e){ if(e.key === 'Escape') window.cgFilters(false); });
 
-  // Assessment «Отметить пройденным» / «↺ Вернуть»: POST the mailbox, swap the chip+button in
-  // place with the returned fragment (its inline onclick re-binds automatically). stopPropagation
-  // in the inline handler already kept the click off the card toggle.
+  // Assessment actions («Тихая строка», right slot). cgMarkAsmt POSTs mark/unmark and swaps
+  // the control in place with the returned fragment (its inline onclick re-binds automatically);
+  // stopPropagation in the inline handler already kept the click off the card toggle.
+  // cgAsmtDone is the two-step revert: the quiet «Пройдено» arms into «Вернуть» on the first
+  // tap, and only the second tap actually POSTs the un-mark (no accidental reverts).
+  var CG_IC_UNDO = '<svg class="cg-ic" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/>' +
+    '<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
+  window.cgAsmtDone = function(btn){
+    if(btn.dataset.armed === '1'){ window.cgMarkAsmt(btn); return; }
+    btn.dataset.armed = '1';
+    btn.classList.remove('done'); btn.classList.add('mut');
+    btn.innerHTML = CG_IC_UNDO + 'Вернуть';
+    btn.title = 'Вернуть в непройденные';
+  };
   window.cgMarkAsmt = function(btn){
     var wrap = btn.closest('.cg-asmt-wrap'); if(!wrap) return;
     var mailbox = btn.dataset.mailbox || wrap.dataset.mailbox || '';

@@ -288,7 +288,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
             "Действие необратимо.</p>"
             f"<form method='post' action='/users/{rid}/delete' "
             "onsubmit=\"return confirm('Удалить пользователя безвозвратно?');\">"
-            "<button class='hbtn danger' type='submit'>Удалить пользователя</button></form></div>")
+            "<button class='hbtn danger' type='submit'>Удалить</button></form></div>")
 
     body = (
         _CSS +
@@ -314,8 +314,8 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         "18:00–01:00). День без промежутков — выходной. Конец раньше начала — ночное окно через "
         "полночь; одинаковое время начала и конца — доступен <b>24 ч</b>.</p>"
         "<div class='avd-actions'>"
-        "<button class='primary' type='submit'>Сохранить доступность</button>"
-        "<button class='ghost' type='button' onclick='avdCopyMon()'>Скопировать Пн на все дни</button>"
+        "<button class='primary' type='submit'>Сохранить</button>"
+        "<button class='ghost' type='button' onclick='avdCopyMon()'>Скопировать Пн</button>"
         "</div>"
         "</form></div>"
 
@@ -325,7 +325,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         f"<form method='post' action='/users/{rid}/passwd'>"
         "<label>Новый пароль (пусто — сгенерируется)</label>"
         "<input name='password' placeholder='(сгенерируется)' autocomplete='off'>"
-        "<button class='hbtn' type='submit'>Сбросить пароль</button></form></div>"
+        "<button class='hbtn' type='submit'>Сбросить</button></form></div>"
 
         # telegram
         "<div class='u-card u-set'><h3>Telegram для напоминаний</h3>"

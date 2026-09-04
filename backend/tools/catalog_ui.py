@@ -243,17 +243,16 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="cat-head">'
         f'<div class="cat-h-row"><div class="cat-h-title">{title_txt} {head_n}</div>'
         '<div class="cat-h-btns">'
-        '<button class="cat-run" onclick="toggleFilters()" '
-        'title="Настроить и запустить массовую подачу">▶ Запустить подачу</button>'
-        # «Фильтры» demoted to a secondary funnel icon (no more twin text buttons); it opens the
-        # same settings sheet. The active region stays visible as a small badge beside it.
-        '<button class="iconbtn cat-flt" id="fltBtn" onclick="toggleFilters()" aria-expanded="false" '
-        'title="Фильтры и настройки подачи" aria-label="Фильтры">'
+        # ONE control (owner-requested exception): «Фильтры» is the single entry to the settings
+        # sheet; «Запустить подачу» lives in that sheet's sticky footer (configure + launch in one
+        # place). No duplicate top button.
+        '<button class="cat-filters-btn" id="fltBtn" onclick="toggleFilters()" aria-expanded="false" '
+        'title="Фильтры и запуск подачи">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         'stroke-linecap="round" stroke-linejoin="round">'
-        '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></button>'
+        '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>Фильтры'
         + (f'<span class="cat-filters-tag">{reg_tag}</span>' if reg_tag else '')
-        + f'</div></div>{search}</div>')
+        + f'</button></div></div>{search}</div>')
 
     # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
     # settings sheet, so the main view is just search + jobs.
@@ -290,11 +289,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<label class="cat-bulk-n">Потоков'
         '<input type="number" id="bulkW" min="1" max="18" step="1" placeholder="Авто" '
         'inputmode="numeric" title="Пусто = авто (сервер сам держит нагрузку); либо число 1–18">'
-        '</label>'
-        '<button class="cat-bulk-go" id="bulkGo" onclick="bulkFillAll()">Подать</button>'
-        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" '
-        'onclick="bulkStop()">Стоп</button>'
-        '<span class="cat-bulk-prog" id="bulkProg"></span></div>')
+        '</label></div>')  # launch button/stop/progress live in the sheet's sticky footer
     proxy_block = (
         '<div class="px-status" id="pxStatus">'
         '<span class="px-dot"></span>'
@@ -326,6 +321,11 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="cat-bulk-report" id="bulkReport"></div></div>'
         '<div class="cs-sec"><div class="cs-label">Прокси <b id="pxCount">0</b></div>'
         f'<div class="cat-proxy-body">{proxy_block}</div></div>'
+        '</div>'  # /cat-modal-body — filters above, launch pinned below
+        '<div class="cat-modal-foot">'
+        '<span class="cat-bulk-prog" id="bulkProg"></span>'
+        '<button class="cat-bulk-stop" id="bulkStop" style="display:none" onclick="bulkStop()">Стоп</button>'
+        '<button class="cat-launch" id="bulkGo" onclick="bulkFillAll()">▶ Запустить подачу</button>'
         '</div></div></div>')
 
     list_html = cards or '<div class="empty">Вакансий не найдено</div>'
@@ -366,9 +366,15 @@ _CAT_CSS = """<style>
 /* Filters button — opens the settings sheet; shows the active region as a tag. */
 .cat-filters-btn{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
 .cat-h-btns{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.cat-run{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;min-height:38px;white-space:nowrap}
-.cat-run:hover{filter:brightness(1.07)}
-.cat-flt[aria-expanded=true]{color:var(--accent);background:var(--accent-soft)}
+.cat-filters-btn svg{width:15px;height:15px;flex:0 0 auto}
+/* Sheet sticky footer: filters scroll above, the launch button is pinned at the bottom. */
+.cat-modal-foot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--panel)}
+.cat-launch{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#0b8043;color:#fff;border:0;border-radius:var(--r-full);padding:13px 18px;font-size:14.5px;font-weight:700;cursor:pointer;min-height:48px;box-shadow:0 1px 2px rgba(11,128,67,.3)}
+.cat-launch:hover{background:#0a7038}
+.cat-launch:active{transform:translateY(1px)}
+.cat-launch:disabled{opacity:.5;cursor:default;box-shadow:none}
+/* in the footer the progress text must not force a full-width wrap (it does in the old bar) */
+.cat-modal-foot .cat-bulk-prog{flex:0 1 auto;margin:0;min-width:0}
 .cat-filters-btn:hover{border-color:var(--accent);color:var(--ink)}
 .cat-filters-btn[aria-expanded=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}
@@ -495,6 +501,7 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
   /* Filters modal becomes a bottom-sheet on phones. */
   .cat-modal{padding:0;align-items:flex-end}
   .cat-modal-panel{width:100%;max-height:92vh;border-radius:18px 18px 0 0;border-bottom:0;animation:cm-sheet .26s cubic-bezier(.22,.61,.36,1)}
+  .cat-modal-foot{padding-bottom:calc(14px + env(safe-area-inset-bottom))}
   .cat-modal-head{padding:14px 18px}
   .cat-modal-body{padding:2px 18px 22px}
 }

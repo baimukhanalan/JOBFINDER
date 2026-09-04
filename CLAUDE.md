@@ -2059,8 +2059,13 @@ tz-parametrised (80 pass).
   `var(--accent)`. De-slug rule: no raw source slug in the UI — `mass_hiring_ui._src_label` title-cases a
   fallback and `.mh-src` is quiet muted text, not a bordered chip. The company score badge leads with a
   WORD tier (`_tier`: Высокий/Средний/Точечно, mid = amber not blue) with the raw index secondary.
-  `/catalog` header: one primary «▶ Запустить подачу» + «Фильтры» demoted to a funnel `.iconbtn`
-  (`.cat-flt`). ROLLOUT: the other tabs (Каталог body, Незавершённые, Статистика, Пользователи) still use
+  `/catalog` header (owner-requested exception to the one-header-primary rule, 2026-09-04): ONE
+  «Фильтры» control (funnel icon + «Все»/region tag, `.cat-filters-btn`) is the single entry to the
+  settings sheet (`#catSettings`); the prominent «▶ Запустить подачу» launch lives in that sheet's
+  **sticky footer** (`.cat-modal-foot`/`.cat-launch`, green = execute) with the filters/config
+  scrolling above — configure + launch in one place, no duplicate top button. The bulk JS
+  (`bulkFillAll`/`bulkStop`/`bulkPoll`) still drives `#bulkGo`/`#bulkStop`/`#bulkProg` by id (just
+  relocated into the footer). ROLLOUT: the other tabs (Каталог body, Незавершённые, Статистика, Пользователи) still use
   bespoke headers — migrate them through `_page_head` next (Кандидаты is the reference, leave it). Only the
   dashboard restarts. **Perf gotcha found during this work:** a leaked `idle in transaction` connection
   can block an `ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS …` (from `ensure_schema` in an

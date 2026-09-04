@@ -200,6 +200,9 @@ def _group_card(g: dict) -> str:
     # glance whether the candidate is waiting on us.
     snip_prefix = "Вы: " if g.get("last_outbound") else ""
     snippet = _clean_snippet(g.get("last_snippet") or "")
+    # ONE preview line (Direction B): the clean body snippet when we have it (most informative
+    # for triage), else the subject. No two-fragment "subject stub + snippet".
+    preview = (snip_prefix + (snippet or subject)).strip()
 
     clip = '<span class="cg-clip" title="есть вложение">📎</span>' if g.get("has_att") else ""
     date = maildate(g.get("last_ts", 0))
@@ -237,8 +240,7 @@ def _group_card(g: dict) -> str:
         f'<div class="cg-mid">'
         f'<div class="cg-l1">{dot}<span class="cg-name">{escape(name)}</span>{stage_tag}'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
-        f'<div class="cg-l2"><span class="cg-subj">{escape(subject)}</span>'
-        f'<span class="cg-snip">{escape((snip_prefix + snippet).strip())}</span></div>'
+        f'<div class="cg-l2"><span class="cg-snip">{escape(preview)}</span></div>'
         f'<div class="cg-metaline">{count_chip}{_apps_chip(mailbox)}'
         f'{_assessment_control(g)}{sobes}</div>'
         f'</div>'
@@ -434,8 +436,10 @@ _CG_CSS = """
 .cg-fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 .cg-fbtn.active b{color:#fff;}
 /* ===== Direction B — one panel, dense rows divided by hairlines, stage rail ===== */
-#grouplist{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel);}
-.cg-card{position:relative;background:var(--panel);border-bottom:1px solid var(--line-soft);transition:background .12s;--stg:var(--ink-mute);}
+#grouplist{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel);box-shadow:var(--shadow,0 1px 2px rgba(20,26,44,.05));}
+/* Flat dense rows: explicitly reset the shell's shared .cg-card chrome (border/radius/shadow/
+   hover-lift) so rows read as one continuous panel, not gapped cards. */
+.cg-card{position:relative;background:var(--panel);border:0;border-bottom:1px solid var(--line-soft);border-radius:0;box-shadow:none;margin:0;transition:background .12s;--stg:var(--line-strong);}
 .cg-card:last-child{border-bottom:0;}
 .cg-st-interview{--stg:var(--accent);}
 .cg-st-offer{--stg:#1f9d55;}
@@ -444,11 +448,10 @@ _CG_CSS = """
 .cg-st-rejection{--stg:var(--danger);}
 .cg-st-ack{--stg:#7c8698;}
 .cg-st-sent{--stg:#7c8698;}
-.cg-card:hover{background:color-mix(in srgb,var(--accent) 5%,var(--panel));}
-.cg-card.open{background:color-mix(in srgb,var(--accent) 7%,var(--panel));}
+.cg-card:hover{background:color-mix(in srgb,var(--accent) 5%,var(--panel));box-shadow:none;border-color:var(--line-soft);}
+.cg-card.open{background:color-mix(in srgb,var(--accent) 7%,var(--panel));box-shadow:none;}
 .cg-rail{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--stg);}
-.cg-st-other>.cg-rail,.cg-card:not([class*=" cg-st-"])>.cg-rail{opacity:.35;}
-.cg-head{display:flex;align-items:center;gap:11px;padding:10px 14px 10px 16px;cursor:pointer;min-width:0;}
+.cg-head{display:flex;align-items:center;gap:11px;padding:11px 14px 11px 16px;cursor:pointer;min-width:0;}
 .cg-ava{width:28px;height:28px;border-radius:8px;font-size:11px;flex:0 0 auto;align-self:flex-start;margin-top:1px;}
 .cg-mid{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;}
 .cg-l1{display:flex;align-items:center;gap:7px;min-width:0;}
@@ -458,11 +461,10 @@ _CG_CSS = """
 .cg-clip{flex:0 0 auto;font-size:11px;color:var(--ink-mute);}
 .cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);font-variant-numeric:tabular-nums;}
 .cg-unread .cg-date{color:var(--accent);}
-.cg-l2{display:flex;gap:7px;min-width:0;align-items:baseline;}
-.cg-subj{flex:0 1 auto;min-width:0;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:12.5px;font-weight:500;}
-.cg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-mute);font-size:12.5px;}
+.cg-l2{display:flex;min-width:0;}
+.cg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:13px;}
 .cg-unread .cg-name{font-weight:800;}
-.cg-unread .cg-subj{color:var(--ink);font-weight:600;}
+.cg-unread .cg-snip{color:var(--ink);font-weight:600;}
 .cg-metaline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;}
 .cg-metaline:empty{display:none;}
 .cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}

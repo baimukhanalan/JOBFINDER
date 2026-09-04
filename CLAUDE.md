@@ -534,6 +534,13 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   real misclassification is visible instead of buried under code noise. `stats.py` is untouched (its
   `_rank` gives an unknown kind −1, below `other`, so `code` never becomes an "outcome"). Bumped
   `CLASSIFIER_VERSION`. Restart dash + indexer, then `reclassify_existing()`.
+- **Кандидаты card look = «Строгая классика» (2026-09-04, owner-chosen from 3 Fable variants).** The
+  grouped cards stay BORDERED + SPACED (owner rejected a flush dense panel), refined per the chosen variant:
+  subtle card shadow + hover-lift, name 15px/600 (unread 700 + accent date), and — the key fix — ONE clean
+  ellipsized preview line `<subject> · <snippet>` (`.cg-preview` is a single nowrap line; `.cg-subj` lead +
+  `.cg-psep` + `.cg-snip`) so a short subject never squishes to a "Verify y…" stub. Uses the shared shell
+  tokens (theme-aware) + the shared font, NOT the mockup's Inter. `_clean_snippet` still strips CSS/HTML
+  garbage. Chips stay on the normalized `--chip-h` (32px) scale. Only the dashboard restarts.
 - **Merged Кандидаты screen — the primary tab, a candidate-grouped inbox (2026-08-29).** «Инбокс» `/mail`
   and «Кандидаты» were showing the same mail two ways, so they were merged into ONE Gmail-style surface at
   `/mail/candidates` (`tools/candidates_inbox.py`, rendered via `mailcrm_ui._page("candidates", …)`): one

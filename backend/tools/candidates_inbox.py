@@ -213,16 +213,23 @@ def _group_card(g: dict) -> str:
 
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
+    card_cls = "cg-card unread" if unread else "cg-card"
+
+    # ONE clean preview line: subject lead, then «· snippet» only when there's real snippet text.
+    snip_txt = snip_prefix + snippet
+    preview = f'<span class="cg-subj">{escape(subject)}</span>'
+    if snip_txt.strip():
+        preview += (f'<span class="cg-psep">·</span>'
+                    f'<span class="cg-snip">{escape(snip_txt)}</span>')
 
     return (
-        f'<div class="cg-card" data-mailbox="{escape(mailbox, quote=True)}" data-loaded="0">'
+        f'<div class="{card_cls}" data-mailbox="{escape(mailbox, quote=True)}" data-loaded="0">'
         f'<div class="cg-head" onclick="cgToggle(this)">'
         f'{avatar}'
         f'<div class="cg-mid">'
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
-        f'<div class="cg-preview"><span class="cg-subj">{escape(subject)}</span>'
-        f'<span class="cg-snip">{escape(snip_prefix + snippet)}</span></div>'
+        f'<div class="cg-preview">{preview}</div>'
         f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}'
         f'{_assessment_control(g)}{sobes}</div>'
         f'</div>'
@@ -418,21 +425,28 @@ _CG_CSS = """
 .cg-fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 .cg-fbtn.active b{color:#fff;}
 /* card list */
-#grouplist{display:flex;flex-direction:column;gap:10px;}
-.cg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;transition:border-color .12s,box-shadow .12s;}
-.cg-card:hover{border-color:var(--line-strong);}
-.cg-card.open{border-color:var(--accent);box-shadow:0 2px 16px -8px rgba(26,115,232,.4);}
+#grouplist{display:flex;flex-direction:column;gap:11px;}
+.cg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.05);transition:border-color .16s,box-shadow .16s,transform .16s;}
+.cg-card:hover{border-color:var(--line-strong);transform:translateY(-1px);box-shadow:0 4px 14px rgba(16,24,40,.08);}
+.cg-card.open{border-color:var(--accent);box-shadow:0 2px 16px -8px rgba(26,115,232,.4);transform:none;}
 .cg-head{display:flex;align-items:flex-start;gap:13px;padding:13px 16px;cursor:pointer;}
 .cg-head:hover{background:#f8fafd;}
 .cg-ava{width:38px;height:38px;font-size:15px;margin-top:1px;}
 .cg-mid{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;}
 .cg-top{display:flex;align-items:baseline;gap:8px;}
-.cg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:var(--ink);font-size:14.5px;}
+.cg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:var(--ink);font-size:15px;letter-spacing:-.012em;}
+.cg-card.unread .cg-name{font-weight:700;}
 .cg-clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
-.cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);}
-.cg-preview{display:flex;gap:7px;min-width:0;}
-.cg-subj{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:13.5px;}
-.cg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-mute);font-size:12.5px;}
+.cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute);}
+.cg-card.unread .cg-date{color:var(--accent);font-weight:600;}
+/* Строгая классика: ONE clean ellipsized preview line — subject lead (·) snippet — so a
+   short subject never squishes to a 6-char stub and the whole line truncates as a unit. */
+.cg-preview{display:block;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;line-height:1.45;}
+.cg-subj{color:var(--ink-soft);font-weight:500;}
+.cg-psep{margin:0 5px;color:var(--ink-mute);opacity:.6;}
+.cg-snip{color:var(--ink-mute);}
+.cg-card.unread .cg-subj{color:var(--ink);font-weight:600;}
+.cg-card.unread .cg-snip{color:var(--ink-soft);}
 .cg-metaline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:1px;}
 .cg-metaline:empty{display:none;}
 .cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}

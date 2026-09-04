@@ -558,17 +558,21 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   `candidate_groups`). Tests: `test_candidates_inbox.py`. NB some `last_snippet`s carry raw CSS/HTML from
   senders that put markup in `text/plain` (Axon/Outlook) — a pre-existing `mail_index.snippet` data-quality
   quirk shared with the old inbox, not a render bug.
-  **UI reworked to "Direction B" (dense/Linear rows, 2026-09-04, owner-approved of 3 mockups):** the grouped
-  list is now ONE panel of hairline-divided DENSE rows (not gapped rounded cards) with a 3px left STAGE-COLOR
-  RAIL (`.cg-rail`, color via `.cg-st-<stage>` → `--stg`: interview=accent, offer=green, code/action=amber,
-  rejection=danger, ack/sent=slate, other=faint), a 28px rounded-square avatar, a mono uppercase stage TAG
-  (`_STAGE_LABEL`), mono tabular dates, and unread dot+badge. The header pseudo-tab «Все письма» was REPLACED
-  by a clean title «Кандидаты» + mono total count (`_title(count)`, count from `stage_counts['all']`). The
-  raw-CSS-in-snippet quirk above is now FIXED at render by `_clean_snippet()` (strips `<style>`/bare CSS
-  rules/at-rules/bare CSS declarations/tags; applied to both group cards and message rows) — render-time only,
-  no DB/index change. All prior functions preserved (expand, «Собес», «📄» apps, assessment mark toggle,
-  funnel, FAB, pagination). Only the dashboard restarts. Verified live at 390px. Other tabs keep their current
-  headers until the contract is rolled out.
+  **UI note (2026-09-04): a "Direction B" dense/flush-panel rework was tried and REVERTED by owner request —
+  the familiar bordered, spaced candidate CARDS are the intended look** (separate rounded card per persona +
+  gap + hover-lift + the old «• Принято» stage chips + normal dates + round avatar). TWO things from that pass
+  were KEPT: (1) `_clean_snippet()` — strips leaked CSS/HTML from previews (`<style>`/bare CSS rules/at-rules/
+  bare CSS declarations/tags; applied to both group cards and message rows), render-time only, no DB/index
+  change, so snippets show real text not "body, table { font-family… }"; (2) the clean header title
+  «Кандидаты» + mono total count (`_title(count)`, count from `stage_counts['all']`) replacing the leftover
+  «Все письма» pseudo-tab. Don't reintroduce the flush single-panel/rail/mono-tag look. Only the dashboard
+  restarts. Verified live at 390px.
+  **Button size scale (2026-09-04):** shared control tokens in `mailcrm_ui._CSS` `:root` — `--ctl-h:40px`,
+  `--ctl-px:16px`, `--ctl-fs:13.5px` — so every button role is one size everywhere. `.hbtn`, `button.primary`,
+  `.ghost` are `height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs)`; `.iconbtn` is a
+  `var(--ctl-h)` square. Catalog's per-card controls were normalized to it: the М/Ж toggle (`.cat-sex`/
+  `.cat-sex-b`) and «Заполнить» (`.cat-fill`) are now the same 40px height (was a fat 22px-padded pill next to
+  a 32px toggle). Keep new buttons on these tokens — don't hardcode heights/paddings.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

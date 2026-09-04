@@ -437,10 +437,10 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 /* Sex is a compact segmented toggle, not two big buttons — one modifier for the single
    primary action below. */
-.cat-sex{display:inline-flex;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:2px}
-.cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:13px;font-weight:600;line-height:1;min-width:38px;height:32px;padding:0 10px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.cat-sex{display:inline-flex;align-items:center;height:var(--ctl-h);background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:3px}
+.cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:var(--ctl-fs);font-weight:600;line-height:1;min-width:40px;height:calc(var(--ctl-h) - 8px);padding:0 12px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .cat-sex-b.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.cat-fill{display:inline-flex;align-items:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);padding:9px 22px;font-size:13.5px;font-weight:600;cursor:pointer;min-height:38px}
+.cat-fill{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 18px;font-size:var(--ctl-fs);font-weight:600;cursor:pointer}
 .cat-fill:hover{background:var(--accent-deep)}
 .cat-fill:disabled{opacity:.6;cursor:default}
 .cat-fill-res a{color:var(--accent);font-weight:600;font-size:13px;text-decoration:none}

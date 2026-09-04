@@ -190,7 +190,9 @@ def fulldate(ts: int) -> str:
 
 # ---------------------------------------------------------------- CSS (ported)
 _CSS = """
-:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#0c47c2;--accent-deep:#0a389c;--accent-soft:#e7edfb;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;}
+:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#0c47c2;--accent-deep:#0a389c;--accent-soft:#e7edfb;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;
+/* One control-size scale so every button role is the same size everywhere. */
+--ctl-h:40px;--ctl-px:16px;--ctl-fs:13.5px;}
 *{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
@@ -226,14 +228,14 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .ph-info-d>summary::-webkit-details-marker{display:none;}
 .ph-info-d>summary:hover{color:var(--accent);background:var(--panel-2);}
 .ph-pop{position:absolute;top:130%;left:0;z-index:30;width:min(280px,80vw);background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:10px 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;font-weight:400;}
-.hbtn{display:inline-flex;align-items:center;gap:7px;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);padding:9px 14px;min-height:40px;border-radius:var(--r-full);font-weight:600;font-size:13px;cursor:pointer;}
+.hbtn{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);padding:0 var(--ctl-px);height:var(--ctl-h);border-radius:var(--r-full);font-weight:600;font-size:var(--ctl-fs);cursor:pointer;}
 .hbtn:hover{background:var(--panel-2);color:var(--ink);}
 .hbtn svg{width:15px;height:15px;}
 .hbtn-lbl{display:inline;}
 .fab-compose{display:none;}
 .hbtn.danger{color:var(--danger);border-color:#f3c7c2;}.hbtn.danger:hover{background:var(--danger);color:#fff;}
 /* Round borderless icon buttons (Gmail-style message toolbar: back, delete). */
-.iconbtn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:40px;height:40px;min-width:40px;border:0;background:transparent;color:var(--ink-soft);border-radius:50%;cursor:pointer;padding:0;}
+.iconbtn{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;width:var(--ctl-h);height:var(--ctl-h);min-width:var(--ctl-h);border:0;background:transparent;color:var(--ink-soft);border-radius:50%;cursor:pointer;padding:0;}
 .iconbtn:hover{background:rgba(60,64,67,.09);color:var(--ink);text-decoration:none;}
 .iconbtn svg{width:20px;height:20px;}
 .iconbtn.danger{color:var(--danger);}
@@ -250,9 +252,9 @@ input::placeholder,textarea::placeholder{color:var(--ink-mute);}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15);}
 input[type=search]{min-width:240px;}textarea{width:100%;min-height:150px;resize:vertical;}
 label{display:block;font-weight:600;color:var(--ink-soft);margin:12px 0 5px;font-size:12px;}
-button.primary{font:inherit;font-weight:600;cursor:pointer;border:0;padding:10px 16px;border-radius:var(--r-full);background:var(--accent);color:#fff;font-size:13.5px;}
+button.primary{font:inherit;font-weight:600;cursor:pointer;border:0;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:var(--ctl-h);padding:0 var(--ctl-px);border-radius:var(--r-full);background:var(--accent);color:#fff;font-size:var(--ctl-fs);}
 button.primary:hover{background:var(--accent-deep);}
-.ghost{background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);padding:11px 15px;border-radius:var(--r-full);font-weight:600;cursor:pointer;font-size:13px;}
+.ghost{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);height:var(--ctl-h);padding:0 var(--ctl-px);border-radius:var(--r-full);font-weight:600;cursor:pointer;font-size:var(--ctl-fs);}
 .ghost:hover{background:var(--panel-2);color:var(--ink);text-decoration:none;}
 .filterbar{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 14px;margin-bottom:16px;color:var(--ink-soft);}
 .maillist{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}

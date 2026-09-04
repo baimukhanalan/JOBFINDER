@@ -21,7 +21,8 @@ JS (all functions prefixed `cg`). No stack names appear in any user-facing text.
 """
 from __future__ import annotations
 
-from html import escape
+import re
+from html import escape, unescape
 from urllib.parse import urlencode
 
 from backend.tools import candidate_apps, mailcrm
@@ -48,6 +49,66 @@ _FUNNEL = [
     ("rejection", "Отказ"),
     ("code", "Коды"),
 ]
+
+
+# Short mono stage tag shown on a card (Direction B). The neutral «other»/unknown bucket gets
+# no tag. Keys mirror mail_db furthest-stage kinds.
+_STAGE_LABEL = {
+    "interview": "собес", "offer": "оффер", "ack": "принято",
+    "action_needed": "действие", "code": "код", "rejection": "отказ",
+    "sent": "отправлено",
+}
+
+# A stored mail_index.snippet occasionally carries raw CSS/HTML that a sender put in the
+# text/plain part (e.g. "body, table { font-family: Verdana… }", "#outlook a { padding:0 }").
+# Strip it at render so the preview shows real message text, never markup. Render-time only —
+# no DB/index change.
+_CSS_RULE_RE = re.compile(r"[^{}<>]*\{[^{}]*\}")
+_TAG_RE = re.compile(r"<[^>]+>")
+_ATRULE_RE = re.compile(r"@[a-zA-Z-]+[^;{}]*[;{]")
+# Bare CSS declarations that leak into a text/plain snippet (no braces, often truncated),
+# e.g. "img border:0;height:auto;line-height:100%;mso-line-height-rule:exactly".
+_CSS_DECL_RE = re.compile(
+    r"(?i)(?:(?:img|td|tr|table|tbody|thead|div|span|body|font|center|a|p|h[1-6]|ul|ol|li)\s+|"
+    r"[.#][\w-]+\s+)?"
+    r"(?:border(?:-[\w]+)?|margin|padding|height|width|max-width|min-width|line-height|"
+    r"font(?:-[\w]+)?|color|background(?:-[\w]+)?|display|text-[\w-]+|vertical-align|mso-[\w-]+|"
+    r"-webkit-[\w-]+|-ms-[\w-]+|outline|border-collapse|table-layout)\s*:\s*[^;]+;?")
+_LEADING_TAG_RE = re.compile(
+    r"^(?:img|td|tr|table|div|span|body|p|a|ul|ol|li|h[1-6]|tbody|thead|font|center|br)\b[\s,]*",
+    re.I)
+
+
+def _clean_snippet(s: str) -> str:
+    """Best-effort clean preview text: drop <style>/<script> blocks, bare CSS rules, at-rules,
+    bare CSS declarations, HTML tags, then unescape + collapse whitespace. Returns '' if nothing
+    readable is left (a snippet that was pure CSS) — the card then just shows the subject."""
+    if not s:
+        return ""
+    t = re.sub(r"(?is)<(style|script)[^>]*>.*?</\1>", " ", s)
+    t = _ATRULE_RE.sub(" ", t)
+    for _ in range(4):  # peel several/adjacent "selector { … }" blocks
+        nt = _CSS_RULE_RE.sub(" ", t)
+        if nt == t:
+            break
+        t = nt
+    for _ in range(3):                    # bare, brace-less CSS declarations (often chained)
+        nt = _CSS_DECL_RE.sub(" ", t)
+        if nt == t:
+            break
+        t = nt
+    t = _TAG_RE.sub(" ", t)
+    t = unescape(t)
+    t = t.replace("{", " ").replace("}", " ")
+    # a snippet cut mid-CSS can leave a trailing partial vendor/prop fragment ("… -ms-inte")
+    t = re.sub(r"(?i)[\s;,]*(?:-ms-|-webkit-|-moz-|mso-)[\w-]*[:;]?[^;]*$", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    for _ in range(3):                    # peel orphan leading tag-name tokens ("img", "td"…)
+        nt = _LEADING_TAG_RE.sub("", t)
+        if nt == t:
+            break
+        t = nt.strip()
+    return t if len(t) >= 2 else ""
 
 
 def _clink(tab: str, stage: str, q: str) -> str:
@@ -138,13 +199,15 @@ def _group_card(g: dict) -> str:
     # An outbound last message reads as "Вы: …" (Gmail-style), so the operator can tell at a
     # glance whether the candidate is waiting on us.
     snip_prefix = "Вы: " if g.get("last_outbound") else ""
-    snippet = g.get("last_snippet") or ""
+    snippet = _clean_snippet(g.get("last_snippet") or "")
 
     clip = '<span class="cg-clip" title="есть вложение">📎</span>' if g.get("has_att") else ""
     date = maildate(g.get("last_ts", 0))
 
-    # Stage tag (furthest inbound kind). _kind_tag returns "" for the neutral «other» bucket.
-    stage_tag = _kind_tag(g.get("stage", "other"))
+    # Stage: a color rail + a short mono tag by the furthest inbound kind (Direction B).
+    stage = re.sub(r"[^a-z_]", "", (g.get("stage") or "other")) or "other"
+    tag_lbl = _STAGE_LABEL.get(stage, "")
+    stage_tag = f'<span class="cg-tag">{tag_lbl}</span>' if tag_lbl else ""
 
     n_msg = g.get("msg_count", 0)
     count_chip = f'<span class="cg-count" title="писем в переписке">{n_msg}</span>' if n_msg else ""
@@ -163,17 +226,20 @@ def _group_card(g: dict) -> str:
 
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
+    dot = '<span class="cg-dot" title="непрочитанные"></span>' if unread else ""
+    ucls = " cg-unread" if unread else ""
 
     return (
-        f'<div class="cg-card" data-mailbox="{escape(mailbox, quote=True)}" data-loaded="0">'
+        f'<div class="cg-card cg-st-{stage}{ucls}" data-mailbox="{escape(mailbox, quote=True)}" data-loaded="0">'
+        f'<span class="cg-rail"></span>'
         f'<div class="cg-head" onclick="cgToggle(this)">'
         f'{avatar}'
         f'<div class="cg-mid">'
-        f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
+        f'<div class="cg-l1">{dot}<span class="cg-name">{escape(name)}</span>{stage_tag}'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
-        f'<div class="cg-preview"><span class="cg-subj">{escape(subject)}</span>'
-        f'<span class="cg-snip">{escape(snip_prefix + snippet)}</span></div>'
-        f'<div class="cg-metaline">{stage_tag}{count_chip}{_apps_chip(mailbox)}'
+        f'<div class="cg-l2"><span class="cg-subj">{escape(subject)}</span>'
+        f'<span class="cg-snip">{escape((snip_prefix + snippet).strip())}</span></div>'
+        f'<div class="cg-metaline">{count_chip}{_apps_chip(mailbox)}'
         f'{_assessment_control(g)}{sobes}</div>'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
@@ -200,7 +266,7 @@ def _msg_row(m: dict) -> str:
     kind_tag = _kind_tag(m.get("kind", "other")) if m.get("kind") else ""
     clip = '<span class="cg-msg-clip" title="есть вложение">📎</span>' if m.get("has_att") else ""
     subject = m.get("subject") or "(без темы)"
-    snippet = m.get("snippet", "") or ""
+    snippet = _clean_snippet(m.get("snippet", "") or "")
     date = maildate(m.get("date_ts", 0))
     return (
         f'<div class="cg-msg{unread}" data-id="{escape(hid, quote=True)}" data-loaded="0" '
@@ -233,10 +299,11 @@ def render_message_fragment(message) -> str:
 
 
 # ------------------------------------------------------------------- full page
-def _title() -> str:
-    # The «Приоритетные» tab was removed by owner request — this slot is now just the screen
-    # title, kept in the old active-tab slot/looks so the layout is unchanged.
-    return '<div class="cg-tabs"><span class="cg-tab active">Все письма</span></div>'
+def _title(count=None) -> str:
+    # Clean page title (single instance): «Кандидаты» + a mono total count. Replaces the old
+    # lone underlined «Все письма» pseudo-tab (leftover of the removed «Приоритетные» tab).
+    c = f'<span class="cg-h-count">{count}</span>' if count else ""
+    return f'<div class="cg-htitle"><span class="cg-h">Кандидаты</span>{c}</div>'
 
 
 def _filter_btn(stage: str) -> str:
@@ -317,7 +384,8 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
     groups = groups or []
     tab = tab or "all"
 
-    toolbar = ('<div class="cg-toolbar">' + _title()
+    total = (stage_counts or {}).get("all")
+    toolbar = ('<div class="cg-toolbar">' + _title(total)
                + '<div class="cg-actions">' + _filter_btn(stage) + _COMPOSE_BTN
                + _search(tab, stage, q) + '</div></div>')
     funnel = _funnel(tab, stage, q, stage_counts)
@@ -354,10 +422,9 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
 _CG_CSS = """
 .cg-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 14px;}
 .cg-actions{display:flex;align-items:center;gap:10px;flex:0 0 auto;}
-.cg-tabs{display:flex;align-items:baseline;gap:22px;}
-.cg-tab{font-size:22px;font-weight:600;color:var(--ink-mute);letter-spacing:-.02em;padding-bottom:4px;}
-.cg-tab:hover{color:var(--ink-soft);text-decoration:none;}
-.cg-tab.active{color:var(--ink);box-shadow:0 2px 0 var(--accent);}
+.cg-htitle{display:flex;align-items:baseline;gap:9px;}
+.cg-h{font-size:21px;font-weight:800;color:var(--ink);letter-spacing:-.02em;}
+.cg-h-count{font-family:var(--ff-mono);font-size:14px;font-weight:700;color:var(--ink-mute);font-variant-numeric:tabular-nums;}
 .cg-search{margin:0;flex:0 0 auto;}
 .cg-search input[type=search]{min-width:260px;}
 .cg-funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
@@ -366,23 +433,37 @@ _CG_CSS = """
 .cg-fbtn:hover{border-color:var(--accent);text-decoration:none;}
 .cg-fbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
 .cg-fbtn.active b{color:#fff;}
-/* card list */
-#grouplist{display:flex;flex-direction:column;gap:10px;}
-.cg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;transition:border-color .12s,box-shadow .12s;}
-.cg-card:hover{border-color:var(--line-strong);}
-.cg-card.open{border-color:var(--accent);box-shadow:0 2px 16px -8px rgba(26,115,232,.4);}
-.cg-head{display:flex;align-items:flex-start;gap:13px;padding:13px 16px;cursor:pointer;}
-.cg-head:hover{background:#f8fafd;}
-.cg-ava{width:38px;height:38px;font-size:15px;margin-top:1px;}
-.cg-mid{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;}
-.cg-top{display:flex;align-items:baseline;gap:8px;}
-.cg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:var(--ink);font-size:14.5px;}
-.cg-clip{flex:0 0 auto;font-size:12px;color:var(--ink-mute);}
-.cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);}
-.cg-preview{display:flex;gap:7px;min-width:0;}
-.cg-subj{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:13.5px;}
+/* ===== Direction B — one panel, dense rows divided by hairlines, stage rail ===== */
+#grouplist{display:flex;flex-direction:column;gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--panel);}
+.cg-card{position:relative;background:var(--panel);border-bottom:1px solid var(--line-soft);transition:background .12s;--stg:var(--ink-mute);}
+.cg-card:last-child{border-bottom:0;}
+.cg-st-interview{--stg:var(--accent);}
+.cg-st-offer{--stg:#1f9d55;}
+.cg-st-action_needed{--stg:#bd7d10;}
+.cg-st-code{--stg:#bd7d10;}
+.cg-st-rejection{--stg:var(--danger);}
+.cg-st-ack{--stg:#7c8698;}
+.cg-st-sent{--stg:#7c8698;}
+.cg-card:hover{background:color-mix(in srgb,var(--accent) 5%,var(--panel));}
+.cg-card.open{background:color-mix(in srgb,var(--accent) 7%,var(--panel));}
+.cg-rail{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--stg);}
+.cg-st-other>.cg-rail,.cg-card:not([class*=" cg-st-"])>.cg-rail{opacity:.35;}
+.cg-head{display:flex;align-items:center;gap:11px;padding:10px 14px 10px 16px;cursor:pointer;min-width:0;}
+.cg-ava{width:28px;height:28px;border-radius:8px;font-size:11px;flex:0 0 auto;align-self:flex-start;margin-top:1px;}
+.cg-mid{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px;}
+.cg-l1{display:flex;align-items:center;gap:7px;min-width:0;}
+.cg-dot{flex:0 0 auto;width:7px;height:7px;border-radius:50%;background:var(--accent);}
+.cg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:var(--ink);font-size:14px;letter-spacing:-.01em;}
+.cg-tag{flex:0 0 auto;font-family:var(--ff-mono);font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:5px;color:var(--stg);background:color-mix(in srgb,var(--stg) 15%,var(--panel));}
+.cg-clip{flex:0 0 auto;font-size:11px;color:var(--ink-mute);}
+.cg-date{flex:0 0 auto;margin-left:auto;font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);font-variant-numeric:tabular-nums;}
+.cg-unread .cg-date{color:var(--accent);}
+.cg-l2{display:flex;gap:7px;min-width:0;align-items:baseline;}
+.cg-subj{flex:0 1 auto;min-width:0;max-width:46%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-soft);font-size:12.5px;font-weight:500;}
 .cg-snip{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-mute);font-size:12.5px;}
-.cg-metaline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:1px;}
+.cg-unread .cg-name{font-weight:800;}
+.cg-unread .cg-subj{color:var(--ink);font-weight:600;}
+.cg-metaline{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px;}
 .cg-metaline:empty{display:none;}
 .cg-count{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel-2);border-radius:var(--r-full);padding:1px 8px;}
 .cg-apps{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:1px 8px;cursor:pointer;white-space:nowrap;}
@@ -396,11 +477,11 @@ _CG_CSS = """
 .cg-asmt-btn.primary{border-color:#0a7d33;color:#0a7d33;background:#eafaef;}
 .cg-asmt-btn.primary:hover{background:#d6f2df;}
 .cg-asmt-btn:disabled{opacity:.5;cursor:default;}
-.cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
+.cg-right{display:flex;align-items:center;gap:9px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
-.cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}
+.cg-chev{flex:0 0 auto;font-size:20px;line-height:1;color:var(--ink-mute);transition:transform .18s;}
 .cg-card.open .cg-chev{transform:rotate(90deg);color:var(--accent);}
-.cg-body{background:#f8fafd;border-top:1px solid var(--line);padding:4px 12px 8px;}
+.cg-body{background:var(--panel-2);border-top:1px solid var(--line);padding:4px 12px 8px;}
 .cg-load,.cg-thread-empty{padding:16px;text-align:center;color:var(--ink-mute);font-size:13px;}
 .cg-empty{text-align:center;padding:48px;color:var(--ink-mute);}
 #grpmore{min-height:1px;}
@@ -426,12 +507,12 @@ _CG_CSS = """
 .cg-msg-err{padding:14px;color:var(--danger);font-size:13px;}
 @media(max-width:760px){
   .cg-toolbar{margin-bottom:12px;}
-  .cg-tab{font-size:19px;}
+  .cg-h{font-size:19px;}
   .cg-search{display:none;}
   .cg-compose-desk{display:none;}
   .cg-funnel{display:none;}          /* mobile uses the «Фильтры» button + modal instead */
-  .cg-head{padding:14px;gap:12px;min-height:44px;}
-  .cg-name{font-size:15px;}
+  .cg-head{padding:12px 12px 12px 14px;gap:10px;}
+  .cg-name{font-size:14.5px;}
   .cg-msg{padding:12px 6px;}
 }
 """

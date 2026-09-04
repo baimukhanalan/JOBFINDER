@@ -558,6 +558,17 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   `candidate_groups`). Tests: `test_candidates_inbox.py`. NB some `last_snippet`s carry raw CSS/HTML from
   senders that put markup in `text/plain` (Axon/Outlook) — a pre-existing `mail_index.snippet` data-quality
   quirk shared with the old inbox, not a render bug.
+  **UI reworked to "Direction B" (dense/Linear rows, 2026-09-04, owner-approved of 3 mockups):** the grouped
+  list is now ONE panel of hairline-divided DENSE rows (not gapped rounded cards) with a 3px left STAGE-COLOR
+  RAIL (`.cg-rail`, color via `.cg-st-<stage>` → `--stg`: interview=accent, offer=green, code/action=amber,
+  rejection=danger, ack/sent=slate, other=faint), a 28px rounded-square avatar, a mono uppercase stage TAG
+  (`_STAGE_LABEL`), mono tabular dates, and unread dot+badge. The header pseudo-tab «Все письма» was REPLACED
+  by a clean title «Кандидаты» + mono total count (`_title(count)`, count from `stage_counts['all']`). The
+  raw-CSS-in-snippet quirk above is now FIXED at render by `_clean_snippet()` (strips `<style>`/bare CSS
+  rules/at-rules/bare CSS declarations/tags; applied to both group cards and message rows) — render-time only,
+  no DB/index change. All prior functions preserved (expand, «Собес», «📄» apps, assessment mark toggle,
+  funnel, FAB, pagination). Only the dashboard restarts. Verified live at 390px. Other tabs keep their current
+  headers until the contract is rolled out.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

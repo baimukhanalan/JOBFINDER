@@ -157,7 +157,7 @@ def test_render_page_shell_and_controls():
     page = ci.render_page([], tab="all", stage="", q="",
                           stage_counts={"all": 5, "interview": 2, "sent": 1})
     assert "<main" in page
-    assert "Все письма" in page
+    assert "Кандидаты" in page
     assert 'id="grouplist"' in page
     assert 'id="grpmore"' in page
     # «Приоритетные» tab was removed by owner request
@@ -173,8 +173,11 @@ def test_render_page_shell_and_controls():
 def test_render_page_single_title_no_priority_link():
     page = ci.render_page([], tab="all",
                           stage_counts={"all": 5, "interview": 2, "sent": 1})
-    # the header is a single non-link title, styled like the old active tab
-    assert '<span class="cg-tab active">Все письма</span>' in page
+    # clean single title «Кандидаты» + mono total count; the old «Все письма» pseudo-tab is gone
+    assert '<span class="cg-h">Кандидаты</span>' in page
+    assert '<span class="cg-h-count">5</span>' in page
+    assert "Все письма" not in page
+    assert 'class="cg-tab' not in page
     # no priority tab link anywhere
     assert "tab=priority" not in page
 

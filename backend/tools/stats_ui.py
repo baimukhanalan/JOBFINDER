@@ -274,8 +274,8 @@ def render_page(force: bool = False) -> str:
     comp_sub = (f'{_fmt_money(comp.get("p25"))}–{_fmt_money(comp.get("p75"))} · '
                 f'{_fmt(comp.get("coverage", 0))} вак.') if comp.get("median") else "нет данных"
     kpis = "".join([
-        _kpi("Подано (вакансий)", t["applied"], sub=f'{_fmt(t["attempts"])} попыток с повторами'),
-        _kpi("Подтверждено сабмитов", t["submitted"], color=_C["mute"]),
+        _kpi("Подано", t["applied"], sub=f'{_fmt(t["attempts"])} попыток с повторами'),
+        _kpi("Сабмиты", t["submitted"], color=_C["mute"]),
         _kpi("Ответили", t["replied"], sub=f'{t["reply_rate"]:.0f}% от поданных', color=_C["accent"]),
         _kpi("Собеседования", t["interview"], sub=f'{t["interview_rate"]:.1f}% от поданных', color=_C["interview"]),
         _kpi("Отказы", t["rejection"], color=_C["rejection"]),
@@ -284,7 +284,7 @@ def render_page(force: bool = False) -> str:
     ])
 
     funnel = _funnel([
-        ("Подано (вакансий)", t["applied"], _C["accent"]),
+        ("Подано", t["applied"], _C["accent"]),
         ("Ответили", t["replied"], "#5b9bf0"),
         ("Собеседования", t["interview"], _C["interview"]),
         ("Офферы", t["offer"], _C["offer"]),

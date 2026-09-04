@@ -184,11 +184,12 @@ _IV_STYLE = """<style>
 .iv-modal-panel{position:relative;display:flex;flex-direction:column;width:min(720px,100%);max-height:90vh;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 64px rgba(15,23,42,.30);overflow:hidden}
 .iv-modal-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
 .iv-modal-title{font-size:16px;font-weight:700;color:var(--ink)}
-.iv-modal-x{width:34px;height:34px;border:none;background:var(--bg-app);border-radius:50%;font-size:13px;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.iv-modal-x{width:var(--ctl-h);height:var(--ctl-h);border:none;background:transparent;border-radius:50%;font-size:16px;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.iv-modal-x:hover{background:var(--panel-2)}
 .iv-modal-x:hover{background:var(--line);color:var(--ink)}
 .iv-modal-body{overflow:auto;padding:14px 20px 20px}
 .iv-weeknav{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
-.iv-wk{background:var(--panel);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:7px 14px;font-size:13px;font-weight:600;color:var(--ink-soft);cursor:pointer}
+.iv-wk{display:inline-flex;align-items:center;background:var(--panel);border:1px solid var(--line-strong);border-radius:var(--r-full);height:var(--chip-h);padding:0 var(--chip-px);font-size:var(--chip-fs);font-weight:600;color:var(--ink-soft);cursor:pointer}
 .iv-wk:hover{border-color:var(--accent);color:var(--ink)}
 .iv-wk-label{font-size:13px;font-weight:700;color:var(--ink)}
 .iv-ctx{font-size:12px;color:var(--ink-mute);margin:0 0 10px}
@@ -197,7 +198,7 @@ _IV_STYLE = """<style>
 .iv-hcell.iv-corner{left:0;z-index:3}
 .iv-hcell .iv-dd{font-family:var(--ff-mono,monospace);font-weight:500;font-size:10px;color:var(--ink-mute)}
 .iv-hourcell{font-family:var(--ff-mono,monospace);font-size:10px;color:var(--ink-mute);display:flex;align-items:center;justify-content:flex-end;padding-right:5px;position:sticky;left:0;z-index:1;background:var(--panel)}
-.iv-cell{border:1px solid var(--line);border-radius:6px;min-height:30px;font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
+.iv-cell{border:1px solid var(--line);border-radius:var(--r-sm);min-height:30px;font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
 .iv-cell.iv-free{background:#e7f6ec;border-color:#bcdfc4;color:#188038}
 .iv-cell.iv-free:hover{background:#d3efdc;border-color:#188038}
 .iv-cell.iv-sel{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -208,18 +209,18 @@ _IV_STYLE = """<style>
 .iv-assign[hidden]{display:none}
 .iv-when{font-size:13px;font-weight:700;color:var(--ink)}
 .iv-assign select{padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px;min-width:150px}
-.iv-assign-btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:700;cursor:pointer}
+.iv-assign-btn{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer}
 .iv-assign-btn:disabled{opacity:.6;cursor:default}
 .iv-toast{font-size:13px;font-weight:600;color:var(--accent-deep,var(--accent));margin-top:10px;min-height:18px}
 .iv-loading{font-size:13px;color:var(--ink-mute);padding:16px 0}
-.iv-sobes{display:inline-flex;align-items:center;gap:5px;background:var(--accent-soft);color:var(--accent);border:1px solid transparent;border-radius:var(--r-full);padding:2px 10px;font-size:12px;font-weight:700;cursor:pointer;line-height:1.6}
+.iv-sobes{display:inline-flex;align-items:center;gap:5px;height:var(--chip-h);background:var(--accent-soft);color:var(--accent);border:1px solid transparent;border-radius:var(--r-full);padding:0 var(--chip-px);font-size:var(--chip-fs);font-weight:700;cursor:pointer}
 .iv-sobes:hover{border-color:var(--accent)}
-.iv-assigned{display:inline-flex;align-items:center;gap:5px;background:#e7f6ec;color:#188038;border:1px solid #bcdfc4;border-radius:var(--r-full);padding:2px 10px;font-size:12px;font-weight:700;cursor:pointer;line-height:1.6}
+.iv-assigned{display:inline-flex;align-items:center;gap:5px;height:var(--chip-h);background:#e7f6ec;color:#188038;border:1px solid #bcdfc4;border-radius:var(--r-full);padding:0 var(--chip-px);font-size:var(--chip-fs);font-weight:700;cursor:pointer}
 .iv-assigned:hover{border-color:#188038}
 .iv-current{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#e7f6ec;border:1px solid #bcdfc4;border-radius:10px;padding:10px 14px;margin-bottom:12px}
 .iv-current[hidden]{display:none}
 .iv-current-text{font-size:13px;font-weight:700;color:#188038}
-.iv-cancel-btn{background:var(--panel);border:1px solid var(--danger);color:var(--danger);border-radius:8px;padding:7px 12px;font-size:12.5px;font-weight:700;cursor:pointer}
+.iv-cancel-btn{display:inline-flex;align-items:center;justify-content:center;background:var(--panel);border:1px solid var(--danger);color:var(--danger);border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer}
 .iv-cancel-btn:hover{background:#fdeceb}
 .iv-cancel-btn:disabled{opacity:.6;cursor:default}
 @media(max-width:760px){

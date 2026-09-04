@@ -14,9 +14,9 @@ from backend.tools import mailcrm_ui
 
 # outcome colors, aligned with the inbox _KIND palette
 _C = {
-    "interview": "#1a73e8", "offer": "#188038", "rejection": "#d93025",
+    "interview": "#0c47c2", "offer": "#188038", "rejection": "#d93025",
     "action_needed": "#b06000", "ack": "#8a9099", "other": "#c3c8ce",
-    "accent": "#1a73e8", "ink": "#202124", "mute": "#5f6368",
+    "accent": "#0c47c2", "ink": "#202124", "mute": "#5f6368",
 }
 _OUTCOME_LABELS = {
     "offer": "Офферы", "interview": "Собеседования", "action_needed": "Требует действия",
@@ -302,7 +302,7 @@ def render_page(force: bool = False) -> str:
     body = f"""
 <style>{_CSS}</style>
 <div class="page-head"><h1 class="st-title">Статистика подач</h1>
-<span class="st-mute st-gen">обновлено {gen} · {_fmt(t['companies'])} компаний · <a href="/stats?refresh=1">обновить данные</a></span></div>
+<span class="st-mute st-gen">обновлено {gen} · {_fmt(t['companies'])} компаний</span> <a href="/stats?refresh=1" class="ghost">Обновить</a></div>
 
 <div class="st-kpis">{kpis}</div>
 
@@ -393,13 +393,13 @@ _CSS = """
 .st-tbl thead th{position:sticky;top:0;background:#f8f9fa;z-index:1}
 .st-th{padding:9px 10px;text-align:right;font-weight:700;color:#5f6368;cursor:pointer;user-select:none;white-space:nowrap;border-bottom:1px solid #e8eaed}
 .st-th.st-l{text-align:left}
-.st-th:hover{color:#1a73e8}
-.st-th.st-sorted{color:#1a73e8}
+.st-th:hover{color:#0c47c2}
+.st-th.st-sorted{color:#0c47c2}
 .st-tbl td{padding:7px 10px;border-bottom:1px solid #f1f3f4}
 .st-tbl td.st-num{text-align:right;font-variant-numeric:tabular-nums}
 .st-tbl td.st-l{text-align:left}
 .st-tbl tbody tr:hover{background:#f8f9fa}
-.st-irbar{display:inline-block;height:7px;background:#1a73e8;border-radius:4px;vertical-align:1px;margin-right:6px;max-width:70px}
+.st-irbar{display:inline-block;height:7px;background:#0c47c2;border-radius:4px;vertical-align:1px;margin-right:6px;max-width:70px}
 .st-irtxt{font-variant-numeric:tabular-nums}
 /* trend */
 .st-trend-row{display:grid;grid-template-columns:100px 1fr 70px;align-items:end;gap:10px;margin-bottom:10px}

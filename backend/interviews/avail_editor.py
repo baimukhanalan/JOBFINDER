@@ -59,14 +59,15 @@ CSS = """
 .avd-day{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 13px}
 .avd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
 .avd-dow{font-size:14.5px;color:var(--ink)}
-.avd-add{background:var(--accent-soft);color:var(--accent-deep,var(--accent));border:1px solid transparent;border-radius:var(--r-full);padding:6px 13px;font-size:12.5px;font-weight:700;cursor:pointer;min-height:34px}
+.avd-add{display:inline-flex;align-items:center;background:var(--accent-soft);color:var(--accent-deep,var(--accent));border:1px solid transparent;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer}
 .avd-add:hover{border-color:var(--accent)}
 .avd-wins{display:flex;flex-direction:column;gap:7px}
 .avd-wins:empty{display:none}
 .avd-win{display:flex;align-items:center;gap:8px}
 .avd-win input[type=time]{flex:1;min-width:0;padding:9px 10px;text-align:center}
 .avd-sep{color:var(--ink-mute);flex:0 0 auto}
-.avd-x{flex:0 0 auto;width:36px;height:36px;border:1px solid var(--line-strong);background:var(--panel);color:var(--danger);border-radius:8px;font-size:17px;line-height:1;cursor:pointer}
+.avd-x{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:var(--ctl-h);height:var(--ctl-h);border:0;background:transparent;color:var(--danger);border-radius:50%;font-size:17px;line-height:1;cursor:pointer}
+.avd-x:hover{background:rgba(217,48,37,.1)}
 .avd-x:hover{background:#fdeceb}
 .avd-empty{color:var(--ink-mute);font-size:12.5px}
 .avd-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;align-items:center}

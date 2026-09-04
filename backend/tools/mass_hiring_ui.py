@@ -84,8 +84,8 @@ _CSS = """
 .mh-pay{font-size:12.5px;font-weight:700;color:#0f7b3e;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .mh-pay.est{color:var(--ink-soft);font-weight:600;}
 .mh-est-t{font-size:10px;font-weight:600;opacity:.65;}
-.mh-fill{margin-left:8px;border:1px solid var(--accent);background:var(--accent);
-  color:#fff;border-radius:8px;padding:5px 11px;font:inherit;font-size:12px;font-weight:700;
+.mh-fill{margin-left:8px;display:inline-flex;align-items:center;border:1px solid var(--accent);background:var(--accent);
+  color:#fff;border-radius:var(--r-full);height:var(--chip-h);padding:0 var(--chip-px);font:inherit;font-size:var(--chip-fs);font-weight:700;
   cursor:pointer;white-space:nowrap;}
 .mh-fill:hover{filter:brightness(1.07);}
 .mh-fill:disabled{opacity:.6;cursor:default;}
@@ -289,11 +289,11 @@ _MODAL_CSS = """
 .mhm-status{margin-top:14px;font-size:12.5px;color:var(--ink-soft);white-space:pre-line;line-height:1.5;
   font-variant-numeric:tabular-nums;}
 .mhm-foot{display:flex;gap:8px;margin-top:18px;}
-.mhm-foot button{flex:1;border-radius:9px;padding:10px;font:inherit;font-weight:700;font-size:14px;
+.mhm-foot button{flex:1;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font:inherit;font-weight:700;font-size:var(--ctl-fs);
   cursor:pointer;border:1px solid var(--line);}
 .mhm-go{background:#0f7b3e;color:#fff;border-color:#0f7b3e;}
 .mhm-stop{background:var(--panel-2);color:var(--ink);}
-.mhm-x{background:transparent;color:var(--ink-soft);flex:0 0 auto;padding:10px 14px;}
+.mhm-x{background:transparent;color:var(--ink-soft);flex:0 0 auto;}
 </style>
 """
 

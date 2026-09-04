@@ -573,6 +573,18 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
   `var(--ctl-h)` square. Catalog's per-card controls were normalized to it: the М/Ж toggle (`.cat-sex`/
   `.cat-sex-b`) and «Заполнить» (`.cat-fill`) are now the same 40px height (was a fat 22px-padded pill next to
   a 32px toggle). Keep new buttons on these tokens — don't hardcode heights/paddings.
+  **Dashboard-wide button normalization (2026-09-04, audit-driven):** a full audit of EVERY button across
+  all tabs found many off-scale controls (tiny ~14-20px chips, 3 different close-✕ sizes, off-radius modal
+  CTAs). Fix = TWO sanctioned scales only: the 40px `--ctl-h/px/fs` family for every real button + a NEW
+  COMPACT `--chip-h:32px/--chip-px:12px/--chip-fs:12.5px` family for inline metaline chips (📄 apps toggle,
+  assessment `✓ Пройдено`, `Собес`/`Назначено`). Documented exceptions: the mobile compose FAB (52px) and
+  the Собес calendar cell (30px). Normalized: shell (`.fbtn`/`.capp-btn`/`.filter-btn`/`.reply-btn`/`.mf-reply`/
+  `.msel`/`.sel-link`/`.apps-chip`/`.modal-head .x`/`.ph-info-d`), Кандидаты (`.cg-apps`/`.cg-asmt`/`.cg-asmt-btn`/
+  `.cg-fbtn`), Собес (`operator_ui.py` `.iv-*` — assign/cancel now pill+40px, sobes/assigned/wk → chip,
+  modal-x → 40px circle, cell radius → `--r-sm`), Catalog (`.cat-launch`/`.cat-bulk-*`/`.cat-reg`/`.cat-proxy-*`/
+  `.cat-modal-x`/`.px-toggle`), Mass Hiring (`.mh-fill` → chip, `.mhm-foot` → 40px pill), Статистика (refresh
+  → `.ghost`, unified the stray `#1a73e8` blue → brand `#0c47c2`), Пользователи (`.avd-add`/`.avd-x`),
+  Незавершённые (`.unf-go/done/rerun/open`). Verified at 390px. Only the dashboard restarts.
 - **`/catalog` is the ONLY job-browsing surface (DB-backed).** The old network-live `/roles` + `/jobs`
   routes were **removed 2026-08-21** (duplicates that fetched Ashby per request), along with
   `tools/jobs_feed.py`. `/catalog` reads Postgres (`catalog_db.py` → `jobfinder_crm.job_catalog`), no

@@ -2072,8 +2072,16 @@ tz-parametrised (80 pass).
   badges (`.cg-apps/.cg-asmt*/.cg-count`) are on `--chip-sm`; `.iv-sobes/.iv-assigned` (operator_ui.py) too, with
   `.iv-assigned` name capped `max-width:150px`. Message-count chip is «✉ N» (distinct from the unread blue
   circle, which has no tooltip on mobile). Assessment button pair is symmetric «✓ Отметить» / «↺ Вернуть».
-  Only the dashboard restarts. The other tabs (Каталог/Статистика/Пользователи/Незавершённые/Mass Hiring) still
-  need the same pass — see the spec the audit produced.
+  Only the dashboard restarts. **Rollout to the other tabs DONE (2026-09-04):** Каталог (RU workplace labels
+  Удалённо/Гибрид/Офис, 2-line `.cat-title` clamp + `title=` for uniform card height, hybrid→brand blue),
+  Незавершённые (dropped the internal `[review]` token, show unfilled COUNT not the raw list, `.unf-rerun`→`--ok`
+  green, 2-line `.unf-title` clamp), Массовый найм (RU: «Удалённо»/«в поддержке», status badges de-emoji'd to
+  «Авто»/«Ассессмент»), Статистика (KPI labels shortened «Подано»/«Сабмиты»), Пользователи (buttons trimmed
+  Удалить/Сохранить/Скопировать Пн/Сбросить). Verified live (admin fetch, all 200, RU strings present, no EN in
+  our chrome — remaining «Remote» hits are employer DATA: a company literally named «Remote» + JD prose, allowed).
+  Deferred (riskier than a copy pass): Mass-Hiring `.mh-job` full 2-line fixed template (it's `flex-wrap:wrap`, so
+  long titles wrap on mobile → some height variance remains); stats `_page_head` helper adoption + a uniform
+  `_fmt_pct` (it already uses `.page-head` + `_fmt` + `_C` color roles).
 - **Brand mark = serif interlocked "JF" (white) on royal-blue `#0c47c2`** at `backend/static/logo.svg`
   (+ `logo-maskable.svg` and rendered PNG icons). Rendered with Times New Roman Bold (closest installed
   serif). NOT a circle/sans-serif. Rebuild icons after any change: `rsvg-convert -w N -h N

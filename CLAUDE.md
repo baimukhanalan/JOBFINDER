@@ -2040,3 +2040,30 @@ tz-parametrised (80 pass).
   `_page`, cabinet via `_doc`, login via `dash_auth._doc`), one edit here restyles the whole platform —
   don't duplicate per file. Modal open animation: shell modals use `jfFadeIn` (`.modal-card`/`.fm-card`/
   `.iv-modal-panel`); the `/catalog` modal keeps its own `cm-pop`. Only the dashboard restarts for these.
+- **Canonical page-header contract `mailcrm_ui._page_head(title, count, primary, icons, meta, info)`
+  (P0 of the UX redesign, 2026-09-04).** ALL tabs should render their header through this ONE partial so
+  every screen looks identical: LEFT = the tab title ONCE + a mono count (`<b>` seg-nav style) + a single
+  thin `.ph-meta` line + an optional ⓘ popover (`.ph-info-d`/`.ph-pop`, `<details>`-based, zero-JS, on the
+  meta line so it survives the mobile title-hide); RIGHT = **exactly ONE** filled `button.primary`
+  (`.ph-primary`) + secondary actions as 40px round `.iconbtn` only — **never two equal buttons, never a
+  centered/floating button in the page body** (that was the reported eyesore). MOBILE (≤760px): the
+  top-pill already names the tab, so `_page_head` HIDES the in-body title (`.page-head:has(.ph-titlewrap)
+  .ph-title{display:none}`) and the primary moves OUT of the header into the existing `.fab-compose` slot
+  (thumb zone; collapses to an icon on scroll-down). `_page_head` returns the header **plus** the FAB
+  (position:fixed, DOM position irrelevant). Mass Hiring is the reference migration
+  (`mass_hiring_ui.render_page` → deleted the bespoke `.mh-head`/`<h1>`/`.mh-sub` legend → ⓘ; «Запустить
+  подачу» is the primary, «Обновить» a `.iconbtn`; its own tiny scroll handler `_MH_SCROLL_JS` collapses
+  head/pill/FAB since it lacks the inbox/candidates scroll IIFE). **Brand accent is now the token
+  `--accent:#0c47c2`** (was Google-blue `#1a73e8`) — recompute `--accent-deep`/`--accent-soft` if you
+  change it; per-file hardcoded blues (`#2f6fed`, `#1a4fb0`, `rgba(26,115,232,…)`) were replaced with
+  `var(--accent)`. De-slug rule: no raw source slug in the UI — `mass_hiring_ui._src_label` title-cases a
+  fallback and `.mh-src` is quiet muted text, not a bordered chip. The company score badge leads with a
+  WORD tier (`_tier`: Высокий/Средний/Точечно, mid = amber not blue) with the raw index secondary.
+  `/catalog` header: one primary «▶ Запустить подачу» + «Фильтры» demoted to a funnel `.iconbtn`
+  (`.cat-flt`). ROLLOUT: the other tabs (Каталог body, Незавершённые, Статистика, Пользователи) still use
+  bespoke headers — migrate them through `_page_head` next (Кандидаты is the reference, leave it). Only the
+  dashboard restarts. **Perf gotcha found during this work:** a leaked `idle in transaction` connection
+  can block an `ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS …` (from `ensure_schema` in an
+  apply-lane/on-demand run), which then blocks EVERY query on the table → `/mass-hiring` hangs. Clear with
+  `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state='idle in transaction' AND
+  now()-state_change > interval '5 minutes'`.

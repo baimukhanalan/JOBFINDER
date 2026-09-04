@@ -61,26 +61,30 @@ def _ago(ts: int) -> str:
     return f"{d // 86400} дн назад"
 
 
-def _score_cls(s: int) -> str:
-    return "hi" if s >= 40 else ("mid" if s >= 15 else "lo")
+def _tier(s: int) -> tuple[str, str]:
+    """Demand tier: a WORD (leads the badge) + css class. The raw 0-100 index stays secondary,
+    so the badge never reads as a naked count that could be confused with a vacancy total."""
+    if s >= 40:
+        return ("Высокий", "hi")
+    if s >= 15:
+        return ("Средний", "mid")
+    return ("Точечно", "lo")
+
+
+def _src_label(s: str) -> str:
+    """Human source name — never a raw slug in the UI (title-cased fallback)."""
+    return _SRC_LABEL.get(s) or str(s or "").replace("_", " ").replace("-", " ").strip().title()
 
 
 _CSS = """
 <style>
 .mh-wrap{max-width:1040px;margin:0 auto;padding:18px 16px 60px;}
-.mh-head{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin-bottom:6px;}
-.mh-head h1{font-size:26px;font-weight:700;margin:0;letter-spacing:-.02em;}
-.mh-sub{color:var(--ink-soft);font-size:14px;margin:2px 0 0;}
-.mh-meta{margin-left:auto;text-align:right;color:var(--ink-soft);font-size:13px;line-height:1.5;}
-.mh-refresh{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--panel);
-  color:var(--ink);border-radius:9px;padding:8px 13px;font:inherit;font-weight:600;font-size:13px;cursor:pointer;}
-.mh-refresh:hover{background:var(--panel-2);}
 .mh-star{flex:0 0 auto;color:#f5a623;font-size:15px;line-height:1;margin-right:5px;
   text-shadow:0 1px 3px rgba(245,166,35,.45);}
 .mh-pay{font-size:12.5px;font-weight:700;color:#0f7b3e;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .mh-pay.est{color:var(--ink-soft);font-weight:600;}
 .mh-est-t{font-size:10px;font-weight:600;opacity:.65;}
-.mh-fill{margin-left:8px;border:1px solid var(--accent,#2f6fed);background:var(--accent,#2f6fed);
+.mh-fill{margin-left:8px;border:1px solid var(--accent);background:var(--accent);
   color:#fff;border-radius:8px;padding:5px 11px;font:inherit;font-size:12px;font-weight:700;
   cursor:pointer;white-space:nowrap;}
 .mh-fill:hover{filter:brightness(1.07);}
@@ -91,27 +95,30 @@ _CSS = """
 .mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
 .mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
-.mh-score{flex:0 0 auto;width:46px;height:46px;border-radius:11px;display:flex;align-items:center;justify-content:center;
-  font-weight:700;font-size:17px;font-variant-numeric:tabular-nums;}
-.mh-score.hi{background:#0f7b3e;color:#fff;}.mh-score.mid{background:#e6f0ff;color:#1a4fb0;}
+/* Demand tier leads with a WORD; the raw index is secondary (no naked number, no mid-blue). */
+.mh-score{flex:0 0 auto;min-width:66px;padding:7px 9px;border-radius:11px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:1px;line-height:1.05;font-variant-numeric:tabular-nums;text-align:center;}
+.mh-score .mh-tier{font-weight:700;font-size:12px;white-space:nowrap;}
+.mh-score .mh-num{font-size:10px;font-weight:600;opacity:.72;}
+.mh-score.hi{background:#0f7b3e;color:#fff;}
+.mh-score.mid{background:#fef2d6;color:#8a5a04;}
 .mh-score.lo{background:var(--panel-2);color:var(--ink-soft);}
 .mh-cinfo{min-width:0;flex:1 1 auto;}
 .mh-cname{font-weight:700;font-size:16px;letter-spacing:-.01em;}
 .mh-cstats{color:var(--ink-soft);font-size:13px;margin-top:2px;}
-.mh-src{display:inline-block;font-size:11px;font-weight:600;color:var(--ink-soft);border:1px solid var(--line);
-  border-radius:6px;padding:1px 6px;margin-left:6px;vertical-align:1px;}
+.mh-src{font-size:11.5px;font-weight:500;color:var(--ink-mute);margin-left:7px;}
 .mh-caret{flex:0 0 auto;color:var(--ink-soft);transition:transform .15s;}
 details[open] .mh-caret{transform:rotate(90deg);}
 .mh-jobs{border-top:1px solid var(--line);}
 .mh-job{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:11px 16px 11px 74px;border-top:1px solid var(--line);}
 .mh-job:first-child{border-top:none;}
 .mh-jtitle{font-weight:600;font-size:14px;color:var(--ink);text-decoration:none;}
-.mh-jtitle:hover{text-decoration:underline;color:var(--accent,#2f6fed);}
+.mh-jtitle:hover{text-decoration:underline;color:var(--accent);}
 .mh-lang{flex:0 0 auto;border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:11px;
   font-weight:600;color:#8a94a6;background:rgba(138,148,166,.10);white-space:nowrap;}
 .mh-lang.ok{color:#1f8f4e;border-color:#1f8f4e;background:rgba(31,143,78,.12);}
 .mh-jloc{color:var(--ink-soft);font-size:12.5px;}
-.mh-apply{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--accent,#2f6fed);text-decoration:none;white-space:nowrap;}
+.mh-apply{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;}
 .mh-empty{text-align:center;color:var(--ink-soft);padding:60px 20px;}
 .mh-emp{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:18px;overflow:hidden;}
 .mh-emp-sum{display:flex;align-items:center;gap:10px;padding:13px 16px;cursor:pointer;list-style:none;}
@@ -125,7 +132,7 @@ details[open] .mh-caret{transform:rotate(90deg);}
 .mh-emp-seg{font-size:11px;font-weight:600;color:var(--ink-soft);border:1px solid var(--line);border-radius:6px;padding:1px 6px;}
 .mh-emp-s{color:var(--ink-soft);font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums;}
 .mh-emp-note{color:var(--ink-soft);font-size:12px;padding:10px 16px 13px;border-top:1px solid var(--line);}
-@media(max-width:760px){.mh-meta{margin-left:0;text-align:left;width:100%;}
+@media(max-width:760px){
   .mh-job{padding-left:16px;}.mh-apply{margin-left:0;}.mh-emp-s{margin-left:0;}}
 </style>
 """
@@ -203,8 +210,9 @@ def _company_card(c: dict, category: str | None, comp: str | None = None) -> str
     key = c.get("company_key")
     js = mass_hiring.jobs(company_key=key, category=category, limit=60, comp=comp)
     src = {j.get("source") for j in js}
-    src_tag = "".join(f'<span class="mh-src">{_SRC_LABEL.get(s, s)}</span>' for s in sorted(src))
+    src_tag = "".join(f'<span class="mh-src">{_esc(_src_label(s))}</span>' for s in sorted(src))
     score = int(c.get("mass_hiring_score") or 0)
+    tier, cls = _tier(score)
     caret = ('<svg class="mh-caret" width="18" height="18" viewBox="0 0 24 24" fill="none" '
              'stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>')
     stats = f'{c["active_jobs"]} вакансий'
@@ -212,7 +220,8 @@ def _company_card(c: dict, category: str | None, comp: str | None = None) -> str
         stats += f' · {c["cs_jobs"]} customer support'
     return (
         f'<details class="mh-card"><summary class="mh-crow">'
-        f'<div class="mh-score {_score_cls(score)}">{score}</div>'
+        f'<div class="mh-score {cls}" title="Индекс масс-хайринга {score}/100">'
+        f'<span class="mh-tier">{tier}</span><span class="mh-num">{score}</span></div>'
         f'<div class="mh-cinfo"><div class="mh-cname">{_esc(c.get("company"))}{src_tag}</div>'
         f'<div class="mh-cstats">{stats}</div></div>{caret}</summary>'
         f'<div class="mh-jobs">{"".join(_job_row(j) for j in js)}</div></details>')
@@ -254,10 +263,6 @@ def _everify_panel(limit: int = 40) -> str:
 
 _MODAL_CSS = """
 <style>
-.mh-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px;}
-.mh-run{border:1px solid var(--accent,#2f6fed);background:var(--accent,#2f6fed);color:#fff;border-radius:9px;
-  padding:8px 14px;font:inherit;font-weight:700;font-size:13px;cursor:pointer;}
-.mh-run:hover{filter:brightness(1.07);}
 .mhm-back{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:80;}
 .mhm-back.on{display:block;}
 .mhm{position:fixed;z-index:81;left:50%;top:50%;transform:translate(-50%,-50%);width:min(480px,94vw);
@@ -359,6 +364,31 @@ function mhRender(j){
 """
 
 
+# Sticky-header hide + FAB collapse on scroll (self-contained; this page has neither the
+# inbox #maillist nor the candidates #mbxlist scroll IIFE, so there is no double-bind).
+_MH_SCROLL_JS = """
+<script>(function(){
+  var head=document.querySelector('.page-head'),
+      pill=document.querySelector('.gm-topbar'),
+      fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
+  if(!head&&!fab)return;
+  window.addEventListener('scroll',function(){
+    var y=window.scrollY,dy=y-lastY;if(Math.abs(dy)<=6)return;lastY=y;
+    if(dy>0&&y>90){if(head)head.classList.add('hide');if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
+    else if(dy<0){if(head)head.classList.remove('hide');if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
+  },{passive:true});
+})();</script>
+"""
+
+_PLAY_SVG = ('<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+             '<polygon points="6 4 20 12 6 20"/></svg>')
+_REFRESH_ICON = ('<form method="post" action="/mass-hiring/collect" style="display:inline">'
+                 '<button class="iconbtn" type="submit" title="Обновить вакансии" aria-label="Обновить вакансии">'
+                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                 'stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/>'
+                 '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></form>')
+
+
 def render_page(category: str | None = None, comp: str | None = None) -> str:
     # Filters were removed by owner request — the board shows all active jobs; the only
     # display toggle is «Показывать испанские» (persisted in mh_settings, default hidden).
@@ -369,17 +399,17 @@ def render_page(category: str | None = None, comp: str | None = None) -> str:
         ('<div class="mh-empty">Пока пусто. Нажми «Обновить», чтобы собрать вакансии '
          'из источников (Conduent / Alorica / Himalayas / …).</div>')
 
+    info = ('<b style="color:#f5a623">★</b> — стабильная оплата (не комиссия).<br>'
+            '«оц.» рядом со ставкой — оценка по типу роли (точную смотри в вакансии).')
+    ph = mailcrm_ui._page_head(
+        "Mass Hiring", count=st["active"],
+        primary={"label": "Запустить подачу", "onclick": "mhOpenRun()", "svg": _PLAY_SVG},
+        icons=_REFRESH_ICON,
+        meta=(f'{st["active"]} вакансий · {st["companies"]} компаний · '
+              f'обновлено {_ago(st.get("last_collected", 0))}'),
+        info=info)
     head = (
-        f'<div class="mh-wrap">{_CSS}{_MODAL_CSS}'
-        f'<div class="mh-head"><div><h1>Mass Hiring</h1>'
-        f'<p class="mh-sub">Remote · US · масс-хайринг · '
-        f'<span style="color:#f5a623">★</span> — стабильная оплата (не комиссия) · ставка «оц.» — оценка по типу роли</p></div>'
-        f'<div class="mh-meta">{st["active"]} вакансий · {st["companies"]} компаний<br>'
-        f'обновлено {_ago(st.get("last_collected", 0))}'
-        f'<div class="mh-actions">'
-        f'<button class="mh-run" type="button" onclick="mhOpenRun()">▶ Запустить подачу</button>'
-        f'<form method="post" action="/mass-hiring/collect" style="display:inline">'
-        f'<button class="mh-refresh" type="submit">↻ Обновить</button></form></div></div></div>'
+        f'<div class="mh-wrap">{_CSS}{_MODAL_CSS}{ph}'
         f'{_everify_panel()}'
-        f'{body}{_run_modal()}</div>{_JS}{_RUN_JS}')
+        f'{body}{_run_modal()}</div>{_JS}{_RUN_JS}{_MH_SCROLL_JS}')
     return mailcrm_ui._page("masshiring", head)

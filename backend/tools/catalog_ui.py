@@ -245,9 +245,15 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="cat-h-btns">'
         '<button class="cat-run" onclick="toggleFilters()" '
         'title="Настроить и запустить массовую подачу">▶ Запустить подачу</button>'
-        '<button class="cat-filters-btn" id="fltBtn" onclick="toggleFilters()" '
-        f'aria-expanded="false">Фильтры<span class="cat-filters-tag">{reg_tag}</span></button>'
-        f'</div></div>{search}</div>')
+        # «Фильтры» demoted to a secondary funnel icon (no more twin text buttons); it opens the
+        # same settings sheet. The active region stays visible as a small badge beside it.
+        '<button class="iconbtn cat-flt" id="fltBtn" onclick="toggleFilters()" aria-expanded="false" '
+        'title="Фильтры и настройки подачи" aria-label="Фильтры">'
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round">'
+        '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></button>'
+        + (f'<span class="cat-filters-tag">{reg_tag}</span>' if reg_tag else '')
+        + f'</div></div>{search}</div>')
 
     # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
     # settings sheet, so the main view is just search + jobs.
@@ -360,8 +366,9 @@ _CAT_CSS = """<style>
 /* Filters button — opens the settings sheet; shows the active region as a tag. */
 .cat-filters-btn{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:38px}
 .cat-h-btns{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.cat-run{display:inline-flex;align-items:center;gap:7px;background:var(--accent,#2f6fed);color:#fff;border:1px solid var(--accent,#2f6fed);border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;min-height:38px;white-space:nowrap}
+.cat-run{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:var(--r-full);padding:8px 15px;font-size:13px;font-weight:700;cursor:pointer;min-height:38px;white-space:nowrap}
 .cat-run:hover{filter:brightness(1.07)}
+.cat-flt[aria-expanded=true]{color:var(--accent);background:var(--accent-soft)}
 .cat-filters-btn:hover{border-color:var(--accent);color:var(--ink)}
 .cat-filters-btn[aria-expanded=true]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
 .cat-filters-tag{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:var(--r-full);padding:2px 9px}
@@ -389,7 +396,7 @@ _CAT_CSS = """<style>
 .cat-reg{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;padding:9px 15px;border-radius:999px;border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);font-size:14px;font-weight:600;text-decoration:none;min-height:42px}
 .cat-reg b{font-family:var(--ff-mono,monospace);font-weight:500;font-size:12px;color:var(--ink-mute)}
 .cat-reg:hover{border-color:var(--accent);text-decoration:none}
-.cat-reg.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 8px -2px rgba(26,115,232,.5)}
+.cat-reg.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 8px -2px rgba(12,71,194,.5)}
 .cat-reg.on b{color:rgba(255,255,255,.85)}
 .cat-list{display:flex;flex-direction:column;gap:10px}
 .cat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px}

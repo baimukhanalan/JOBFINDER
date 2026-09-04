@@ -190,7 +190,7 @@ def fulldate(ts: int) -> str:
 
 # ---------------------------------------------------------------- CSS (ported)
 _CSS = """
-:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#1a73e8;--accent-deep:#1762c4;--accent-soft:#e8f0fe;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;}
+:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#0c47c2;--accent-deep:#0a389c;--accent-soft:#e7edfb;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;}
 *{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
@@ -213,7 +213,19 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .seg-nav a b{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:var(--ink-mute);}
 .seg-nav a.active{color:var(--ink);box-shadow:0 2px 0 var(--accent);}
 .seg-nav a.active b{color:var(--accent);}
-.head-actions{display:flex;gap:8px;}
+.head-actions{display:flex;gap:8px;align-items:center;}
+/* Canonical page-head partial (_page_head): title once + one primary + secondary icons. */
+.ph-titlewrap{display:flex;flex-direction:column;gap:1px;min-width:0;}
+.ph-title{font-size:22px;font-weight:600;letter-spacing:-.02em;color:var(--ink);display:inline-flex;align-items:baseline;gap:7px;}
+.ph-title b{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:var(--accent);}
+.ph-meta{color:var(--ink-soft);font-size:12.5px;font-variant-numeric:tabular-nums;}
+.ph-primary{display:inline-flex;align-items:center;gap:7px;}
+.ph-primary svg{width:14px;height:14px;}
+.ph-info-d{position:relative;display:inline-block;}
+.ph-info-d>summary{list-style:none;cursor:pointer;color:var(--ink-mute);font-size:13px;line-height:1;padding:2px 5px;border-radius:var(--r-full);}
+.ph-info-d>summary::-webkit-details-marker{display:none;}
+.ph-info-d>summary:hover{color:var(--accent);background:var(--panel-2);}
+.ph-pop{position:absolute;top:130%;left:0;z-index:30;width:min(280px,80vw);background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:10px 12px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;font-weight:400;}
 .hbtn{display:inline-flex;align-items:center;gap:7px;background:var(--panel);color:var(--ink-soft);border:1px solid var(--line-strong);padding:9px 14px;min-height:40px;border-radius:var(--r-full);font-weight:600;font-size:13px;cursor:pointer;}
 .hbtn:hover{background:var(--panel-2);color:var(--ink);}
 .hbtn svg{width:15px;height:15px;}
@@ -264,9 +276,9 @@ button.primary:hover{background:var(--accent-deep);}
 .sel-bar[hidden]{display:none;}
 .sel-count{font-weight:700;color:var(--accent-deep);font-size:15px;min-width:18px;text-align:center;}
 .sel-link{border:0;background:transparent;color:var(--accent);font-weight:600;font-size:14px;cursor:pointer;padding:7px 9px;border-radius:var(--r-sm);}
-.sel-link:hover{background:rgba(26,115,232,.12);}
+.sel-link:hover{background:rgba(12,71,194,.12);}
 .sel-bar .iconbtn{color:var(--accent-deep);}
-.sel-bar .iconbtn:hover{background:rgba(26,115,232,.14);color:var(--accent-deep);}
+.sel-bar .iconbtn:hover{background:rgba(12,71,194,.14);color:var(--accent-deep);}
 .avatar{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;margin-top:1px;}
 .mbody{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px;}
 .mtop{display:flex;align-items:baseline;gap:8px;}
@@ -307,7 +319,7 @@ button.primary:hover{background:var(--accent-deep);}
 .tcard .msg-from{padding-bottom:14px;margin-bottom:16px;}
 .atts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
 .att{display:inline-flex;align-items:center;gap:8px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:8px 12px;color:var(--ink);max-width:280px;}
-.att:hover{background:#e8f0fe;border-color:var(--accent);text-decoration:none;}
+.att:hover{background:var(--accent-soft);border-color:var(--accent);text-decoration:none;}
 .att-ic{font-size:15px;}.att-nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:500;}
 .att-sz{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);margin-left:auto;}
 .funnel{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;}
@@ -448,11 +460,17 @@ button.primary:hover{background:var(--accent-deep);}
    header keyword button is hidden (keywords live in the «Фильтр» modal on mobile). */
 @media(max-width:760px){
   .head-actions{gap:6px;}
-  .hbtn-compose,.hbtn-kw{display:none;}
+  /* top-pill already names the tab -> the in-body primary moves to the FAB slot, and the
+     in-body title is hidden (only for the _page_head partial) to save the top inch. */
+  .hbtn-compose,.hbtn-kw,.ph-primary{display:none;}
+  .page-head:has(.ph-titlewrap) .ph-title{display:none;}
+  .page-head:has(.ph-titlewrap){flex-wrap:nowrap;align-items:center;}
+  .page-head:has(.ph-titlewrap) .ph-left{flex:1;min-width:0;}
+  .page-head:has(.ph-titlewrap) .ph-meta{white-space:normal;}
   .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
     bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
     border:none;border-radius:16px;height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
-    cursor:pointer;box-shadow:0 6px 18px -4px rgba(26,115,232,.55);overflow:hidden;
+    cursor:pointer;box-shadow:0 6px 18px -4px rgba(12,71,194,.55);overflow:hidden;
     transition:padding .26s cubic-bezier(.4,0,.2,1),gap .26s cubic-bezier(.4,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1);}
   .fab-compose svg{width:22px;height:22px;flex:0 0 auto;}
   .fab-compose span{white-space:nowrap;overflow:hidden;max-width:130px;transition:max-width .26s cubic-bezier(.4,0,.2,1),opacity .2s ease;}
@@ -637,6 +655,43 @@ def _drawer(active: str) -> str:
             '<div class="gm-drawer-foot">'
             f'<a class="gm-logout" href="/logout">{_IC_LOGOUT}<span>Выйти из админки</span></a>'
             '</div></aside>')
+
+
+def _page_head(title: str, count=None, primary: dict | None = None,
+               icons: str = "", meta: str | None = None, info: str | None = None) -> str:
+    """Canonical sticky page header, reused across tabs (replaces bespoke per-tab headers +
+    the old centered/floating button pairs). LEFT: the tab title ONCE + optional mono count +
+    optional ⓘ popover, with one thin meta line under it. RIGHT (desktop): exactly ONE filled
+    button.primary + secondary .iconbtn actions. MOBILE (≤760px): the top-pill already names
+    the tab, so the primary hides from the header and re-appears in the .fab-compose slot
+    (thumb zone). At most one FAB per screen.
+
+    primary: {"label": str, "onclick": str} OR {"label", "href"}, optional "svg" (shown in both
+    the header button and the FAB). icons: prebuilt .iconbtn HTML (may wrap a form). Returns the
+    header markup PLUS the fixed-position FAB (its DOM position is irrelevant)."""
+    cnt = f' <b>{escape(str(count))}</b>' if count is not None else ""
+    info_html = (f'<details class="ph-info-d"><summary aria-label="Пояснение">ⓘ</summary>'
+                 f'<div class="ph-pop">{info}</div></details>') if info else ""
+    # ⓘ lives on the meta line (not the title) so it survives when the in-body title is hidden
+    # on mobile (where the top-pill already names the tab).
+    meta_bits = " ".join(x for x in (meta, info_html) if x)
+    meta_html = f'<div class="ph-meta">{meta_bits}</div>' if meta_bits else ""
+    prim_btn = fab = ""
+    if primary:
+        if primary.get("onclick"):
+            act = f'onclick="{escape(primary["onclick"], quote=True)}"'
+        else:
+            act = f'''onclick="location.href='{escape(primary.get("href", ""), quote=True)}'"'''
+        svg = primary.get("svg", "")
+        lbl = escape(primary["label"])
+        prim_btn = f'<button class="primary ph-primary" type="button" {act}>{svg}{lbl}</button>'
+        fab = (f'<button class="fab-compose" type="button" {act} aria-label="{lbl}">'
+               f'{svg or ""}<span>{lbl}</span></button>')
+    return (
+        '<div class="page-head"><div class="ph-left"><div class="ph-titlewrap">'
+        f'<div class="seg-nav"><span class="ph-title">{escape(title)}{cnt}</span></div>'
+        f'{meta_html}</div></div>'
+        f'<div class="head-actions">{prim_btn}{icons}</div></div>{fab}')
 
 
 def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:

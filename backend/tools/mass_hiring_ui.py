@@ -64,11 +64,11 @@ def _ago(ts: int) -> str:
 def _tier(s: int) -> tuple[str, str]:
     """Demand tier: a WORD (leads the badge) + css class. The raw 0-100 index stays secondary,
     so the badge never reads as a naked count that could be confused with a vacancy total."""
-    if s >= 40:
+    if s >= 85:
         return ("Высокий", "hi")
-    if s >= 15:
+    if s >= 60:
         return ("Средний", "mid")
-    return ("Точечно", "lo")
+    return ("Точечный", "lo")
 
 
 def _src_label(s: str) -> str:
@@ -209,8 +209,16 @@ def _job_row(j: dict) -> str:
 def _company_card(c: dict, category: str | None, comp: str | None = None) -> str:
     key = c.get("company_key")
     js = mass_hiring.jobs(company_key=key, category=category, limit=60, comp=comp)
+    # Show the source only when it adds info — i.e. it's meaningfully DIFFERENT from the company
+    # display name. For own-ATS employers the slug just repeats the name ("Conduent Conduent"), so
+    # it's dropped; aggregator sources (Himalayas/RemoteOK) that differ from the employer stay.
+    company = c.get("company") or ""
+    cnorm = re.sub(r"[^a-z0-9]", "", company.lower())
     src = {j.get("source") for j in js}
-    src_tag = "".join(f'<span class="mh-src">{_esc(_src_label(s))}</span>' for s in sorted(src))
+    src_tag = "".join(
+        f'<span class="mh-src">{_esc(lbl)}</span>'
+        for lbl in (_src_label(s) for s in sorted(src))
+        if (n := re.sub(r"[^a-z0-9]", "", lbl.lower())) and n not in cnorm and cnorm not in n)
     score = int(c.get("mass_hiring_score") or 0)
     tier, cls = _tier(score)
     caret = ('<svg class="mh-caret" width="18" height="18" viewBox="0 0 24 24" fill="none" '

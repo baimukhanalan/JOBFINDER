@@ -68,15 +68,15 @@ def _workplace(j: dict) -> tuple[str, str]:
     """(label, css-class) for the workplace pill."""
     raw = (j.get("workplace") or "").strip().lower()
     if "remote" in raw:
-        return "Remote", "cat-wp-remote"
+        return "Удалённо", "cat-wp-remote"
     if "hybrid" in raw:
-        return "Hybrid", "cat-wp-hybrid"
+        return "Гибрид", "cat-wp-hybrid"
     if raw in ("onsite", "on-site", "on site", "office"):
-        return "OnSite", "cat-wp-onsite"
+        return "Офис", "cat-wp-onsite"
     # no explicit workplace value → fall back to is_remote flag
     if j.get("is_remote"):
-        return "Remote", "cat-wp-remote"
-    return "OnSite", "cat-wp-onsite"
+        return "Удалённо", "cat-wp-remote"
+    return "Офис", "cat-wp-onsite"
 
 
 # ---- rendering -----------------------------------------------------------------
@@ -132,9 +132,9 @@ def _card(j: dict) -> str:
     # The title itself is the link to the source posting — no separate "Открыть" button.
     if url:
         title_html = (f'<a class="cat-title" href="{esc(url)}" target="_blank" '
-                      f'rel="noopener">{title}</a>')
+                      f'rel="noopener" title="{title}">{title}</a>')
     else:
-        title_html = f'<div class="cat-title">{title}</div>'
+        title_html = f'<div class="cat-title" title="{title}">{title}</div>'
 
     jid = j.get("id")
     # ONE primary action per card ("Заполнить") + a compact М/Ж sex toggle (no emoji).
@@ -409,9 +409,9 @@ _CAT_CSS = """<style>
 .cat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px}
 .cat-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px}
 .cat-co{font-size:12px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em}
-.cat-wp{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-.cat-wp-remote{color:#188038;border-color:#bcdfc4}.cat-wp-hybrid{color:#1a73e8;border-color:#b8d3f5}.cat-wp-onsite{color:var(--ink-mute)}
-.cat-title{display:block;font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;margin-bottom:5px;text-decoration:none}
+.cat-wp{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.cat-wp-remote{color:#188038;border-color:#bcdfc4}.cat-wp-hybrid{color:var(--accent);border-color:#b8d3f5}.cat-wp-onsite{color:var(--ink-mute)}
+.cat-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;min-height:calc(1.3em*2);margin-bottom:5px;text-decoration:none}
 a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-meta{font-size:12.5px;color:var(--ink-mute);margin-bottom:8px}
 .cat-meta span{color:inherit}

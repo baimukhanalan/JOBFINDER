@@ -107,3 +107,6 @@ backend/data/icims_stealth_profile/
 backend/data/taleo_accounts.json
 backend/data/mh_settings.json
 logs/crontab.bak-*
+
+# never commit the secrets bundle (was public on GitHub 2026-08-19..09-05)
+jobfinder-secrets.tar.gz

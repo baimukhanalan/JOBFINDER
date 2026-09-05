@@ -19,6 +19,12 @@ backend/data/shl_answer_bank.json
 backend/data/shl_assess_state.json
 backend/data/shl_assess_done.json
 backend/data/shl_assess_runner.lock
+# assessment question-bank HARVESTER (runtime data + PII source + big regenerable media assets)
+backend/data/assessment_bank.json
+backend/data/assessment_media/
+backend/data/harvest_state.json
+backend/tools/assessment_harvester/assets/*.wav
+backend/tools/assessment_harvester/assets/*.y4m
 backend/data/*stealth_profile*/
 backend/data/mh_apply_cron.lock
 backend/data/*.lock

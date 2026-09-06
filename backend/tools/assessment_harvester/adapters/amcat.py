@@ -568,13 +568,19 @@ class AmcatAdapter(Adapter):
             body = await page.inner_text("body", timeout=3000)
         except Exception:
             body = ""
-        if (not self._diag_submitted and not _GATE_RE.search(body)
-                and (re.search(r"question\s+\d+\s+out of\s+\d+", body, re.I)
-                     or re.search(r"\b[0-5]?\d\s*:\s*[0-5]\d\b", body)
-                     or await self.svar_state(page) != {})):
-            if re.search(r"question\s+\d+\s+out of\s+\d+", body, re.I) or (await self.svar_state(page)).get("isSvar"):
-                self._diag_submitted = True
-                logger.info("[amcat] resume past diagnostic -> diag_submitted=True")
+        try:
+            in_svar = bool((await self.svar_state(page)).get("isSvar"))
+        except Exception:
+            in_svar = False
+        # A running MM:SS timer OR an SVAR page OR "Question N out of M" on a page that is NOT the
+        # diagnostic/gate and NOT terminal == we're already inside a scored module (any: cognitive,
+        # typing, personality, SVAR). Mark the diagnostic done so the gate never re-clicks #submit1.
+        if (not self._diag_submitted and not _GATE_RE.search(body) and not _TERMINAL_RE.search(body)
+                and (in_svar
+                     or re.search(r"question\s+\d+\s+out of\s+\d+", body, re.I)
+                     or re.search(r"\b[0-5]?\d\s*:\s*[0-5]\d\b", body))):
+            self._diag_submitted = True
+            logger.info("[amcat] resume past diagnostic -> diag_submitted=True")
         prev = ""
         for i in range(40):
             if await self.is_terminal(page):

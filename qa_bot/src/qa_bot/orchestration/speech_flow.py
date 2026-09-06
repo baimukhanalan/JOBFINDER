@@ -83,7 +83,7 @@ class SpeechAnswerFlow:
         local_stt=None,
         timeout: float = 120,
     ) -> PreparedSpeechAnswer:
-        """Transcribe optional prompt, solve for text, then use exact replay/TTS bank."""
+        """Identify the full prompt and replay before invoking the answer solver."""
         question_text = normalize_prompt(question_text)
         transcript = None
         if prompt_wav is not None:
@@ -92,20 +92,25 @@ class SpeechAnswerFlow:
             transcript = normalize_prompt(
                 await local_stt.transcribe_wav(prompt_wav, timeout=timeout)
             )
-        solved = answer_solver(question_text, transcript)
-        if inspect.isawaitable(solved):
-            solved = await solved
-        answer_text = normalize_prompt(solved)
         prompt_key = question_text if transcript is None else (
             question_text + " [AUDIO TRANSCRIPT] " + transcript
         )
-        replay = await self.replay_bank.get_or_create(
-            prompt_key, answer_text, speech=self.speech, voice=self.voice,
-            model=self.model, settings=self.settings, source_profile=source_profile,
-            source_test=source_test, source_question=source_question, timeout=timeout,
+        replay = self.replay_bank.replay(
+            prompt_key, source_profile=source_profile, source_test=source_test,
+            source_question=source_question,
         )
+        if replay is None:
+            solved = answer_solver(question_text, transcript)
+            if inspect.isawaitable(solved):
+                solved = await solved
+            answer_text = normalize_prompt(solved)
+            replay = await self.replay_bank.get_or_create(
+                prompt_key, answer_text, speech=self.speech, voice=self.voice,
+                model=self.model, settings=self.settings, source_profile=source_profile,
+                source_test=source_test, source_question=source_question, timeout=timeout,
+            )
         path = self.microphone.stage(replay.wav_path.read_bytes())
         return PreparedSpeechAnswer(
-            replay, path, answer_text, transcript,
+            replay, path, replay.answer_text, transcript,
             "listen_answer" if transcript is not None else "speak_topic",
         )

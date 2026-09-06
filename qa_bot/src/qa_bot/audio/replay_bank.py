@@ -253,7 +253,7 @@ class SpeechReplayBank:
     def replay(
         self,
         question_text: str,
-        answer_text: str,
+        answer_text: str | None = None,
         *,
         source_profile: str,
         source_test: str,

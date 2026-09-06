@@ -220,13 +220,93 @@ class SpeechReplayTests(unittest.IsolatedAsyncioTestCase):
                         source_question="voice-2",
                     )
                     first = await flow.prepare_spoken_answer("Answer the question.", **args)
+                    solver.side_effect = AssertionError("cached answer must bypass solver")
                     second = await flow.prepare_spoken_answer("Answer the question.", **args)
                     self.assertEqual(first.strategy, "listen_answer")
                     self.assertEqual(first.answer_text, "The customer should contact support.")
                     self.assertEqual(second.replay.source, "replay")
                     self.assertEqual(provider.synthesize_mp3.await_count, 1)
+                    solver.assert_awaited_once_with(
+                        "Answer the question.", "What should the customer do?"
+                    )
+                    self.assertEqual(first.replay.audio_sha256, second.replay.audio_sha256)
+                    self.assertEqual(first.answer_text, second.answer_text)
+                    self.assertEqual(bank.stats(), {"answers": 1, "reuses": 1})
         finally:
             speech.close()
+
+    async def test_spoken_topic_replays_after_restart_without_solver_or_tts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, artifacts = root / "speech.sqlite3", root / "answers"
+            with SpeechReplayBank(database, artifacts, converter=FakeConverter()) as bank:
+                first = bank.record(
+                    "Describe good customer service.", "Listen carefully and resolve the problem.",
+                    b"ID3" + bytes(200), voice="voice", model="model",
+                    source_profile="profile-01", source_test="TP-001", source_question="q1",
+                )
+            with SpeechReplayBank(database, artifacts, converter=FakeConverter()) as bank:
+                flow = SpeechAnswerFlow(
+                    bank, None, ChromiumFakeMicrophone(root / "mic.wav"), voice="voice",
+                )
+                second = await flow.prepare_spoken_answer(
+                    "Describe good customer service.", answer_solver=None,
+                    source_profile="profile-02", source_test="TP-002", source_question="q2",
+                )
+                self.assertEqual(second.replay.source, "replay")
+                self.assertEqual(second.answer_text, first.answer_text)
+                self.assertEqual(second.replay.mp3_path.read_bytes(), first.mp3_path.read_bytes())
+                self.assertEqual(second.microphone_path.read_bytes(), first.wav_path.read_bytes())
+                self.assertEqual(bank.usage()[-1]["source_test"], "TP-002")
+                self.assertEqual(bank.stats(), {"answers": 1, "reuses": 1})
+
+    async def test_changed_listening_transcript_requires_new_answer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prompt = root / "prompt.wav"
+            prompt.write_bytes(tone_wav())
+            speech = AsyncMock()
+            speech.synthesize_mp3.return_value = b"ID3" + bytes(200)
+            stt = AsyncMock()
+            stt.transcribe_wav.side_effect = ["When is delivery?", "Where is delivery?"]
+            solver = AsyncMock(side_effect=["Delivery is tomorrow.", "Delivery is at reception."])
+            with SpeechReplayBank(root / "bank.sqlite3", root / "audio",
+                                  converter=FakeConverter()) as bank:
+                flow = SpeechAnswerFlow(
+                    bank, speech, ChromiumFakeMicrophone(root / "mic.wav"), voice="voice",
+                )
+                args = dict(answer_solver=solver, local_stt=stt, prompt_wav=prompt,
+                            source_profile="p", source_test="t", source_question="q")
+                first = await flow.prepare_spoken_answer("Answer the question.", **args)
+                second = await flow.prepare_spoken_answer("Answer the question.", **args)
+                self.assertNotEqual(first.replay.question_key, second.replay.question_key)
+                self.assertEqual(second.answer_text, "Delivery is at reception.")
+                self.assertEqual(solver.await_count, 2)
+                self.assertEqual(speech.synthesize_mp3.await_count, 2)
+
+    async def test_corrupt_spoken_cache_stops_before_solver_and_microphone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            solver, speech = AsyncMock(), AsyncMock()
+            with SpeechReplayBank(root / "bank.sqlite3", root / "audio",
+                                  converter=FakeConverter()) as bank:
+                cached = bank.record(
+                    "Describe customer service.", "Listen carefully to the customer.",
+                    b"ID3" + bytes(200), voice="voice", model="model",
+                    source_profile="p", source_test="t", source_question="q",
+                )
+                cached.mp3_path.write_bytes(b"ID3" + bytes(201))
+                flow = SpeechAnswerFlow(
+                    bank, speech, ChromiumFakeMicrophone(root / "mic.wav"), voice="voice",
+                )
+                with self.assertRaisesRegex(ValueError, "artifact missing or changed"):
+                    await flow.prepare_spoken_answer(
+                        "Describe customer service.", answer_solver=solver,
+                        source_profile="p2", source_test="t2", source_question="q2",
+                    )
+                solver.assert_not_called()
+                speech.synthesize_mp3.assert_not_called()
+                self.assertFalse((root / "mic.wav").exists())
 
     def test_runtime_replay_needs_no_provider_key(self):
         with tempfile.TemporaryDirectory() as directory:

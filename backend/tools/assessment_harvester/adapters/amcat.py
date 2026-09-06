@@ -21,10 +21,26 @@ routes it to advance(); real questions pass through for the random-answer path.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from backend.tools.assessment_harvester.adapters.base import Adapter
-from backend.tools.assessment_harvester import mic
+from backend.tools.assessment_harvester import mic, assets
+
+# Section D "Free Speech": speak on a topic for a timed window. SUBMIT must NOT be clicked while
+# recording (an early click with an unfinished recording triggers the "unable to hear you" WARN loop);
+# feed the mic continuously and let the speaking window run out, then submit.
+_FREE_SPEECH_RE = re.compile(r"free speech|speak on the topic|your topic is|describe (a|an|your|the)\b", re.I)
+
+# A long, continuous passage to feed the mic during a free-speech window so the recorder hears sustained
+# speech (a short clip with replay gaps reads as "unable to hear you").
+_FREE_SPEECH_TEXT = (
+    "Last year I stayed at a seaside resort with my family for a week. "
+    "The rooms were clean and comfortable, and the staff were friendly and helpful at all times. "
+    "Every morning we had breakfast by the pool and then walked along the beach. "
+    "In the afternoons we joined activities like kayaking and tennis, and in the evening we enjoyed dinner "
+    "at the restaurant. The weather was warm and sunny, and the whole trip was relaxing and memorable. "
+    "I would happily recommend that resort to anyone looking for a calm and pleasant holiday.")
 
 logger = logging.getLogger("assessment_harvester")
 
@@ -329,6 +345,8 @@ class AmcatAdapter(Adapter):
         self._diag_submitted = False
         self._typing_dumped = False    # one-time typing-DOM capture for verification
         self._mystery_dumped = False   # one-time capture of an unrecognised module (e.g. personality)
+        self._pers_dumped = False      # one-time capture of a personality item (option/submit DOM)
+        self._free_wav = None          # lazily-generated long passage for a free-speech window
 
     async def _timer(self, page):
         try:
@@ -607,12 +625,30 @@ class AmcatAdapter(Adapter):
             #      the record window opens; stop it once we leave the window. This does NOT `continue` —
             #      it falls through to the CTA-click block, which walks the OK/SUBMIT/NEXT cycle that
             #      actually ADVANCES the item (skipping the click was what stalled Q1 forever). ----
-            if mic_say_wav and cur.get("recording"):
+            free_speech = bool(_FREE_SPEECH_RE.search(
+                (cur.get("section") or "") + " " + (cur.get("prompt") or "")))
+            feed_wav = mic_say_wav
+            if free_speech:
+                if self._free_wav is None:            # a long continuous passage for the speaking window
+                    self._free_wav = os.path.join(
+                        os.environ.get("AMCAT_DUMP_DIR", "/tmp"), "amcat_free_speech.wav")
+                    try:
+                        assets.speak_text_wav(_FREE_SPEECH_TEXT, self._free_wav)
+                    except Exception:
+                        self._free_wav = ""
+                feed_wav = self._free_wav or mic_say_wav
+            if feed_wav and cur.get("recording"):
                 if play is None or play.poll() is not None:
-                    play = mic.speak(mic_say_wav)     # non-blocking Popen; kept present across the window
-                    logger.info("[amcat] mic feed during record nav=%s", nav)
+                    play = mic.speak(feed_wav)        # non-blocking Popen; kept present across the window
+                    logger.info("[amcat] mic feed during record nav=%s free=%s", nav, free_speech)
             elif play is not None:
                 _stop_play()                           # left the record window
+
+            # ---- FREE SPEECH: never SUBMIT while recording (early click -> "unable to hear" loop).
+            #      Feed the mic + let the timed window run; submit only once recording has ended. ----
+            if free_speech and cur.get("recording"):
+                await page.wait_for_timeout(3000)
+                continue
 
             # ---- forward-first: click any ENABLED primary CTA (SUBMIT ANSWER / NEXT / OK / YES) once ----
             if cur.get("hasCta") and cur.get("ctaText"):
@@ -665,6 +701,14 @@ class AmcatAdapter(Adapter):
         ANSWER button (`#submit1`, class `.primary-cta-btn`) enables — click it via the SVAR primary
         clicker (the gate's `advance` REFUSES `#submit1` to avoid the diagnostic-logout, so it can't
         submit a question). Falls back to the generic reader for any non-`.option-lable` MCQ."""
+        if not self._pers_dumped and re.search(
+                r"agree|describes you|which statement|\bi (am|prefer|enjoy|like|tend|find|get|feel)\b|"
+                r"strongly (agree|disagree)|to what extent|how (often|much) do you",
+                (item.get("question") or ""), re.I):
+            self._pers_dumped = True
+            logger.info("[amcat] personality item q=%r opts=%d — dumping DOM",
+                        (item.get("question") or "")[:70], len(item.get("options") or []))
+            await self._dump_stuck(page, "personality_first")
         try:
             ok = await page.evaluate(_MCQ_CLICK_JS, index)
         except Exception:

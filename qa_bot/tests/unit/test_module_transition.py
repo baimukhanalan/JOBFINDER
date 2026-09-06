@@ -11,6 +11,24 @@ from qa_bot.live_session import Session
 
 
 class ModuleTransitionTests(unittest.TestCase):
+    def test_null_switch_answer_is_absent_not_a_decode_failure(self):
+        result=transition_evidence('/api/v1/test/switch-module',b'answerObject=null',b'{"data":{}}')
+        self.assertFalse(result['request']['answer_object_present'])
+        self.assertNotIn('answer_parse_error',result['request'])
+
+    def test_selected_option_has_comparable_evidence_but_free_text_is_not_exposed(self):
+        def observe(value):
+            encoded=base64.b64encode(quote(json.dumps({'answerResponse':value})).encode()).decode()
+            return transition_evidence('/api/v1/qb/get-next-question',
+                urlencode({'answerObject':encoded}).encode(),b'{"data":{}}')['request']
+        value=observe('3')
+        self.assertEqual(value['answer_response_kind'],'str')
+        self.assertEqual(value['answer_response_scalar'],'3')
+        self.assertEqual(len(value['answer_response_sha256']),64)
+        private=observe('private long response')
+        self.assertNotIn('answer_response_scalar',private)
+        self.assertNotIn('private',json.dumps(private))
+
     def test_cutoff_is_observed_without_recording_answers_or_auth(self):
         response = {'data': {'cutOffData': {'cutOffCleared': False, 'cutOffMsg': 'private'},
                              'moduleId': 42, 'moduleSwitched': True,

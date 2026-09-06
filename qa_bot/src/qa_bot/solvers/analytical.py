@@ -16,9 +16,27 @@ from qa_bot.knowledge.live_archive import session_archive
 async def label_info(session,node):
     resolved=await session.cdp.send('DOM.resolveNode',{'backendNodeId':node})
     try:
-        result=await session.cdp.send('Runtime.callFunctionOn',{'objectId':resolved['object']['objectId'],'functionDeclaration':'''function(){const p=this.parentElement;return {text:this.innerText.trim(),checked:p.querySelector('input')?.checked,selected:p.getAttribute('aria-selected'),image:!!this.querySelector('img')}}''','returnByValue':True})
+        result=await session.cdp.send('Runtime.callFunctionOn',{'objectId':resolved['object']['objectId'],'functionDeclaration':'''function(){const p=this.parentElement,inputs=p.querySelectorAll('input'),input=inputs.length===1?inputs[0]:null;return {text:this.innerText.trim(),checked:p.querySelector('input')?.checked,selected:p.getAttribute('aria-selected'),image:!!this.querySelector('img'),input_count:inputs.length,input_value:input?input.value:null,input_value_attribute:input?input.getAttribute('value'):null}}''','returnByValue':True})
         return result['result']['value']
     finally:await session.cdp.send('Runtime.releaseObject',{'objectId':resolved['object']['objectId']})
+
+def selected_input_evidence(info,*,question,option,index):
+    """Bind the clicked control to the extracted question without leaking values."""
+    result={'question_id':question.question_id,'question_content_hash':question.content_hash,
+        'selected_option_id':option.id,'selected_option_position':index+1,
+        'selected_input_count':info.get('input_count'),'selection_observed_at':time.time()}
+    for key in ('input_value','input_value_attribute'):
+        value=info.get(key)
+        result['selected_'+key+'_kind']='null' if value is None else type(value).__name__
+        encoded=json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()
+        result['selected_'+key+'_json_sha256']=hashlib.sha256(encoded).hexdigest()
+        if isinstance(value,str):
+            result['selected_'+key+'_sha256']=hashlib.sha256(value.encode()).hexdigest()
+            if re.fullmatch(r'(?:[0-9]{1,6}|[A-Ha-h])',value):result['selected_'+key]=value
+            if re.fullmatch(r'[0-9]{1,6}',value) and int(value)<=100000:
+                result['selected_'+key+'_numeric_json_sha256']=hashlib.sha256(str(int(value)).encode()).hexdigest()
+    return result
+
 
 async def options(session):
     nodes=await session.controls('LabelText')
@@ -134,8 +152,9 @@ async def run_module(session,module):
             if not info['checked'] and info['selected']!='true':raise ValueError('selection not checked')
             fresh=await session.page.evaluate(STATE_SCRIPT)
             if fresh.get('number')!=number:raise ValueError('question changed before submit')
+            evidence=selected_input_evidence(info,question=q,option=q.options[selected],index=selected)
             await session.click('button','SUBMIT ANSWER')
-            session.log('analytical.jsonl',{'number':number,'question':text,'selected':labels[selected],'confidence':answer.proposal.confidence,'source':answer.source,'image_sha256':q.assets[0].sha256,'correctness_verified':False})
+            session.log('analytical.jsonl',{'number':number,'question':text,'selected':labels[selected],'confidence':answer.proposal.confidence,'source':answer.source,'image_sha256':q.assets[0].sha256,'correctness_verified':False,**evidence})
             print(json.dumps({'analytical_submitted':number,'confidence':answer.proposal.confidence}),flush=True)
             seen.add(number)
             for attempt in range(150):

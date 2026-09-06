@@ -6,7 +6,9 @@ This observer explains a terminal transition; it never changes the response.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import re
 from urllib.parse import parse_qs, unquote
 
 PATHS = frozenset(('/api/v1/test/switch-module', '/api/v1/test/end',
@@ -24,11 +26,19 @@ def transition_evidence(path: str, request_body: bytes, response_body: bytes) ->
         and values[0].isascii() and values[0].isdecimal() and len(values[0]) <= 12
     }
     encoded = request.get('answerObject', [])
-    result['request']['answer_object_present'] = bool(encoded and encoded[0])
-    if len(encoded) == 1 and 0 < len(encoded[0]) <= 1_000_000:
+    result['request']['answer_object_present'] = bool(encoded and encoded[0] not in ('', 'null', 'undefined'))
+    if len(encoded) == 1 and result['request']['answer_object_present'] and len(encoded[0]) <= 1_000_000:
         try:
             answer = json.loads(unquote(base64.b64decode(encoded[0], validate=True).decode('utf-8')))
             response = answer.get('answerResponse') if isinstance(answer, dict) else None
+            result['request']['answer_response_present'] = isinstance(answer, dict) and 'answerResponse' in answer
+            result['request']['answer_response_kind'] = type(response).__name__
+            result['request']['answer_response_sha256'] = hashlib.sha256(
+                json.dumps(response, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+            if type(response) is int and 0 <= response <= 100000:
+                result['request']['answer_response_scalar'] = response
+            elif isinstance(response, str) and re.fullmatch(r'[0-9]{1,6}|[A-Ha-h]', response):
+                result['request']['answer_response_scalar'] = response
             message = response.get('message') if isinstance(response, dict) else None
             score = message.get('score') if isinstance(message, dict) else None
             if type(score) in (int, float) and score in (0, 1):

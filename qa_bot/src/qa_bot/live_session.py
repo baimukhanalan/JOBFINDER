@@ -368,8 +368,9 @@ class Session:
                 if self.auto_navigation and time.monotonic()-self.navigation_at>.5:
                     self.navigation_at=time.monotonic()
                     if 'To resume your assessment' in state['text']:
-                        try:await self.click('button','CONTINUE')
-                        except ValueError:pass
+                        if not self.preflight:
+                            try:await self.click('button','CONTINUE')
+                            except ValueError:pass
                     else:
                         checkboxes=await self.controls('checkbox')
                         label='I confirm I have read and understood this Notice.'
@@ -585,7 +586,7 @@ async def run(args):
                     importlib.reload(played_capture)
                     return await played_capture.capture_html(session,item)
                 await page.expose_function('__qaCapturePlayedAudio',capture_played)
-            if args.preflight:session.auto_navigation=True
+            if args.preflight:session.auto_navigation=False
             if args.auto:
                 session.auto_speech=session.auto_choices=session.auto_navigation=True
             page.on('response', session.response)

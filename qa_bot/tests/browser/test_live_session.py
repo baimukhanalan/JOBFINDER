@@ -6,6 +6,24 @@ from qa_bot.live_session import Session
 
 
 class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_preflight_does_not_resume_an_existing_assessment(self):
+        import asyncio
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('To resume your assessment<button onclick="window.resumed=true">CONTINUE</button>')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    session.preflight=True;session.auto_navigation=True
+                    task=asyncio.create_task(session.watch())
+                    try:
+                        await asyncio.sleep(.7)
+                        self.assertIsNone(await page.evaluate('window.resumed'))
+                    finally:
+                        task.cancel();await asyncio.gather(task,return_exceptions=True)
+            finally:await browser.close()
+
     async def test_device_review_plays_once_then_advances_and_acknowledges_success(self):
         import asyncio
         async with async_playwright() as pw:

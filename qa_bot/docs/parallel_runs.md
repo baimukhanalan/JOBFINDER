@@ -104,8 +104,8 @@ Validated locally with fake subprocess workers: ten-way manifest isolation,
 bounded scheduling, duplicate profile/owner rejection, scope tampering rejection,
 busy ports, error preservation, explicit terms control, timeout/exit distinction,
 partial log records, process cleanup, and survival after a detached launcher exits.
-The latest confirmed full suite passed 337 tests; a subsequent targeted run passed
-33 tests. A new full-suite result after the latest changes is not yet claimed.
+The latest confirmed full suite passed 367 tests after the submission diagnostics
+and read-only inventory changes.
 
 Additional measurements on the local 16 GiB, ten-core host used no new assessment
 invitations:

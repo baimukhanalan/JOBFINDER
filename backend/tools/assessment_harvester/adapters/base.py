@@ -90,7 +90,7 @@ _GENERIC_ITEM_JS = r"""() => {
   document.querySelectorAll('button,[role=button],a,div,span').forEach(b => {
     if (!vis(b)) return;
     const s = ((b.getAttribute('aria-label')||'') + ' ' + (b.className||'') + ' ' + T(b)).toLowerCase();
-    if (/\brecord\b|start recording|microphone|\bmic\b|record answer|record response/.test(s)) hasMic = true;
+    if (/\brecord\b|recording|record answer|record response|tap to speak|press to speak|start speaking|record your (answer|response)/.test(s)) hasMic = true;
   });
 
   const pm = (document.body.innerText||'').match(/(\d+)\s*%/);

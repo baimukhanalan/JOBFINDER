@@ -24,6 +24,7 @@ import logging
 import re
 
 from backend.tools.assessment_harvester.adapters.base import Adapter
+from backend.tools.assessment_harvester import mic
 
 logger = logging.getLogger("assessment_harvester")
 
@@ -210,6 +211,107 @@ _SVAR_PLAY_REVIEW_JS = r"""() => {
   return lbl || 'play';
 }"""
 
+# Section C "Listening Comprehension" (and any AMCAT MCQ) options render as `.option-lable`
+# (note the source typo "lable") inside `.rander-options`, NOT as radios/`.question-answer-label`, so
+# the generic reader misses them and the page (svar chrome, no detected options) was mis-routed to the
+# speaking handler and stalled. Extract the options + the question + whether a listen clip is present.
+_MCQ_OPTS_JS = r"""() => {
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const els = [...document.querySelectorAll('.option-lable')].filter(vis);
+  const seen = new Set(); const opts = [];
+  els.forEach(e => { const t=T(e); if(!t||seen.has(t)||t.length>400) return; seen.add(t);
+     const im=e.querySelector('img'); opts.push({text:t, image: im ? (im.src||'') : null}); });
+  let q='';
+  const cand = [...document.querySelectorAll('.mBoldFont, .svar-las-question-block p, .question-text, .rander-question, .svar-direction')]
+     .filter(vis).map(T).filter(x => x && !seen.has(x) && x.length>3);
+  if (cand.length) q = cand.find(x => /\?\s*$/.test(x)) || cand[cand.length-1] || '';
+  const hasAudio = !!document.querySelector('#audio-blob-player, audio[src*="SpeechAssessmentBank"], audio[src]');
+  return {opts, q, hasAudio};
+}"""
+
+# Click the nth visible `.option-lable` (Section C MCQ). Returns true if clicked.
+_MCQ_CLICK_JS = r"""(idx) => {
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const els = [...document.querySelectorAll('.option-lable')].filter(vis);
+  if (idx<0 || idx>=els.length) return false;
+  const el = els[idx];
+  el.scrollIntoView({block:'center'});
+  (el.querySelector('input[type=radio],input[type=checkbox]') || el).click();
+  return true;
+}"""
+
+# Typing module: extract the reference SENTENCE to copy (the prominent text that is NOT the
+# instruction and NOT inside an input) + the input element presence. The accuracy test only advances
+# when the shown sentence is typed, so we must copy it exactly (via real keystrokes).
+_TYPING_EXTRACT_JS = r"""() => {
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const instr = /type the given sentence|exactly as shown|space provided|type the (paragraph|text)|as fast|as accurately/i;
+  const inputs = [...document.querySelectorAll('textarea, [contenteditable=true], input[type=text]')].filter(vis);
+  const inInput = t => inputs.some(i => (i.value||i.textContent||'').replace(/\s+/g,' ').trim() === t);
+  // The sentence is usually a bordered/highlighted block; try known-ish containers first, then any
+  // prominent line that reads like a sentence (has spaces + letters), excluding the instruction.
+  let cands = [...document.querySelectorAll('.typing-text,.type-text,.typing-para,.given-sentence,.sentence,.paraText,.para-text,.text-to-type,.svar-las-question-block p,.svar-las-question-block')]
+     .filter(vis).map(T).filter(x => x && x.length>=15 && !instr.test(x) && !inInput(x));
+  if (!cands.length) {
+     cands = [...document.querySelectorAll('p,div,span,label,h2,h3')].filter(vis).map(T)
+        .filter(x => x && x.length>=20 && /\s/.test(x) && /[a-z]/i.test(x) && !instr.test(x) && !inInput(x));
+  }
+  cands.sort((a,b) => b.length - a.length);
+  return {sent: cands[0]||'', nInputs: inputs.length,
+          hasCta: !![...document.querySelectorAll('.primary-cta-btn')].find(e => vis(e)
+                    && !/\bdisabled\b/.test(e.className||'') && e.getAttribute('aria-disabled')!=='true')};
+}"""
+
+# Focus the visible typing input (so page.keyboard.type lands there). Returns true if focused.
+_TYPING_FOCUS_JS = r"""() => {
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const el = [...document.querySelectorAll('textarea, [contenteditable=true], input[type=text]')].find(vis);
+  if (!el) return false;
+  el.scrollIntoView({block:'center'}); el.focus();
+  if (el.isContentEditable) { el.textContent=''; } else if ('value' in el) { el.value=''; }
+  return true;
+}"""
+
+# Computer-proficiency / WriteX module = an Adobe Captivate (ex-Flash) SOFTWARE SIMULATION ("Print the
+# current document." etc., N questions, a `.captivateIframe`). Flash is dead in modern Chromium so the
+# sim never renders (no answerable options) — SKIP each question (confirming the skip-warning) to reach
+# the next module. Not harvest-valuable (a simulation task, not a Q&A).
+_CAPTIVATE_DETECT_JS = r"""() => {
+  const b = document.body.innerText || '';
+  const cap = !!document.querySelector('.captivateIframe, [class*="captivate"]') || /adobe flash player/i.test(b);
+  const q = /question\s+\d+\s+out of\s+\d+/i.test(b);
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const skip = [...document.querySelectorAll('button,a,[role=button],.footerBtn')].some(e => vis(e) && /^skip$/i.test(T(e)));
+  return cap && q && skip;
+}"""
+_CAPTIVATE_SKIP_JS = r"""() => {
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const sk = [...document.querySelectorAll('button,a,[role=button],.footerBtn,.btn-green-bs')].filter(vis)
+     .find(e => /^skip$/i.test(T(e)));
+  if (sk) { sk.scrollIntoView({block:'center'}); sk.click(); return true; }
+  return false;
+}"""
+# The skip-warning ngDialog confirm ("OK").
+_CAPTIVATE_OK_JS = r"""() => {
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const ok = [...document.querySelectorAll('.ngdialog button, .ngdialog a, .ngdialog .footerBtn, .ngdialog .btn-green-bs, button, a, [role=button]')]
+     .filter(vis).find(e => /^ok$/i.test(T(e)));
+  if (ok) { ok.click(); return true; }
+  return false;
+}"""
+
 # instructional prose that is NOT a speak-this-sentence prompt (so the Section-A intro isn't
 # mis-banked as a speaking item)
 _SVAR_INTRO_RE = re.compile(
@@ -225,6 +327,8 @@ class AmcatAdapter(Adapter):
         # Once the diagnostic SUBMIT (#submit1) has been clicked ONCE, never target #submit1 again
         # (its id is reused by SVAR modal buttons and re-clicking the diag submit logs the SPA out).
         self._diag_submitted = False
+        self._typing_dumped = False    # one-time typing-DOM capture for verification
+        self._mystery_dumped = False   # one-time capture of an unrecognised module (e.g. personality)
 
     async def _timer(self, page):
         try:
@@ -256,6 +360,23 @@ class AmcatAdapter(Adapter):
             it["qimgs"] = []
             return it
         real_opts = [o for o in (it.get("options") or []) if (o.get("text") or "").strip()]
+        # Section C "Listening Comprehension" (+ any AMCAT MCQ) renders options as `.option-lable`,
+        # which the generic reader misses -> the page looks option-less and was mis-routed to speaking.
+        # Detect them FIRST so the core answers + banks it as a normal MCQ (listening if a clip is present).
+        if not real_opts:
+            try:
+                mcq = await page.evaluate(_MCQ_OPTS_JS)
+            except Exception:
+                mcq = None
+            if mcq and len(mcq.get("opts") or []) >= 2:
+                it = dict(it)
+                it["options"] = mcq["opts"]
+                if mcq.get("q"):
+                    it["question"] = mcq["q"]
+                it["has_audio"] = bool(mcq.get("hasAudio"))
+                it["has_mic"] = it["has_textarea"] = it["has_video"] = False
+                it["qimgs"] = it.get("qimgs") or []
+                return it
         # SVAR "Read and Speak": a real sentence prompt + svar chrome, no MCQ options -> speaking.
         # (The Section-A intro carries instructional prose, not a sentence -> excluded by _SVAR_INTRO_RE.)
         if not real_opts:
@@ -281,6 +402,15 @@ class AmcatAdapter(Adapter):
             it["options"] = []
             it["has_mic"] = it["has_textarea"] = it["has_audio"] = it["has_video"] = False
             it["qimgs"] = []
+        # One-time capture of an UNRECOGNISED module page (no options detected, not svar/gate, but a real
+        # countdown running) so its option DOM can be handled — e.g. the Personality / cognitive modules.
+        if (not real_opts and not it.get("has_mic") and not it.get("has_textarea")
+                and not _GATE_RE.search(it.get("body") or "") and not self._mystery_dumped):
+            body = it.get("body") or ""
+            if re.search(r"\b\d{1,2}\s*:\s*\d{2}\b", body):    # a MM:SS timer -> inside a module
+                self._mystery_dumped = True
+                logger.info("[amcat] MYSTERY module page (no options) body=%r", body[:160])
+                await self._dump_stuck(page, "mystery_module")
         return it
 
     async def _diag_blitz(self, page) -> bool:
@@ -310,7 +440,32 @@ class AmcatAdapter(Adapter):
                 logger.info("[amcat] diag waiting ~%ds timer=%s", int(k * 0.75), await self._timer(page))
         return False
 
+    async def _skip_captivate(self, page) -> bool:
+        """SKIP one question of the Adobe Captivate (Flash) simulation module + confirm the skip-warning.
+        Returns True if a skip was performed (so the core keeps walking through the whole module)."""
+        try:
+            if not await page.evaluate(_CAPTIVATE_DETECT_JS):
+                return False
+        except Exception:
+            return False
+        try:
+            if not await page.evaluate(_CAPTIVATE_SKIP_JS):
+                return False
+        except Exception:
+            return False
+        await page.wait_for_timeout(900)
+        try:
+            await page.evaluate(_CAPTIVATE_OK_JS)     # confirm the "you chose to skip" ngDialog
+        except Exception:
+            pass
+        await page.wait_for_timeout(1200)
+        logger.info("[amcat] captivate/flash sim: skipped a question")
+        return True
+
     async def advance(self, page) -> bool:
+        # A dead Flash/Captivate software-simulation module -> skip through it to the next module.
+        if await self._skip_captivate(page):
+            return True
         try:
             act = await page.evaluate(_GATE_ACTION_JS, self._diag_submitted)
         except Exception:
@@ -324,6 +479,20 @@ class AmcatAdapter(Adapter):
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(2800)
         logger.info("[amcat] OPEN timer=%s terminal=%s", await self._timer(page), await self.is_terminal(page))
+        # Resume-safety: if a token RESUMES past the diagnostic (already inside a scored module — a
+        # "Question N out of M" / SVAR / a running MM:SS timer with no diagnostic gate), mark the
+        # diagnostic done so the gate never re-clicks `#submit1` (which would log the session out).
+        try:
+            body = await page.inner_text("body", timeout=3000)
+        except Exception:
+            body = ""
+        if (not self._diag_submitted and not _GATE_RE.search(body)
+                and (re.search(r"question\s+\d+\s+out of\s+\d+", body, re.I)
+                     or re.search(r"\b[0-5]?\d\s*:\s*[0-5]\d\b", body)
+                     or await self.svar_state(page) != {})):
+            if re.search(r"question\s+\d+\s+out of\s+\d+", body, re.I) or (await self.svar_state(page)).get("isSvar"):
+                self._diag_submitted = True
+                logger.info("[amcat] resume past diagnostic -> diag_submitted=True")
         prev = ""
         for i in range(40):
             if await self.is_terminal(page):
@@ -362,7 +531,7 @@ class AmcatAdapter(Adapter):
                 await page.wait_for_timeout(500)
             prev = cur
 
-    async def handle_speaking(self, page, record_secs: float = 6.0) -> bool:
+    async def handle_speaking(self, page, record_secs: float = 6.0, mic_say_wav: str | None = None) -> bool:
         """Drive ONE SVAR speaking item to the next. The primary CTA cycles OK -> YES (device-test
         "were you able to hear it?") -> records (fake mic feeds speech.wav; CTA goes `disabled`) ->
         SUBMIT ANSWER / NEXT. Click the ENABLED `.primary-cta-btn` ONE click per state, waiting for a
@@ -376,6 +545,16 @@ class AmcatAdapter(Adapter):
         same = 0
         played_nav = None
         warn_ticks = 0
+        play = None     # PASS mode: current paplay Popen feeding mic_say_wav into the virtual mic
+
+        def _stop_play():
+            nonlocal play
+            if play is not None:
+                try:
+                    play.terminate()
+                except Exception:
+                    pass
+                play = None
         # PATIENT per-item walk (owner-verified: "just wait — NEXT/advance opens on its own"). Each item:
         # question audio plays -> RECORD phase (rec=True; the fake mic speaks speech.wav — do NOT click,
         # just wait so a real recording is captured; clicking SUBMIT with no recording is what triggers
@@ -388,6 +567,18 @@ class AmcatAdapter(Adapter):
             nav = cur.get("navTxt")
             if (nav and nav != start_nav) or (cur.get("prompt") and start_prompt and cur.get("prompt") != start_prompt):
                 logger.info("[amcat] svar advanced nav %s -> %s", start_nav, nav)
+                return True
+            # Section C "Listening Comprehension" is listen-FIRST: its `.option-lable` MCQ options render
+            # only AFTER the audio, so read_item saw none and mis-routed here. The moment options appear,
+            # BAIL (return True) so the core re-reads and answers it via the MCQ path (we can't answer an
+            # MCQ by recording). Nothing to bank is lost — the item re-reads immediately.
+            try:
+                mcq = await page.evaluate(_MCQ_OPTS_JS)
+            except Exception:
+                mcq = None
+            if mcq and len(mcq.get("opts") or []) >= 2:
+                _stop_play()
+                logger.info("[amcat] svar -> MCQ options appeared, bailing to MCQ path nav=%s", nav)
                 return True
             if tick % 4 == 0:
                 logger.info("[amcat] svar wait t=%d nav=%s cta=%r disCta=%r rec=%s review=%s warn=%s",
@@ -404,10 +595,24 @@ class AmcatAdapter(Adapter):
                     return False
                 if warn_ticks % 5 == 0:          # a gentle retry every ~15s, not every tick
                     await page.evaluate(_SVAR_CLICK_TEXT_JS, r"try ?again")
+                    _stop_play()                 # re-speak into the mic on the next record attempt
                     logger.info("[amcat] svar WARN patient TRY AGAIN (%ds) nav=%s", warn_ticks * 3, nav)
                 await page.wait_for_timeout(3000)
                 continue
             warn_ticks = 0
+
+            # ---- PASS mode: feed the required sentence into the virtual mic THROUGHOUT the record phase
+            #      (rec=True) so a read-aloud / listen-repeat item is answered. Load-robust: (re)start
+            #      paplay whenever it isn't running while recording, so audio is present no matter when
+            #      the record window opens; stop it once we leave the window. This does NOT `continue` —
+            #      it falls through to the CTA-click block, which walks the OK/SUBMIT/NEXT cycle that
+            #      actually ADVANCES the item (skipping the click was what stalled Q1 forever). ----
+            if mic_say_wav and cur.get("recording"):
+                if play is None or play.poll() is not None:
+                    play = mic.speak(mic_say_wav)     # non-blocking Popen; kept present across the window
+                    logger.info("[amcat] mic feed during record nav=%s", nav)
+            elif play is not None:
+                _stop_play()                           # left the record window
 
             # ---- forward-first: click any ENABLED primary CTA (SUBMIT ANSWER / NEXT / OK / YES) once ----
             if cur.get("hasCta") and cur.get("ctaText"):
@@ -454,6 +659,85 @@ class AmcatAdapter(Adapter):
             logger.info("[amcat] dumped stuck state -> %s/%s.{png,html}", d, tag)
         except Exception:
             pass
+
+    async def answer_mcq(self, page, item: dict, index: int) -> bool:
+        """Answer an AMCAT MCQ. Section C options are `.option-lable`; after selecting one the SUBMIT
+        ANSWER button (`#submit1`, class `.primary-cta-btn`) enables — click it via the SVAR primary
+        clicker (the gate's `advance` REFUSES `#submit1` to avoid the diagnostic-logout, so it can't
+        submit a question). Falls back to the generic reader for any non-`.option-lable` MCQ."""
+        try:
+            ok = await page.evaluate(_MCQ_CLICK_JS, index)
+        except Exception:
+            ok = False
+        if not ok:
+            return await super().answer_mcq(page, item, index)
+        await page.wait_for_timeout(700)              # let SUBMIT ANSWER enable
+        try:
+            await page.evaluate(_SVAR_CLICK_PRIMARY_JS)   # click the now-enabled SUBMIT ANSWER
+        except Exception:
+            pass
+        await page.wait_for_timeout(900)
+        return True
+
+    async def handle_typing(self, page, text: str) -> bool:
+        """AMCAT Typing module = a TIMED module (`<textarea ng-model=model.editor .typingTextArea>`, an
+        Angular countdown ~3min): type the shown PARAGRAPH with REAL keystrokes (Angular updates on key
+        events; setting `.value` is ignored), then WAIT for the module to END — it auto-advances at
+        timer=0, or a SUBMIT CTA appears once done. Poll until the page leaves the typing module (handles
+        multiple paragraphs + an offered submit). Returns True once it advanced, else False (churn)."""
+        async def _type_current() -> str:
+            try:
+                info = await page.evaluate(_TYPING_EXTRACT_JS)
+            except Exception:
+                info = None
+            para = ((info or {}).get("sent") or "").strip()
+            if not self._typing_dumped:
+                self._typing_dumped = True
+                logger.info("[amcat] typing extract sent=%r nInputs=%s hasCta=%s",
+                            para[:80], (info or {}).get("nInputs"), (info or {}).get("hasCta"))
+                await self._dump_stuck(page, "typing_first")
+            if not para or len(para) < 8:
+                para = text
+            try:
+                if await page.evaluate(_TYPING_FOCUS_JS):
+                    await page.keyboard.type(para[:1400], delay=6)   # real keys; Angular ng-model picks up
+            except Exception:
+                pass
+            return para
+
+        async def _still_typing() -> bool:
+            try:
+                return bool(await page.evaluate(
+                    "() => !!document.querySelector('.typingModule, .typingTextArea, .typingOption')"))
+            except Exception:
+                return True
+
+        last = await _type_current()
+        for _ in range(80):                     # ~240s: cover the ~3-min module timer
+            await page.wait_for_timeout(3000)
+            if await self.is_done(page) or not await _still_typing():
+                logger.info("[amcat] typing module ended -> advancing")
+                return True
+            try:
+                cur = await page.evaluate(_TYPING_EXTRACT_JS)
+            except Exception:
+                cur = None
+            if cur and cur.get("hasCta"):        # a submit/next offered once done -> click it
+                try:
+                    await page.evaluate(_SVAR_CLICK_PRIMARY_JS)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(2500)
+                if not await _still_typing():
+                    return True
+            elif cur and cur.get("sent") and cur.get("sent") != last:   # a NEW paragraph -> type it too
+                last = cur.get("sent")
+                try:
+                    if await page.evaluate(_TYPING_FOCUS_JS):
+                        await page.keyboard.type((last or "")[:1400], delay=6)
+                except Exception:
+                    pass
+        return False
 
     async def wall(self, page) -> str | None:
         if await self.is_terminal(page):

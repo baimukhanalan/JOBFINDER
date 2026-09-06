@@ -29,7 +29,7 @@ import random
 import re
 import tempfile
 
-from backend.tools.assessment_harvester import assets, asr, bank, media
+from backend.tools.assessment_harvester import assets, asr, bank, media, mic
 
 # Audio whose transcript is a section/instruction prompt, not harvestable content.
 _ASR_INSTR_RE = re.compile(
@@ -173,9 +173,29 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
     from playwright.async_api import async_playwright
     res = {"status": "error", "banked": 0, "by_type": {}, "shots": [], "note": "", "mailbox": mailbox,
            "walls": []}
-    args, asset_paths = _launch_args()
+    # Prefer the PULSE VIRTUAL MIC: it lets us feed the REQUIRED SVAR sentence (read-aloud prompt /
+    # ASR of the listen-repeat audio) into the recorder per item, so speaking sections ADVANCE past the
+    # SVAR wall into Typing / Personality / cognitive. Fall back to the static fake-audio file when the
+    # pulse mic isn't available (old behaviour: harvests Section A + listening, stalls at listen-repeat).
+    mic_ready = False
+    launch_env = None
+    try:
+        mic_ready = mic.ensure()
+    except Exception:
+        mic_ready = False
+    if mic_ready:
+        asset_paths = assets.ensure_assets()
+        args = ["--no-sandbox"] + mic.launch_args()
+        if asset_paths.get("video"):
+            args.append(f"--use-file-for-fake-video-capture={asset_paths['video']}")
+        launch_env = mic.launch_env()
+    else:
+        args, asset_paths = _launch_args()
     res["fake_media"] = asset_paths
+    res["mic_pass"] = mic_ready
     res["_audiodir"] = tempfile.mkdtemp(prefix="amcat_aud_")
+    res["_say_wav"] = os.path.join(res["_audiodir"], "say.wav")
+    res["_latest_aud"] = None
 
     def _bank(item, item_type, is_ability, chosen, shot, free=None, audio_url=None):
         bank.record(
@@ -199,7 +219,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
     async def _run():
         nonlocal page
         async with async_playwright() as p:
-            b = await p.chromium.launch(headless=False, args=args, timeout=60000)
+            b = await p.chromium.launch(headless=False, args=args, env=launch_env, timeout=60000)
             ctx = await b.new_context(viewport={"width": 1280, "height": 850},
                                       permissions=["microphone", "camera"])
             page = await ctx.new_page()
@@ -225,6 +245,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
                     fn = os.path.join(res["_audiodir"], hashlib.sha1(base.encode()).hexdigest()[:16] + ".mp3")
                     with open(fn, "wb") as w:
                         w.write(body)
+                    res["_latest_aud"] = fn      # newest captured audio = the listen-repeat sentence to echo
                 except Exception:
                     pass
 
@@ -232,6 +253,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
             try:
                 await adapter.enter(page, url)
                 stale = 0
+                typing_seen: dict = {}     # churn guard: a typing sentence that won't advance
                 for step in range(max_items):
                     if await adapter.is_done(page):
                         res["status"] = "completed"
@@ -290,7 +312,24 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
                                   {"text": None, "index": None, "value": "fake_audio_submitted", "source": "fake_device"},
                                   shot, free="speaking")
                             logger.info("[%s] #%d speaking q=%r (fake mic)", mailbox, res["banked"], q[:60])
-                        if await adapter.handle_speaking(page):
+                        # PASS mode: compute the sentence to speak into the virtual mic so the item
+                        # ADVANCES — a read-aloud item speaks the shown prompt; a listen-repeat / audio-only
+                        # item echoes the ASR of the just-played question audio. handle_speaking plays it
+                        # THROUGHOUT the record window.
+                        say_wav = None
+                        if res.get("mic_pass"):
+                            say = None
+                            if not item.get("_walk_only"):
+                                say = (q or "").strip() or None                     # read-aloud
+                            elif asr.available():
+                                await page.wait_for_timeout(1500)                    # let the audio play+capture
+                                if res.get("_latest_aud"):
+                                    say = asr.transcribe(res["_latest_aud"])         # listen-repeat / audio-only
+                            # repeat the sentence so one playback comfortably spans the record window
+                            if say and len(say) >= 4 and assets.speak_text_wav(
+                                    ((say.strip() + ". ") * 2).strip(), res["_say_wav"]):
+                                say_wav = res["_say_wav"]
+                        if await adapter.handle_speaking(page, mic_say_wav=say_wav):
                             await page.wait_for_timeout(1500)
                             continue
                         res["walls"].append(("speaking", shot, q[:80]))
@@ -314,6 +353,13 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
 
                     # ---- TYPING — fill and advance ----
                     if item_type == "typing":
+                        # churn guard: if the SAME typing sentence keeps reappearing it isn't advancing
+                        # (bad extraction / unaccepted input) — bail instead of re-typing to max_items.
+                        typing_seen[q] = typing_seen.get(q, 0) + 1
+                        if typing_seen[q] > 8:
+                            res["status"] = "stuck"
+                            res["note"] = f"typing churn on same sentence ({res['banked']} banked)"
+                            return
                         _bank(item, "typing", False,
                               {"text": None, "index": None, "value": "fake_text_typed", "source": "fake_device"},
                               shot, free="typing")

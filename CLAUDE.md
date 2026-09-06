@@ -1643,6 +1643,52 @@ surface). NOT yet wired to a board button/co-pilot lane. Tests: `test_avature.py
     live at deploy (~300 employers). Only the dashboard restarts for panel display changes. Tests:
     `test_everify_employers.py` (parser + segmentation + graceful-degrade + stale-gated cache, no network).
 
+## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`, added 2026-09-06)
+A separate engine from the auto-apply lanes: it enters a post-apply assessment as a synthetic persona
+and SAVES every question + options (+ per-item screenshots) into a unified bank — a question CORPUS, NOT
+an answer-replay cache. Owner-authorized to answer RANDOMLY (it deliberately FAILS while capturing). The
+etalon's integrity hard-stop becomes a random-answer seam; the old free-response ceiling is walked with
+a **fake mic/camera** (Chromium `--use-fake-{ui,device}-for-media-stream` + `--use-file-for-fake-audio/
+video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_args`).
+- **Package:** `core.py` (harvest loop: fake-media launch, item classify, random-MCQ, speaking/listening/
+  typing handlers, screenshots → `data/assessment_media/<platform>/<sha>.png`), `bank.py` (unified
+  `data/assessment_bank.json`, `schema_version 2`, platform-scoped media-aware dedup key, atomic pid-tmp
+  write; `migrate_from_shl()` imported the 263 SHL OPQ items), `discover.py` (invite discovery over
+  `mail_index`, excludes burned single-use tokens via `harvest_state.json`), `assets.py` (generates the
+  fake WAV/y4m), `adapters/{base,shl,amcat}.py`. CLI: `harvest_runner.py --platform amcat --limit 1`
+  (auto-freshest) or `--url <URL> --mailbox <mb>`. Run HEADFUL under `DISPLAY=:98 sg mail`. Bank/media/
+  assets are gitignored. Tests: `test_harvest_bank.py`, `test_harvest_discover.py`.
+- **Reachability (audited live 2026-09-06):** the only rich live surface with fresh invites is **AMCAT/TP**
+  (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com` "TP Assessment", ~272/day, single-use
+  ES256-JWT autologin — open a FRESH token, a stale one shows "TC100 already completed/submitted").
+  **AMCAT device-check PASSES with the fake mic+camera** (Mic/Speaker/Webcam ✓ — NOT proctor-walled) and
+  the ~5-min diagnostic timer is ample. **SPEAKING is harvested:** the adapter clears Data-Protection →
+  T&C → Copy-Test-ID → System-Config diagnostic → the real test **Section A "Read and Speak" (SVAR)** and
+  banks the read-aloud prompts (~2-3 distinct prompts per fresh token; each session randomizes the
+  sentences — run more tokens to grow the bank).
+- **GOTCHA — the `#submit1` multi-click LOGOUT (cost the whole first day).** The diagnostic SUBMIT id
+  `#submit1` is REUSED by the SVAR modal buttons; clicking it more than once makes the SPA show "You have
+  successfully logged out" (0 banked). Fix: `self._diag_submitted` — click `#submit1` exactly ONCE, then
+  `advance()`/`_GATE_ACTION_JS(diagDone)` never target it again. Single-click discipline everywhere
+  (rapid double-clicks anywhere = logout). The review NEXT is a handler-less `<button>` — the real forward
+  control is the modal `<a ng-click>OK/YES`; you must PLAY the recording (`_SVAR_PLAY_REVIEW_JS`) to enable
+  it. A "we can't hear you" warning gets ONE gentle TRY AGAIN then a clean stop — NEVER click TRY LATER
+  (→ `MIC200` logout, added to `_TERMINAL_RE`).
+- **CEILING — cognitive/math/picture/listening are UNREACHABLE for synthetic personas (evidenced, not a
+  bug).** The TP AMCAT is a 6-module battery with **server-enforced order**: Diagnostic → **SVAR spoken-
+  English ×4** → Typing → Personality (72) → **Basic Analytical Ability (19, cognitive)** → Sales (20).
+  Modules can't be jumped client-side (`startTest` reads `currentModule` from the server; 4 jump
+  strategies failed). And SVAR can't be COMPLETED by a synthetic persona: the **listen-repeat** items run
+  **speech recognition** — a fake tone is rejected ("unable to hear you") and retries hit `MIC200`. To
+  clear SVAR you'd need real per-item intelligible speech (TTS of the shown sentence) AND **ASR of the
+  played audio** to repeat listen-repeat items — i.e. actually pass a spoken-English exam — before the
+  cognitive module even unlocks. No TTS/ASR is installed. So the fake mic solved the DEVICE check but not
+  the speech-RECOGNITION gate; the cognitive modules stay behind it. **Sutherland-SHL** is separately
+  walled by **webcam proctoring** (`WCI200` — a real camera + liveness; do NOT fake a human face — it's an
+  identity control). **Maximus SHL-OPQ** (personality, no-right-answer) is the one fully-passable
+  assessment and is already auto-completed + banked by the etalon (`shl_assessment.py`, 263 items in the
+  unified bank). Only the harvester files change for this; nothing live imports them (no pm2 restart).
+
 ## Teleperformance (iCIMS) apply — SERVER-SIDE FULL-AUTO NOW WORKS END-TO-END (paid NopeCHA, 2026-09-01)
 > **BREAKTHROUGH 2026-09-01 — a full TP application was submitted AUTONOMOUSLY, server-side, from the
 > DATACENTER IP (no residential tunnel), NopeCHA solving every captcha.** Ground truth: two real emails

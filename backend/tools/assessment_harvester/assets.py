@@ -28,12 +28,42 @@ def _ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
 
 
-def _gen_speech(path: str) -> bool:
-    """~28s of CONTINUOUS speech-BAND energy (mono 48kHz s16). Chromium LOOPS
-    `--use-file-for-fake-audio-capture`, so keep it CONTINUOUS (no long silence): a silence tail made
-    AMCAT's SVAR recorder throw "Warning: we are unable to hear you" whenever a recording window landed
-    on the pause. The read-aloud items auto-stop the recording into the review step regardless of
-    silence; the recorder only needs to register non-silent input, which a continuous tone guarantees."""
+# Generic intelligible English — enough words for SVAR's speech RECOGNITION to register real speech
+# (a bare tone was rejected as "we are unable to hear you"). Content need not match the shown sentence;
+# we only need each SVAR item to detect speech and ADVANCE (score is irrelevant — we harvest).
+_SPEECH_TEXT = (
+    "Hello, my name is Alex and I am very glad to be here today. "
+    "I have several years of customer service experience and I really enjoy helping people. "
+    "I stay calm and professional under pressure, and I always listen carefully to every customer. "
+    "I communicate clearly and I work very well as part of a team. "
+    "Thank you very much for this opportunity, I am confident I would be a great fit for this role.")
+
+
+def speak_text_wav(text: str, path: str) -> bool:
+    """Synthesize `text` to a mono 48kHz s16 WAV via espeak-ng (real intelligible speech) + ffmpeg.
+    Used both for the default fake-mic asset and for per-item dynamic TTS of a captured prompt."""
+    esp = shutil.which("espeak-ng") or shutil.which("espeak")
+    ff = _ffmpeg()
+    if not esp or not ff:
+        return False
+    raw = path + ".raw.wav"
+    try:
+        # -s 150 wpm (clear), -g small word gap; espeak writes a 22050Hz WAV
+        subprocess.run([esp, "-s", "150", "-g", "3", "-w", raw, text], check=True, timeout=60)
+        subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-i", raw,
+                        "-af", "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=mono,volume=2.0",
+                        "-y", path], check=True, timeout=60)
+        try:
+            os.remove(raw)
+        except OSError:
+            pass
+        return os.path.exists(path)
+    except Exception:
+        return False
+
+
+def _gen_tone(path: str) -> bool:
+    """Fallback when no TTS engine: ~28s of continuous speech-BAND energy (not words)."""
     ff = _ffmpeg()
     if not ff:
         return False
@@ -52,6 +82,12 @@ def _gen_speech(path: str) -> bool:
         return os.path.exists(path)
     except Exception:
         return False
+
+
+def _gen_speech(path: str) -> bool:
+    """Real intelligible speech (espeak-ng) so SVAR speech-recognition registers words and ADVANCES;
+    falls back to a speech-band tone if no TTS engine is present."""
+    return speak_text_wav(_SPEECH_TEXT, path) or _gen_tone(path)
 
 
 def _gen_face(path: str) -> bool:

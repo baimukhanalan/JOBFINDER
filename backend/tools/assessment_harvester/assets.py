@@ -29,14 +29,19 @@ def _ffmpeg() -> str | None:
 
 
 def _gen_speech(path: str) -> bool:
+    """~28s of CONTINUOUS speech-BAND energy (mono 48kHz s16). Chromium LOOPS
+    `--use-file-for-fake-audio-capture`, so keep it CONTINUOUS (no long silence): a silence tail made
+    AMCAT's SVAR recorder throw "Warning: we are unable to hear you" whenever a recording window landed
+    on the pause. The read-aloud items auto-stop the recording into the review step regardless of
+    silence; the recorder only needs to register non-silent input, which a continuous tone guarantees."""
     ff = _ffmpeg()
     if not ff:
         return False
     cmd = [ff, "-hide_banner", "-loglevel", "error",
-           "-f", "lavfi", "-i", "sine=frequency=180:duration=22",
-           "-f", "lavfi", "-i", "sine=frequency=550:duration=22",
-           "-f", "lavfi", "-i", "sine=frequency=1800:duration=22",
-           "-f", "lavfi", "-i", "anoisesrc=d=22:c=pink:a=0.12",
+           "-f", "lavfi", "-i", "sine=frequency=180:duration=28",
+           "-f", "lavfi", "-i", "sine=frequency=550:duration=28",
+           "-f", "lavfi", "-i", "sine=frequency=1800:duration=28",
+           "-f", "lavfi", "-i", "anoisesrc=d=28:c=pink:a=0.12",
            "-filter_complex",
            "[0][1][2][3]amix=inputs=4:normalize=0,tremolo=f=4.5:d=0.85,"
            "highpass=f=90,lowpass=f=3800,volume=2.2,"

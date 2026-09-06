@@ -82,7 +82,23 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=1)
     ap.add_argument("--concurrency", type=int, default=1)
     ap.add_argument("--list", action="store_true", help="show pending invites + bank stats and exit")
+    ap.add_argument("--url", default=None, help="harvest ONE explicit invite URL (bypass discovery — for a just-arrived fresh token)")
+    ap.add_argument("--mailbox", default="", help="mailbox label for --url mode")
     args = ap.parse_args()
+
+    if args.url:
+        adapter = _adapter(args.platform)
+        _lock = _acquire_lock()  # noqa: F841
+        res = asyncio.run(core.harvest_one(args.url, args.mailbox or "manual", adapter,
+                                           min_delay=0.0, max_delay=0.0))
+        print("\n==== SINGLE-URL HARVEST ====")
+        print("status :", res.get("status"))
+        print("banked :", res.get("banked"), "by_type:", res.get("by_type"))
+        print("note   :", res.get("note"))
+        print("shots  :", res.get("shots"))
+        print("walls  :", res.get("walls"))
+        print(f"bank total: {bank.size()} items")
+        return
 
     if args.list:
         inv = discover.discover(args.platform, limit=args.limit or 50, include_done=True)

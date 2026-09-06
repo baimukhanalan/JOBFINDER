@@ -97,8 +97,11 @@ def discover(platform: str, *, limit: int | None = None, include_done: bool = Fa
         url = link_from_path(path, m["link_re"])
         if not url:
             continue
-        if not include_done and state.get(url) in ("completed", "stuck_free_response", "needs_human") \
-                or (not include_done and str(state.get(url, "")).startswith("harvested")):
+        # Any recorded state means this token was already ATTEMPTED. Single-use assessment tokens go
+        # terminal ("already completed/submitted") once opened, so a burned one is dead regardless of
+        # HOW the attempt ended — never re-serve it (the runner records a compound status like
+        # "stuck_free_response:banked1", so an exact-match check missed these and re-served them).
+        if not include_done and url in state:
             continue
         out.append((mailbox.split("@")[0], url))
         if limit and len(out) >= limit:

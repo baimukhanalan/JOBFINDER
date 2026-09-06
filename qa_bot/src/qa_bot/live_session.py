@@ -94,6 +94,7 @@ class Session:
         self.navigation_at=0
         self.typing_tasks=set()
         self.personality_tasks=set()
+        self.personality_task=None
         self.module_tasks=set()
         self.timeout_seen=False
         self.preflight=False
@@ -361,10 +362,12 @@ class Session:
                         self.module_tasks.add(module)
                         from qa_bot.solvers.analytical import run_module
                         task=asyncio.create_task(run_module(self,module));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
-                if self.auto_choices and 'Select an option with which you agree the most.' in state['text'] and state.get('number') not in self.personality_tasks:
-                    self.personality_tasks.add(state.get('number'))
+                if (self.auto_choices and 'Select an option with which you agree the most.' in state['text']
+                        and state.get('number') and state['number'] not in self.personality_tasks
+                        and (self.personality_task is None or self.personality_task.done())):
                     from qa_bot.solvers.personality import run_personality
-                    task=asyncio.create_task(run_personality(self,state));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+                    task=asyncio.create_task(run_personality(self,state));self.personality_task=task
+                    self.tasks.add(task);task.add_done_callback(self.tasks.discard)
                 passage=self.typing_passage(state)
                 typing_key=(state.get('number'),passage)
                 if self.auto_speech and passage and typing_key not in self.typing_tasks:

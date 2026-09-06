@@ -152,6 +152,14 @@ async def automate(session,frame):
     finally:cache.close()
 
 
+def completed_task_result(question,task,pending,events,now_ms):
+    """Recognize a causally bound provider result without promoting a cache entry."""
+    from qa_bot.knowledge.computer_protocol import outcome
+    if not pending or any(json.loads(canonical).get('task')!=task for _,canonical,_ in pending):
+        return False
+    return outcome(question,pending,events,now_ms)['verification']=='verified_success'
+
+
 async def _automate(session,frame,cache):
     import hashlib
     import re
@@ -215,15 +223,19 @@ async def _automate(session,frame,cache):
             if len(frames)!=1:await asyncio.sleep(.3);continue
             frame=frames[0]
             number=state['number']
+            task=re.search(r'QUESTION\n\d+ out of 16\n(.*?)\n(?:SKIP|SUBMIT)(?:\n|$)',state['text'],re.S)
+            if not task:raise ValueError('simulation task unavailable')
             result_screen=(await frame.locator('body').inner_text()).strip()=='result_message'
-            if result_screen and number in active_frames and pending:
+            provider_success=(previous==number and completed_task_result(number,task[1],pending,events,time.time()*1000))
+            if (result_screen or provider_success) and number in active_frames and pending:
                 # Every provider result advances through a delayed 2 s callback.
                 # The final footer SUBMIT bypasses saving the response, so all
                 # questions wait for the provider's next screen or confirmation.
                 if number not in result_wait_started:
                     result_wait_started[number]=time.monotonic()
                     session.log('computer-result-wait.jsonl',{'number':number,
-                        'reason':'awaiting_provider_response_callback','time':time.time()})
+                        'reason':'awaiting_provider_response_callback','time':time.time(),
+                        'provider_task_success_observed':bool(provider_success)})
                 if time.monotonic()-result_wait_started[number]>15:
                     raise ValueError('provider response transition did not arrive')
                 await asyncio.sleep(.2)
@@ -236,8 +248,6 @@ async def _automate(session,frame,cache):
                 session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':outcome['verification']=='verified_success','time':time.time()})
                 seen.add(previous)
             previous=number
-            task=re.search(r'QUESTION\n\d+ out of 16\n(.*?)\n(?:SKIP|SUBMIT)(?:\n|$)',state['text'],re.S)
-            if not task:raise ValueError('simulation task unavailable')
             await asyncio.sleep(.25)
             nodes=await frame.evaluate(NODES_SCRIPT)
             shot=session.output/f'computer-{number}-step-{step}.png'

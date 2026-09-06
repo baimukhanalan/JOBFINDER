@@ -13,6 +13,25 @@ from qa_bot.domain.question import QuestionSpec,OptionSpec,AssetRef,ResponseCont
 from qa_bot.knowledge.bank import QuestionBank,fingerprint
 from qa_bot.knowledge.live_archive import session_archive
 
+async def fetch_question_image(session, url, number):
+    """Retry a transient read failure only while the same question remains."""
+    from playwright.async_api import Error as BrowserError
+    from qa_bot.live_session import STATE_SCRIPT
+    for attempt in range(3):
+        fresh=await session.page.evaluate(STATE_SCRIPT)
+        if fresh.get('number')!=number:raise ValueError('question changed during image fetch')
+        try:
+            response=await session.page.request.get(url,timeout=10000)
+            if response.status!=200:
+                if response.status in (500,502,503,504) and attempt<2:
+                    await asyncio.sleep(.3*(attempt+1));continue
+                raise ValueError('question image unavailable')
+            return await response.body(), response.headers.get('content-type','').split(';')[0]
+        except BrowserError:
+            if attempt==2:raise
+            session.log('image-fetch-retries.jsonl',{'time':time.time(),'number':number,'attempt':attempt+1,'reason':'transient_browser_transport'})
+            await asyncio.sleep(.3*(attempt+1))
+
 async def label_info(session,node):
     resolved=await session.cdp.send('DOM.resolveNode',{'backendNodeId':node})
     try:
@@ -114,9 +133,7 @@ async def run_module(session,module):
                 parsed=urlsplit(url)
                 if parsed.scheme!='https' or parsed.hostname not in ('s3.amazonaws.com','qbdata-amcat.s3.amazonaws.com'):
                     raise ValueError('unrecognized question image origin')
-                response=await session.page.request.get(url)
-                if response.status!=200:raise ValueError('question image unavailable')
-                body=await response.body();media=response.headers.get('content-type','').split(';')[0]
+                body,media=await fetch_question_image(session,url,number)
                 if media not in ('image/png','image/jpeg') or not 0<len(body)<=20_000_000:raise ValueError('question image format rejected')
                 target=session.output/f'analytical-{number}-figure-{i}{".png" if media=="image/png" else ".jpg"}'
                 target.write_bytes(body)

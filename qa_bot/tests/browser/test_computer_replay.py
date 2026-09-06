@@ -185,6 +185,12 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
             finally:await browser.close()
 
     async def test_provider_verified_repeat_uses_no_model(self):
+        await self.verified_repeat('result_message')
+
+    async def test_visible_completed_scene_waits_for_provider_without_model(self):
+        await self.verified_repeat('Untitled - Notepad')
+
+    async def verified_repeat(self,completed_text):
         calls=[]
         class Client:
             def __init__(self,*args,**kwargs):pass
@@ -193,7 +199,7 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                 return {'question_id':q['question_id'],'content_hash':q['content_hash'],'status':'answer','confidence':.91,
                     'action':'click','id':'go','value':None,'target_id':None}
         origin='https://amcatglobal.aspiringminds.com'
-        frame=FRAME.replace('parent.advance()',"document.body.innerText='result_message';parent.postMessage({message:{score:1,log:[]}},'*');setTimeout(()=>parent.advance(),2000)")
+        frame=FRAME.replace('parent.advance()',"document.body.innerText="+repr(completed_text)+";parent.scoreAt=Date.now();parent.postMessage({message:{score:1,log:[]}},'*');setTimeout(()=>{parent.savedAfter=Date.now()-parent.scoreAt;parent.advance()},2000)")
         async with async_playwright() as pw:
             browser=await pw.chromium.launch(headless=True)
             try:
@@ -208,10 +214,13 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                         with patch('qa_bot.adapters.llm.codex_cli.CodexCLIClient',Client),patch('shutil.which',return_value='/bin/true' if n==1 else None):
                             await automate(session,page.frames[1])
                         self.assertIn('Assessments',await page.inner_text('body'))
+                        self.assertGreaterEqual(await page.evaluate('window.savedAfter'),2000)
                     self.assertEqual(calls,['1'])
                     action=json.loads((Path(directory)/'2/computer-actions.jsonl').read_text().splitlines()[0])
                     self.assertEqual(action['source'],'previous_exact');self.assertEqual(action['confidence'],.91)
                     self.assertTrue(action['correctness_verified'])
                     wait=json.loads((Path(directory)/'2/computer-result-wait.jsonl').read_text().splitlines()[0])
                     self.assertEqual(wait['number'],'1')
+                    self.assertTrue(wait['provider_task_success_observed'])
+                    self.assertEqual(len((Path(directory)/'2/computer-observations.jsonl').read_text().splitlines()),1)
             finally:await browser.close()

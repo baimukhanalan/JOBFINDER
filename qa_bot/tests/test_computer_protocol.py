@@ -31,3 +31,16 @@ class ProtocolTests(unittest.TestCase):
         action={k:v for k,v in self.action.items() if k!='action_started_ms'}
         result=outcome('1',[(self.key,self.canonical,action)],[self.event],1200)
         self.assertEqual(result['reason'],'missing_action_timing')
+
+    def test_completed_scene_wait_requires_same_task_and_causal_success(self):
+        from qa_bot.solvers.computer import completed_task_result
+        self.assertTrue(completed_task_result('1','Synthetic task',self.steps,[self.event],1200))
+        self.assertFalse(completed_task_result('1','Changed task',self.steps,[self.event],1200))
+        self.assertFalse(completed_task_result('2','Synthetic task',self.steps,[self.event],1200))
+        self.assertFalse(completed_task_result('1','Synthetic task',[],[self.event],1200))
+        variants=[dict(self.event,time=999),dict(self.event,sequence=0),
+                  dict(self.event,fields={'message':{'score':0,'log':[]}}),
+                  dict(self.event,fields={'message':{'score':1,'log':[],'error':'failed'}})]
+        for event in variants:
+            self.assertFalse(completed_task_result('1','Synthetic task',self.steps,[event],1200))
+        self.assertFalse(completed_task_result('1','Synthetic task',self.steps,[self.event,variants[2]],1200))

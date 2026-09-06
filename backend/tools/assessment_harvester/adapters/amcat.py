@@ -328,6 +328,50 @@ _CAPTIVATE_OK_JS = r"""() => {
   return false;
 }"""
 
+# Personality (AMPI) module: ONE statement at a time — `<div class="question" id="div<N>">the statement</div>`
+# (only the current, gated `screenCount===$index`) + a 5-point Likert scale of radios `input[name="op<N>"]`
+# (Strongly Disagree … Strongly Agree) + a NEXT. The generic reader mis-read the header as the question and
+# saw only 2 options; this reads the real statement + the 5-point scale so each of the ~72 is banked, and
+# answers by clicking a random radio in the CURRENT row then NEXT.
+_PERSONALITY_READ_JS = r"""() => {
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const q = [...document.querySelectorAll('.question[id^="div"], .personalityQue .question')].find(vis);
+  if (!q) return null;
+  const row = (q.id || '').replace('div', '');
+  if (!row && row !== '0') return null;
+  const stmt = (q.textContent || '').replace(/\s+/g,' ').trim();
+  const radios = [...document.querySelectorAll('input[type=radio][name="op'+row+'"]')];
+  if (radios.length < 2) return null;
+  const opts = radios.map((r,i) => i===0 ? 'Strongly Disagree'
+                                 : i===radios.length-1 ? 'Strongly Agree' : String(i+1));
+  return {stmt, row, opts};
+}"""
+
+# Click the idx-th radio of the current personality row (the input is display:none -> click its label),
+# then click NEXT/continue to advance to the next statement.
+_PERSONALITY_ANSWER_JS = r"""(args) => {
+  const row = args[0], idx = args[1];   // Playwright passes ONE arg -> destructure the array
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const radios = [...document.querySelectorAll('input[type=radio][name="op'+row+'"]')];
+  if (!radios.length) return false;
+  const r = radios[Math.min(Math.max(idx,0), radios.length-1)];
+  const lab = document.querySelector('label[for="'+CSS.escape(r.id)+'"]') || r.closest('label') || r;
+  lab.scrollIntoView({block:'center'}); lab.click();
+  return true;
+}"""
+_PERSONALITY_NEXT_JS = r"""() => {
+  const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+     return r.width>2 && r.height>2 && s.display!=='none' && s.visibility!=='hidden'; };
+  const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
+  const el = [...document.querySelectorAll('.button-area-newDesign a, .button-area-newDesign button, .primary-cta-btn, .footerBtn, .btn-green-bs, button, a, [role=button]')]
+     .filter(vis).find(e => /^(next|continue|submit|submit test|proceed|save (and|&) (next|continue))$/i.test(T(e))
+                          && !/\bdisabled\b/.test(e.className||'') && e.getAttribute('aria-disabled')!=='true');
+  if (el) { el.scrollIntoView({block:'center'}); el.click(); return T(el).slice(0,20); }
+  return null;
+}"""
+
 # instructional prose that is NOT a speak-this-sentence prompt (so the Section-A intro isn't
 # mis-banked as a speaking item)
 _SVAR_INTRO_RE = re.compile(
@@ -376,6 +420,20 @@ class AmcatAdapter(Adapter):
             it["options"] = []
             it["has_mic"] = it["has_textarea"] = it["has_audio"] = it["has_video"] = False
             it["qimgs"] = []
+            return it
+        # Personality (AMPI): one statement + a 5-point Likert scale. Detect FIRST (its radios would else
+        # be mis-read as a generic MCQ with the header as the question).
+        try:
+            pers = await page.evaluate(_PERSONALITY_READ_JS)
+        except Exception:
+            pers = None
+        if pers and pers.get("stmt") and pers.get("opts"):
+            it = dict(it)
+            it["question"] = pers["stmt"]
+            it["options"] = [{"text": o, "image": None} for o in pers["opts"]]
+            it["has_mic"] = it["has_textarea"] = it["has_audio"] = it["has_video"] = False
+            it["qimgs"] = []
+            it["_pers_row"] = pers["row"]
             return it
         real_opts = [o for o in (it.get("options") or []) if (o.get("text") or "").strip()]
         # Section C "Listening Comprehension" (+ any AMCAT MCQ) renders options as `.option-lable`,
@@ -721,6 +779,20 @@ class AmcatAdapter(Adapter):
         ANSWER button (`#submit1`, class `.primary-cta-btn`) enables — click it via the SVAR primary
         clicker (the gate's `advance` REFUSES `#submit1` to avoid the diagnostic-logout, so it can't
         submit a question). Falls back to the generic reader for any non-`.option-lable` MCQ."""
+        # Personality Likert: click the idx-th radio of the CURRENT row, then NEXT to advance.
+        prow = item.get("_pers_row")
+        if prow is not None:
+            try:
+                ok = await page.evaluate(_PERSONALITY_ANSWER_JS, [str(prow), index])
+            except Exception:
+                ok = False
+            await page.wait_for_timeout(500)
+            try:
+                await page.evaluate(_PERSONALITY_NEXT_JS)   # NEXT (no-op if it auto-advances)
+            except Exception:
+                pass
+            await page.wait_for_timeout(900)
+            return ok
         if not self._pers_dumped and re.search(
                 r"agree|describes you|which statement|\bi (am|prefer|enjoy|like|tend|find|get|feel)\b|"
                 r"strongly (agree|disagree)|to what extent|how (often|much) do you",

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-qa-environment="staging" data-qa-sandbox-consent="true">
+<head><meta charset="utf-8"><title>QA sandbox consent fixture</title></head>
+<body>
+  <h1>QA sandbox consent</h1>
+  <button id="consent" type="button" role="switch" aria-checked="false" data-consent-toggle>No</button>
+  <button id="continue" type="button" data-nav="continue" disabled>Continue</button>
+  <script>
+    const consentToggle = document.getElementById('consent');
+    const continueButton = document.getElementById('continue');
+    sessionStorage.setItem('qaConsentToggleClicks', '0');
+    sessionStorage.setItem('qaConsentContinueClicks', '0');
+    consentToggle.addEventListener('click', () => {
+      sessionStorage.setItem('qaConsentToggleClicks', String(Number(sessionStorage.getItem('qaConsentToggleClicks')) + 1));
+      consentToggle.setAttribute('aria-checked', 'true');
+      consentToggle.textContent = 'Yes';
+      continueButton.disabled = false;
+    });
+    continueButton.addEventListener('click', () => {
+      sessionStorage.setItem('qaConsentContinueClicks', String(Number(sessionStorage.getItem('qaConsentContinueClicks')) + 1));
+      location.href = 'consent-complete.html';
+    });
+  </script>
+</body>
+</html>

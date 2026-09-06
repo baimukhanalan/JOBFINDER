@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["question_id", "content_hash", "status", "kind", "confidence", "selections", "text", "calculation"],
+  "properties": {
+    "question_id": {"type": "string"},
+    "content_hash": {"type": "string"},
+    "status": {"type": "string", "enum": ["answer", "abstain"]},
+    "kind": {"type": "string", "enum": ["single_choice", "multi_choice", "text"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "selections": {"type": "array", "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["option_id", "role"],
+      "properties": {"option_id": {"type": "string"}, "role": {"type": ["string", "null"]}}
+    }},
+    "text": {"type": ["string", "null"]},
+    "calculation": {"anyOf": [
+      {"type": "null"},
+      {"$ref": "#/$defs/operation"}
+    ]}
+  },
+  "$defs": {
+    "value": {"anyOf": [{"type": "string"}, {"$ref": "#/$defs/operation"}]},
+    "operation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["op", "args"],
+      "properties": {
+        "op": {"type": "string", "enum": ["add", "sub", "mul", "div", "percent", "proportion"]},
+        "args": {"type": "array", "items": {"$ref": "#/$defs/value"}}
+      }
+    }
+  }
+}

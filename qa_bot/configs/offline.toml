@@ -1,0 +1,5 @@
+mode = "dry-run"
+external_services = false
+browser_enabled = false
+operation_timeout_seconds = 30
+max_retries = 0

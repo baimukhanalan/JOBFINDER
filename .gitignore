@@ -103,6 +103,16 @@ backend/tools/residential_proxy/client/key.pem
 logs/icims_recon/
 backend/data/icims_stealth_profile/
 
+# Local assessment research and captured content. Keep these out of the public repo.
+/MANIFEST.json
+/SHL_QA_architecture_RU.md
+/SHL_QA_task_type_catalog_RU.md
+/SHL_answers_RU.md
+/SHL_answers_all.csv
+/START_HERE_RU.md
+/data/
+/research/
+
 # Taleo candidate-account credentials (passwords) — PII, never commit
 backend/data/taleo_accounts.json
 backend/data/mh_settings.json

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shl-qa-skeleton"
+version = "0.1.0"
+description = "Synthetic QA toolkit with read-only observation and opt-in speech diagnostics."
+requires-python = ">=3.11"
+dependencies = ["playwright==1.62.0", "lameenc==1.8.4"]
+
+[project.scripts]
+qa-bot = "qa_bot.app:main"
+qa-speech-replay = "qa_bot.speech_runtime:main"
+qa-local-stt = "qa_bot.adapters.stt.natively_local:main"
+qa-capture-audio = "qa_bot.audio.capture_bridge:main"
+qa-live-speech = "qa_bot.audio.live_speech_bridge:main"
+qa-injection-server = "qa_bot.audio.injection_server:main"
+qa-prompt-capture = "qa_bot.audio.prompt_capture:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

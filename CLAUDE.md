@@ -1707,16 +1707,31 @@ video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_
   - **Typing** is a TIMED Angular module — type the shown paragraph with REAL keystrokes, then wait for the
     module timer to end (don't churn); a churn guard bails an unadvancing sentence.
   - **Captivate/Flash** computer-proficiency sim — SKIP every question (Flash is dead in Chromium).
+  - **Personality (AMPI)** = ONE statement at a time (`<div class=question id=div<N>>` + a 5-point Likert
+    row `input[name=op<N>]` + NEXT), NOT a generic MCQ. `read_item` returns the real statement as the
+    question with the 5-point scale as options; `answer_mcq` clicks a random radio in the CURRENT row then
+    NEXT — so it walks all ~72 statements, banking each. (Bug that cost a run: `_PERSONALITY_ANSWER_JS`
+    must take ONE array arg — Playwright passes a single `evaluate` arg; a 2-param arrow left idx undefined
+    and never clicked the radio.)
+  - **Basic Analytical Ability (cognitive)** + **Sales** = normal `opts=4` MCQ with a diagram/table IMAGE —
+    the generic reader + `answer_mcq` handle them; they bank as `numerical`/`picture`/`unknown` with a
+    per-item screenshot. `max_items` is **320** so a full walk (SVAR + Section C + typing + 72 personality
+    + 19 analytical + 20 sales) completes without the step-cap cutting off inside the math module.
   - **Resume-safety**: mark the diagnostic done when a token resumes past it, so the gate never re-clicks
-    `#submit1` (which logs the session out).
-  - **CURRENT CEILING = an INTERMITTENT fake-mic detection miss.** The SVAR recorder occasionally doesn't
-    "hear" the synthetic audio on ONE random item per session (`unable to hear you`), and that item blocks
-    the rest — so a fresh FULL SVAR walk succeeds only SOME of the time. Personality (reached + banked live)
-    and the cognitive/math + Sales modules (which sit AFTER a full 72-item Personality pass) are therefore
-    captured **probabilistically across many runs**, not every run. A token that stalls resumes past its
-    completed items but re-stalls on the same mic-miss item. So the corpus accumulates deep-module questions
-    by VOLUME (mass runs), not by a single deterministic walk. Improving mic-detection reliability (or
-    real per-item TTS timing) is the remaining lever for math/picture. **Sutherland-SHL** is separately
+    `#submit1` (which logs the session out). Resuming a token via `--url` lands in its saved module — the
+    fastest way to test/harvest a deep module (skips the SVAR walk).
+  - **VERIFIED FULL WALK (2026-09-06):** one clean direct run banked all types end-to-end — SVAR speaking +
+    listening, Section C, typing, **72 personality statements**, and **Basic Analytical numerical + picture**
+    (with images), on to Sales (bank 585 → 847 in the session).
+  - **THE REAL GATE = `NE500` (a per-IP daily rate-limit), not the code.** After heavy same-IP use the
+    assessment server logs sessions out at Section C/D with `Error Code NE500` (and the BD-datacenter proxy
+    gets `STATE_TRANSITION_FAILED` even earlier — the ASN is flagged; BD residential is too slow, its
+    autologin SPA never renders). So it is NOT a proxy problem — a fresh direct walk after the IP **cools
+    down** (≈hours) goes all the way through, while back-to-back runs re-trigger NE500. Practical harvest:
+    a PACED sequential mass run (`--concurrency 1`, one browser on `:98`, ~11min/token) — never fan out
+    concurrent browsers (they clash on the one virtual mic AND worsen NE500). An optional BD proxy is wired
+    (`HARVEST_PROXY=1`|`res`, off by default) but does NOT help here. A secondary flake is an intermittent
+    fake-mic "unable to hear you" miss on a random SVAR item; resume/retry walks past it. **Sutherland-SHL** is separately
   walled by **webcam proctoring** (`WCI200` — a real camera + liveness; do NOT fake a human face — it's an
   identity control). **Maximus SHL-OPQ** (personality, no-right-answer) is the one fully-passable
   assessment and is already auto-completed + banked by the etalon (`shl_assessment.py`, 263 items in the

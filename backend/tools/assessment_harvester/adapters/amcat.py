@@ -734,14 +734,16 @@ class AmcatAdapter(Adapter):
         except Exception:
             ok = False
         if not ok:
-            return await super().answer_mcq(page, item, index)
-        await page.wait_for_timeout(700)              # let SUBMIT ANSWER enable
+            ok = await super().answer_mcq(page, item, index)   # generic option click (e.g. personality)
+        await page.wait_for_timeout(700)              # let a SUBMIT/NEXT enable
+        # Always try the primary CTA after selecting: Section C + many Personality items need a SUBMIT/NEXT
+        # click (the gate `advance` refuses #submit1), while items that auto-advance make this a no-op.
         try:
-            await page.evaluate(_SVAR_CLICK_PRIMARY_JS)   # click the now-enabled SUBMIT ANSWER
+            await page.evaluate(_SVAR_CLICK_PRIMARY_JS)
         except Exception:
             pass
         await page.wait_for_timeout(900)
-        return True
+        return ok
 
     async def handle_typing(self, page, text: str) -> bool:
         """AMCAT Typing module = a TIMED module (`<textarea ng-model=model.editor .typingTextArea>`, an

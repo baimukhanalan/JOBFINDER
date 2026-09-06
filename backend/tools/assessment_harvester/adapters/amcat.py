@@ -564,6 +564,8 @@ class AmcatAdapter(Adapter):
         played_nav = None
         warn_ticks = 0
         play = None     # PASS mode: current paplay Popen feeding mic_say_wav into the virtual mic
+        spoke = False   # whether we've already spoken once into the CURRENT (non-free) record window
+        spoke_tick = 0  # the tick we spoke on (delay the SUBMIT click so the recorder captures speech)
 
         def _stop_play():
             nonlocal play
@@ -614,6 +616,7 @@ class AmcatAdapter(Adapter):
                 if warn_ticks % 5 == 0:          # a gentle retry every ~15s, not every tick
                     await page.evaluate(_SVAR_CLICK_TEXT_JS, r"try ?again")
                     _stop_play()                 # re-speak into the mic on the next record attempt
+                    spoke = False
                     logger.info("[amcat] svar WARN patient TRY AGAIN (%ds) nav=%s", warn_ticks * 3, nav)
                 await page.wait_for_timeout(3000)
                 continue
@@ -637,12 +640,29 @@ class AmcatAdapter(Adapter):
                     except Exception:
                         self._free_wav = ""
                 feed_wav = self._free_wav or mic_say_wav
-            if feed_wav and cur.get("recording"):
-                if play is None or play.poll() is not None:
-                    play = mic.speak(feed_wav)        # non-blocking Popen; kept present across the window
-                    logger.info("[amcat] mic feed during record nav=%s free=%s", nav, free_speech)
-            elif play is not None:
-                _stop_play()                           # left the record window
+            if cur.get("recording"):
+                if free_speech:
+                    # free speech: keep audio present for the whole (long) speaking window
+                    if feed_wav and (play is None or play.poll() is not None):
+                        play = mic.speak(feed_wav)
+                        logger.info("[amcat] mic feed (free) during record nav=%s", nav)
+                elif feed_wav and not spoke:
+                    # listen-repeat / read-aloud: speak the sentence ONCE, then let the mic go SILENT so
+                    # the recorder detects end-of-speech and ENABLES submit. Continuous audio kept SUBMIT
+                    # disabled forever (the Q20 Section-B stall) because the utterance never "ended".
+                    play = mic.speak(feed_wav)
+                    spoke = True
+                    spoke_tick = tick
+                    logger.info("[amcat] mic feed (once) during record nav=%s", nav)
+                # after speaking, give the audio time to play + be captured before SUBMITting — an early
+                # SUBMIT (it's enabled from the record start) submits an empty clip -> "unable to hear" WARN.
+                if spoke and (tick - spoke_tick) < 3:
+                    await page.wait_for_timeout(1500)
+                    continue
+            else:
+                spoke = False                          # left the record window -> next window re-speaks
+                if play is not None:
+                    _stop_play()
 
             # ---- FREE SPEECH: never SUBMIT while recording (early click -> "unable to hear" loop).
             #      Feed the mic + let the timed window run; submit only once recording has ended. ----

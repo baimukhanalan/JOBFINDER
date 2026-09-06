@@ -1,7 +1,10 @@
 # Python QA-бот — development preview
 
-Python 3.11+, Playwright/Chromium, unittest. Набор модулей для синтетического QA
-и read-only диагностики. **Автономное прохождение реального assessment не готово.**
+Python 3.11+, Playwright/Chromium, unittest. Синтетический QA и отдельный
+`qa_bot.live_session` для явно разрешённой контрольной попытки.
+Текущий статус живого прогона и его ограничения: [LIVE_QA.md](LIVE_QA.md).
+Описанные ниже ограничения старого CLI `qa_bot` и staging executor относятся
+к этим компонентам, а не к отдельному `live_session`.
 
 ## Быстрый запуск (PowerShell)
 
@@ -29,7 +32,7 @@ $env:PYTHONPATH = (Resolve-Path src).Path
 - DOM-first OCR для synthetic-5x7-v1, confidence/provenance/conflict checks.
 - SQLite exact hash + canonical match, candidate/approved и отдельный source corpus.
 - Strict AnswerEngine с injected LLM, `abstain`, Decimal/Fraction calculator,
-  validator и single-question pipeline. Реальный Codex LLM transport не проверен.
+  validator и single-question pipeline. В `live_session` проверен транспорт Codex CLI.
 - Локальный macOS TTS, Natively/Distil-Whisper STT, MP3/WAV-кэш, точная память
   речевых ответов, журнал профилей, Free-only gate и наш mock media API.
 - Подготовка WAV как тестового микрофона Chromium; реальный Chromium получил

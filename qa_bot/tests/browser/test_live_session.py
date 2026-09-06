@@ -6,6 +6,53 @@ from qa_bot.live_session import Session
 
 
 class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_device_review_plays_once_then_advances_and_acknowledges_success(self):
+        import asyncio
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page();await page.set_content('<button class="currentQue">1</button><p>Click NEXT if you can hear your voice clearly</p><button id="play">Play</button><button id="next" disabled>NEXT</button><script>\nwindow.__qaDynamicReadAloud={status:\'idle\',currentSiteId:\'navigation:1\',replayCount:1};\nwindow.__qaMicrophoneBus={context:{state:\'running\'},nonzeroSamples:10};\nplay.onclick=()=>{window.plays=(window.plays||0)+1;setTimeout(()=>next.disabled=false,150)};\nnext.onclick=()=>{window.advanced=true;document.body.innerHTML=\'<p>Device testing successful</p><p>Your device is compatible.</p><button onclick="window.confirmed=true;this.remove()">OK</button>\'};\n</script>')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    session.auto_navigation=True
+                    task=asyncio.create_task(session.watch())
+                    try:
+                        await page.wait_for_function('window.confirmed===true',timeout=5000)
+                        self.assertEqual(await page.evaluate('plays'),1)
+                        self.assertTrue(await page.evaluate('advanced'))
+                    finally:task.cancel();await asyncio.gather(task,return_exceptions=True)
+            finally:await browser.close()
+
+    async def test_explicit_terms_command_checks_once_and_rejects_other_screen(self):
+        from qa_bot.solvers.onboarding import accept_terms
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('<h1>TERMS &amp; CONDITIONS</h1><p>I agree to Terms and Conditions</p><label><input type="checkbox">No</label><button>CONTINUE</button>')
+                await page.evaluate("document.querySelector('button').onclick=()=>window.accepted=document.querySelector('input').checked")
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    session.profile_id='fixture';session.test_id='fixture'
+                    await accept_terms(session);self.assertTrue(await page.evaluate('accepted'))
+                    await accept_terms(session);self.assertTrue(await page.locator('input').is_checked())
+                    await page.locator('h1').evaluate("n=>n.innerText='Unrelated screen'")
+                    with self.assertRaisesRegex(ValueError,'reviewed terms'):await accept_terms(session)
+            finally:await browser.close()
+
+    async def test_diagnostic_waits_for_platform_to_enable_submit(self):
+        from qa_bot.solvers.onboarding import run_diagnostic
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('<p>System Diagnostic Tool.</p><div class="system-diag"><div class="init-button">START</div></div>\n                    <div id="submitBtn"><a role="button" class="disabled">SUBMIT</a></div><script>\n                    document.querySelector(\'.init-button\').onclick=()=>{window.started=true;setTimeout(()=>document.querySelector(\'a\').className=\'\',150)};\n                    document.querySelector(\'a\').onclick=()=>window.submitted=!document.querySelector(\'a\').classList.contains(\'disabled\');</script>')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    await run_diagnostic(session)
+                    self.assertTrue(await page.evaluate('started && submitted'))
+            finally:await browser.close()
+
     async def test_timeout_disables_all_automatic_answers_and_navigation(self):
         import asyncio
         async with async_playwright() as pw:
@@ -15,9 +62,11 @@ class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
                 with tempfile.TemporaryDirectory() as directory:
                     session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
                     session.auto_navigation=session.auto_choices=session.auto_speech=True
+                    pending=asyncio.create_task(asyncio.sleep(10));session.tasks.add(pending)
                     task=asyncio.create_task(session.watch())
                     await asyncio.sleep(.25);task.cancel();await asyncio.gather(task,return_exceptions=True)
                     self.assertTrue(session.timeout_seen)
+                    self.assertTrue(pending.cancelled())
                     self.assertFalse(session.auto_navigation or session.auto_choices or session.auto_speech)
                     self.assertIn('assessment_time_out',(Path(directory)/'run-failures.jsonl').read_text())
             finally:await browser.close()

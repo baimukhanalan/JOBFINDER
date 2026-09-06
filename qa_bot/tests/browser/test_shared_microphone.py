@@ -26,6 +26,7 @@ class SharedMicrophoneTests(unittest.IsolatedAsyncioTestCase):
             "/", "synthetic", "shared-stream", auto_detect=True,
             question_counter_selector="button.currentQue",
             suspension_selector='[role="dialog"]',
+            section_heading='Section A: Read and Speak',
         )
         loop = DirectAudioLoopback(
             allowed_hosts=("audio.example",), path_markers=("/SpeechAssessmentBank/",),

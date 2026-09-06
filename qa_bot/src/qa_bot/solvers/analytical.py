@@ -43,6 +43,16 @@ async def run_module(session,module):
     from qa_bot.adapters.llm import codex_cli
     from qa_bot.solvers import engine,calculator
     importlib.reload(codex_cli);importlib.reload(calculator);importlib.reload(engine)
+    if module in ('computer_inspect','computer') or module.startswith('computer_step:'):
+        from qa_bot.solvers import computer
+        importlib.reload(computer)
+        await computer.run(session,module)
+        return
+    if module in ('accept_terms','diagnostic_start'):
+        from qa_bot.solvers import onboarding
+        importlib.reload(onboarding)
+        await (onboarding.accept_terms(session) if module=='accept_terms' else onboarding.run_diagnostic(session))
+        return
     if module=='sales_inspect':
         print(json.dumps({'sales_dom':await session.page.locator('#main-q-parent').inner_html()}),flush=True)
         return
@@ -137,3 +147,14 @@ async def run_module(session,module):
     except Exception as error:
         session.log('analytical-errors.jsonl',{'error':safe_text(error)[:400]})
         print(json.dumps({'analytical_blocked':safe_text(error)[:400]}),flush=True)
+        # One bounded recovery on the same unanswered question; never skip it.
+        if str(error)=='question changed during solving' or str(error).startswith('model_or_validation_failed:'):
+            fresh=await session.page.evaluate(STATE_SCRIPT)
+            retries=getattr(session,'analytical_retries',{})
+            timer=re.search(r'^Skip to main content\s*\n(\d{1,2})\s*:\s*(\d{2})',fresh['text'])
+            remaining=int(timer[1])*60+int(timer[2]) if timer else 0
+            if fresh.get('number')==number and retries.get(number,0)<1 and remaining>60:
+                retries[number]=retries.get(number,0)+1;session.analytical_retries=retries
+                session.log('analytical-retries.jsonl',{'number':number,'reason':safe_text(error)[:300]})
+                await asyncio.sleep(.3)
+                await run_module(session,'analytical')

@@ -335,10 +335,6 @@ class DynamicReadAloudBridge:
   }};
 
   const check = () => {{
-    if (cfg.sectionHeading && !Array.from(document.querySelectorAll('h1,h2,[role="heading"]'))
-        .some(node=>visible(node)&&normalize(node.textContent)===cfg.sectionHeading)) {{
-      stopActive();qa.status='idle';previousRecording=false;recordingCandidate=null;return;
-    }}
     if (cfg.suspensionSelector) {{
       let suspended;
       try {{ suspended = document.querySelector(cfg.suspensionSelector) !== null; }}
@@ -350,6 +346,10 @@ class DynamicReadAloudBridge:
         recordingCandidate = null;
         return;
       }}
+    }}
+    if (cfg.sectionHeading && !Array.from(document.querySelectorAll('h1,h2,[role="heading"]'))
+        .some(node=>visible(node)&&normalize(node.textContent)===cfg.sectionHeading)) {{
+      if (active && !active.root.isConnected) stopActive();qa.status='idle';previousRecording=false;recordingCandidate=null;return;
     }}
     const observation = inspect();
     if (observation.error || !observation.recording) recordingCandidate = null;

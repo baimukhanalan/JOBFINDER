@@ -1,6 +1,8 @@
 """Allowlisted calculation tree; never eval/exec model output."""
 from decimal import Decimal, localcontext
 from fractions import Fraction
+from functools import reduce
+from operator import mul
 import re
 
 
@@ -16,12 +18,14 @@ def calculate(node):
             raise ValueError("invalid calculation")
         op, args = value["op"], value["args"]
         sizes = {"add": 2, "sub": 2, "mul": 2, "div": 2, "percent": 2, "proportion": 3}
-        if op not in sizes or not isinstance(args, list) or len(args) != sizes[op]:
+        if op not in sizes or not isinstance(args, list):
             raise ValueError("unsupported operation")
+        if not (2<=len(args)<=32 if op in ('add','mul') else len(args)==sizes[op]):
+            raise ValueError("unsupported operation arity")
         a = [run(v, numeric, depth + 1) for v in args]
-        if op == "add": return a[0] + a[1]
+        if op == "add": return sum(a)
         if op == "sub": return a[0] - a[1]
-        if op == "mul": return a[0] * a[1]
+        if op == "mul": return reduce(mul,a)
         if op == "div": return a[0] / a[1]
         if op == "percent": return a[0] * a[1] / 100
         return a[1] * a[2] / a[0]

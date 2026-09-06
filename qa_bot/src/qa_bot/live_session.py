@@ -312,11 +312,14 @@ class Session:
                 if 'Assessment Time out' in state['text'] and not self.timeout_seen:
                     self.timeout_seen=True
                     self.auto_navigation=self.auto_choices=self.auto_speech=False
+                    for task in tuple(self.tasks):task.cancel()
                     self.log('run-failures.jsonl',{'time':time.time(),'reason':'assessment_time_out','number':state.get('number')})
                     print(json.dumps({'run_failed':'assessment_time_out'}),flush=True)
                 if self.auto_choices and state.get('number'):
                     module=None
-                    if "Choose the 'best' and the 'worst' action for the given situation." in state['text']:module='sales'
+                    if "System Diagnostic Tool." in state["text"]:module="diagnostic_start"
+                    elif re.search(r"QUESTION\n\d+ out of 16\n",state["text"]) and await self.page.locator("#frame").count()==1:module="computer"
+                    elif "Choose the 'best' and the 'worst' action for the given situation." in state['text']:module='sales'
                     elif 'Compose an email response for the topic provided.' in state['text']:module='writex'
                     elif 'Section ' not in state['text'] and any(x in state['text'] for x in ('Choose the correct option.','Refer to the data presented and answer the question.')):module='analytical'
                     if module and module not in self.module_tasks:
@@ -342,7 +345,21 @@ class Session:
                         label='I confirm I have read and understood this Notice.'
                         if any(n.get('name',{}).get('value','').strip()==label for n in checkboxes):
                             await self.command({'action':'notice'})
-                        elif not self.preflight and (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English')))):
+                        elif not self.preflight and (('Device Testing' in state['text'] and 'This is a sample question to check your device compatibility.' in state['text']) or ('Device testing successful' in state['text'] and 'Your device is compatible.' in state['text'])):
+                            try:await self.click('button','OK')
+                            except ValueError:pass
+                        elif not self.preflight and 'Device Testing' in state['text'] and 'Were you able to hear the question audio clearly?' in state['text'] and any(x.get('duration',0)>0 for x in state.get('heard',[])):
+                            try:await self.click('button','YES')
+                            except ValueError:pass
+                        elif not self.preflight and state.get('number')=='1' and 'Click NEXT if you can hear your voice clearly' in state['text'] and (state.get('read') or {}).get('siteId')=='navigation:1' and (state.get('read') or {}).get('replays',0)>0 and (state.get('microphone') or {}).get('signal',0)>2:
+                            try:await self.click('button','NEXT')
+                            except ValueError:
+                                if not getattr(self,'device_play_started',False):
+                                    try:
+                                        await self.click('button','Play')
+                                        self.device_play_started=True
+                                    except ValueError:pass
+                        elif not self.preflight and (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English','Basic Computer Literacy Simulation (Windows 10)')))):
                             try:await self.click('button','NEXT')
                             except ValueError:pass
                         elif not self.preflight and 'Section ' in state['text'] and 'Listen Carefully' in state['text'] and 'NEXT' in state['text']:
@@ -361,8 +378,11 @@ class Session:
                 if (self.auto_choices and passages and 'Section C:' in state['text']
                         and 'Warning!' not in state['text']
                         and state.get('number') not in self.choice_tasks):
+                    observed=await self.page.evaluate('globalThis.__qaDirectAudioLoopback.observedSources.filter(s=>s.player==="html" && s.path.includes("/stimulus/"))')
+                    captured_paths={s['path'] for s in passages}
+                    conversation_complete=bool(observed) and all(s['path'] in captured_paths and s.get('endedAt') is not None for s in observed)
                     radios=await self.controls('radio')
-                    if len(radios)>=2:
+                    if len(radios)>=2 and conversation_complete:
                         self.choice_tasks.add(state['number'])
                         task=asyncio.create_task(self.solve_choice(state,passages))
                         self.tasks.add(task);task.add_done_callback(self.tasks.discard)
@@ -517,6 +537,13 @@ async def run(args):
             session.prompt_dir=args.prompt_dir
             session.profile_id=args.profile_id;session.test_id=args.test
             session.preflight=args.preflight
+            if not args.preflight:
+                async def capture_played(item):
+                    from qa_bot.audio import played_capture
+                    import importlib
+                    importlib.reload(played_capture)
+                    return await played_capture.capture_html(session,item)
+                await page.expose_function('__qaCapturePlayedAudio',capture_played)
             if args.preflight:session.auto_navigation=True
             if args.auto:
                 session.auto_speech=session.auto_choices=session.auto_navigation=True

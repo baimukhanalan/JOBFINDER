@@ -144,6 +144,11 @@ class AnswerSystemTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(validate_answer(q, proposal))
 
     async def test_calculation_and_units(self):
+        self.assertEqual(calculate({'op':'div','args':[{'op':'add','args':['100','200','300']},'3']}),200)
+        self.assertEqual(calculate({'op':'mul','args':['2','3','4']}),24)
+        for operation in ('add','mul'):
+            for values in (['1'],['1']*33):
+                with self.assertRaises(ValueError):calculate({'op':operation,'args':values})
         self.assertEqual(calculate({"op": "percent", "args": ["200", "15"]}), 30)
         self.assertEqual(calculate({"op": "proportion", "args": ["3", "12", "5"]}), 20)
         self.assertEqual(convert_unit("1", "km", "m"), 1000)

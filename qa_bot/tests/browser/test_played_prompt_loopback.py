@@ -41,6 +41,28 @@ class PlayedPromptTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(state['heard'][0]['id'],'23')
             finally:await browser.close()
 
+    async def test_html_capture_binding_receives_signed_playback_without_browser_fetch(self):
+        origin='https://assessment.example';calls=[]
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                context=await browser.new_context()
+                await context.add_init_script(script=SharedMicrophoneBridge(origin).init_script()+'\n'+PlayedPromptLoopback(origin,'t'*32,'synthetic','test').init_script())
+                page=await context.new_page()
+                async def capture(item):
+                    calls.append(item)
+                    return {'file':'audio/fixture.mp3','sha256':hashlib.sha256(_tone_wav()).hexdigest()}
+                await page.expose_function('__qaCapturePlayedAudio',capture)
+                await page.route(origin+'/',lambda r:r.fulfill(content_type='text/html',body='<button id="begin">Begin</button><h1>Section C: Listening Comprehension</h1><button class="currentQue">23</button>'))
+                await page.route('https://qbdata-amcat.s3.amazonaws.com/**',lambda r:r.fulfill(body=_tone_wav(),content_type='audio/wav'))
+                await page.goto(origin+'/');await page.click('#begin')
+                await page.evaluate("async()=>{const a=globalThis.a=new Audio('https://qbdata-amcat.s3.amazonaws.com/SpeechAssessmentBank/stimulus/fixture.mp3?qa_signature=fixture');await a.play()}")
+                await page.wait_for_function('__qaDirectAudioLoopback.heardSources.length===1')
+                self.assertEqual(len(calls),1);self.assertIn('?qa_signature=fixture',calls[0]['url'])
+                state=await page.evaluate('__qaDirectAudioLoopback.heardSources[0]')
+                self.assertNotIn('?',state['path']);self.assertEqual(state['id'],'23')
+            finally:await browser.close()
+
     async def test_prefetched_next_prompt_cannot_replace_played_current_prompt(self):
         origin='https://assessment.example'
         async with async_playwright() as pw:

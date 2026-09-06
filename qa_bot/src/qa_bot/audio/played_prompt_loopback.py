@@ -91,6 +91,11 @@ class PlayedPromptLoopback:
      this.addEventListener('ended',()=>{report.endedAt=performance.now()},{once:true});
      try{
        // Preserve this playback's signed URL in memory; archive only its path.
+       if(globalThis.__qaCapturePlayedAudio){
+         const receipt=await globalThis.__qaCapturePlayedAudio({url:playbackUrl,id,order});
+         qa.heardSources.push({id,section:heading,path:item.path,file:receipt.file,sha256:receipt.sha256,duration:this.duration,order});
+         qa.heardSources.sort((a,b)=>a.order-b.order);return;
+       }
        const response=await nativeFetch(playbackUrl);
        if(response.status!==200)throw Error('full_prompt_http_'+response.status);
        const bytes=await response.arrayBuffer();if(!bytes.byteLength || bytes.byteLength>20000000)throw Error('prompt_size_rejected');

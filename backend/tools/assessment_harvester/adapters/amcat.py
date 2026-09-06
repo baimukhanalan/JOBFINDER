@@ -235,7 +235,7 @@ _MCQ_OPTS_JS = r"""() => {
   const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
   const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
      return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
-  const els = [...document.querySelectorAll('.option-lable, .optionDiv')].filter(vis);
+  const els = [...document.querySelectorAll('.option-lable, .optionDiv:has(input.EliminatorMaskerOptionInput)')].filter(vis);
   const seen = new Set(); const opts = [];
   els.forEach(e => { const t=T(e); if(!t||seen.has(t)||t.length>400) return; seen.add(t);
      const im=e.querySelector('img'); opts.push({text:t, image: im ? (im.src||'') : null}); });
@@ -251,11 +251,15 @@ _MCQ_OPTS_JS = r"""() => {
 _MCQ_CLICK_JS = r"""(idx) => {
   const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
      return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
-  const els = [...document.querySelectorAll('.option-lable, .optionDiv')].filter(vis);
+  const els = [...document.querySelectorAll('.option-lable, .optionDiv:has(input.EliminatorMaskerOptionInput)')].filter(vis);
   if (idx<0 || idx>=els.length) return false;
   const el = els[idx];
   el.scrollIntoView({block:'center'});
-  (el.querySelector('input[type=radio],input[type=checkbox]') || el).click();
+  // click the inner radio only if it is actually visible; the cognitive module's radio is display:none
+  // (a fake overlay) so clicking IT does nothing — click the visible option element instead.
+  const inp = el.querySelector('input[type=radio],input[type=checkbox]');
+  const vinp = (inp && getComputedStyle(inp).display!=='none' && inp.offsetParent!==null) ? inp : null;
+  (vinp || el).click();
   return true;
 }"""
 

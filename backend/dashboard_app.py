@@ -907,6 +907,30 @@ def stats_page(refresh: int = 0):
                             status_code=502)
 
 
+@app.get("/health", response_class=HTMLResponse)
+def health_page():
+    """«Health» tab — read-only health of every pm2 service, cron lane, data store, the :98
+    display stack and the box (load/disk/mem). Best-effort; one failed check never breaks the page."""
+    from backend.tools import health_ui
+    try:
+        return HTMLResponse(health_ui.render_page())
+    except Exception as exc:
+        logging.getLogger("dashboard").exception("health page failed")
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>Health недоступен: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
+@app.get("/health.json", response_class=JSONResponse)
+def health_json():
+    """Machine-readable health snapshot (for probes / an external monitor)."""
+    from backend.tools import health
+    try:
+        return JSONResponse(health.gather())
+    except Exception as exc:
+        return JSONResponse({"overall": "down", "error": str(exc)}, status_code=502)
+
+
 _MH_COLLECTING = {"running": False}
 
 

@@ -83,12 +83,16 @@ def rows(path):
 
 def collect_run(run):
     run=Path(run).resolve();owned=run/'evidence/owned'
+    runs_root=(Path(__file__).resolve().parents[3]/'runs').resolve()
+    # Retain the batch/segment path: basename alone merges resumed profiles.
+    source_run=run.relative_to(runs_root).as_posix() if run.is_relative_to(runs_root) else run.as_posix()
+    provenance={'source_run':source_run,'source_path':str(run)}
     if not (owned/'states.jsonl').is_file():raise ValueError(f'missing states.jsonl in explicitly selected run {run.name}')
     observations={};phase=None;modules=[];assets=defaultdict(dict);answered=defaultdict(set);malformed=[]
     def add(section,n,kind,content,file,line,**extra):
         signature=digest(content);key=(section,n,kind,signature)
         if key not in observations:
-            observations[key]={'source_run':run.name,'section':section or 'unknown','number':n,'kind':kind,
+            observations[key]={**provenance,'section':section or 'unknown','number':n,'kind':kind,
                 'signature':signature,'content':content,'evidence':[],**extra}
         observations[key]['evidence'].append({'file':file,'line':line})
     for line,row in rows(owned/'states.jsonl'):
@@ -133,9 +137,22 @@ def collect_run(run):
             add(SPEECH[m[1]],number(row.get('id')),'transcript',{'text':row['transcript'],'audio_sha256':row.get('sha256'),'order':row.get('order')},'transcripts.jsonl',line)
     result=list(observations.values())
     for item in result:item['answer_observed']=item['number'] in answered[item['section']]
-    return result,{'source_run':run.name,'module_order':modules,'malformed_lines':malformed}
+    return result,{**provenance,'module_order':modules,'malformed_lines':malformed}
+
+def collect_runs(runs):
+    """Collect only explicit, distinct canonical directories, in requested order."""
+    paths=[Path(run).resolve() for run in runs]
+    if len(set(paths))!=len(paths):raise ValueError('duplicate run directory')
+    observations=[];metadata=[]
+    for path in paths:
+        records,meta=collect_run(path);observations.extend(records);metadata.append(meta)
+    return observations,metadata
 
 def summarize(observations,metadata):
+    names=[run['source_run'] for run in metadata]
+    paths=[str(Path(run['source_path']).resolve()) for run in metadata if 'source_path' in run]
+    if len(set(names))!=len(names) or len(set(paths))!=len(paths):
+        raise ValueError('duplicate run directory or source_run')
     sections={};overlaps=[]
     for run in metadata:
         name=run['source_run'];per={}
@@ -172,11 +189,8 @@ def main(argv=None):
     args=parser.parse_args(argv)
     project=Path(__file__).resolve().parents[3];runs=(project/'runs').resolve();output=args.output.resolve()
     if not output.is_relative_to(runs):parser.error('output must remain under ignored qa_bot/runs')
-    if len({r.resolve() for r in args.run})!=len(args.run):parser.error('duplicate run directory')
-    if len({r.resolve().name for r in args.run})!=len(args.run):parser.error('run directory names must be distinct')
-    observations=[];metadata=[]
-    for run in args.run:
-        records,meta=collect_run(run);observations.extend(records);metadata.append(meta)
+    try:observations,metadata=collect_runs(args.run)
+    except ValueError as error:parser.error(str(error))
     summary=summarize(observations,metadata);output.mkdir(parents=True,exist_ok=True)
     (output/'observations.jsonl').write_text(''.join(json.dumps(o,ensure_ascii=False)+'\n' for o in observations))
     (output/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n')

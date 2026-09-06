@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from qa_bot.knowledge.live_corpus import clean_text,collect_run,summarize,main
+from unittest.mock import patch
+from qa_bot.knowledge.live_corpus import clean_text,collect_run,collect_runs,summarize,main
 
 class CorpusTests(unittest.TestCase):
     def write_run(self,root,name,states,logs=None):
@@ -32,7 +33,7 @@ class CorpusTests(unittest.TestCase):
             records,meta=collect_run(run)
             self.assertEqual(len([r for r in records if r['kind']=='question']),2)
             self.assertTrue(any(r['kind']=='ambiguous_transition' and not r['answer_observed'] for r in records))
-            report=summarize(records,[meta]);section=report['sections']['first']['analytical']
+            report=summarize(records,[meta]);section=report['sections'][meta['source_run']]['analytical']
             self.assertEqual(section['question_numbers_observed'],1)
             self.assertEqual(section['question_numbers_with_answer_evidence'],1)
             self.assertFalse(section['complete_variant_proven'])
@@ -54,3 +55,47 @@ class CorpusTests(unittest.TestCase):
         self.assertIn('1\n2\n3',clean_text(text))
         options='\n'.join(str(i) for i in range(1,20))
         self.assertIn(options,clean_text('Choose the correct option.\nOPTIONS\n'+options+'\nSUBMIT ANSWER','analytical'))
+
+    def test_equal_basenames_keep_distinct_segments_and_real_overlap(self):
+        with tempfile.TemporaryDirectory() as d:
+            first=self.write_run(Path(d),'main/row-09',[{'number':'1','text':'Choose the correct option.\nBuy 12 items.'}])
+            second=self.write_run(Path(d),'recovery/row-09',[{'number':'1','text':'Choose the correct option.\nDo NOT buy 21 items.'}])
+            records,metadata=collect_runs([first,second])
+            report=summarize(records,metadata)
+            self.assertEqual(len(report['sections']),2)
+            self.assertNotEqual(metadata[0]['source_run'],metadata[1]['source_run'])
+            self.assertTrue(metadata[0]['source_run'].endswith('main/row-09'))
+            self.assertTrue(metadata[1]['source_run'].endswith('recovery/row-09'))
+            for path,meta in zip([first,second],metadata):
+                self.assertEqual(meta['source_path'],str(path.resolve()))
+                observed=[r for r in records if r['source_run']==meta['source_run']]
+                self.assertEqual(len(observed),1)
+                self.assertEqual(observed[0]['source_path'],str(path.resolve()))
+                self.assertEqual(report['sections'][meta['source_run']]['analytical']['question_numbers_observed'],1)
+            overlap=report['overlaps'][0]
+            self.assertEqual(overlap['shared_exact_signatures'],0)
+            self.assertFalse(overlap['same_observed_order'])
+            # Identity does not change with selection order or batch membership.
+            _,reverse=collect_runs([second,first])
+            self.assertEqual([m['source_run'] for m in reverse],list(reversed([m['source_run'] for m in metadata])))
+
+    def test_repeated_resolved_directory_is_rejected_before_collection(self):
+        with tempfile.TemporaryDirectory() as d:
+            run=self.write_run(Path(d),'main/row-09',[{'number':'1','text':'Choose the correct option.\n12 items.'}])
+            alias=Path(d)/'alias';alias.symlink_to(run,target_is_directory=True)
+            with self.assertRaisesRegex(ValueError,'duplicate run directory'):
+                collect_runs([run,alias])
+            records,meta=collect_run(run)
+            with self.assertRaisesRegex(ValueError,'duplicate run directory'):
+                summarize(records+records,[meta,meta])
+
+    def test_project_runs_keep_readable_relative_segment_names(self):
+        with tempfile.TemporaryDirectory() as d:
+            project=Path(d)/'qa_bot'
+            run=self.write_run(project/'runs','batch/row-09',[{'number':'1','text':'Choose the correct option.\n12 items.'}])
+            module=project/'src/qa_bot/knowledge/live_corpus.py'
+            with patch('qa_bot.knowledge.live_corpus.__file__',str(module)):
+                records,meta=collect_run(run)
+            self.assertEqual(meta['source_run'],'batch/row-09')
+            self.assertEqual(meta['source_path'],str(run.resolve()))
+            self.assertEqual(records[0]['source_run'],'batch/row-09')

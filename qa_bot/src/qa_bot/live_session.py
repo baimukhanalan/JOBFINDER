@@ -322,6 +322,13 @@ class Session:
         while True:
             try:
                 state = await self.page.evaluate(STATE_SCRIPT)
+                if 'Your test is now complete. Thank you!' in state['text'] and not getattr(self,'final_captured',False):
+                    self.final_captured=True
+                    try:
+                        await self.page.screenshot(path=str(self.output/'final.png'))
+                        self.log('final-page.jsonl',{'time':time.time(),'text':state['text'],'screenshot':'final.png','completeness_audited':False})
+                    except Exception as error:
+                        self.log('observer-errors.jsonl',{'type':'final_screenshot','error':safe_text(error)[:200]})
                 if 'Assessment Time out' in state['text'] and not self.timeout_seen:
                     self.timeout_seen=True
                     self.auto_navigation=self.auto_choices=self.auto_speech=False

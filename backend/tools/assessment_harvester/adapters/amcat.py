@@ -592,6 +592,15 @@ class AmcatAdapter(Adapter):
                 logger.info("[amcat] REACHED QUESTION step %d timer=%s q=%r opts=%d",
                             i, await self._timer(page), item.get("question", "")[:60], len(real))
                 return
+            # per-iteration resume-safety: a running MM:SS timer on a non-gate/non-terminal page means a
+            # scored module (whose options may just be slow to render), so stop treating #submit1 as the
+            # diagnostic submit — re-clicking it here logs the session out.
+            if not self._diag_submitted:
+                body_now = item.get("body") or ""
+                if (not _GATE_RE.search(body_now) and not _TERMINAL_RE.search(body_now)
+                        and re.search(r"\b[0-5]?\d\s*:\s*[0-5]\d\b", body_now)):
+                    self._diag_submitted = True
+                    logger.info("[amcat] in-loop resume past diagnostic (timer) -> diag_submitted=True")
             try:
                 act = await page.evaluate(_GATE_ACTION_JS, self._diag_submitted)
             except Exception:

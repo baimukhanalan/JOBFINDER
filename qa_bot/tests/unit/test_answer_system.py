@@ -148,6 +148,22 @@ class AnswerSystemTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await engine.propose(q, synthetic=True)).source, "approved")
             client.complete.assert_not_called()
 
+    async def test_authorized_qa_allows_proposal_without_fake_approval(self):
+        q, client = spec(), AsyncMock()
+        client.complete.return_value = {
+            'question_id':q.question_id,'content_hash':q.content_hash,
+            'status':'answer','kind':'single_choice','confidence':.99,
+            'selections':[{'option_id':'o1','role':None}],'text':None,'calculation':None,
+        }
+        with QuestionBank(':memory:') as bank:
+            engine=AnswerEngine(bank,client)
+            self.assertIsNone((await engine.propose(q)).proposal)
+            client.complete.assert_not_called()
+            result=await engine.propose(q,authorized_qa=True)
+            self.assertEqual(result.source,'candidate')
+            self.assertIsNotNone(result.proposal)
+            self.assertIsNone(bank.lookup(q))
+
     async def test_engine_abstain_and_stale(self):
         q, client = spec(), AsyncMock()
         client.complete.return_value = {"status": "abstain"}

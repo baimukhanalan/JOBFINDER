@@ -21,6 +21,7 @@ class DirectAudioLoopback:
     maximum_prepare_attempts: int = 3
     retry_base_ms: int = 250
     failure_history_limit: int = 20
+    section_heading: str = ""
     capture_bridge_url: str | None = None
     capture_token: str | None = None
     source_profile: str | None = None
@@ -33,6 +34,8 @@ class DirectAudioLoopback:
             raise ValueError("path_markers must be absolute path fragments")
         if not self.record_markers or any(not m.strip() for m in self.record_markers):
             raise ValueError("record_markers must be non-empty")
+        if not isinstance(self.section_heading, str) or len(self.section_heading) > 200:
+            raise ValueError("invalid section heading")
         if type(self.maximum_replays) is not int or not 1 <= self.maximum_replays <= 1000:
             raise ValueError("maximum_replays must be between 1 and 1000")
         if (type(self.maximum_prepare_attempts) is not int
@@ -66,6 +69,7 @@ class DirectAudioLoopback:
             "maximumPrepareAttempts": self.maximum_prepare_attempts,
             "retryBaseMs": self.retry_base_ms,
             "failureHistoryLimit": self.failure_history_limit,
+            "sectionHeading": self.section_heading,
             "capture": ({
                 "base": self.capture_bridge_url.rstrip("/"),
                 "token": self.capture_token,
@@ -149,6 +153,8 @@ class DirectAudioLoopback:
   }};
   const recordingVisible = () => {{
     if (!document.body) return false;
+    if (cfg.sectionHeading && !Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
+        .some(node => visible(node) && node.textContent.trim() === cfg.sectionHeading)) return false;
     const nodes = [document.body, ...document.body.querySelectorAll('*')];
     return nodes.some(node => {{
       if (!visible(node)) return false;
@@ -167,8 +173,9 @@ class DirectAudioLoopback:
 
   const ensureGraph = () => {{
     if (!qa.context) {{
-      qa.context = new AudioContext();
-      qa.destination = qa.context.createMediaStreamDestination();
+      const shared = globalThis.__qaMicrophoneBus;
+      qa.context = shared ? shared.context : new AudioContext();
+      qa.destination = shared ? shared.destination : qa.context.createMediaStreamDestination();
     }}
     return qa.destination.stream;
   }};
@@ -339,6 +346,7 @@ class DirectAudioLoopback:
   const original = media.getUserMedia.bind(media);
   media.getUserMedia = async constraints => {{
     if (!constraints || !constraints.audio) return original(constraints);
+    if (globalThis.__qaMicrophoneBus) return original(constraints);
     const stream = await ensureAudio();
     queueMicrotask(maybeReplay);
     return stream;

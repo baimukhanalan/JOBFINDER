@@ -1,4 +1,4 @@
-"""Approved lookup first; model proposes only for explicitly synthetic unknowns."""
+"""Approved lookup first; model proposals require explicit QA authorization."""
 import asyncio
 from dataclasses import dataclass, asdict
 from qa_bot.domain.answer import AnswerProposal, Selection
@@ -18,7 +18,7 @@ class AnswerEngine:
     def __init__(self, bank, client, *, historical=None):
         self.bank, self.client, self.historical = bank, client, historical
 
-    async def propose(self, q, *, synthetic=False, timeout=30):
+    async def propose(self, q, *, synthetic=False, authorized_qa=False, timeout=30):
         if not q.completeness or q.unresolved_regions or q.extraction_confidence < 0.8:
             return EngineResult(None, "abstain", "incomplete_question")
         try:
@@ -36,7 +36,7 @@ class AnswerEngine:
                     f"occurrences={resolution.occurrence_count};official_key="
                     f"{str(resolution.official_answer_key).lower()}",
                 )
-        if not synthetic:
+        if not synthetic and not authorized_qa:
             return EngineResult(None, "abstain", "only_synthetic_model_input_allowed")
         if any(not a.media_type.startswith("audio/") or "stt:" + a.sha256 not in q.provenance
                for a in q.assets):

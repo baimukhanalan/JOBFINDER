@@ -15,6 +15,9 @@ class DynamicReadAloudBridge:
     source_profile: str
     source_test: str
     auto_detect: bool = False
+    question_counter_selector: str = ""
+    suspension_selector: str = ""
+    section_heading: str = ""
     question_root_selector: str = "[data-qa-read-aloud-question]"
     sentence_selector: str = "[data-qa-read-aloud-text]"
     instruction_selector: str = "[data-qa-read-aloud-instruction]"
@@ -40,6 +43,12 @@ class DynamicReadAloudBridge:
             raise ValueError("allowed_path_prefix must start with /")
         if type(self.auto_detect) is not bool:
             raise ValueError("auto_detect must be boolean")
+        if not isinstance(self.question_counter_selector, str) or len(self.question_counter_selector) > 500:
+            raise ValueError("invalid question counter selector")
+        if not isinstance(self.suspension_selector, str) or len(self.suspension_selector) > 500:
+            raise ValueError("invalid suspension selector")
+        if not isinstance(self.section_heading,str) or len(self.section_heading)>200:
+            raise ValueError("invalid section heading")
         if not isinstance(self.token, str) or len(self.token) < 24:
             raise ValueError("bridge token must contain at least 24 characters")
         for name in ("source_profile", "source_test", "question_root_selector",
@@ -63,6 +72,9 @@ class DynamicReadAloudBridge:
             "origin": self.allowed_origin.rstrip("/"), "path": self.allowed_path_prefix,
             "profile": self.source_profile.strip(), "test": self.source_test.strip(),
             "autoDetect": self.auto_detect,
+            "counterSelector": self.question_counter_selector,
+            "suspensionSelector": self.suspension_selector,
+            "sectionHeading": self.section_heading,
             "root": self.question_root_selector, "sentence": self.sentence_selector,
             "instruction": self.instruction_selector, "phase": self.phase_selector,
             "siteId": self.site_id_attribute,
@@ -80,7 +92,7 @@ class DynamicReadAloudBridge:
   const qa = {{status: 'installed', failures: [], prepareCount: 0, audioCount: 0,
                replayCount: 0, graphCreations: 0, epoch: 0, currentKey: null,
                currentSiteId: null, recordingSeenAt: null, replayStartedAt: null,
-               recordingUnpreparedCount: 0, transitions: []}};
+               recordingUnpreparedCount: 0, retryCount: 0, transitions: []}};
   Object.defineProperty(globalThis, '__qaDynamicReadAloud',
     {{value: qa, configurable: false, writable: false}});
 
@@ -116,11 +128,14 @@ class DynamicReadAloudBridge:
   let candidateCount = 0;
   let candidateSeenAt = 0;
   let previousRecording = false;
+  let recordingCandidate = null;
+  let recordingCandidateAt = 0;
 
   const ensureGraph = () => {{
     if (!context) {{
-      context = new AudioContext();
-      destination = context.createMediaStreamDestination();
+      const shared = globalThis.__qaMicrophoneBus;
+      context = shared ? shared.context : new AudioContext();
+      destination = shared ? shared.destination : context.createMediaStreamDestination();
       qa.graphCreations += 1;
     }}
     return destination.stream;
@@ -206,13 +221,33 @@ class DynamicReadAloudBridge:
       if (siteId) break;
     }}
     if (!siteId) {{
-      if (counters.length !== 1) return {{error: counters.length ? 'ambiguous_question_counter' : 'missing_question_counter'}};
-      siteId = 'counter:' + counters[0].text;
+      if (counters.length > 1) return {{error: 'ambiguous_question_counter'}};
+      if (counters.length === 1) siteId = 'counter:' + counters[0].text;
+      else if (cfg.counterSelector) {{
+        const counter = exactVisible(document, cfg.counterSelector);
+        if (counter.error) return {{error: 'question_counter_' + counter.error}};
+        if (!/^[1-9]\\d*$/.test(counter.text)) return {{error: 'invalid_question_counter'}};
+        siteId = 'navigation:' + counter.text;
+      }} else return {{error: 'missing_question_counter'}};
     }}
     const root = sentence.node.closest('section,article,main,[role="main"]') || document.body;
     return {{root, sentence: sentence.text, siteId, recording}};
   }};
   const inspect = () => cfg.autoDetect ? inspectAuto() : inspectExplicit();
+  // Explicit recovery is only available while a configured suspension dialog
+  // is present, after a completed/missed take of the same connected question.
+  qa.retryCurrent = () => {{
+    if (!cfg.suspensionSelector || !document.querySelector(cfg.suspensionSelector) ||
+        !active || !active.root.isConnected || !active.decoded || active.source ||
+        !['played', 'missed'].includes(active.status)) return false;
+    active.played = false;
+    active.status = 'armed';
+    previousRecording = false;
+    recordingCandidate = null;
+    qa.retryCount += 1;
+    transition(active.epoch, 'armed');
+    return true;
+  }};
   const autoTargetPresent = () => cfg.autoDetect && leafBlocks().some(item => {{
     const text = normalize(item.innerText || item.textContent);
     return text === cfg.instructionText || cfg.recordPhases.includes(text);
@@ -277,7 +312,8 @@ class DynamicReadAloudBridge:
 
   const replay = observation => {{
     if (!active || active.played || active.status !== 'armed' ||
-        active.root !== observation.root || active.siteId !== observation.siteId) return;
+        active.root !== observation.root || active.siteId !== observation.siteId ||
+        active.signature !== observation.siteId + '\\0' + observation.sentence) return;
     if (context.state !== 'running') {{ active.status = 'failed'; report('audio_context_not_running'); return; }}
     active.played = true;
     qa.recordingSeenAt = performance.now();
@@ -299,10 +335,30 @@ class DynamicReadAloudBridge:
   }};
 
   const check = () => {{
+    if (cfg.sectionHeading && !Array.from(document.querySelectorAll('h1,h2,[role="heading"]'))
+        .some(node=>visible(node)&&normalize(node.textContent)===cfg.sectionHeading)) {{
+      stopActive();qa.status='idle';previousRecording=false;recordingCandidate=null;return;
+    }}
+    if (cfg.suspensionSelector) {{
+      let suspended;
+      try {{ suspended = document.querySelector(cfg.suspensionSelector) !== null; }}
+      catch (_) {{ report('invalid_suspension_selector'); return; }}
+      if (suspended) {{
+        // A diagnostic dialog temporarily hides the prepared question. Keep
+        // its buffer but never play behind the dialog or count its stale phase.
+        previousRecording = false;
+        recordingCandidate = null;
+        return;
+      }}
+    }}
     const observation = inspect();
+    if (observation.error || !observation.recording) recordingCandidate = null;
     if (observation.error) {{
       if (cfg.autoDetect && observation.error === 'missing_instruction') {{
-        if (active) stopActive();
+        // Dialog transitions can hide the question before mounting the dialog.
+        // Keep the armed buffer until a new full identity replaces it; a missing
+        // instruction alone never authorizes playback of that buffer.
+        if (active && !active.root.isConnected) stopActive();
         qa.status = 'idle';
         candidateSignature = null; candidateCount = 0; candidateSeenAt = 0;
         previousRecording = false;
@@ -321,9 +377,17 @@ class DynamicReadAloudBridge:
         stableFor >= (cfg.stable - 1) * cfg.poll &&
         (!active || active.signature !== signature)) arm(observation);
     if (observation.recording && !previousRecording) {{
+      if (recordingCandidate !== signature) {{
+        recordingCandidate = signature;
+        recordingCandidateAt = performance.now();
+      }}
       const matches = active && active.root === observation.root &&
-        active.siteId === observation.siteId;
+        active.siteId === observation.siteId && active.signature === signature;
       if (!matches || active.status !== 'armed') {{
+        // SPA templates briefly show a stale recording label while mounting.
+        // Never play unprepared audio, but allow that label to settle before
+        // cancelling an in-flight preparation. Ready audio still starts at once.
+        if (performance.now() - recordingCandidateAt < 150) return;
         qa.recordingUnpreparedCount += 1;
         if (active) {{
           active.status = 'missed';
@@ -340,6 +404,7 @@ class DynamicReadAloudBridge:
   const original = media.getUserMedia.bind(media);
   media.getUserMedia = async constraints => {{
     if (!constraints || !constraints.audio) return original(constraints);
+    if (globalThis.__qaMicrophoneBus) return original(constraints);
     const observation = inspect();
     let targetPresent = false;
     try {{ targetPresent = cfg.autoDetect ? autoTargetPresent() :

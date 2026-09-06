@@ -28,6 +28,27 @@ def answer(q):
 
 
 class AnswerSystemTests(unittest.IsolatedAsyncioTestCase):
+    async def test_calculation_binds_unit_option_without_second_text_payload(self):
+        from qa_bot.domain.question import OptionSpec
+        q=replace(spec(),options=(OptionSpec('a',1,'55.75 inches'),OptionSpec('b',2,'57.75 inches')))
+        q=replace(q,content_hash=fingerprint(q)[0])
+        client=AsyncMock()
+        client.complete.return_value={'question_id':q.question_id,'content_hash':q.content_hash,'status':'answer','kind':'single_choice','confidence':1,'selections':[{'option_id':'b','role':None}],'text':'57.75','calculation':{'op':'mul','args':['21','2.75']}}
+        with QuestionBank(':memory:') as bank:
+            result=await AnswerEngine(bank,client).propose(q,authorized_qa=True)
+        self.assertIsNotNone(result.proposal)
+        self.assertEqual(result.proposal.selections[0].option_id,'b')
+        self.assertIsNone(result.proposal.text)
+
+    async def test_numeric_options_allow_shared_units_and_reject_mixed_units(self):
+        from decimal import Decimal
+        from qa_bot.domain.question import OptionSpec
+        q=replace(spec(),options=(OptionSpec('a',1,'55.75 inches'),OptionSpec('b',2,'57.75 inches')))
+        self.assertEqual(match_number(q,Decimal('57.75')),'b')
+        mixed=replace(q,options=(q.options[0],OptionSpec('b',2,'57.75 cm')))
+        with self.assertRaisesRegex(ValueError,'mixed'):
+            match_number(mixed,Decimal('57.75'))
+
     async def test_exact_history_is_ready_without_model_call(self):
         q, bank, client, historical = spec(), MagicMock(), AsyncMock(), MagicMock()
         bank.lookup.return_value = None

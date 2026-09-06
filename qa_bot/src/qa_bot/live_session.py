@@ -52,11 +52,11 @@ def bundle(token, profile, test):
     ))
 
 
-STATE_SCRIPT = '''() => {
+STATE_SCRIPT = r'''() => {
  const r=globalThis.__qaDynamicReadAloud,b=globalThis.__qaMicrophoneBus,
        l=globalThis.__qaDirectAudioLoopback,t=globalThis.__qaTopicSpeech;
  return {text:document.body.innerText.slice(0,4000),
-   number:document.querySelector('button.currentQue')?.textContent.trim(),
+   number:(()=>{const nodes=[...document.querySelectorAll('.currentQue')].filter(n=>n.getClientRects().length);return nodes.length===1?(nodes[0].innerText.trim().match(/^\d+/)||[])[0]||null:null})(),
    read:r&&{status:r.status,prepared:r.prepareCount,replays:r.replayCount,
      retries:r.retryCount,key:r.currentKey,siteId:r.currentSiteId,failures:r.failures},
    repeat:l&&{status:l.status,replays:l.replayCount,siteId:l.currentSiteId,failures:l.failures},
@@ -69,6 +69,11 @@ STATE_SCRIPT = '''() => {
 
 def safe_text(value):
     return re.sub(r'https?://[^\s"<>]+', '[URL]', str(value))
+
+
+def control_name(role,name):
+    if role=='button':name=re.sub(r'[\ue000-\uf8ff]','',name)
+    return ' '.join(name.split()).casefold()
 
 
 class Session:
@@ -86,6 +91,10 @@ class Session:
         self.topic_tasks=set()
         self.auto_navigation=False
         self.navigation_at=0
+        self.typing_tasks=set()
+        self.personality_tasks=set()
+        self.module_tasks=set()
+        self.timeout_seen=False
         self.output.mkdir(parents=True, exist_ok=True)
 
     async def click(self, role, name):
@@ -93,7 +102,7 @@ class Session:
         tree = await self.cdp.send('Accessibility.getFullAXTree')
         nodes = [n for n in tree['nodes'] if not n.get('ignored')
                  and n.get('role', {}).get('value') == role
-                 and n.get('name', {}).get('value', '').strip().casefold() == name.casefold()
+                 and control_name(role,n.get('name', {}).get('value', '')) == control_name(role,name)
                  and not any(p['name'] == 'disabled' and p['value'].get('value')
                              for p in n.get('properties', []))]
         if len(nodes) != 1:
@@ -164,6 +173,34 @@ class Session:
         except Exception as error:
             self.log('topic-errors.jsonl',{'number':number,'error':safe_text(error)[:300]})
             print(json.dumps({'topic_blocked':number,'reason':safe_text(error)[:300]}),flush=True)
+
+    @staticmethod
+    def typing_passage(state):
+        match=re.search(r'Type the given (?:sentence|text|paragraph) EXACTLY[^\n]*\n(.*?)\n\d{1,2}\s*:\s*\d{2}\s*Time Left',state['text'],re.S)
+        return match.group(1) if match and 5<=len(match.group(1))<=10000 else None
+
+    async def type_passage(self,state,passage):
+        number=state['number']
+        try:
+            field=self.page.locator('textarea.typingTextArea')
+            if await field.count()!=1:raise ValueError('one typing input required')
+            existing=await field.input_value()
+            if not passage.startswith(existing):raise ValueError('typing input conflicts with source')
+            await field.press_sequentially(passage[len(existing):],delay=30,timeout=60000)
+            fresh=await self.page.evaluate(STATE_SCRIPT)
+            actual=await field.input_value()
+            if fresh.get('number')!=number or self.typing_passage(fresh)!=passage or actual!=passage:
+                raise ValueError('typing result or question changed')
+            for role in ('button','link'):
+                try:await self.click(role,'SUBMIT ANSWER');break
+                except ValueError:continue
+            else:raise ValueError('typing submit unavailable')
+            self.log('typing.jsonl',{'number':number,'characters':len(passage),'exact_match':True,
+                'sha256':hashlib.sha256(passage.encode()).hexdigest(),'practice':'only for practice' in state['text']})
+            print(json.dumps({'typing_submitted':number,'characters':len(passage),'exact_match':True}),flush=True)
+        except Exception as error:
+            self.log('typing-errors.jsonl',{'number':number,'error':safe_text(error)[:300]})
+            print(json.dumps({'typing_blocked':number,'reason':safe_text(error)[:300]}),flush=True)
 
     async def solve_choice(self, state, sources):
         number=state['number']
@@ -271,6 +308,29 @@ class Session:
         while True:
             try:
                 state = await self.page.evaluate(STATE_SCRIPT)
+                if 'Assessment Time out' in state['text'] and not self.timeout_seen:
+                    self.timeout_seen=True
+                    self.auto_navigation=self.auto_choices=self.auto_speech=False
+                    self.log('run-failures.jsonl',{'time':time.time(),'reason':'assessment_time_out','number':state.get('number')})
+                    print(json.dumps({'run_failed':'assessment_time_out'}),flush=True)
+                if self.auto_choices and state.get('number'):
+                    module=None
+                    if "Choose the 'best' and the 'worst' action for the given situation." in state['text']:module='sales'
+                    elif 'Compose an email response for the topic provided.' in state['text']:module='writex'
+                    elif 'Section ' not in state['text'] and any(x in state['text'] for x in ('Choose the correct option.','Refer to the data presented and answer the question.')):module='analytical'
+                    if module and module not in self.module_tasks:
+                        self.module_tasks.add(module)
+                        from qa_bot.solvers.analytical import run_module
+                        task=asyncio.create_task(run_module(self,module));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+                if self.auto_choices and 'Select an option with which you agree the most.' in state['text'] and state.get('number') not in self.personality_tasks:
+                    self.personality_tasks.add(state.get('number'))
+                    from qa_bot.solvers.personality import run_personality
+                    task=asyncio.create_task(run_personality(self,state));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+                passage=self.typing_passage(state)
+                typing_key=(state.get('number'),passage)
+                if self.auto_speech and passage and typing_key not in self.typing_tasks:
+                    self.typing_tasks.add(typing_key)
+                    task=asyncio.create_task(self.type_passage(state,passage));self.tasks.add(task);task.add_done_callback(self.tasks.discard)
                 if self.auto_navigation and time.monotonic()-self.navigation_at>.5:
                     self.navigation_at=time.monotonic()
                     if 'To resume your assessment' in state['text']:
@@ -281,6 +341,9 @@ class Session:
                         label='I confirm I have read and understood this Notice.'
                         if any(n.get('name',{}).get('value','').strip()==label for n in checkboxes):
                             await self.command({'action':'notice'})
+                        elif (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English')))):
+                            try:await self.click('button','NEXT')
+                            except ValueError:pass
                         elif 'Section ' in state['text'] and 'Listen Carefully' in state['text'] and 'NEXT' in state['text']:
                             try:await self.click('button','NEXT')
                             except ValueError:pass
@@ -352,6 +415,25 @@ class Session:
             return await self.page.evaluate('''() => ({now:performance.now(),
                 scripts:[...document.scripts].map(s=>s.src).filter(Boolean).map(x=>new URL(x).pathname),
                 buttons:[...document.querySelectorAll('button')].filter(b=>b.textContent.trim()==='NEXT').map(b=>({text:b.textContent,disabled:b.disabled,html:b.outerHTML}))})''')
+        if action == 'ax':
+            tree=await self.cdp.send('Accessibility.getFullAXTree')
+            return {'nodes':[{'role':n.get('role',{}).get('value'),'name':n.get('name',{}).get('value'),'id':n.get('backendDOMNodeId'),'properties':n.get('properties',[])} for n in tree['nodes'] if not n.get('ignored') and n.get('role',{}).get('value') not in ('button','RootWebArea','generic')]}
+        if action == 'node_html':
+            result=await self.cdp.send('DOM.getOuterHTML',{'backendNodeId':command['id']})
+            return {'html':safe_text(result['outerHTML'])[:20000]}
+        if action == 'auto_modules':
+            import importlib
+            from qa_bot.solvers import analytical
+            importlib.reload(analytical)
+            task=asyncio.create_task(analytical.run_module(self,command['module']))
+            self.tasks.add(task);task.add_done_callback(self.tasks.discard)
+            return {'started':command['module']}
+        if action == 'question_dom':
+            return await self.page.evaluate('''() => [...document.querySelectorAll('.question,.radio-outer,input,textarea,[role=slider]')].filter(n=>n.getClientRects().length).map(n=>n.outerHTML).join('\\n').slice(0,20000)''')
+        if action == 'form_state':
+            return await self.page.evaluate('''() => ({
+                fields:[...document.querySelectorAll('textarea,input,[contenteditable=true]')].filter(n=>n.getClientRects().length).map(n=>({tag:n.tagName,id:n.id,type:n.type,name:n.name,value:n.value,html:n.outerHTML})),
+                paragraphs:[...document.querySelectorAll('p,[id]')].filter(n=>n.getClientRects().length&&n.innerText?.trim()&&n.innerText.length<2500).map(n=>({tag:n.tagName,id:n.id,class:n.className,text:n.innerText})).slice(-80)})''')
         if action == 'auto_speech':
             self.auto_speech = True
             return {'automatic_speech_submission':True}
@@ -442,7 +524,7 @@ async def run(args):
                     try:
                         result = await session.command(json.loads(line))
                         print(json.dumps({'result':result}, ensure_ascii=False), flush=True)
-                        if result.get('close'):break
+                        if isinstance(result,dict) and result.get('close'):break
                     except Exception as error:
                         print(json.dumps({'error':safe_text(error)[:500]}), flush=True)
             finally:

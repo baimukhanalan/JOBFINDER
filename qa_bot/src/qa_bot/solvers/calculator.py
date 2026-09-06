@@ -53,13 +53,15 @@ def convert_unit(value, source, target):
 
 
 def match_number(q, value):
-    matches = []
+    parsed=[]
     for option in q.options:
-        label = option.label.strip()
-        if re.fullmatch(r"-?\d+(\.\d+)?", label) and Decimal(label) == value:
-            matches.append(option.id)
-    if len(matches) != 1:
-        raise ValueError("numeric option absent or ambiguous")
+        match=re.fullmatch(r"(-?\d+(?:\.\d+)?)(?:\s*([A-Za-z%]+(?: [A-Za-z]+)*))?",option.label.strip())
+        if not match:raise ValueError("numeric option format unsupported")
+        parsed.append((option.id,Decimal(match.group(1)),(match.group(2) or '').casefold()))
+    if len({unit for _,_,unit in parsed})!=1:
+        raise ValueError("mixed numeric option units")
+    matches=[identity for identity,number,_ in parsed if number==value]
+    if len(matches)!=1:raise ValueError("numeric option absent or ambiguous")
     return matches[0]
 
 

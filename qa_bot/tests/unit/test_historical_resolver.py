@@ -37,6 +37,12 @@ class HistoricalResolverTests(unittest.TestCase):
             writer.writerows(answers)
         return HistoricalAnswerResolver.from_files(questions, csv_path)
 
+    def test_text_response_keeps_email_line_breaks(self):
+        answer="To: test@example.com\nSubject: QA example\n\nHello,\n\nA preserved paragraph.\n"
+        resolver=self.resolver([{'id':'mail','section':'Analytical','prompt':'Choose.','text':'Write a test email.','options':[]}],[{'id':'mail','recommended_answer':answer,'confidence':'high','official_answer_key':'false'}])
+        result=resolver.lookup(question(text='Write a test email.',options=(),kind=ResponseKind.TEXT))
+        self.assertEqual(result.proposal.text,answer)
+
     def test_exact_repeat_resolves_to_current_option_id(self):
         rows = [
             {"id": "old-1", "section": "Analytical", "prompt": "Choose.",

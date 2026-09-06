@@ -35,6 +35,7 @@ class _Entry:
     source_ids: tuple[str, ...]
     confidence_label: str
     official_answer_key: bool
+    raw_answer: str = ""
 
 
 class HistoricalAnswerResolver:
@@ -68,7 +69,7 @@ class HistoricalAnswerResolver:
                 grouped[key].append((identity, normalize(answer["recommended_answer"]),
                                      answer.get("confidence", ""),
                                      answer.get("official_answer_key", "").strip().lower()
-                                     in {"1", "true", "yes"}))
+                                     in {"1", "true", "yes"},answer["recommended_answer"]))
         entries = {}
         for key, values in grouped.items():
             answers = {value[1] for value in values}
@@ -79,6 +80,7 @@ class HistoricalAnswerResolver:
                 source_ids=tuple(value[0] for value in values),
                 confidence_label=values[0][2],
                 official_answer_key=all(value[3] for value in values),
+                raw_answer=values[0][4],
             )
         return cls(entries)
 
@@ -125,7 +127,7 @@ class HistoricalAnswerResolver:
         elif kind == ResponseKind.TEXT:
             proposal = AnswerProposal(
                 question.question_id, question.content_hash, kind, 1.0,
-                text=entry.answer, evidence=evidence,
+                text=entry.raw_answer or entry.answer, evidence=evidence,
             )
         elif kind == ResponseKind.UI_ACTION:
             plan_id = "historical:" + hashlib.sha256(entry.answer.encode()).hexdigest()

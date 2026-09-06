@@ -6,6 +6,78 @@ from qa_bot.live_session import Session
 
 
 class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_closed_shadow_hidden_radio_is_selected_by_native_label(self):
+        from qa_bot.solvers.analytical import options,click_node,label_info
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('''<div id="host"></div><script>
+                  const root=host.attachShadow({mode:'closed'});
+                  root.innerHTML='<div aria-selected="false"><input style="display:none" type="radio" id="a"><label tabindex="0" for="a">A safe fixture</label></div>';
+                  </script>''')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    opts=await options(session);self.assertEqual(len(opts),1)
+                    self.assertEqual(opts[0]['text'],'A safe fixture')
+                    self.assertFalse(opts[0]['checked'])
+                    await click_node(session,opts[0]['node'])
+                    self.assertTrue((await label_info(session,opts[0]['node']))['checked'])
+            finally:await browser.close()
+
+    async def test_scale_selects_exact_option_and_rejects_changed_question(self):
+        from types import SimpleNamespace
+        from qa_bot.solvers.personality import run_personality
+        from qa_bot.live_session import STATE_SCRIPT
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('''<div class="question">A synthetic preference.</div>
+                  <a class="currentQue">12<span style="display:none">Tooltip</span></a>
+                  <div id="options"></div><button id="next">NEXT</button>
+                  <script>
+                  const labels=['Strongly Disagree','Disagree','Neither agree nor disagree','Agree','Strongly Agree'];
+                  options.innerHTML=labels.map((x,i)=>`<label class="radio-outer" id="label${i}" title="${x}"><input style="display:none" id="input${i}" type="radio" name="answer">${i}</label>`).join('');
+                  next.onclick=()=>window.submitted=true;
+                  </script>''')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    proposal=SimpleNamespace(selections=[SimpleNamespace(option_id='option-3')])
+                    session.historical=SimpleNamespace(lookup=lambda q:SimpleNamespace(proposal=proposal,source_ids=('fixture',)))
+                    state=await page.evaluate(STATE_SCRIPT);self.assertEqual(state['number'],'12')
+                    await run_personality(session,state)
+                    self.assertTrue(await page.locator('#input2').is_checked())
+                    self.assertTrue(await page.evaluate('submitted'))
+                    await page.evaluate("window.submitted=false;document.querySelector('.currentQue').innerText='13'")
+                    await run_personality(session,state)
+                    self.assertFalse(await page.evaluate('submitted'))
+            finally:await browser.close()
+
+    async def test_typing_uses_keyboard_events_and_preserves_punctuation(self):
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('''<div>Type the given sentence EXACTLY as shown in the space provided.</div>
+                    <div>"Good morning," she said.</div><div>00 : 55 Time Left</div>
+                    <textarea class="typingTextArea"></textarea><a href="#" id="submit">SUBMIT ANSWER</a>
+                    <a class="currentQue">1</a><script>
+                    window.keys=0;window.pastes=0;document.querySelector('textarea').onkeydown=()=>window.keys++;
+                    document.querySelector('textarea').onpaste=e=>{window.pastes++;e.preventDefault()};
+                    document.querySelector('#submit').onclick=e=>{e.preventDefault();window.submitted=true};</script>''')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    from qa_bot.live_session import STATE_SCRIPT
+                    state=await page.evaluate(STATE_SCRIPT);passage=session.typing_passage(state)
+                    self.assertEqual(passage,'"Good morning," she said.')
+                    await session.type_passage(state,passage)
+                    self.assertEqual(await page.locator('textarea').input_value(),passage)
+                    self.assertTrue(await page.evaluate('submitted'))
+                    self.assertGreater(await page.evaluate('keys'),0)
+                    self.assertEqual(await page.evaluate('pastes'),0)
+            finally:await browser.close()
+
     async def test_closed_shadow_controls_and_ambiguous_or_disabled_rejection(self):
         async with async_playwright() as pw:
             browser=await pw.chromium.launch(headless=True)

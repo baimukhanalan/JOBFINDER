@@ -38,7 +38,8 @@ class AnswerEngine:
                 )
         if not synthetic and not authorized_qa:
             return EngineResult(None, "abstain", "only_synthetic_model_input_allowed")
-        if any(not a.media_type.startswith("audio/") or "stt:" + a.sha256 not in q.provenance
+        if any(not (a.media_type.startswith("audio/") and "stt:" + str(a.sha256) in q.provenance)
+               and not (a.media_type in ("image/png","image/jpeg") and a.sha256 and getattr(self.client,'supports_images',False))
                for a in q.assets):
             return EngineResult(None, "abstain", "multimodal_transport_not_configured")
         try:
@@ -49,6 +50,8 @@ class AnswerEngine:
                            "options": [asdict(o) for o in q.options],
                            "tables": [asdict(t) for t in q.tables], "context": q.context,
                            "response_contract": asdict(q.response_contract)}
+                images=[asdict(a) for a in q.assets if a.media_type.startswith('image/')]
+                if images:payload['_image_attachments']=images
                 data = await self.client.complete(payload, timeout=timeout)
             expected = {"question_id", "content_hash", "status", "kind", "confidence",
                         "selections", "text", "calculation"}
@@ -67,6 +70,7 @@ class AnswerEngine:
                 value = calculate(data["calculation"])
                 if kind == ResponseKind.SINGLE_CHOICE:
                     selections = (Selection(match_number(q, value)),)
+                    text = None
                 elif kind == ResponseKind.TEXT:
                     text = str(value)
                 else:
@@ -78,5 +82,5 @@ class AnswerEngine:
                 return EngineResult(None, "abstain", ",".join(errors))
             self.bank.save_candidate(q, proposal)
             return EngineResult(proposal, "candidate")
-        except Exception:
-            return EngineResult(None, "abstain", "model_or_validation_failed")
+        except Exception as error:
+            return EngineResult(None, "abstain", "model_or_validation_failed:"+type(error).__name__+":"+str(error)[:160])

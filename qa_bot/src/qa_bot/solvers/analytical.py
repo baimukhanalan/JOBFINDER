@@ -1,1 +1,139 @@
-"""Reserved for future implementation; intentionally no behavior."""
+"""Observed question UI, image-backed reasoning and guarded native submission."""
+import asyncio
+from dataclasses import replace
+import hashlib
+import importlib
+import json
+from pathlib import Path
+import re
+import shutil
+import time
+from urllib.parse import urlsplit
+from qa_bot.domain.question import QuestionSpec,OptionSpec,AssetRef,ResponseContract,ResponseKind
+from qa_bot.knowledge.bank import QuestionBank,fingerprint
+
+async def label_info(session,node):
+    resolved=await session.cdp.send('DOM.resolveNode',{'backendNodeId':node})
+    try:
+        result=await session.cdp.send('Runtime.callFunctionOn',{'objectId':resolved['object']['objectId'],'functionDeclaration':'''function(){const p=this.parentElement;return {text:this.innerText.trim(),checked:p.querySelector('input')?.checked,selected:p.getAttribute('aria-selected'),image:!!this.querySelector('img')}}''','returnByValue':True})
+        return result['result']['value']
+    finally:await session.cdp.send('Runtime.releaseObject',{'objectId':resolved['object']['objectId']})
+
+async def options(session):
+    nodes=await session.controls('LabelText')
+    result=[]
+    for node in nodes:
+        info=await label_info(session,node['backendDOMNodeId'])
+        if info['text'] or info['image']:result.append({'node':node['backendDOMNodeId'],**info})
+    return result
+
+async def click_node(session,node):
+    await session.cdp.send('DOM.scrollIntoViewIfNeeded',{'backendNodeId':node})
+    quad=(await session.cdp.send('DOM.getBoxModel',{'backendNodeId':node}))['model']['content']
+    x,y=sum(quad[::2])/4,sum(quad[1::2])/4
+    for kind in ('mousePressed','mouseReleased'):
+        await session.cdp.send('Input.dispatchMouseEvent',{'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
+
+def question_text(text):
+    text=re.sub(r'^Skip to main content\s*\n\d{1,2}\s*:\s*\d{2}\s*\nHelp\s*\nExit\s*\n','',text)
+    return re.sub(r'\n1\n2\n3\n[\s\S]*','',text).strip()
+
+async def run_module(session,module):
+    from qa_bot.live_session import STATE_SCRIPT,safe_text
+    from qa_bot.adapters.llm import codex_cli
+    from qa_bot.solvers import engine,calculator
+    importlib.reload(codex_cli);importlib.reload(calculator);importlib.reload(engine)
+    if module=='sales_inspect':
+        print(json.dumps({'sales_dom':await session.page.locator('#main-q-parent').inner_html()}),flush=True)
+        return
+    if module=='sales':
+        from qa_bot.solvers import sales
+        importlib.reload(sales)
+        await sales.run_sales(session)
+        return
+    if module=='writex':
+        from qa_bot.solvers import writex
+        importlib.reload(writex)
+        await writex.run_writex(session)
+        return
+    if module=='stop':
+        targets=[t for t in session.tasks if t is not asyncio.current_task() and getattr(t.get_coro(),'__name__','')=='run_module']
+        for t in targets:t.cancel()
+        await asyncio.gather(*targets,return_exceptions=True)
+        print(json.dumps({'module_tasks_stopped':len(targets)}),flush=True)
+        return
+    if module=='inspect':
+        print(json.dumps({'images':await session.page.locator('#main-q-parent img').evaluate_all('(nodes)=>nodes.filter(n=>n.getClientRects().length).map(n=>({src:n.currentSrc,html:n.outerHTML}))')}),flush=True)
+        return
+    if module!='analytical':raise ValueError('unsupported observed module')
+    seen=set()
+    try:
+        for _ in range(19):
+            state=await session.page.evaluate(STATE_SCRIPT)
+            if 'Assessments\n' in state['text']:break
+            number=state.get('number');text=question_text(state['text'])
+            if not number or number in seen or not any(x in text for x in ('Choose the correct option.','Refer to the data presented and answer the question.')):raise ValueError('expected new analytical question')
+            opts=await options(session)
+            if not 2<=len(opts)<=8:raise ValueError('ambiguous analytical choices')
+            labels=[o['text'] or 'Image option '+str(i) for i,o in enumerate(opts,1)]
+            await session.page.wait_for_function("[...document.querySelectorAll('#main-q-parent img')].filter(n=>n.getClientRects().length).every(n=>n.complete&&n.naturalWidth>0&&n.currentSrc)",timeout=10000)
+            snapshot=session.output/f'analytical-{number}.png'
+            data=await session.page.screenshot(path=str(snapshot),full_page=True)
+            assets=[AssetRef('question-image','image/png',str(snapshot.resolve()),hashlib.sha256(data).hexdigest())]
+            image_urls=await session.page.locator('#main-q-parent img').evaluate_all('(nodes)=>nodes.filter(n=>n.getClientRects().length).map(n=>n.currentSrc)')
+            for i,url in enumerate(dict.fromkeys(image_urls),1):
+                parsed=urlsplit(url)
+                if parsed.scheme!='https' or parsed.hostname not in ('s3.amazonaws.com','qbdata-amcat.s3.amazonaws.com'):
+                    raise ValueError('unrecognized question image origin')
+                response=await session.page.request.get(url)
+                if response.status!=200:raise ValueError('question image unavailable')
+                body=await response.body();media=response.headers.get('content-type','').split(';')[0]
+                if media not in ('image/png','image/jpeg') or not 0<len(body)<=20_000_000:raise ValueError('question image format rejected')
+                target=session.output/f'analytical-{number}-figure-{i}{".png" if media=="image/png" else ".jpg"}'
+                target.write_bytes(body)
+                assets.append(AssetRef('figure-'+str(i),media,str(target.resolve()),hashlib.sha256(body).hexdigest()))
+            q=QuestionSpec('analytical-'+number,'authorized-single','Basic Analytical Ability','ANALYTICAL-MCQ',text,ResponseContract(ResponseKind.SINGLE_CHOICE,1,1),'pending',
+                instruction='Choose the correct option. Read the attached full question image, including all figures, list numbering and option images.',
+                options=tuple(OptionSpec('option-'+str(i),i,label) for i,label in enumerate(labels,1)),
+                assets=tuple(assets),completeness=True,extraction_confidence=1)
+            q=replace(q,content_hash=fingerprint(q)[0])
+            isolated=session.output/'isolated';isolated.mkdir(exist_ok=True)
+            client=codex_cli.CodexCLIClient(Path(shutil.which('codex')),session.project_root/'configs/answer_schema.json',isolated,reasoning_effort='low')
+            historical=None
+            if not image_urls and 'PASSAGE' not in state['text']:
+                from qa_bot.knowledge.historical import HistoricalAnswerResolver
+                pure=session.page.locator('#simpleMcqQuesContainer')
+                if await pure.count()==1:
+                    plain=await pure.inner_text()
+                    heading=await session.page.locator('h1.direction').all_inner_texts()
+                    if len(heading)==1:
+                        q=replace(q,question_text=plain,instruction=heading[0].strip())
+                        q=replace(q,content_hash=fingerprint(q)[0])
+                        root=session.project_root.parent
+                        historical=HistoricalAnswerResolver.from_files(root/'data/questions.jsonl',root/'SHL_answers_all.csv')
+            with QuestionBank(session.output/'analytical.sqlite3') as bank:
+                answer=await engine.AnswerEngine(bank,client,historical=historical).propose(q,authorized_qa=True,timeout=45)
+            if not answer.proposal:raise ValueError(answer.reason)
+            selected=next(i for i,o in enumerate(q.options) if o.id==answer.proposal.selections[0].option_id)
+            fresh=await session.page.evaluate(STATE_SCRIPT);fresh_opts=await options(session)
+            if fresh.get('number')!=number or question_text(fresh['text'])!=text or [(o['text'],o['image']) for o in fresh_opts]!=[(o['text'],o['image']) for o in opts]:raise ValueError('question changed during solving')
+            if await session.page.locator('#main-q-parent img').evaluate_all('(nodes)=>nodes.filter(n=>n.getClientRects().length).map(n=>n.currentSrc)')!=image_urls:raise ValueError('question image changed')
+            await click_node(session,fresh_opts[selected]['node'])
+            info=await label_info(session,fresh_opts[selected]['node'])
+            if not info['checked'] and info['selected']!='true':raise ValueError('selection not checked')
+            fresh=await session.page.evaluate(STATE_SCRIPT)
+            if fresh.get('number')!=number:raise ValueError('question changed before submit')
+            await session.click('button','SUBMIT ANSWER')
+            session.log('analytical.jsonl',{'number':number,'question':text,'selected':labels[selected],'confidence':answer.proposal.confidence,'source':answer.source,'image_sha256':q.assets[0].sha256,'correctness_verified':False})
+            print(json.dumps({'analytical_submitted':number,'confidence':answer.proposal.confidence}),flush=True)
+            seen.add(number)
+            for attempt in range(150):
+                await asyncio.sleep(.1)
+                fresh=await session.page.evaluate(STATE_SCRIPT)
+                if fresh.get('number')!=number:break
+            else:raise ValueError('submission did not advance')
+            await asyncio.sleep(.3)
+        print(json.dumps({'analytical_stopped':len(seen)}),flush=True)
+    except Exception as error:
+        session.log('analytical-errors.jsonl',{'error':safe_text(error)[:400]})
+        print(json.dumps({'analytical_blocked':safe_text(error)[:400]}),flush=True)

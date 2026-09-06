@@ -28,6 +28,40 @@ def answer(q):
 
 
 class AnswerSystemTests(unittest.IsolatedAsyncioTestCase):
+    async def test_best_effort_preserves_low_confidence_without_any_solution_access(self):
+        q=spec();bank=MagicMock();archive=MagicMock();historical=MagicMock();client=AsyncMock()
+        client.complete.return_value={'question_id':q.question_id,'content_hash':q.content_hash,'status':'answer','kind':'single_choice','confidence':0.25,'selections':[{'option_id':q.options[0].id,'role':None}],'text':None,'calculation':None}
+        result=await AnswerEngine(bank,client,archive=archive,historical=historical).propose(q,authorized_qa=True,best_effort=True)
+        self.assertEqual(result.source,'best_effort_unverified')
+        self.assertEqual(result.proposal.confidence,0.25)
+        self.assertEqual(bank.mock_calls,[])
+        self.assertEqual(archive.mock_calls,[])
+        self.assertEqual(historical.mock_calls,[])
+        bank.lookup.return_value=None
+        ordinary=await AnswerEngine(bank,client).propose(q,authorized_qa=True)
+        self.assertIsNone(ordinary.proposal)
+        self.assertIn('low_confidence',ordinary.reason)
+        bank.save_candidate.assert_not_called()
+
+    async def test_best_effort_retains_validation_and_missing_data_abstention(self):
+        q=spec();bank=MagicMock();client=AsyncMock()
+        valid={'question_id':q.question_id,'content_hash':q.content_hash,'status':'answer','kind':'single_choice','confidence':0,'selections':[{'option_id':q.options[0].id,'role':None}],'text':None,'calculation':None}
+        for changes in ({'question_id':'stale'},{'content_hash':'stale'},{'confidence':-0.1},{'confidence':True},
+                        {'selections':[{'option_id':'absent','role':None}]},{'unexpected':1},{'status':'abstain'},
+                        {'calculation':{'op':'invented','args':['999999','1']}}):
+            with self.subTest(changes=changes):
+                client.complete.return_value={**valid,**changes}
+                result=await AnswerEngine(bank,client).propose(q,authorized_qa=True,best_effort=True)
+                self.assertIsNone(result.proposal)
+        client.reset_mock()
+        result=await AnswerEngine(bank,client).propose(replace(q,completeness=False),authorized_qa=True,best_effort=True)
+        self.assertEqual(result.reason,'incomplete_question')
+        client.complete.assert_not_called()
+        for kwargs in ({'allow_model':False,'authorized_qa':True},{}):
+            result=await AnswerEngine(bank,client).propose(q,best_effort=True,**kwargs)
+            self.assertIsNone(result.proposal)
+        self.assertEqual(bank.mock_calls,[])
+
     async def test_arithmetic_with_named_options_keeps_explicit_choice(self):
         from qa_bot.domain.question import OptionSpec
         q=replace(spec(),options=(OptionSpec('a',1,'Alice and Ben'),OptionSpec('b',2,'Carl and Dana')))

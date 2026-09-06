@@ -19,9 +19,11 @@ class AnswerEngine:
         self.bank, self.client, self.historical = bank, client, historical
         self.archive=archive
 
-    async def propose(self, q, *, synthetic=False, authorized_qa=False, timeout=30, allow_model=True):
-        kwargs=dict(synthetic=synthetic,authorized_qa=authorized_qa,timeout=timeout,allow_model=allow_model)
-        if self.archive and authorized_qa:
+    async def propose(self, q, *, synthetic=False, authorized_qa=False, timeout=30, allow_model=True, best_effort=False):
+        if type(best_effort) is not bool:
+            raise ValueError('best_effort must be an explicit boolean')
+        kwargs=dict(synthetic=synthetic,authorized_qa=authorized_qa,timeout=timeout,allow_model=allow_model,best_effort=best_effort)
+        if not best_effort and self.archive and authorized_qa:
             try:
                 async with self.archive.solution_lock(q,timeout=timeout+5):
                     return await self._propose(q,**kwargs)
@@ -29,19 +31,25 @@ class AnswerEngine:
                 return EngineResult(None,'abstain','shared_answer_preparation_busy')
         return await self._propose(q,**kwargs)
 
-    async def _propose(self, q, *, synthetic=False, authorized_qa=False, timeout=30, allow_model=True):
+    async def _propose(self, q, *, synthetic=False, authorized_qa=False, timeout=30, allow_model=True, best_effort=False):
         if not q.completeness or q.unresolved_regions or q.extraction_confidence < 0.8:
             return EngineResult(None, "abstain", "incomplete_question")
-        archive=self.archive if authorized_qa else None
+        archive=self.archive if authorized_qa and not best_effort else None
         if archive:archive.observe(q)
         try:
-            cached = self.bank.lookup(q)
+            if best_effort:
+                # Retain media identity validation without consulting solutions.
+                from qa_bot.knowledge.bank import fingerprint
+                fingerprint(q)
+                cached = None
+            else:
+                cached = self.bank.lookup(q)
         except ValueError:
             return EngineResult(None, "abstain", "unverified_media")
         if cached:
             if archive:archive.save(q,cached,'approved')
             return EngineResult(cached, "approved")
-        if self.historical is not None:
+        if self.historical is not None and not best_effort:
             resolution = self.historical.lookup(q)
             if resolution is not None:
                 if archive:archive.save(q,resolution.proposal,'historical_exact')
@@ -103,9 +111,11 @@ class AnswerEngine:
                     raise ValueError("invalid_numeric_response")
             proposal = AnswerProposal(q.question_id, q.content_hash, kind, data["confidence"],
                                       selections=selections, text=text)
-            errors = validate_answer(q, proposal)
+            errors = validate_answer(q, proposal, min_confidence=0 if best_effort else 0.9)
             if errors:
                 return EngineResult(None, "abstain", ",".join(errors))
+            if best_effort:
+                return EngineResult(proposal, 'best_effort_unverified')
             self.bank.save_candidate(q, proposal)
             if archive:archive.save(q,proposal,'candidate')
             return EngineResult(proposal, "candidate")

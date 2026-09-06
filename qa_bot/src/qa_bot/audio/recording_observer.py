@@ -9,6 +9,8 @@ def recording_observer_script(origin, token, *, port=18772):
       const cfg = CONFIG;
       if (location.origin !== cfg.origin || !globalThis.__qaMicrophoneBus) return;
       const bus = __qaMicrophoneBus;
+      bus.recorderTrackingEnabled = true;
+      bus.recording = null;
       const evidence = globalThis.__qaRecorderEvidence = {analysers:[],recordings:[]};
       const indices = new WeakMap();
       const originalFrequency = AnalyserNode.prototype.getByteFrequencyData;
@@ -32,9 +34,16 @@ def recording_observer_script(origin, token, *, port=18772):
             this.stream.getAudioTracks().some(t=>bus.destination.stream.getAudioTracks().includes(t))) {
           observed.add(this);
           let chunks = [];
-          this.addEventListener('start',()=>{chunks=[]});
+          this.addEventListener('start',()=>{
+            chunks=[];
+            const counter=document.querySelector('button.currentQue');
+            const number=(counter?.innerText||counter?.textContent||'').trim().match(/^([1-9]\d*)/);
+            bus.recording={recorder:this,active:true,siteId:number?'navigation:'+number[1]:null,
+              startedAt:performance.now(),contextTime:bus.context.currentTime};
+          });
           this.addEventListener('dataavailable',event=>{if(event.data.size)chunks.push(event.data)});
           this.addEventListener('stop', async()=>{
+            if(bus.recording?.recorder===this)bus.recording.active=false;
             const data = new Blob(chunks, {type:this.mimeType});
             const record = {bytes:data.size,type:data.type,number:document.querySelector('button.currentQue')?.textContent.trim()};
             evidence.recordings.push(record);

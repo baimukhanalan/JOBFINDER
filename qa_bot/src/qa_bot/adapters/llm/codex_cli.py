@@ -7,10 +7,12 @@ from pathlib import Path
 
 class CodexCLIClient:
     supports_images = True
-    def __init__(self, executable: Path, schema: Path, workspace: Path, *, reasoning_effort=None):
+    def __init__(self, executable: Path, schema: Path, workspace: Path, *, reasoning_effort=None, best_effort=False):
         self.executable, self.schema, self.workspace = executable, schema, workspace
         if reasoning_effort not in (None,"low","medium","high"):raise ValueError("unsupported reasoning effort")
         self.reasoning_effort=reasoning_effort
+        if type(best_effort) is not bool:raise ValueError('best_effort must be an explicit boolean')
+        self.best_effort=best_effort
 
     async def complete(self, question: dict, *, timeout: float):
         # Native executable is required on Windows; no shell/command interpolation.
@@ -37,6 +39,12 @@ class CodexCLIClient:
                   "ops add/mul (2 to 32 arguments), sub/div (exactly two arguments), percent (base,rate), proportion (a,b,c gives b*c/a). For averages divide an add tree by the count; there is no mean or average operation. "
                   "For choice answers text must be null. For text answers selections must be empty. "
                   "No program code or selectors.\nQUESTION_DATA:\n" + json.dumps(question))
+        if self.best_effort:
+            prompt = ("BEST-EFFORT QA REVIEW: If the question is fully visible but internally inconsistent, "
+                      "choose the most defensible listed option. Report your actual confidence, even when low; "
+                      "never inflate confidence to pass a threshold. This is an unverified judgment. "
+                      "Set calculation to null if no exact numeric result matches a listed option. "
+                      "Missing or unreadable information still requires abstain; do not invent it.\n" + prompt)
         if getattr(self,'ui_actions',False):
             prompt=("Choose exactly one native UI action to perform the explicitly authorized QA task in a Windows simulation. "
                     "Use the screenshot as truth: many DOM labels and IDs are misleading. Match visible screenshot controls to the supplied element rectangles. "

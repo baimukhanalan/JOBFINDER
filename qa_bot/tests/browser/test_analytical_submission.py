@@ -57,3 +57,50 @@ class AnalyticalEvidenceTests(unittest.IsolatedAsyncioTestCase):
                     info=await label_info(session,await backend(session,'label[for=a]'))
                     self.assertEqual(info['input_count'],2);self.assertIsNone(info['input_value'])
             finally:await browser.close()
+
+    async def test_inconsistent_complete_question_gets_one_marked_review(self):
+        from unittest.mock import patch, AsyncMock
+        from qa_bot.solvers import analytical
+        from qa_bot.solvers.engine import EngineResult
+        from qa_bot.domain.answer import AnswerProposal, Selection
+        from qa_bot.domain.question import ResponseKind
+        calls=[]
+        async def propose(q,**kwargs):
+            calls.append(kwargs)
+            if len(calls)==1:return EngineResult(None,'abstain','model_abstained')
+            return EngineResult(AnswerProposal(q.question_id,q.content_hash,ResponseKind.SINGLE_CHOICE,.55,
+                selections=(Selection('option-2'),)), 'best_effort_unverified')
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.set_content('''<div>Skip to main content</div><div>09 : 00</div><div>Help</div><div>Exit</div>
+                <main id="main-q-parent"><p>PASSAGE</p><p>Choose the correct option.</p><p>A complete synthetic question with inconsistent choices.</p>
+                <div><input id="a" type="radio" name="choices" value="1"><label for="a">13 feet</label></div>
+                <div><input id="b" type="radio" name="choices" value="2"><label for="b">17 feet</label></div></main>
+                <button class="currentQue">1</button><div>2</div><div>3</div>
+                <button onclick="window.selected=document.querySelector('input:checked')?.value;document.body.innerHTML='<div>Assessments</div><p>Complete</p>'">SUBMIT ANSWER</button>''')
+                with tempfile.TemporaryDirectory() as d:
+                    session=Session(page,Path(d));session.project_root=Path(d)
+                    session.cdp=await page.context.new_cdp_session(page)
+                    async def fixture_options(_session):
+                        result=[]
+                        for selector in ('label[for=a]','label[for=b]'):
+                            node=await backend(session,selector)
+                            result.append({'node':node,**await label_info(session,node)})
+                        return result
+                    with patch.object(analytical.importlib,'reload',lambda module:module), \
+                         patch.object(analytical,'options',side_effect=fixture_options), \
+                         patch('qa_bot.solvers.engine.AnswerEngine') as engine_cls:
+                        engine_cls.return_value.propose=AsyncMock(side_effect=propose)
+                        await analytical.run_module(session,'analytical')
+                    self.assertEqual(await page.evaluate('window.selected'),'2')
+                    self.assertEqual(len(calls),2)
+                    self.assertTrue(calls[1]['best_effort'])
+                    log=json.loads((Path(d)/'analytical-uncertainties.jsonl').read_text())
+                    self.assertEqual(log['confidence'],.55)
+                    self.assertFalse(log['saved_to_shared_answers'])
+                    self.assertFalse(log['correctness_verified'])
+                    submitted=json.loads((Path(d)/'analytical.jsonl').read_text())
+                    self.assertEqual(submitted['source'],'best_effort_unverified')
+            finally:await browser.close()

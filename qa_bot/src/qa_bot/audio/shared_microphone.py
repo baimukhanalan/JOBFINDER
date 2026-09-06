@@ -32,6 +32,12 @@ class SharedMicrophoneBridge:
   const bus = {{context, destination, analyser, input, consumers: [input], streamsRequested: 0, peak: 0,
                nonzeroSamples: 0, sampleCount: 0, firstSignalAt: null}};
   Object.defineProperty(globalThis, '__qaMicrophoneBus', {{value: bus}});
+  // A continuously clocked zero-valued source keeps microphone frames flowing
+  // before speech is ready. Otherwise a recorder may defer its start event
+  // until the first answer sample, making startup synchronisation impossible.
+  const clockInput=context.createConstantSource();clockInput.offset.value=0;
+  clockInput.connect(destination);clockInput.start();bus.clockInput=clockInput;
+
   // A physical microphone has a tiny idle noise floor. Exact digital zero
   // trips this platform's frozen-input detector during its 30-second prep.
   // The optional floor is disabled for every recording phase, including when

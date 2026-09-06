@@ -142,6 +142,22 @@ async def run_module(session,module):
                         historical=HistoricalAnswerResolver.from_files(root/'data/questions.jsonl',root/'SHL_answers_all.csv')
             with QuestionBank(session.output/'analytical.sqlite3') as bank, session_archive(session,ignored_observation_assets=('question-image',)) as archive:
                 answer=await engine.AnswerEngine(bank,client,historical=historical,archive=archive).propose(q,authorized_qa=True,allow_model=not getattr(session,'replay_only',False),timeout=45)
+            retryable_uncertainty = (answer.reason in ('model_abstained', 'low_confidence')
+                                    or 'numeric option absent or ambiguous' in answer.reason)
+            if not answer.proposal and retryable_uncertainty and not getattr(session,'replay_only',False):
+                review_state=await session.page.evaluate(STATE_SCRIPT)
+                timer=re.search(r'^Skip to main content\s*\n(\d{1,2})\s*:\s*(\d{2})',review_state['text'])
+                remaining=int(timer[1])*60+int(timer[2]) if timer else 0
+                if review_state.get('number')==number and remaining>50:
+                    initial_reason=answer.reason
+                    reviewer=codex_cli.CodexCLIClient(Path(shutil.which('codex')),session.project_root/'configs/answer_schema.json',isolated,reasoning_effort='medium',best_effort=True)
+                    with QuestionBank(session.output/'analytical.sqlite3') as bank:
+                        answer=await engine.AnswerEngine(bank,reviewer).propose(q,authorized_qa=True,timeout=45,best_effort=True)
+                    session.log('analytical-uncertainties.jsonl',{'time':time.time(),'number':number,
+                        'question_id':q.question_id,'question_content_hash':q.content_hash,
+                        'initial_reason':initial_reason,'review_source':answer.source,
+                        'review_reason':answer.reason,'confidence':answer.proposal.confidence if answer.proposal else None,
+                        'correctness_verified':False,'saved_to_shared_answers':False})
             if not answer.proposal:raise ValueError(answer.reason)
             selected=next(i for i,o in enumerate(q.options) if o.id==answer.proposal.selections[0].option_id)
             fresh=await session.page.evaluate(STATE_SCRIPT);fresh_opts=await options(session)

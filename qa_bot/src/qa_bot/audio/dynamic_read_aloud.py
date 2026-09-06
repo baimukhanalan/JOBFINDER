@@ -193,6 +193,8 @@ class DynamicReadAloudBridge:
     if (isCounter(text)) return true;
     if (/^(?:section|part)\\s+[a-z0-9]+(?:\\s*[:.\\-].*)?$/i.test(text)) return true;
     if (/^\\d{{1,2}}:\\d{{2}}$/.test(text)) return true;
+    if (/^(?:remaining time|time left)\\s*:?(?:\\s*\\d{{1,2}}:\\d{{2}})?$/i.test(text)) return true;
+    if (/^\\d+\\s*(?:seconds?|secs?|s)$/i.test(text)) return true;
     return ['submit', 'submit answer', 'next', 'back', 'skip', 'listen carefully',
       'prepare', 'get ready', 'time left', 'help', 'exit', 'replay', 'record again',
       'play recording', 'connection', 'audio', 'question audio', 'warning', 'or',
@@ -354,13 +356,26 @@ class DynamicReadAloudBridge:
         active.root !== observation.root || active.siteId !== observation.siteId ||
         active.signature !== observation.siteId + '\\0' + observation.sentence) return;
     if (context.state !== 'running') {{ active.status = 'failed'; report('audio_context_not_running'); return; }}
+    const bus=globalThis.__qaMicrophoneBus;
+    let startTime=context.currentTime+0.005;
+    if(bus?.recorderTrackingEnabled) {{
+      const recording=bus.recording;
+      if(!recording?.active || recording.siteId!==observation.siteId) return;
+      // The label can precede the recorder's real start. Keep the first phoneme
+      // clear of recorder startup/encoder preroll without changing cached audio.
+      startTime=Math.max(startTime,recording.contextTime+0.120);
+      const remaining=normalize(document.body.innerText).match(/Remaining Time\\s*:\\s*(\\d{{1,2}}):(\\d{{2}})/i);
+      if(remaining && startTime-context.currentTime+active.decoded.duration+0.05>Number(remaining[1])*60+Number(remaining[2])) {{
+        active.status='missed';report('recording_window_too_short');return;
+      }}
+    }}
     active.played = true;
     qa.recordingSeenAt = performance.now();
     const source = context.createBufferSource();
     active.source = source;
     source.buffer = active.decoded;
     source.connect(destination);
-    source.start(context.currentTime + 0.005);
+    source.start(startTime);
     qa.replayStartedAt = performance.now();
     qa.replayCount += 1;
     transition(active.epoch, 'recording');
@@ -409,6 +424,7 @@ class DynamicReadAloudBridge:
       return;
     }}
     const signature = observation.siteId + '\\0' + observation.sentence;
+    if(active?.source && (active.signature!==signature || active.root!==observation.root)) stopActive();
     if (signature === candidateSignature) candidateCount += 1;
     else {{ candidateSignature = signature; candidateCount = 1; candidateSeenAt = performance.now(); }}
     const stableFor = performance.now() - candidateSeenAt;
@@ -433,7 +449,12 @@ class DynamicReadAloudBridge:
           active.abort.abort();
         }}
         report('recording_unprepared');
-      }} else replay(observation);
+      }} else {{
+        replay(observation);
+        // A visible recording label alone is not enough. Poll until the
+        // matching native recorder start arrives before consuming this phase.
+        if(active && active.status==='armed' && !active.played)return;
+      }}
     }}
     previousRecording = observation.recording;
   }};

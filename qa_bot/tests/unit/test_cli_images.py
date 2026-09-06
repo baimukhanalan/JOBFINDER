@@ -6,6 +6,21 @@ from unittest.mock import AsyncMock,patch
 from qa_bot.adapters.llm.codex_cli import CodexCLIClient
 
 class ImageTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_best_effort_prompt_is_explicit_and_default_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);exe=root/'codex';exe.touch();schema=root/'schema.json';schema.write_text('{}')
+            for enabled in (False,True):
+                process=AsyncMock();process.returncode=0
+                process.communicate.return_value=(b'{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}',b'')
+                with patch('asyncio.create_subprocess_exec',new_callable=AsyncMock,return_value=process):
+                    await CodexCLIClient(exe,schema,root,best_effort=enabled).complete({'question_id':'q'},timeout=1)
+                prompt=process.communicate.call_args.args[0].decode()
+                self.assertEqual('BEST-EFFORT QA REVIEW' in prompt,enabled)
+                if enabled:
+                    self.assertIn('actual confidence',prompt)
+                    self.assertIn('Missing or unreadable information still requires abstain',prompt)
+                    self.assertIn('Set calculation to null if no exact numeric result',prompt)
+
     async def test_tampered_image_never_launches_model(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);exe=root/'codex';exe.touch();schema=root/'schema.json';schema.write_text('{}')

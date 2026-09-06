@@ -167,7 +167,7 @@ def _launch_args() -> tuple[list[str], dict]:
     return args, a
 
 
-async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
+async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                       min_delay: float = 0.8, max_delay: float = 2.2) -> dict:
     """Drive ONE assessment session end-to-end. Returns a result dict with per-type counts."""
     from playwright.async_api import async_playwright

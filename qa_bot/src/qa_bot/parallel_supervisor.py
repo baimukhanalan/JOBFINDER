@@ -27,6 +27,14 @@ TERMINAL = {"platform_complete", "timed_out", "failed", "interrupted", "cancelle
 INSPECT_ACTIONS = ("state", "controls", "screenshot", "device_diagnostics")
 
 
+def speech_retry_visible(text):
+    """Recognize the platform's recording retry dialog, not ordinary warnings."""
+    lines = [line.strip() for line in text.splitlines()]
+    return (any(line.casefold() == "warning!" for line in lines)
+            and "we are unable to hear you." in text.casefold()
+            and any(re.fullmatch(r"try\s*again", line, re.I) for line in lines))
+
+
 def write_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -184,6 +192,8 @@ class Attempt:
         self.error_count = 0
         self.diagnostic_count = 0
         self.terms_visible = False
+        self.speech_retry_required = False
+        self.last_module_error_reason = None
         self.latest_text = ""
         self.final_probe_pending = False
         self.final_probe_requested_at = None
@@ -264,7 +274,13 @@ class Attempt:
             with (evidence / "final-handshake.jsonl").open("a") as stream:
                 stream.write(json.dumps(record) + "\n")
         for record in observed:
-            text = record.get("text", "")
+            text = record.get("text")
+            # Missing/empty text is common while the page changes. It cannot
+            # establish that an observed recording dialog has disappeared.
+            if not isinstance(text, str) or not text.strip() or record.get("error"):
+                continue
+            was_speech_retry = self.speech_retry_required
+            self.speech_retry_required = speech_retry_visible(text)
             self.latest_text = text
             self.last_question = record.get("number")
             self.terms_visible = "TERMS & CONDITIONS" in text
@@ -272,8 +288,15 @@ class Attempt:
                 self.state, self.reason = "timed_out", "platform_time_limit"
             elif final_text_status(text) != "absent" and self.state not in TERMINAL:
                 self.state, self.reason = "needs_attention", "final_confirmation_or_other_visible_content" if final_text_status(text) == "blocked" else "final_verification_pending"
+            elif self.speech_retry_required and self.state not in TERMINAL:
+                self.state, self.reason = "needs_attention", "speech_retry_required"
             elif self.terms_visible and self.state not in TERMINAL:
                 self.state = "awaiting_terms" if not self.error_count else "needs_attention"
+                if was_speech_retry:
+                    self.reason = self.last_module_error_reason if self.error_count else None
+            elif was_speech_retry and self.reason == "speech_retry_required" and self.state not in TERMINAL:
+                self.state = "needs_attention" if self.error_count else "running"
+                self.reason = self.last_module_error_reason if self.error_count else None
             elif self.state == "awaiting_terms":
                 self.state = "running" if not self.error_count else "needs_attention"
         for path in evidence.glob("*errors.jsonl"):
@@ -283,8 +306,9 @@ class Attempt:
                     self.diagnostic_count += added
                     continue
                 self.error_count += added
+                self.last_module_error_reason = path.name
                 if self.state not in TERMINAL:
-                    self.state, self.reason = "needs_attention", path.name
+                    self.state, self.reason = "needs_attention", "speech_retry_required" if self.speech_retry_required else path.name
         if self.tail(evidence / "run-failures.jsonl") and self.state not in {"failed", "cancelled", "interrupted"}:
             self.state, self.reason = "timed_out", "runner_reported_failure"
         if self.state not in TERMINAL:
@@ -338,6 +362,7 @@ class Attempt:
                 "state": self.state, "reason": self.reason, "last_question": self.last_question,
                 "errors": self.error_count, "diagnostics": self.diagnostic_count,
                 "terms_visible": self.terms_visible, "started_at": self.started_at,
+                "speech_retry_required": self.speech_retry_required,
                 "completion_audit": self.completion_audit,
                 "pids": {role: process.pid for role, process in self.children.items()}}
 

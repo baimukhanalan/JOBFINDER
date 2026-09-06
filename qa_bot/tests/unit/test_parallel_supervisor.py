@@ -51,6 +51,9 @@ for line in sys.stdin:
  if command==dict(action='auto_modules',module='accept_terms'):state('Question',1)
 '''
 
+SPEECH_RETRY = ('Question 5\nWarning!\nWe are unable to hear you. Please click on "Try Again" '
+                'to start the recording again.\nTRY AGAIN\nTRY LATER')
+
 
 class ParallelSupervisorTests(unittest.TestCase):
     def setUp(self):
@@ -230,6 +233,61 @@ class ParallelSupervisorTests(unittest.TestCase):
         self.assertEqual(attempt.error_count,1)
         self.assertEqual(attempt.children['browser'].pid,original)
         self.assertIsNone(attempt.children['browser'].poll())
+
+    def append_state(self, attempt, value):
+        with (attempt.path/'evidence'/'owned'/'states.jsonl').open('a') as stream:
+            stream.write(json.dumps(value)+'\n')
+        return attempt.poll()
+
+    def test_speech_retry_warning_is_attention_and_clears_after_recovery(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        original=attempt.children['browser'].pid
+        self.assertEqual(self.append_state(attempt,{'text':SPEECH_RETRY,'number':5}),'needs_attention')
+        self.assertEqual(attempt.reason,'speech_retry_required')
+        self.assertTrue(attempt.summary()['speech_retry_required'])
+        self.assertEqual(attempt.error_count,0)
+        self.assertEqual(self.append_state(attempt,{'text':'Question 5\nRecording...','number':5}),'running')
+        self.assertIsNone(attempt.reason)
+        self.assertFalse(attempt.summary()['speech_retry_required'])
+        self.assertEqual(attempt.children['browser'].pid,original)
+        self.assertFalse((attempt.path/'received.jsonl').exists())
+
+    def test_speech_retry_survives_transient_reads_without_new_hard_errors(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        self.append_state(attempt,{'text':SPEECH_RETRY.replace('TRY AGAIN','TRYAGAIN')})
+        for record in ({'error':'execution context destroyed'},{'text':''},{'text':'  '},{'text':None},
+                       {'text':'Question 5','error':'incomplete read'}):
+            self.assertEqual(self.append_state(attempt,record),'needs_attention')
+            self.assertEqual(attempt.reason,'speech_retry_required')
+        with (attempt.path/'browser.log').open('a') as stream:
+            stream.write(json.dumps({'error':'state: execution context destroyed'})+'\n')
+        self.assertEqual(attempt.poll(),'needs_attention')
+        self.assertEqual(attempt.error_count,0)
+        self.assertEqual(attempt.diagnostic_count,0)
+        self.assertEqual(self.append_state(attempt,{'text':'Question 5\nRecording...'}),'running')
+
+    def test_speech_recovery_does_not_clear_module_failure(self):
+        attempt=self.attempt('error');self.poll_until(attempt,'needs_attention')
+        self.append_state(attempt,{'text':SPEECH_RETRY})
+        self.assertEqual(attempt.reason,'speech_retry_required')
+        evidence=attempt.path/'evidence'/'owned'
+        (evidence/'speech-errors.jsonl').write_text('{"error":"missing audio"}\n')
+        self.assertEqual(attempt.poll(),'needs_attention')
+        self.assertEqual(attempt.reason,'speech_retry_required')
+        self.assertEqual(self.append_state(attempt,{'text':'Question 5\nRecording...'}),'needs_attention')
+        self.assertEqual(attempt.reason,'speech-errors.jsonl')
+        self.assertEqual(attempt.error_count,2)
+        self.assertFalse(attempt.speech_retry_required)
+
+    def test_other_warning_or_quoted_retry_phrase_is_not_speech_retry(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        for text in ('Question 5\nWarning!\nAre you ready?\nTRY AGAIN',
+                     'Question: We are unable to hear you. What should you say?\nTRY AGAIN'):
+            self.assertEqual(self.append_state(attempt,{'text':text}),'running')
+            self.assertFalse(attempt.speech_retry_required)
+        attempt.state,attempt.reason='timed_out','platform_time_limit'
+        self.assertEqual(self.append_state(attempt,{'text':SPEECH_RETRY}),'timed_out')
+        self.assertEqual(attempt.reason,'platform_time_limit')
 
     def test_diagnostic_errors_do_not_block_reviewed_terms_control(self):
         attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')

@@ -221,6 +221,38 @@ class DynamicReadAloudTests(unittest.IsolatedAsyncioTestCase):
             "failures": ["recording_unprepared"],
         })
 
+    async def test_auto_detect_one_two_three_word_phrases_excludes_ui(self):
+        await self._open(_screenshot_question(1, 'Hello.') + '<nav><span>Home</span><span>Speak Now</span></nav>')
+        for number, sentence in enumerate(('Hello.', 'Good morning.', 'What lovely ambiance.'),1):
+            if number>1:
+                await self.page.locator('main').evaluate("""(root,data)=>{
+                    root.querySelector('.progress').textContent='Question '+data.number+' of 5';
+                    root.querySelector('.sentence').textContent=data.sentence;
+                    root.querySelector('.phase').textContent='Get Ready';
+                }""", {'number':number,'sentence':sentence})
+            await self.page.wait_for_function("__qaDynamicReadAloud.status==='armed' && __qaDynamicReadAloud.prepareCount==="+str(number))
+            await self.page.click('main')
+            await self.page.locator('.phase').evaluate("n=>n.textContent='Speak Now'")
+            await self.page.wait_for_function('__qaDynamicReadAloud.replayCount==='+str(number))
+            await self.page.wait_for_function("__qaDynamicReadAloud.status==='played'")
+        self.assertEqual([x['question'] for x in self.controller.prepared],['Hello.','Good morning.','What lovely ambiance.'])
+
+    async def test_auto_detect_short_sentence_in_separate_instruction_wrapper(self):
+        body=_screenshot_question(1,'What lovely ambiance.')
+        body=body.replace("<p class='instruction'>Read the given sentence out loud.</p>",
+            '<div class="instruction-wrap"><p>Read the given sentence out loud.</p></div>')
+        await self._open(body)
+        await self.page.wait_for_function("__qaDynamicReadAloud.status==='armed'")
+        self.assertEqual(self.controller.prepared[0]['question'],'What lovely ambiance.')
+
+    async def test_auto_detect_short_navigation_or_phase_is_never_a_sentence(self):
+        await self._open(_screenshot_question(1, 'Speak Now'))
+        await self.page.wait_for_function("__qaDynamicReadAloud.status==='blocked'")
+        self.assertEqual(self.controller.prepared,[])
+        await self.page.locator('.sentence').evaluate("n=>n.textContent='NEXT'")
+        await self.page.wait_for_timeout(150)
+        self.assertEqual(self.controller.prepared,[])
+
     async def test_auto_detect_two_screenshot_shaped_unknown_sentences(self):
         first = "Every customer deserves a clear and thoughtful response."
         second = "Please review the account details before confirming payment."

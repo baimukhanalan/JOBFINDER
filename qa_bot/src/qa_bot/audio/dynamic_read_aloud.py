@@ -180,6 +180,7 @@ class DynamicReadAloudBridge:
     'p,div,span,h1,h2,h3,h4,blockquote,li,label'))
     .filter(visible).filter(node => {{
       if (node.closest('button,a,nav,header,footer,[role="button"],[role="navigation"]')) return false;
+      if (cfg.suspensionSelector && node.closest(cfg.suspensionSelector)) return false;
       const text = normalize(node.innerText || node.textContent);
       if (!text) return false;
       return !Array.from(node.children).some(child =>
@@ -193,7 +194,9 @@ class DynamicReadAloudBridge:
     if (/^(?:section|part)\\s+[a-z0-9]+(?:\\s*[:.\\-].*)?$/i.test(text)) return true;
     if (/^\\d{{1,2}}:\\d{{2}}$/.test(text)) return true;
     return ['submit', 'submit answer', 'next', 'back', 'skip', 'listen carefully',
-      'prepare', 'get ready', 'time left'].includes(lowered);
+      'prepare', 'get ready', 'time left', 'help', 'exit', 'replay', 'record again',
+      'play recording', 'connection', 'audio', 'question audio', 'warning', 'or',
+      'ok', 'yes', 'no', 'try again', 'try later'].includes(lowered);
   }};
   const inspectAuto = () => {{
     const blocks = leafBlocks().map(node =>
@@ -207,9 +210,21 @@ class DynamicReadAloudBridge:
       return {{error: instructions.length ? 'ambiguous_instruction' : 'missing_instruction'}};
     const sentences = blocks.filter(item => {{
       if (autoExcluded(item.text)) return false;
-      if (item.text.length < 15 || item.text.length > 1000) return false;
+      if (!item.text.length || item.text.length > 1000) return false;
       const words = item.text.match(/\\p{{L}}+(?:['’\\-]\\p{{L}}+)?/gu) || [];
-      return words.length >= 4;
+      if (!words.length) return false;
+      if (words.length >= 4) return true;
+      // Short utterances are valid questions. Require their local instruction
+      // context; a phase-only screen can retain only its already armed sentence.
+      if (/^H[1-6]$/.test(item.node.tagName)) return false;
+      if (instructions.length === 1) {{
+        const anchor=instructions[0].node;
+        if (anchor.parentElement?.contains(item.node)) return true;
+        const area=anchor.closest('section,article,main,[role="main"]')||document.body;
+        if (area.contains(item.node) && /[.!?…]$/.test(item.text) &&
+            (anchor.compareDocumentPosition(item.node)&Node.DOCUMENT_POSITION_FOLLOWING)) return true;
+      }}
+      return Boolean(active && active.sentence === item.text && active.root.contains(item.node));
     }});
     if (sentences.length !== 1)
       return {{error: sentences.length ? 'ambiguous_sentence' : 'missing_sentence'}};
@@ -236,10 +251,14 @@ class DynamicReadAloudBridge:
   const inspect = () => cfg.autoDetect ? inspectAuto() : inspectExplicit();
   // Explicit recovery is only available while a configured suspension dialog
   // is present, after a completed/missed take of the same connected question.
+  const retriedSignatures = new Set();
   qa.retryCurrent = () => {{
     if (!cfg.suspensionSelector || !document.querySelector(cfg.suspensionSelector) ||
         !active || !active.root.isConnected || !active.decoded || active.source ||
-        !['played', 'missed'].includes(active.status)) return false;
+        retriedSignatures.has(active.signature) ||
+        (!['played', 'missed'].includes(active.status) && !active.retryPrepared)) return false;
+    retriedSignatures.add(active.signature);
+    active.retryPrepared = false;
     active.played = false;
     active.status = 'armed';
     previousRecording = false;
@@ -265,11 +284,11 @@ class DynamicReadAloudBridge:
 
   const arm = async observation => {{
     const signature = observation.siteId + '\\0' + observation.sentence;
-    if (active && active.signature === signature && active.status !== 'failed') return active.warmTask;
+    if (active && active.signature === signature && !['failed','missed'].includes(active.status)) return active.warmTask;
     if (active) stopActive();
     const epoch = ++qa.epoch;
     const abort = new AbortController();
-    const state = {{epoch, signature, siteId: observation.siteId, root: observation.root,
+    const state = {{epoch, signature, sentence: observation.sentence, siteId: observation.siteId, root: observation.root,
                    abort, status: 'preparing', decoded: null, source: null,
                    played: false, warmTask: null}};
     active = state;
@@ -308,6 +327,26 @@ class DynamicReadAloudBridge:
       if (active === state) {{ state.status = 'failed'; report(error && error.message || error); }}
     }});
     return state.warmTask;
+  }};
+
+  qa.retrySignature = () => {{
+    const observation=inspect();
+    return observation.error?null:observation.siteId+'\\0'+observation.sentence;
+  }};
+  qa.prepareRetryCurrent = async () => {{
+    if (!cfg.suspensionSelector) return false;
+    const dialogs=Array.from(document.querySelectorAll(cfg.suspensionSelector)).filter(visible);
+    if (dialogs.length!==1 || !normalize(dialogs[0].innerText||dialogs[0].textContent).includes('We are unable to hear you.')) return false;
+    const observation=inspect();
+    if (observation.error) return false;
+    const signature=observation.siteId+'\\0'+observation.sentence;
+    if (retriedSignatures.has(signature)) return false;
+    if (!active || active.signature!==signature || !active.decoded) await arm(observation);
+    const fresh=inspect();
+    if (fresh.error || fresh.siteId!==observation.siteId || fresh.sentence!==observation.sentence ||
+        !dialogs[0].isConnected || !active || active.signature!==signature || !active.decoded || active.source) return false;
+    active.retryPrepared=true;
+    return true;
   }};
 
   const replay = observation => {{

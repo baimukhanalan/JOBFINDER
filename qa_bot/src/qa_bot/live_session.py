@@ -328,10 +328,15 @@ class Session:
 
     async def watch(self):
         from qa_bot.solvers.device_check import advance_device_check
+        from qa_bot.solvers.speech_retry import recover_read_warning
         previous = None
         while True:
             try:
                 state = await self.page.evaluate(STATE_SCRIPT)
+                if (self.auto_speech and 'Section A:' in state['text']
+                        and 'We are unable to hear you.' in state['text']):
+                    if await recover_read_warning(self, state):
+                        state = await self.page.evaluate(STATE_SCRIPT)
                 if 'Your test is now complete. Thank you!' in state['text'] and not getattr(self,'final_captured',False):
                     self.final_captured=True
                     try:

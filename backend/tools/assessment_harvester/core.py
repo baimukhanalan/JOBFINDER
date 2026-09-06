@@ -434,8 +434,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                             ak = bank.answer_for(adapter.platform, q, opt_txt, _msig(item))
                         except Exception:
                             ak = None
-                    if ak and isinstance(ak.get("index"), int) and 0 <= ak["index"] < len(opts):
-                        idx = ak["index"]
+                    idx = None
+                    if ak:
+                        # match by ANSWER TEXT first — option order can differ between sessions (SHL
+                        # reorders), so the stored index alone is unsafe; fall back to the index.
+                        want = (ak.get("text") or "").strip().lower()
+                        if want:
+                            idx = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == want), None)
+                        if idx is None and isinstance(ak.get("index"), int) and 0 <= ak["index"] < len(opts):
+                            idx = ak["index"]
+                    if idx is not None:
                         pick_src = "answer_key"
                     else:
                         idx = random.randint(0, len(opts) - 1)

@@ -1686,18 +1686,37 @@ video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_
   as empty speaking). **Verified live: one run banks ~13 speaking + ~21 listening** (real + diverse:
   "Don't open the refrigerator repeatedly.", a full customer-service dialog + comprehension Qs like "What
   was Tina's tone during the conversation?"). Run more fresh tokens to grow the bank.
-- **REMAINING CEILING — the COGNITIVE MCQ modules (Basic Analytical Ability = numerical/verbal) are still
-  gated.** The TP AMCAT is a 6-module server-ordered battery: Diagnostic → **SVAR spoken-English ×4** →
-  Typing → Personality (72) → **Basic Analytical Ability (19, cognitive)** → Sales (20); modules can't be
-  jumped client-side (`startTest` reads `currentModule` from the server). We harvest speaking + listening
-  from SVAR, but to ADVANCE past a **listen-repeat** item you must actually repeat the played sentence in
-  your voice — the run stalls at the first such item it can't pass (`stuck_free_response walk_only=True`).
-  Passing it needs real per-item audio fed to the mic (transcribe the played clip → TTS it back → play it
-  as the mic), which requires a **virtual audio device** (pulseaudio null-sink; `--use-file-for-fake-audio-
-  capture` is read ONCE at launch, so overwriting the file does NOT work — verified). That, plus Typing +
-  72 Personality, gates the cognitive MCQ. Big/fragile build for a unique-per-session (low-replay)
-  cognitive corpus — deferred. So today: speaking + listening banked; cognitive MCQ behind the virtual-mic
-  gate. **Sutherland-SHL** is separately
+- **FULL-BATTERY WALK — the virtual mic IS built and the engine now walks the WHOLE AMCAT battery into
+  Personality (2026-09-06).** The TP AMCAT is a server-ordered battery (Diagnostic → **SVAR spoken-English
+  ×4 (Sections A read-aloud / B listen-repeat / C listen-comprehension / D free-speech)** → Typing →
+  Personality (72) → **Basic Analytical Ability (19, cognitive)** → Sales (20); modules can't be jumped —
+  `startTest` reads `currentModule` from the server). What was built to get past the SVAR wall (all in
+  `adapters/amcat.py` + `core.py`, verified live reaching + banking Personality):
+  - **PULSE VIRTUAL MIC** (`mic.py`): pulseaudio null-sink + `module-remap-source` so Chromium enumerates
+    it as a mic; launch WITHOUT `--use-file-for-fake-audio-capture` (read ONCE at launch — a static file
+    can't answer per item) and WITH `PULSE_SERVER` in the env. `core.harvest_one` prefers it (falls back to
+    the static file if unavailable). Per SVAR item it feeds the required sentence: read-aloud → the shown
+    prompt; listen-repeat → whisper-ASR of the just-played S3 clip; both TTS'd via espeak.
+  - **`handle_speaking`**: speak the sentence ONCE per record window then let the mic go SILENT (continuous
+    audio kept SUBMIT disabled forever — the recorder needs speech-then-silence to end the utterance); delay
+    the SUBMIT click a few ticks so the clip is captured (an early SUBMIT → "unable to hear you" WARN loop).
+    **Section D Free Speech** is the exception: feed a long continuous passage for the whole timed window and
+    never SUBMIT while recording.
+  - **Section C** MCQ options are `.option-lable` (missed by the generic reader) — recognised in `read_item`
+    + `answer_mcq`, and `handle_speaking` BAILS to the MCQ path the moment they render (listen-first).
+  - **Typing** is a TIMED Angular module — type the shown paragraph with REAL keystrokes, then wait for the
+    module timer to end (don't churn); a churn guard bails an unadvancing sentence.
+  - **Captivate/Flash** computer-proficiency sim — SKIP every question (Flash is dead in Chromium).
+  - **Resume-safety**: mark the diagnostic done when a token resumes past it, so the gate never re-clicks
+    `#submit1` (which logs the session out).
+  - **CURRENT CEILING = an INTERMITTENT fake-mic detection miss.** The SVAR recorder occasionally doesn't
+    "hear" the synthetic audio on ONE random item per session (`unable to hear you`), and that item blocks
+    the rest — so a fresh FULL SVAR walk succeeds only SOME of the time. Personality (reached + banked live)
+    and the cognitive/math + Sales modules (which sit AFTER a full 72-item Personality pass) are therefore
+    captured **probabilistically across many runs**, not every run. A token that stalls resumes past its
+    completed items but re-stalls on the same mic-miss item. So the corpus accumulates deep-module questions
+    by VOLUME (mass runs), not by a single deterministic walk. Improving mic-detection reliability (or
+    real per-item TTS timing) is the remaining lever for math/picture. **Sutherland-SHL** is separately
   walled by **webcam proctoring** (`WCI200` — a real camera + liveness; do NOT fake a human face — it's an
   identity control). **Maximus SHL-OPQ** (personality, no-right-answer) is the one fully-passable
   assessment and is already auto-completed + banked by the etalon (`shl_assessment.py`, 263 items in the

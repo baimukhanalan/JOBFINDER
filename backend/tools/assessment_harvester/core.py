@@ -426,13 +426,26 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         await page.wait_for_timeout(1200)
                         continue
 
-                    idx = random.randint(0, len(opts) - 1)
+                    # REPLAY the pre-computed correct answer if this question is in the bank's answer key;
+                    # else fall back to random (harvest mode / first-seen question).
+                    ak = None
+                    if os.environ.get("HARVEST_MODE") != "random":
+                        try:
+                            ak = bank.answer_for(adapter.platform, q, opt_txt, _msig(item))
+                        except Exception:
+                            ak = None
+                    if ak and isinstance(ak.get("index"), int) and 0 <= ak["index"] < len(opts):
+                        idx = ak["index"]
+                        pick_src = "answer_key"
+                    else:
+                        idx = random.randint(0, len(opts) - 1)
+                        pick_src = "random"
                     chosen = {"text": opt_txt[idx] if idx < len(opt_txt) else opts[idx].get("text"),
-                              "index": idx, "value": None, "source": "random"}
+                              "index": idx, "value": None, "source": pick_src}
                     _bank(item, item_type, is_ability, chosen, shot, audio_url=audio_url)
-                    logger.info("[%s] #%d %s%s q=%r opts=%d pick=%d",
+                    logger.info("[%s] #%d %s%s q=%r opts=%d pick=%d (%s)",
                                 mailbox, res["banked"], item_type,
-                                " IMG" if item.get("qimgs") else "", q[:60], len(opts), idx)
+                                " IMG" if item.get("qimgs") else "", q[:60], len(opts), idx, pick_src)
 
                     prev = (q, tuple(o.get("text", "") for o in opts), item.get("progress"))
                     await asyncio.sleep(random.uniform(min_delay, max_delay))

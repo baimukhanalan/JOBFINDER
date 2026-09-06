@@ -111,6 +111,13 @@ def record(*, platform: str, item_type: str, question: str,
     return key
 
 
+def answer_for(platform: str, question: str, option_texts: list[str], msig: str = "") -> dict | None:
+    """Return the stored `answer_key` ({text,index,source,needs_vision}) for a banked MCQ, or None.
+    Used to REPLAY the pre-computed correct answer on a recurrence instead of guessing/random."""
+    e = _load().get("items", {}).get(dedup_key(platform, question, option_texts, msig))
+    return (e or {}).get("answer_key")
+
+
 def size() -> int:
     return len(_load().get("items", {}))
 

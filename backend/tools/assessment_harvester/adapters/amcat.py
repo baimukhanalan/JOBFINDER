@@ -259,6 +259,12 @@ _MCQ_CLICK_JS = r"""(idx) => {
   return true;
 }"""
 
+# Typing module: type the passage at a REALISTIC human speed (75 WPM). WPM counts 5 chars/word incl.
+# spaces -> 75*5 = 375 chars/min -> ~160 ms between keystrokes. Typing the exact shown text at 75 WPM
+# is a competent, human-plausible typing result (was delay=6ms = inhumanly fast).
+_TYPING_WPM = 75
+_TYPING_DELAY_MS = round(60000 / (_TYPING_WPM * 5))   # ~160 ms/char
+
 # Typing module: extract the reference SENTENCE to copy (the prominent text that is NOT the
 # instruction and NOT inside an input) + the input element presence. The accuracy test only advances
 # when the shown sentence is typed, so we must copy it exactly (via real keystrokes).
@@ -838,7 +844,7 @@ class AmcatAdapter(Adapter):
                 para = text
             try:
                 if await page.evaluate(_TYPING_FOCUS_JS):
-                    await page.keyboard.type(para[:1400], delay=6)   # real keys; Angular ng-model picks up
+                    await page.keyboard.type(para[:1400], delay=_TYPING_DELAY_MS)   # 75 WPM human cadence
             except Exception:
                 pass
             return para
@@ -872,7 +878,7 @@ class AmcatAdapter(Adapter):
                 last = cur.get("sent")
                 try:
                     if await page.evaluate(_TYPING_FOCUS_JS):
-                        await page.keyboard.type((last or "")[:1400], delay=6)
+                        await page.keyboard.type((last or "")[:1400], delay=_TYPING_DELAY_MS)
                 except Exception:
                     pass
         return False

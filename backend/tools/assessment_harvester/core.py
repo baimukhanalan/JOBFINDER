@@ -196,6 +196,39 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
     res["_audiodir"] = tempfile.mkdtemp(prefix="amcat_aud_")
     res["_say_wav"] = os.path.join(res["_audiodir"], "say.wav")
     res["_latest_aud"] = None
+    # Optional Bright Data proxy egress (env HARVEST_PROXY=1): route the whole session through a fresh
+    # rotating BD IP so the assessment server sees a different IP than our (rate-limited) datacenter one
+    # — the NE500 logouts appeared only after heavy same-IP use. Best-effort; None = direct.
+    res["_proxy"] = None
+    _pmode = os.environ.get("HARVEST_PROXY")
+    if _pmode == "res":
+        # RESIDENTIAL BD egress (a fresh rotating home IP per session) — datacenter IPs (ours + the BD dc
+        # pool) get the assessment server's NE500 / STATE_TRANSITION logouts; residential avoids the flag.
+        try:
+            from backend.config import settings
+            cust = settings.brightdata_customer
+            pw = os.environ.get("HARVEST_RES_PW") or ""
+            gw = settings.brightdata_gateway or "brd.superproxy.io:33335"
+            if cust and pw:
+                sess = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=10))
+                user = f"brd-customer-{cust}-zone-alibaba_res-country-us-session-{sess}"
+                res["_proxy"] = {"server": f"http://{gw}", "username": user, "password": pw}
+                logger.info("[%s] egress via RESIDENTIAL proxy (alibaba_res, session %s)", mailbox, sess)
+        except Exception as exc:
+            logger.info("[%s] residential proxy unavailable (%s) — going direct", mailbox, exc)
+    elif _pmode == "1":
+        try:
+            from backend.tools import proxy_pool
+            pr = proxy_pool.next_proxy()
+            if pr and pr.get("server"):
+                res["_proxy"] = {k: pr[k] for k in ("server", "username", "password") if pr.get(k)}
+                logger.info("[%s] egress via proxy %s", mailbox, pr.get("server"))
+        except Exception as exc:
+            logger.info("[%s] proxy unavailable (%s) — going direct", mailbox, exc)
+    if res["_proxy"]:
+        # BD (esp. residential) SSL-bumps HTTPS -> Chromium sees ERR_CERT_AUTHORITY_INVALID. We control
+        # the proxy and don't need cert validation for a synthetic harvest, so accept any cert.
+        args = args + ["--ignore-certificate-errors"]
 
     def _bank(item, item_type, is_ability, chosen, shot, free=None, audio_url=None):
         bank.record(
@@ -221,7 +254,9 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
         async with async_playwright() as p:
             b = await p.chromium.launch(headless=False, args=args, env=launch_env, timeout=60000)
             ctx = await b.new_context(viewport={"width": 1280, "height": 850},
-                                      permissions=["microphone", "camera"])
+                                      permissions=["microphone", "camera"],
+                                      proxy=res.get("_proxy") or None,
+                                      ignore_https_errors=bool(res.get("_proxy")))
             page = await ctx.new_page()
             # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
             # (Section B listen-repeat, Section C listen-comprehension) can be transcribed + banked.

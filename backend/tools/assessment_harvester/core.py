@@ -29,7 +29,7 @@ import random
 import re
 import tempfile
 
-from backend.tools.assessment_harvester import assets, asr, bank, media, mic
+from backend.tools.assessment_harvester import answer_key, assets, asr, bank, media, mic
 
 # Audio whose transcript is a section/instruction prompt, not harvestable content.
 _ASR_INSTR_RE = re.compile(
@@ -426,31 +426,52 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         await page.wait_for_timeout(1200)
                         continue
 
-                    # REPLAY the pre-computed correct answer if this question is in the bank's answer key;
-                    # else fall back to random (harvest mode / first-seen question).
-                    ak = None
-                    if os.environ.get("HARVEST_MODE") != "random":
+                    # Answer selection: (1) REPLAY the banked answer key (match by TEXT — option order can
+                    # differ between sessions); (2) else LIVE-solve a NEW TEXT question with the local model
+                    # and cache it so it replays next time; (3) else random (image new-question, which needs
+                    # offline vision, or HARVEST_MODE=random for pure capture).
+                    harvest_random = os.environ.get("HARVEST_MODE") == "random"
+                    # image-dependent = explicit images OR a cognitive item with a captured diagram/table
+                    # screenshot: the TEXT-only local model can't see those, so never blind-live-solve them
+                    # (they get random now + offline vision solving into the key).
+                    has_img = (bool(item.get("qimgs")) or any(o.get("image") for o in opts)
+                               or (is_ability and bool(shot)))
+                    idx = None
+                    pick_src = "random"
+                    live_cache = False
+                    if not harvest_random:
                         try:
                             ak = bank.answer_for(adapter.platform, q, opt_txt, _msig(item))
                         except Exception:
                             ak = None
-                    idx = None
-                    if ak:
-                        # match by ANSWER TEXT first — option order can differ between sessions (SHL
-                        # reorders), so the stored index alone is unsafe; fall back to the index.
-                        want = (ak.get("text") or "").strip().lower()
-                        if want:
-                            idx = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == want), None)
-                        if idx is None and isinstance(ak.get("index"), int) and 0 <= ak["index"] < len(opts):
-                            idx = ak["index"]
-                    if idx is not None:
-                        pick_src = "answer_key"
-                    else:
+                        if ak:
+                            want = (ak.get("text") or "").strip().lower()
+                            if want:
+                                idx = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == want), None)
+                            if idx is None and isinstance(ak.get("index"), int) and 0 <= ak["index"] < len(opts):
+                                idx = ak["index"]
+                            if idx is not None:
+                                pick_src = "answer_key"
+                        if idx is None and not has_img:      # new TEXT question -> solve live with the model
+                            try:
+                                live_idx = await answer_key.solve_one(q, opt_txt)
+                            except Exception:
+                                live_idx = None
+                            if live_idx is not None:
+                                idx, pick_src, live_cache = live_idx, "live_llm", True
+                    if idx is None:
                         idx = random.randint(0, len(opts) - 1)
                         pick_src = "random"
                     chosen = {"text": opt_txt[idx] if idx < len(opt_txt) else opts[idx].get("text"),
                               "index": idx, "value": None, "source": pick_src}
                     _bank(item, item_type, is_ability, chosen, shot, audio_url=audio_url)
+                    if live_cache:  # persist the live-solved answer so a recurrence replays it (after _bank)
+                        try:
+                            bank.set_answer(adapter.platform, q, opt_txt,
+                                            {"text": chosen["text"], "index": idx, "source": "live_llm",
+                                             "needs_vision": False, "ts": bank._now()}, _msig(item))
+                        except Exception:
+                            pass
                     logger.info("[%s] #%d %s%s q=%r opts=%d pick=%d (%s)",
                                 mailbox, res["banked"], item_type,
                                 " IMG" if item.get("qimgs") else "", q[:60], len(opts), idx, pick_src)

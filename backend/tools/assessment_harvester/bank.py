@@ -111,6 +111,18 @@ def record(*, platform: str, item_type: str, question: str,
     return key
 
 
+def set_answer(platform: str, question: str, option_texts: list[str], answer_key: dict,
+               msig: str = "") -> bool:
+    """Store/overwrite the `answer_key` on a banked item (for a freshly live-solved question so it
+    replays next time). Returns True if the item existed. Persists."""
+    e = _load().get("items", {}).get(dedup_key(platform, question, option_texts, msig))
+    if not e:
+        return False
+    e["answer_key"] = answer_key
+    _save()
+    return True
+
+
 def answer_for(platform: str, question: str, option_texts: list[str], msig: str = "") -> dict | None:
     """Return the stored `answer_key` ({text,index,source,needs_vision}) for a banked MCQ, or None.
     Used to REPLAY the pre-computed correct answer on a recurrence instead of guessing/random."""

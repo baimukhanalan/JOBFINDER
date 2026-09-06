@@ -60,6 +60,20 @@ async def _pick(client, question: str, options: list[str]) -> int | None:
     return idx if 0 <= idx < len(options) else None
 
 
+async def solve_one(question: str, options: list[str], timeout: float = 40.0) -> int | None:
+    """LIVE-solve a single MCQ with the local model (own client). Returns a 0-based index or None.
+    Used by the harvester when a question isn't in the answer key yet (a text new-question), so it's
+    answered correctly on the FIRST encounter instead of randomly."""
+    if not options or len(options) < 2:
+        return None
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await _pick(client, question, options)
+    except Exception:
+        return None
+
+
 async def compute_all(concurrency: int = 4, redo: bool = False, platform: str | None = None,
                       progress=None) -> dict:
     """Fill `answer_key` for every MCQ item (>=2 text options) that lacks one (or all, with redo).

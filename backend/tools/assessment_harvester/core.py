@@ -99,6 +99,15 @@ _PERS_Q_RE = re.compile(
     r"describes you (the )?best|which statement|strongly agree|strongly disagree|\bi (am|prefer|enjoy|like|tend)\b|"
     r"how (often|much) do you|rate (yourself|how)|to what extent", re.I)
 _TF_RE = re.compile(r"^(true|false|cannot say|can'?t say|not enough information)$", re.I)
+# The question's DATA lives in an image/diagram/table (not the text) -> the text-only local model can't
+# solve it, so never live-solve/cache it (random now + offline vision). Deliberately NOT matching
+# verbal "passage/paragraph/sentence" (those are text-solvable).
+_IMG_REF_RE = re.compile(
+    r"refer to (the )?(given )?(diagram|figure|table|image|chart|graph|list|sign|icon|picture|dimensions|"
+    r"address|map|layout|floor ?plan|information)|"
+    r"given (diagram|figure|table|image|chart|graph|list|sign|icon|picture|dimensions)|"
+    r"\bas shown\b|shown (in|above|below|here|is|are)|in the (diagram|figure|table|image|chart|picture)|"
+    r"the (diagram|figure|table|graph|chart|image|sign) (shows|lists|below|above|given|displays)", re.I)
 
 
 def classify(item: dict) -> tuple[str, bool]:
@@ -435,7 +444,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     # screenshot: the TEXT-only local model can't see those, so never blind-live-solve them
                     # (they get random now + offline vision solving into the key).
                     has_img = (bool(item.get("qimgs")) or any(o.get("image") for o in opts)
-                               or (is_ability and bool(shot)))
+                               or bool(_IMG_REF_RE.search(q)))
                     # listening-comprehension: the correct option depends on the DIALOGUE (audio), so a
                     # text-only key is unreliable — transcribe the just-played clip and solve WITH it.
                     listen_ctx = None

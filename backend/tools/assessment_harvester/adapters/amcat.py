@@ -235,7 +235,7 @@ _MCQ_OPTS_JS = r"""() => {
   const T = e => (e.textContent||'').replace(/\s+/g,' ').trim();
   const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
      return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
-  const els = [...document.querySelectorAll('.option-lable')].filter(vis);
+  const els = [...document.querySelectorAll('.option-lable, .optionDiv')].filter(vis);
   const seen = new Set(); const opts = [];
   els.forEach(e => { const t=T(e); if(!t||seen.has(t)||t.length>400) return; seen.add(t);
      const im=e.querySelector('img'); opts.push({text:t, image: im ? (im.src||'') : null}); });
@@ -251,7 +251,7 @@ _MCQ_OPTS_JS = r"""() => {
 _MCQ_CLICK_JS = r"""(idx) => {
   const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
      return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
-  const els = [...document.querySelectorAll('.option-lable')].filter(vis);
+  const els = [...document.querySelectorAll('.option-lable, .optionDiv')].filter(vis);
   if (idx<0 || idx>=els.length) return false;
   const el = els[idx];
   el.scrollIntoView({block:'center'});

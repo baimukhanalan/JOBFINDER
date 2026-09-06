@@ -436,15 +436,32 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     # (they get random now + offline vision solving into the key).
                     has_img = (bool(item.get("qimgs")) or any(o.get("image") for o in opts)
                                or (is_ability and bool(shot)))
+                    # listening-comprehension: the correct option depends on the DIALOGUE (audio), so a
+                    # text-only key is unreliable — transcribe the just-played clip and solve WITH it.
+                    listen_ctx = None
+                    if (not harvest_random and not has_img and res.get("_latest_aud") and asr.available()
+                            and (item_type == "listening" or item.get("has_audio")
+                                 or re.search(r"\b(you (?:hear|heard)|conversation|dialogu?e|the call|"
+                                              r"caller|customer'?s? call|the speaker|according to the "
+                                              r"(?:audio|recording|conversation))\b", q, re.I))):
+                        try:
+                            dlg = asr.transcribe(res["_latest_aud"])
+                            listen_ctx = dlg if (dlg and len(dlg) > 20) else None
+                        except Exception:
+                            listen_ctx = None
                     idx = None
                     pick_src = "random"
                     live_cache = False
+                    cache_src = "live_llm"
                     if not harvest_random:
                         try:
                             ak = bank.answer_for(adapter.platform, q, opt_txt, _msig(item))
                         except Exception:
                             ak = None
-                        if ak:
+                        strong = bool(ak) and ak.get("source") in ("claude_vision", "dialog_llm")
+                        # replay a stored key UNLESS it's a weak text-only key for a listening item we can
+                        # now upgrade with the dialogue transcript.
+                        if ak and (strong or not listen_ctx):
                             want = (ak.get("text") or "").strip().lower()
                             if want:
                                 idx = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == want), None)
@@ -452,13 +469,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                 idx = ak["index"]
                             if idx is not None:
                                 pick_src = "answer_key"
-                        if idx is None and not has_img:      # new TEXT question -> solve live with the model
+                        if idx is None and not has_img:      # solve live (with the dialogue if we have it)
+                            solve_q = (f"[You heard this dialogue]: {listen_ctx}\n\nQuestion: {q}"
+                                       if listen_ctx else q)
                             try:
-                                live_idx = await answer_key.solve_one(q, opt_txt)
+                                live_idx = await answer_key.solve_one(solve_q, opt_txt)
                             except Exception:
                                 live_idx = None
                             if live_idx is not None:
                                 idx, pick_src, live_cache = live_idx, "live_llm", True
+                                cache_src = "dialog_llm" if listen_ctx else "live_llm"
                     if idx is None:
                         idx = random.randint(0, len(opts) - 1)
                         pick_src = "random"
@@ -468,7 +488,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     if live_cache:  # persist the live-solved answer so a recurrence replays it (after _bank)
                         try:
                             bank.set_answer(adapter.platform, q, opt_txt,
-                                            {"text": chosen["text"], "index": idx, "source": "live_llm",
+                                            {"text": chosen["text"], "index": idx, "source": cache_src,
                                              "needs_vision": False, "ts": bank._now()}, _msig(item))
                         except Exception:
                             pass

@@ -367,100 +367,68 @@ class AmcatAdapter(Adapter):
         start_nav = st.get("navTxt")
         start_prompt = st.get("prompt")
         last_label = None
-        same_streak = 0
-        review_plays = 0
-        warn_retries = 0
-        rec_ticks = 0
-        # ~90s per item budget: SVAR plays the question audio (~5-10s), records the spoken answer
-        # (read-aloud items auto-stop into a REVIEW state where you PLAY the recording to enable NEXT;
-        # other items enable SUBMIT ANSWER). Returns the instant the nav/prompt changes.
-        for tick in range(90):
+        same = 0
+        played_nav = None
+        warn_ticks = 0
+        # PATIENT per-item walk (owner-verified: "just wait — NEXT/advance opens on its own"). Each item:
+        # question audio plays -> RECORD phase (rec=True; the fake mic speaks speech.wav — do NOT click,
+        # just wait so a real recording is captured; clicking SUBMIT with no recording is what triggers
+        # the "unable to hear you" WARN) -> SUBMIT ANSWER / review(PLAY)->NEXT. Click a forward CTA ONCE
+        # then wait; never hammer (rapid re-clicks caused the WARN loop). ~150 ticks (~7min) budget.
+        for tick in range(150):
             cur = await self.svar_state(page)
-            if not cur.get("isSvar"):
-                return True                      # left the speaking section
-            if await self.is_done(page):
+            if not cur.get("isSvar") or await self.is_done(page):
+                return True                      # left SVAR / finished
+            nav = cur.get("navTxt")
+            if (nav and nav != start_nav) or (cur.get("prompt") and start_prompt and cur.get("prompt") != start_prompt):
+                logger.info("[amcat] svar advanced nav %s -> %s", start_nav, nav)
                 return True
-            nav_changed = cur.get("navTxt") and cur.get("navTxt") != start_nav
-            prompt_changed = cur.get("prompt") and start_prompt and cur.get("prompt") != start_prompt
-            if nav_changed or prompt_changed:
-                logger.info("[amcat] svar advanced nav %s -> %s", start_nav, cur.get("navTxt"))
-                return True
-            if tick % 5 == 0:
+            if tick % 4 == 0:
                 logger.info("[amcat] svar wait t=%d nav=%s cta=%r disCta=%r rec=%s review=%s warn=%s",
-                            tick, cur.get("navTxt"), cur.get("ctaText"), cur.get("disabledCta"),
+                            tick, nav, cur.get("ctaText"), cur.get("disabledCta"),
                             cur.get("recording"), cur.get("review"), cur.get("warn"))
 
-            # ---- "Warning: we are unable to hear you" modal ----
-            # This is a LISTEN-REPEAT / open-response SVAR item whose speech-recognition rejects the
-            # synthetic audio (a real read-aloud item accepts it fine). TRY AGAIN just re-records the
-            # same tone -> same rejection; a few of those (or TRY LATER) trigger an "Error Code MIC200 /
-            # you have been logged out" mic-failure LOGOUT that ENDS the whole session and can't be
-            # recovered. So do NOT fight it: the prompt is already banked -> ONE gentle TRY AGAIN (in
-            # case it was a transient first-record glitch on an otherwise-passable item), then give up
-            # this item cleanly WITHOUT ever clicking TRY LATER. A synthetic persona cannot pass a
-            # listen-repeat SVAR item (it needs real intelligible speech).
+            # ---- "unable to hear you" WARN: be PATIENT, do NOT hammer (rapid TRY AGAIN was the bug) ----
+            # Wait calmly; TRY AGAIN only every ~15s so each re-record has time to capture the fake mic.
+            # Never click TRY LATER (-> MIC200 logout). Give up only after a long patient window.
             if cur.get("warn"):
-                if warn_retries < 1:
-                    warn_retries += 1
-                    tag = await page.evaluate(_SVAR_CLICK_TEXT_JS, r"try ?again")
-                    logger.info("[amcat] svar WARN -> TRY AGAIN=%r nav=%s", tag, cur.get("navTxt"))
-                    last_label = None
-                    for _ in range(16):
-                        await page.wait_for_timeout(500)
-                        nx = await self.svar_state(page)
-                        if not nx.get("warn") or nx.get("navTxt") != start_nav or not nx.get("isSvar"):
-                            break
-                    continue
-                logger.info("[amcat] svar WARN persists (listen-repeat item, unpassable w/ synth audio) nav=%s", cur.get("navTxt"))
-                return False   # prompt already banked; do NOT TRY LATER (mic logout)
+                warn_ticks += 1
+                if warn_ticks > 40:              # ~120s of patience
+                    logger.info("[amcat] svar WARN persists ~120s nav=%s", nav)
+                    return False
+                if warn_ticks % 5 == 0:          # a gentle retry every ~15s, not every tick
+                    await page.evaluate(_SVAR_CLICK_TEXT_JS, r"try ?again")
+                    logger.info("[amcat] svar WARN patient TRY AGAIN (%ds) nav=%s", warn_ticks * 3, nav)
+                await page.wait_for_timeout(3000)
+                continue
+            warn_ticks = 0
 
+            # ---- forward-first: click any ENABLED primary CTA (SUBMIT ANSWER / NEXT / OK / YES) once ----
             if cur.get("hasCta") and cur.get("ctaText"):
                 label = cur.get("ctaText")
-                same_streak = same_streak + 1 if label == last_label else 0
-                if same_streak >= 6:             # clicking the same enabled CTA isn't progressing
-                    logger.info("[amcat] svar stuck on CTA=%r nav=%s", label, cur.get("navTxt"))
+                same = same + 1 if label == last_label else 0
+                if same >= 20:                   # same enabled CTA not progressing -> give up this item
+                    logger.info("[amcat] svar stuck on CTA=%r nav=%s", label, nav)
                     await self._dump_stuck(page, "svar_cta")
                     return False
-                sig = (cur.get("ctaText"), cur.get("navTxt"), cur.get("prompt"),
-                       cur.get("modal"), cur.get("section"), cur.get("review"))
                 clicked = await page.evaluate(_SVAR_CLICK_PRIMARY_JS)
                 last_label = label
-                logger.info("[amcat] svar click %r nav=%s prompt=%r",
-                            clicked, cur.get("navTxt"), (cur.get("prompt") or "")[:44])
-                for _ in range(20):              # wait for a real transition, cap ~6s
-                    await page.wait_for_timeout(300)
-                    nx = await self.svar_state(page)
-                    nsig = (nx.get("ctaText"), nx.get("navTxt"), nx.get("prompt"),
-                            nx.get("modal"), nx.get("section"), nx.get("review"))
-                    if nsig != sig or not nx.get("hasCta") or not nx.get("isSvar"):
-                        break
-            elif cur.get("review") and review_plays < 2:
-                # PLAY the recorded answer -> enables the disabled NEXT. Wait for NEXT to enable (or
-                # the item to advance) up to ~28s (a full playback of the recorded answer).
+                logger.info("[amcat] svar click %r nav=%s prompt=%r", clicked, nav, (cur.get("prompt") or "")[:44])
+                await page.wait_for_timeout(2800)
+                continue
+
+            # ---- REVIEW with no enabled CTA: PLAY the recording once to enable the disabled NEXT ----
+            if cur.get("review") and played_nav != nav:
                 pl = await page.evaluate(_SVAR_PLAY_REVIEW_JS)
-                review_plays += 1
+                played_nav = nav
                 last_label = None
-                logger.info("[amcat] svar review PLAY=%r (#%d) nav=%s", pl, review_plays, cur.get("navTxt"))
-                for _ in range(35):
-                    await page.wait_for_timeout(800)
-                    nx = await self.svar_state(page)
-                    if nx.get("hasCta") or nx.get("navTxt") != start_nav or not nx.get("isSvar"):
-                        break
-            else:
-                # question audio playing / recording / processing — wait for the next phase.
-                last_label = None
-                if cur.get("recording"):
-                    rec_ticks += 1
-                else:
-                    rec_ticks = 0
-                # A recording that won't stop (SUBMIT ANSWER never enables, no review, no warning) after
-                # ~35s is a listen-repeat item the synthetic audio can't complete. Give up cleanly — do
-                # NOT click TRY LATER (it triggers the "Error Code MIC200" mic-failure LOGOUT that kills
-                # the session). The prompt is already banked.
-                if rec_ticks >= 35:
-                    logger.info("[amcat] svar recording won't complete (synth audio) after ~35s nav=%s", cur.get("navTxt"))
-                    return False
-                await page.wait_for_timeout(1000)
+                logger.info("[amcat] svar review PLAY=%r nav=%s", pl, nav)
+                await page.wait_for_timeout(3500)
+                continue
+
+            # ---- else: question audio playing / recording / processing — just WAIT (patience) ----
+            last_label = None
+            await page.wait_for_timeout(2500)
         logger.info("[amcat] svar budget exhausted nav=%s", start_nav)
         await self._dump_stuck(page, "svar_budget")
         return False

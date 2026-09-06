@@ -298,6 +298,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                 await adapter.enter(page, url)
                 stale = 0
                 typing_seen: dict = {}     # churn guard: a typing sentence that won't advance
+                stall_skips = 0            # how many stuck items we've skipped past (bounded)
                 for step in range(max_items):
                     if await adapter.is_done(page):
                         res["status"] = "completed"
@@ -527,6 +528,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         if await adapter.is_done(page):
                             res["status"] = "completed"; res["note"] = "completed (final item)"
                             return
+                        # a stubborn item (a drag-order/sequencing UI, or one that can't be answered from
+                        # what we captured) shouldn't kill the whole run — try to SKIP past it so the module
+                        # still completes; bail only after a few consecutive skips fail.
+                        if stall_skips < 5 and await adapter.try_skip(page):
+                            await page.wait_for_timeout(1500)
+                            if await _signature(page, adapter) != prev:
+                                stall_skips += 1
+                                logger.info("[%s] skipped a stuck item (skip #%d) after %d banked",
+                                            mailbox, stall_skips, res["banked"])
+                                continue
                         res["status"] = "stuck"
                         res["note"] = f"item did not advance after answer ({res['banked']} banked)"
                         return

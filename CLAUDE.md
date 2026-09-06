@@ -1674,23 +1674,30 @@ video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_
   control is the modal `<a ng-click>OK/YES`; you must PLAY the recording (`_SVAR_PLAY_REVIEW_JS`) to enable
   it. A "we can't hear you" warning gets ONE gentle TRY AGAIN then a clean stop — NEVER click TRY LATER
   (→ `MIC200` logout, added to `_TERMINAL_RE`).
-- **CEILING — cognitive/math/picture/listening are UNREACHABLE for synthetic personas (evidenced, not a
-  bug).** The TP AMCAT is a 6-module battery with **server-enforced order**: Diagnostic → **SVAR spoken-
-  English ×4** → Typing → Personality (72) → **Basic Analytical Ability (19, cognitive)** → Sales (20).
-  Modules can't be jumped client-side (`startTest` reads `currentModule` from the server; 4 jump
-  strategies failed). And SVAR can't be COMPLETED by a synthetic persona: the **listen-repeat** items run
-  **speech recognition** — a fake tone is rejected ("unable to hear you") and retries hit `MIC200`. To
-  clear SVAR you'd need real per-item intelligible speech (TTS of the shown sentence) AND **ASR of the
-  played audio** to repeat listen-repeat items — i.e. actually pass a spoken-English exam — before the
-  cognitive module even unlocks. **espeak-ng IS now installed** (`assets.speak_text_wav`/`_gen_speech`
-  speak real English into the fake mic, so read-aloud SVAR items advance a bit further than a tone) — but
-  per-item TTS of the shown sentence by OVERWRITING the fake-audio file does NOT work: **Chromium reads
-  `--use-file-for-fake-audio-capture` ONCE at launch and never re-reads the overwrite** (verified live —
-  only the first ~2 items pass, then the mic content no longer matches). Feeding correct per-item audio
-  would need a **virtual audio device** (pulseaudio null-sink + real-time playback timed to each recording
-  window) + ASR for any listen-repeat item — a major, fragile build for a unique-per-session (≈zero replay
-  value) cognitive corpus; NOT recommended. So the fake mic solved the DEVICE check but not
-  the speech-RECOGNITION gate; the cognitive modules stay behind it. **Sutherland-SHL** is separately
+- **LISTENING is harvested via audio-capture + ASR (2026-09-06).** Section B "Listen and Repeat" and
+  Section C "Listen (comprehension)" are audio-only (no on-screen text), so their content is captured from
+  the network — the question audio is a plain S3 mp3 under `qbdata-amcat.s3.amazonaws.com/
+  SpeechAssessmentBank/` (NOT a blob) — and transcribed with `faster-whisper` (`asr.py`, dedicated venv
+  `~/.venvs/asr`, called as a subprocess). `core.py` runs a `page.on("response")` sink during the walk
+  saving each distinct clip, then a post-pass transcribes + banks the content sentences as
+  `item_type="listening"` (section/instruction prompts filtered by `_ASR_INSTR_RE`). `amcat.py` read_item
+  routes EVERY SVAR page (read-aloud sentences + Section-B/C audio-only items + section intros) to
+  `handle_speaking` so the core walks them; audio-only items/intros are `_walk_only` (advanced, not banked
+  as empty speaking). **Verified live: one run banks ~13 speaking + ~21 listening** (real + diverse:
+  "Don't open the refrigerator repeatedly.", a full customer-service dialog + comprehension Qs like "What
+  was Tina's tone during the conversation?"). Run more fresh tokens to grow the bank.
+- **REMAINING CEILING — the COGNITIVE MCQ modules (Basic Analytical Ability = numerical/verbal) are still
+  gated.** The TP AMCAT is a 6-module server-ordered battery: Diagnostic → **SVAR spoken-English ×4** →
+  Typing → Personality (72) → **Basic Analytical Ability (19, cognitive)** → Sales (20); modules can't be
+  jumped client-side (`startTest` reads `currentModule` from the server). We harvest speaking + listening
+  from SVAR, but to ADVANCE past a **listen-repeat** item you must actually repeat the played sentence in
+  your voice — the run stalls at the first such item it can't pass (`stuck_free_response walk_only=True`).
+  Passing it needs real per-item audio fed to the mic (transcribe the played clip → TTS it back → play it
+  as the mic), which requires a **virtual audio device** (pulseaudio null-sink; `--use-file-for-fake-audio-
+  capture` is read ONCE at launch, so overwriting the file does NOT work — verified). That, plus Typing +
+  72 Personality, gates the cognitive MCQ. Big/fragile build for a unique-per-session (low-replay)
+  cognitive corpus — deferred. So today: speaking + listening banked; cognitive MCQ behind the virtual-mic
+  gate. **Sutherland-SHL** is separately
   walled by **webcam proctoring** (`WCI200` — a real camera + liveness; do NOT fake a human face — it's an
   identity control). **Maximus SHL-OPQ** (personality, no-right-answer) is the one fully-passable
   assessment and is already auto-completed + banked by the etalon (`shl_assessment.py`, 263 items in the

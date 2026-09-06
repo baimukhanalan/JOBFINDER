@@ -104,7 +104,7 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(len((Path(directory)/'computer-events.jsonl').read_text().splitlines()),1)
             finally:await browser.close()
 
-    async def test_final_result_screen_submits_closed_shadow_control_once(self):
+    async def test_provider_delayed_confirmation_saves_before_module_finish(self):
         class Client:
             def __init__(self,*args,**kwargs):pass
             async def complete(self,q,**kwargs):
@@ -115,7 +115,18 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
             try:
                 page=await browser.new_page()
                 body=BODY.replace('1 out of 16','16 out of 16').replace('class="currentQue">1','class="currentQue">16')
-                body=body.replace("window.advance=()=>{document.body.innerText='Assessments\\nComplete'}", "window.advance=()=>{const host=document.createElement('div');document.body.append(host);const root=host.attachShadow({mode:'closed'});const submit=document.createElement('button');submit.textContent='SUBMIT';submit.onclick=()=>{window.submits=(window.submits||0)+1;document.body.innerText='Your test is now complete. Thank you!'};root.append(submit)}")
+                body=body.replace("window.advance=()=>{document.body.innerText='Assessments\\nComplete'}", """window.advance=()=>{
+                  window.scoreAt=Date.now();window.steps=[];
+                  const host=document.createElement('div');document.body.append(host);const root=host.attachShadow({mode:'closed'});
+                  const footer=document.createElement('button');footer.textContent='SUBMIT';footer.onclick=()=>{window.steps.push('premature_module_finish');document.body.innerText='Your test is now complete. Thank you!'};root.append(footer);
+                  setTimeout(()=>{
+                    const dialog=document.createElement('div');dialog.id='ngdialog-final';dialog.textContent='Are you ready to submit this assessment?';document.body.append(dialog);
+                    const submit=document.createElement('button');submit.textContent='SUBMIT';submit.onclick=()=>{
+                      window.steps.push('save_response_16');window.savedAt=Date.now();
+                      window.steps.push('finish_module');document.body.innerText='Your test is now complete. Thank you!';
+                    };dialog.append(submit);
+                  },2000);
+                }""")
                 frame=FRAME.replace('parent.advance()',"document.body.innerText='result_message';parent.advance()")
                 await page.route('https://fixture.example/assets/msOfficeSimulation/**',lambda r:r.fulfill(content_type='text/html',body=frame))
                 await page.route('https://fixture.example/',lambda r:r.fulfill(content_type='text/html',body=body))
@@ -125,7 +136,8 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                     session.cdp=await page.context.new_cdp_session(page)
                     with patch('qa_bot.adapters.llm.codex_cli.CodexCLIClient',Client),patch('shutil.which',return_value='/bin/true'):
                         await automate(session,page.frames[1])
-                    self.assertEqual(await page.evaluate('window.submits'),1)
+                    self.assertEqual(await page.evaluate('window.steps'),['save_response_16','finish_module'])
+                    self.assertGreaterEqual(await page.evaluate('window.savedAt-window.scoreAt'),2000)
                     result=json.loads((Path(directory)/'computer.jsonl').read_text().splitlines()[-1])
                     self.assertEqual(result['number'],'16');self.assertFalse(result['correctness_verified'])
             finally:await browser.close()
@@ -181,7 +193,7 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                 return {'question_id':q['question_id'],'content_hash':q['content_hash'],'status':'answer','confidence':.91,
                     'action':'click','id':'go','value':None,'target_id':None}
         origin='https://amcatglobal.aspiringminds.com'
-        frame=FRAME.replace('parent.advance()',"parent.postMessage({message:{score:1,log:[]}},'*');setTimeout(()=>parent.advance(),50)")
+        frame=FRAME.replace('parent.advance()',"document.body.innerText='result_message';parent.postMessage({message:{score:1,log:[]}},'*');setTimeout(()=>parent.advance(),2000)")
         async with async_playwright() as pw:
             browser=await pw.chromium.launch(headless=True)
             try:
@@ -200,4 +212,6 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                     action=json.loads((Path(directory)/'2/computer-actions.jsonl').read_text().splitlines()[0])
                     self.assertEqual(action['source'],'previous_exact');self.assertEqual(action['confidence'],.91)
                     self.assertTrue(action['correctness_verified'])
+                    wait=json.loads((Path(directory)/'2/computer-result-wait.jsonl').read_text().splitlines()[0])
+                    self.assertEqual(wait['number'],'1')
             finally:await browser.close()

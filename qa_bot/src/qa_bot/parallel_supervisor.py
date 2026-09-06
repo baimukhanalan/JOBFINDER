@@ -24,6 +24,7 @@ ORIGIN = "https://amcatglobal.aspiringminds.com"
 PORT_NAMES = ("speech", "script", "prompt_capture", "recording_capture")
 PORT_ENV = ("QA_SPEECH_PORT", "QA_SCRIPT_PORT", "QA_PROMPT_CAPTURE_PORT", "QA_RECORDING_CAPTURE_PORT")
 TERMINAL = {"platform_complete", "timed_out", "failed", "interrupted", "cancelled"}
+INSPECT_ACTIONS = ("state", "controls", "screenshot", "device_diagnostics")
 
 
 def write_json(path: Path, value):
@@ -183,6 +184,11 @@ class Attempt:
         self.error_count = 0
         self.diagnostic_count = 0
         self.terms_visible = False
+        self.latest_text = ""
+        self.final_probe_pending = False
+        self.final_probe_requested_at = None
+        self.final_probe_last_at = 0.0
+        self.completion_audit = None
         self.last_question = None
         self.started_at = time.time()
         self.reason = None
@@ -238,15 +244,34 @@ class Attempt:
         browser.stdin.flush()
 
     def poll(self):
+        from qa_bot.run_audit import audit, final_text_status
         evidence = self.path / "evidence" / "owned"
-        for record in self.tail(evidence / "states.jsonl"):
+        # Drain only already-written responses before sending a new probe. The
+        # supervisor owns stdin; no detached browser owner or second CDP client.
+        replies = self.tail(self.path / "browser.log")
+        observed = self.tail(evidence / "states.jsonl")
+        for reply in replies:
+            result = reply.get("result")
+            if not (self.final_probe_pending and isinstance(result, dict) and "text" in result):
+                continue
+            self.final_probe_pending = False
+            observed.append(result)
+            status = final_text_status(result["text"])
+            record = {"time": time.time(), "request_time": self.final_probe_requested_at,
+                      "source": "owned_state_response", "text_status": status,
+                      "visible_text": result["text"] if status == "clean" else None}
+            evidence.mkdir(parents=True, exist_ok=True)
+            with (evidence / "final-handshake.jsonl").open("a") as stream:
+                stream.write(json.dumps(record) + "\n")
+        for record in observed:
             text = record.get("text", "")
+            self.latest_text = text
             self.last_question = record.get("number")
             self.terms_visible = "TERMS & CONDITIONS" in text
             if "Assessment Time out" in text:
                 self.state, self.reason = "timed_out", "platform_time_limit"
-            elif "Your test is now complete. Thank you!" in text and self.state not in {"timed_out", "failed", "cancelled", "interrupted"}:
-                self.state, self.reason = "platform_complete", "question_counts_and_correctness_not_yet_audited"
+            elif final_text_status(text) != "absent" and self.state not in TERMINAL:
+                self.state, self.reason = "needs_attention", "final_confirmation_or_other_visible_content" if final_text_status(text) == "blocked" else "final_verification_pending"
             elif self.terms_visible and self.state not in TERMINAL:
                 self.state = "awaiting_terms" if not self.error_count else "needs_attention"
             elif self.state == "awaiting_terms":
@@ -268,6 +293,18 @@ class Attempt:
                 if result is not None:
                     self.state, self.reason = "failed", f"{role}_exit_{result}"
                     break
+        if self.state not in TERMINAL and final_text_status(self.latest_text) == "clean":
+            report = audit(evidence)
+            self.completion_audit = {key: report[key] for key in ("expected_scored", "submitted_scored_unique", "completion_coverage_eligible", "final_stability_verified", "completion_verified")}
+            if not report["completion_coverage_eligible"]:
+                self.state, self.reason = "needs_attention", "final_incomplete_required_modules"
+            elif report["completion_verified"]:
+                self.state, self.reason = "platform_complete", "stable_final_and_required_submission_coverage_verified"
+            elif not self.final_probe_pending and time.monotonic() - self.final_probe_last_at >= 1.05:
+                self.send({"action": "state"})
+                self.final_probe_pending = True
+                self.final_probe_requested_at = time.time()
+                self.final_probe_last_at = time.monotonic()
         return self.state
 
     def control(self):
@@ -275,6 +312,8 @@ class Attempt:
         if not request.exists():
             return
         value = json.loads(request.read_text())
+        if not isinstance(value, dict) or set(value) != {"sequence", "action"}:
+            raise ValueError("control accepts only an action and sequence; arbitrary payloads are not supported")
         sequence = value.get("sequence")
         if type(sequence) is not int or sequence <= self.command_sequence:
             raise ValueError("control sequence must increase")
@@ -282,10 +321,15 @@ class Attempt:
         if action == "accept_reviewed_terms" and self.terms_visible and self.state not in TERMINAL:
             # Explicit local operator request only; no automatic terms acceptance.
             self.send({"action": "auto_modules", "module": "accept_terms"})
+        elif action == "inspect" and self.state not in TERMINAL:
+            # Fixed read-only commands through the existing browser owner. No
+            # secondary CDP attachment, custom JavaScript, clicks, or reloads.
+            for inspection in INSPECT_ACTIONS:
+                self.send({"action": inspection})
         elif action == "close":
             self.state, self.reason = "cancelled", "explicit_operator_close"
         else:
-            raise ValueError("only reviewed terms on an awaiting_terms screen or close are supported")
+            raise ValueError("only read-only inspect, reviewed terms on the observed terms screen, or close are supported")
         self.command_sequence = sequence
         request.rename(self.path / f"control-{sequence:04d}.applied.json")
 
@@ -294,6 +338,7 @@ class Attempt:
                 "state": self.state, "reason": self.reason, "last_question": self.last_question,
                 "errors": self.error_count, "diagnostics": self.diagnostic_count,
                 "terms_visible": self.terms_visible, "started_at": self.started_at,
+                "completion_audit": self.completion_audit,
                 "pids": {role: process.pid for role, process in self.children.items()}}
 
     def close(self):
@@ -413,7 +458,7 @@ def main(argv=None):
     control_parser = sub.add_parser("control", help="an explicit operator action; never used automatically")
     control_parser.add_argument("manifest", type=Path)
     control_parser.add_argument("--row", type=int, required=True)
-    control_parser.add_argument("--action", choices=("accept_reviewed_terms", "close"), required=True)
+    control_parser.add_argument("--action", choices=("inspect", "accept_reviewed_terms", "close"), required=True)
     args = parser.parse_args(argv)
     if args.command == "plan":
         plan = make_plan(args.scope, args.output, [int(r) for r in args.rows.split(",")],

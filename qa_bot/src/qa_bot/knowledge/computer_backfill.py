@@ -58,7 +58,7 @@ def audit_question(cache,run,source_test,question,*,apply=False):
         if failures:
             if apply:
                 for key in keys:
-                    cache.db.execute("UPDATE actions SET conflict=CASE WHEN verification='verified_success' THEN 1 ELSE conflict END,verification='reported_failure' WHERE key=? AND source_test=?",(key,source_test))
+                    cache.db.execute("UPDATE actions SET conflict=CASE WHEN verification='verified_success' THEN 1 ELSE conflict END,verification='reported_failure' WHERE key=?",(key,))
             return stop('provider_reported_failure')
         if len(outcomes)!=1:return stop('one_runtime_causal_outcome_required')
         events=outcomes[0];scores=[]
@@ -73,18 +73,19 @@ def audit_question(cache,run,source_test,question,*,apply=False):
         event=scores[0]
         if type(event.get('time')) not in (int,float) or event['time']>advanced[0]['time']*1000:return stop('result_after_advance')
         # The cache was populated only from the runtime's executed pending list.
-        bound_keys=set()
+        bound_keys=set();first_sources={}
         for action,canonical in evidence:
             row=cache.db.execute('SELECT canonical,action,source_test,conflict FROM actions WHERE key=?',(action['key'],)).fetchone()
             expected=json.dumps({k:action.get(k) for k in ACTION_FIELDS},sort_keys=True,separators=(',',':'))
-            if not row or row!=(canonical,expected,source_test,0):return stop('executed_cache_binding_missing_or_conflicting')
+            if not row or row[0]!=canonical or row[1]!=expected or row[3]!=0:return stop('executed_cache_binding_missing_or_conflicting')
+            first_sources[action['key']]=row[2]
             qs=cache.db.execute('SELECT DISTINCT question FROM observations WHERE source_test=? AND key=?',(source_test,action['key'])).fetchall()
             if qs!=[(question,)]:return stop('ambiguous_cache_question_binding')
             bound_keys.add(action['key'])
-        actual={r[0] for r in cache.db.execute('SELECT DISTINCT a.key FROM actions a JOIN observations o ON a.key=o.key WHERE a.source_test=? AND o.source_test=? AND o.question=?',(source_test,source_test,question))}
+        actual={r[0] for r in cache.db.execute('SELECT DISTINCT a.key FROM actions a JOIN observations o ON a.key=o.key WHERE o.source_test=? AND o.question=?',(source_test,question))}
         if actual!=bound_keys:return stop('incomplete_pending_action_sequence')
         proof={'contract':CONTRACT,'source_test':source_test,'question':question,'evidence_basis':result['evidence_basis'],
-            'keys':keys,'event':event,'advanced_record':advanced[0],
+            'keys':keys,'cache_first_sources':first_sources,'event':event,'advanced_record':advanced[0],
             'browser_step_lines':[i+1 for i,_ in matching],
             'files':{name:hashlib.sha256((owned/name).read_bytes()).hexdigest() for name in ('computer-actions.jsonl','computer-observations.jsonl','computer.jsonl','computer-events.jsonl')}}
         # Explicitly verify that the captured event also exists in its raw log.

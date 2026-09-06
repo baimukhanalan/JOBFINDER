@@ -58,8 +58,13 @@ class PlayedPromptLoopback:
  BaseAudioContext.prototype.decodeAudioData=function(bytes,success,failure){
    const zone=globalThis.Zone?.current;
    const invoke=(callback,value)=>{if(callback)return zone?zone.run(callback,undefined,[value]):callback(value)};
-   const known=encodedMetadata.get(bytes),hash=digest(bytes.slice(0));
-   const promise=decode.call(this,bytes).then(async buffer=>{
+   // Decode an owned copy: native Chromium decoding detaches its input. Host
+   // recorder/simulation code may still inspect the original encoded bytes.
+   // An observer must not invalidate that shared buffer while computing its hash.
+   let copy;
+   try{copy=bytes.slice(0)}catch{return decode.call(this,bytes,success,failure)}
+   const known=encodedMetadata.get(bytes),hash=digest(copy);
+   const promise=decode.call(this,copy.slice(0)).then(async buffer=>{
      const key=await hash;bufferHashes.set(buffer,key);
      const item=known || byHash.get(key);if(item)decodedMetadata.set(buffer,item);
      invoke(success,buffer);return buffer;

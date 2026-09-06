@@ -51,3 +51,11 @@ class BackfillTests(unittest.TestCase):
         result=audit_question(self.cache,self.run,'first','1',apply=True)
         self.assertEqual(result['reason'],'provider_reported_failure')
         self.assertIsNone(self.cache.lookup(self.key,self.canonical))
+
+    def test_identical_older_cached_action_is_verified_by_new_runtime_evidence(self):
+        with self.cache.db:self.cache.db.execute("UPDATE actions SET source_test='older-unverified'")
+        result=audit_question(self.cache,self.run,'first','1',apply=True)
+        self.assertEqual(result['verification'],'verified_success')
+        self.assertEqual(result['proof']['cache_first_sources'][self.key],'older-unverified')
+        self.assertEqual(result['proof']['source_test'],'first')
+        self.assertIsNotNone(self.cache.lookup(self.key,self.canonical))

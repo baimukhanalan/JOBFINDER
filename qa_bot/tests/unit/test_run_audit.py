@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from qa_bot.run_audit import audit, module_menu
+from qa_bot.run_audit import audit, module_menu, final_text_status
 
 
 MENU = '''Assessments
@@ -46,6 +46,8 @@ class RunAuditTests(unittest.TestCase):
 
     def full(self, extra=COMPUTER):
         self.log('states.jsonl',[{'text':MENU.format(extra=extra),'time':1},{'text':FINAL,'time':100}])
+        self.log('final-handshake.jsonl',[{'time':101,'source':'owned_state_response','visible_text':FINAL},
+                                         {'time':102.1,'source':'owned_state_response','visible_text':FINAL}])
         self.log('actions.jsonl',[{'action':'submit_speech','number':str(n)} for n in [1,*range(2,23),28]])
         self.log('choices.jsonl',[{'number':str(n),'confidence':.99,'correctness_verified':False} for n in range(23,28)])
         self.log('typing.jsonl',[{'number':'1','practice':True,'exact_match':True},{'number':'2','practice':False,'exact_match':True}])
@@ -166,6 +168,37 @@ class RunAuditTests(unittest.TestCase):
         self.assertTrue(report['operator']['no_logged_manual_answer_controls'])
         self.assertEqual(report['operator']['operator_command_records'],3)
         self.assertIn('physical browser interaction',report['operator']['evidence_scope'])
+
+    def test_final_phrase_embedded_in_other_content_is_not_terminal(self):
+        self.assertEqual(final_text_status('Question: '+FINAL),'absent')
+        self.assertEqual(final_text_status('Skip to main content\n'+FINAL),'clean')
+        self.assertEqual(final_text_status(FINAL+'\nWarning!\nSUBMIT\nCANCEL'),'blocked')
+
+    def test_old_clean_frame_followed_by_modal_cannot_pass_even_with_full_coverage(self):
+        self.full()
+        with (self.root/'states.jsonl').open('a') as stream:
+            stream.write(json.dumps({'time':103,'text':FINAL+'\nAre you ready to submit this assessment?'})+'\n')
+        report=audit(self.root)
+        self.assertTrue(report['completion_coverage_eligible'])
+        self.assertFalse(report['platform_final_clean'])
+        self.assertFalse(report['completion_verified'])
+
+    def test_single_clean_final_frame_without_fresh_handshake_is_unproven(self):
+        self.full();self.log('final-handshake.jsonl',[])
+        report=audit(self.root)
+        self.assertTrue(report['completion_coverage_eligible'])
+        self.assertFalse(report['final_stability_verified'])
+        self.assertFalse(report['completion_verified'])
+
+    def test_old_handshake_cannot_verify_a_later_final_transition(self):
+        self.full()
+        with (self.root/'states.jsonl').open('a') as stream:
+            stream.write(json.dumps({'time':103,'text':'Question still active'})+'\n')
+            stream.write(json.dumps({'time':104,'text':FINAL})+'\n')
+        report=audit(self.root)
+        self.assertTrue(report['platform_final_clean'])
+        self.assertFalse(report['final_stability_verified'])
+        self.assertFalse(report['completion_verified'])
 
 
 if __name__=='__main__':unittest.main()

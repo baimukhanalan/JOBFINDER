@@ -47,6 +47,41 @@ async def capture_message_evidence(session):
     return events
 
 
+async def click_confirmation_submit(session,dialog):
+    """Click only SUBMIT inside the exact dialog, including closed shadow UI."""
+    submit=dialog.get_by_role('button',name='SUBMIT',exact=True)
+    count=await submit.count()
+    if count==1:
+        if not await submit.is_enabled():raise ValueError('one enabled final simulation confirmation submit required')
+        await submit.click();return
+    if count>1:raise ValueError('one enabled final simulation confirmation submit required')
+    from qa_bot.live_session import control_name
+    dialog_id=await dialog.get_attribute('id')
+    if not dialog_id or not dialog_id.startswith('ngdialog'):raise ValueError('exact confirmation dialog required')
+    tree=await session.cdp.send('Accessibility.getFullAXTree')
+    candidates=[]
+    for node in tree['nodes']:
+        if node.get('ignored') or node.get('role',{}).get('value')!='button':continue
+        if control_name('button',node.get('name',{}).get('value',''))!='submit':continue
+        if any(p['name']=='disabled' and p['value'].get('value') for p in node.get('properties',[])):continue
+        backend=node.get('backendDOMNodeId')
+        if not backend:continue
+        resolved=await session.cdp.send('DOM.resolveNode',{'backendNodeId':backend})
+        object_id=resolved['object']['objectId']
+        try:
+            scoped=await session.cdp.send('Runtime.callFunctionOn',{'objectId':object_id,
+                'functionDeclaration':"function(id){if(!this.isConnected)return false;for(let n=this;n;n=n.parentNode||(n.getRootNode&&n.getRootNode().host)||null){if(n.id===id)return !!n.getClientRects().length&&n.innerText.includes('Are you ready to submit this assessment?')}return false}",
+                'arguments':[{'value':dialog_id}],'returnByValue':True})
+            if scoped.get('result',{}).get('value') is True:candidates.append(backend)
+        finally:await session.cdp.send('Runtime.releaseObject',{'objectId':object_id})
+    if len(candidates)!=1:raise ValueError('one enabled final simulation confirmation submit required')
+    await session.cdp.send('DOM.scrollIntoViewIfNeeded',{'backendNodeId':candidates[0]})
+    box=await session.cdp.send('DOM.getBoxModel',{'backendNodeId':candidates[0]})
+    quad=box['model']['content'];x=sum(quad[::2])/4;y=sum(quad[1::2])/4
+    for kind in ('mousePressed','mouseReleased'):
+        await session.cdp.send('Input.dispatchMouseEvent',{'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
+
+
 async def run(session,module):
     frames=[f for f in session.page.frames if urlsplit(f.url).path=='/assets/msOfficeSimulation/run.html']
     if len(frames)!=1:raise ValueError('one simulation frame required')
@@ -127,53 +162,74 @@ async def _automate(session,frame,cache):
     from qa_bot.adapters.llm.codex_cli import CodexCLIClient
     isolated=session.output/'isolated';isolated.mkdir(exist_ok=True)
     from qa_bot.knowledge.computer_cache import identity
+    from qa_bot.run_audit import final_text_status
     client=None
     source_test=getattr(session,'test_id',None) or session.output.parent.name
-    seen=set();previous=None;pending=[];active_frames=set();final_submitted=False
-    for step in range(100):
+    seen=set();previous=None;pending=[];active_frames=set();result_wait_started={}
+    actions_applied=0;started_at=time.monotonic()
+    terminal_since=None;confirmation_sent_at=None
+    for step in range(2000):
         try:
+            if time.monotonic()-started_at>20*60:raise ValueError('simulation runtime limit reached')
             events=await capture_message_evidence(session)
             state=await session.page.evaluate(STATE_SCRIPT)
             if session.timeout_seen or 'Assessment Time out' in state['text']:return
-            if state.get('number')=='16' and 'Are you ready to submit this assessment?' in state['text']:
+            if (state.get('number')=='16' or previous=='16') and 'Are you ready to submit this assessment?' in state['text']:
+                terminal_since=None
                 dialogs=session.page.locator('[id^="ngdialog"]').filter(has_text='Are you ready to submit this assessment?')
-                if await dialogs.count()!=1:raise ValueError('one final simulation confirmation required')
-                submit=dialogs.get_by_role('button',name='SUBMIT',exact=True)
-                if await submit.count()!=1:raise ValueError('one final simulation submit required')
-                await submit.click()
-                session.log('computer-final-submit.jsonl',{'number':'16','confirmed':True,'time':time.time()})
-                await asyncio.sleep(.3)
+                visible=[dialogs.nth(i) for i in range(await dialogs.count()) if await dialogs.nth(i).is_visible()]
+                if len(visible)!=1:raise ValueError('one visible final simulation confirmation required')
+                if confirmation_sent_at is None:
+                    fresh=await session.page.evaluate(STATE_SCRIPT)
+                    if session.timeout_seen or 'Assessment Time out' in fresh['text']:return
+                    if 'Are you ready to submit this assessment?' not in fresh['text']:continue
+                    await click_confirmation_submit(session,visible[0])
+                    confirmation_sent_at=time.monotonic()
+                    session.log('computer-final-submit.jsonl',{'number':'16','confirmed':True,
+                        'evidence':'exact_visible_confirmation_dialog','time':time.time()})
+                elif time.monotonic()-confirmation_sent_at>10:
+                    raise ValueError('final simulation confirmation did not close')
+                await asyncio.sleep(.2)
                 continue
             if 'out of 16' not in state['text']:
-                if not any(marker in state['text'] for marker in ('Assessments\n','ASSESSMENT DESCRIPTION','Your test is now complete')):
-                    await asyncio.sleep(.3);continue
+                terminal=final_text_status(state['text'])
+                if terminal=='blocked' or (terminal!='clean' and 'Your test is now complete. Thank you!' in state['text']):
+                    terminal_since=None
+                    raise ValueError('final simulation screen has an unresolved overlay')
+                if terminal=='clean':
+                    if terminal_since is None:terminal_since=time.monotonic()
+                    if time.monotonic()-terminal_since<1:
+                        await asyncio.sleep(.2);continue
+                else:
+                    terminal_since=None
+                    if not any(marker in state['text'] for marker in ('Assessments\n','ASSESSMENT DESCRIPTION')):
+                        await asyncio.sleep(.2);continue
                 if previous and previous not in seen:
                     outcome=cache.promote(pending,source_test,question=previous,events=events,advanced_at_ms=time.time()*1000);pending=[]
                     session.log('computer-outcomes.jsonl',{'question':previous,**outcome})
                     session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':outcome['verification']=='verified_success','time':time.time()})
                     seen.add(previous)
                 print(json.dumps({'computer_stopped':len(seen)}),flush=True);return
+            terminal_since=None
             frames=[f for f in session.page.frames if urlsplit(f.url).path=='/assets/msOfficeSimulation/run.html']
             if len(frames)!=1:await asyncio.sleep(.3);continue
             frame=frames[0]
             number=state['number']
             result_screen=(await frame.locator('body').inner_text()).strip()=='result_message'
-            if number=='16' and result_screen and number in active_frames and pending:
-                # Observed task actions reached the platform's terminal scene.
-                # This confirms submission readiness, never task correctness.
-                if not final_submitted:
-                    await capture_message_evidence(session)
-                    fresh=await session.page.evaluate(STATE_SCRIPT)
-                    if session.timeout_seen or 'Assessment Time out' in fresh['text']:return
-                    if fresh.get('number')!='16':continue
-                    if (await frame.locator('body').inner_text()).strip()!='result_message':continue
-                    await session.click('button','SUBMIT')
-                    final_submitted=True
-                    session.log('computer-final-submit.jsonl',{'number':'16','confirmed':True,
-                        'evidence':'observed_task_actions_then_result_message','correctness_verified':False,'time':time.time()})
-                await asyncio.sleep(.3)
+            if result_screen and number in active_frames and pending:
+                # Every provider result advances through a delayed 2 s callback.
+                # The final footer SUBMIT bypasses saving the response, so all
+                # questions wait for the provider's next screen or confirmation.
+                if number not in result_wait_started:
+                    result_wait_started[number]=time.monotonic()
+                    session.log('computer-result-wait.jsonl',{'number':number,
+                        'reason':'awaiting_provider_response_callback','time':time.time()})
+                if time.monotonic()-result_wait_started[number]>15:
+                    raise ValueError('provider response transition did not arrive')
+                await asyncio.sleep(.2)
                 continue
-            if not result_screen:active_frames.add(number)
+            if not result_screen:
+                active_frames.add(number);result_wait_started.pop(number,None)
             if previous and number!=previous:
                 outcome=cache.promote(pending,source_test,question=previous,events=events,advanced_at_ms=time.time()*1000);pending=[]
                 session.log('computer-outcomes.jsonl',{'question':previous,**outcome})
@@ -232,6 +288,7 @@ async def _automate(session,frame,cache):
             if session.timeout_seen or 'Assessment Time out' in current_state['text']:return
             if current_state.get('number')!=number or task[1] not in current_state['text']:continue
             if cached and cache.lookup(key,canonical)!=cached:continue
+            if actions_applied>=100:raise ValueError('simulation action limit reached')
             metadata={'action_started_ms':time.time()*1000,'event_sequence_before_action':max((e.get('sequence',0) for e in action_events),default=0),'key':key,'correctness_verified':bool(cached),'source':source,'original_test':original_test,'screenshot':shot.name}
             known={n['id'] for n in nodes}
             if result['action'].endswith('_point'):
@@ -245,6 +302,7 @@ async def _automate(session,frame,cache):
                     await session.page.mouse.move(x,y);await session.page.mouse.down();await session.page.mouse.move(box['x']+tx,box['y']+ty,steps=20);await session.page.mouse.up()
                 elif result['action']=='double_click_point':await session.page.mouse.dblclick(x,y)
                 else:await session.page.mouse.click(x,y,button='right' if result['action']=='right_click_point' else 'left')
+                actions_applied+=1
                 metadata['action_finished_ms']=time.time()*1000
                 pending.append((key,canonical,{**result,**metadata}))
                 if cached:cache.used(key,source_test,number,original_test)
@@ -270,6 +328,7 @@ async def _automate(session,frame,cache):
                 if result['target_id'] not in known:raise ValueError('unknown drag destination')
                 await target.drag_to(frame.locator('[id='+json.dumps(result['target_id'])+']'),timeout=5000)
             else:raise ValueError('unsupported simulation action')
+            actions_applied+=1
             metadata['action_finished_ms']=time.time()*1000
             pending.append((key,canonical,{**result,**metadata}))
             if cached:cache.used(key,source_test,number,original_test)
@@ -280,4 +339,4 @@ async def _automate(session,frame,cache):
             if any(x in str(error) for x in ('Frame was detached','Execution context was destroyed','Cannot find context')):
                 await asyncio.sleep(.3);continue
             raise
-    raise ValueError('simulation step limit reached')
+    raise ValueError('simulation observation limit reached')

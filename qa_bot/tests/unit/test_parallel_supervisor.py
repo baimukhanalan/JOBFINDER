@@ -11,18 +11,28 @@ import unittest
 from unittest.mock import patch
 
 from qa_bot.parallel_supervisor import (Attempt, ProfileLock, commands, conflicting_processes,
-    make_plan, ports_available, supervise, validate_plan, write_json)
+    make_plan, ports_available, supervise, validate_plan, write_json, main)
 
 
 FAKE_WORKER = r'''
 import json, os, pathlib, sys, time
 root=pathlib.Path(sys.argv[1]); mode=sys.argv[2]
 evidence=root/'evidence'/'owned';evidence.mkdir(parents=True)
+current_text='';current_number=None
 def state(text, number=None):
- with (evidence/'states.jsonl').open('a') as f:f.write(json.dumps(dict(text=text,number=number))+'\n')
+ global current_text,current_number
+ current_text,current_number=text,number
+ with (evidence/'states.jsonl').open('a') as f:f.write(json.dumps(dict(text=text,number=number,time=time.time()))+'\n')
 root.joinpath('worker.json').write_text(json.dumps(dict(pid=os.getpid(),started=time.time(),token_length=len(os.environ.get('QA_LOCAL_BRIDGE_TOKEN','')),ports=[os.environ.get(n) for n in ('QA_SPEECH_PORT','QA_SCRIPT_PORT','QA_PROMPT_CAPTURE_PORT','QA_RECORDING_CAPTURE_PORT')])))
+if mode in ('complete','concurrent','delayed_modal','partial_final'):
+ state('Assessments\nTyping\n1 QUESTION\nComplete\nNEXT')
+ if mode!='partial_final':evidence.joinpath('typing.jsonl').write_text(json.dumps(dict(number='2',practice=False,exact_match=True))+'\n')
 if mode=='complete':
  state('Question',1);time.sleep(.15);state('Your test is now complete. Thank you!')
+elif mode=='delayed_modal':
+ state('Your test is now complete. Thank you!');time.sleep(.12)
+ state('Your test is now complete. Thank you!\nWarning!\nAre you ready to submit this assessment?\nSUBMIT\nCANCEL')
+elif mode=='partial_final':state('Your test is now complete. Thank you!')
 elif mode=='concurrent':
  state('Question',1);deadline=time.monotonic()+3
  while len(list(root.parent.glob('row-*/worker.json')))<10 and time.monotonic()<deadline:time.sleep(.01)
@@ -37,6 +47,7 @@ elif mode=='exit':sys.exit(7)
 for line in sys.stdin:
  command=json.loads(line)
  with (root/'received.jsonl').open('a') as f:f.write(json.dumps(command)+'\n')
+ if command==dict(action='state'):print(json.dumps(dict(result=dict(text=current_text,number=current_number))),flush=True)
  if command==dict(action='auto_modules',module='accept_terms'):state('Question',1)
 '''
 
@@ -177,6 +188,40 @@ class ParallelSupervisorTests(unittest.TestCase):
         self.poll_until(attempt,'running')
         self.assertEqual(json.loads((attempt.path/'received.jsonl').read_text()),{'action':'auto_modules','module':'accept_terms'})
 
+    def test_inspect_sends_only_fixed_read_only_commands_through_owner(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        write_json(attempt.path/'control.json',{'sequence':1,'action':'inspect'})
+        attempt.control()
+        deadline=time.monotonic()+3;received=[]
+        while time.monotonic()<deadline:
+            path=attempt.path/'received.jsonl'
+            if path.exists():received=[json.loads(line) for line in path.read_text().splitlines()]
+            if len(received)==4:break
+            time.sleep(.01)
+        self.assertEqual(received,[{'action':action} for action in ('state','controls','screenshot','device_diagnostics')])
+        self.assertEqual(attempt.state,'awaiting_terms')
+        self.assertIsNone(attempt.children['browser'].poll())
+        self.assertTrue((attempt.path/'control-0001.applied.json').exists())
+
+    def test_inspect_rejects_arbitrary_payloads_and_terminal_attempt(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        write_json(attempt.path/'control.json',{'sequence':1,'action':'inspect','command':{'action':'click'}})
+        with self.assertRaises(ValueError):attempt.control()
+        self.assertFalse((attempt.path/'received.jsonl').exists())
+        write_json(attempt.path/'control.json',{'sequence':1,'action':'inspect'})
+        attempt.state='cancelled'
+        with self.assertRaises(ValueError):attempt.control()
+        self.assertFalse((attempt.path/'received.jsonl').exists())
+
+    def test_control_cli_accepts_inspect_and_does_not_allow_reload(self):
+        manifest=self.root/'manifest.json';write_json(manifest,self.plan)
+        directory=Path(self.plan['attempts'][0]['directory']);directory.mkdir(parents=True)
+        with patch('builtins.print'):
+            main(['control',str(manifest),'--row','1','--action','inspect'])
+        self.assertEqual(json.loads((directory/'control.json').read_text())['action'],'inspect')
+        with patch('sys.stderr'),self.assertRaises(SystemExit):
+            main(['control',str(manifest),'--row','1','--action','reload'])
+
     def test_module_error_preserves_live_attempt_without_restart(self):
         attempt=self.attempt('error')
         self.poll_until(attempt,'needs_attention')
@@ -219,6 +264,30 @@ class ParallelSupervisorTests(unittest.TestCase):
         attempt=self.attempt('exit');self.poll_until(attempt,'failed')
         self.assertEqual(attempt.reason,'browser_exit_7')
 
+    def test_final_text_with_missing_required_submissions_preserves_worker(self):
+        attempt=self.attempt('partial_final')
+        self.poll_until(attempt,'needs_attention')
+        self.assertEqual(attempt.reason,'final_incomplete_required_modules')
+        self.assertIsNone(attempt.children['browser'].poll())
+        self.assertFalse(attempt.completion_audit['completion_coverage_eligible'])
+
+    def test_clean_final_then_delayed_confirmation_cannot_close_worker(self):
+        attempt=self.attempt('delayed_modal')
+        deadline=time.monotonic()+.6
+        while time.monotonic()<deadline:
+            attempt.poll();time.sleep(.01)
+        self.assertEqual(attempt.state,'needs_attention')
+        self.assertEqual(attempt.reason,'final_confirmation_or_other_visible_content')
+        self.assertIsNone(attempt.children['browser'].poll())
+
+    def test_complete_requires_two_fresh_final_reads_in_addition_to_coverage(self):
+        attempt=self.attempt('complete')
+        self.poll_until(attempt,'platform_complete')
+        records=[json.loads(line) for line in (attempt.path/'evidence'/'owned'/'final-handshake.jsonl').read_text().splitlines()]
+        self.assertGreaterEqual(len(records),2)
+        self.assertGreaterEqual(records[-1]['time']-records[-2]['time'],1)
+        self.assertTrue(attempt.completion_audit['completion_verified'])
+
     def test_bounded_scheduler_finishes_fake_workers_and_does_not_restart_output(self):
         with patch('qa_bot.parallel_supervisor.conflicting_processes',return_value=[]):
             supervise(self.plan,command_factory=self.factory(),require_ports=False,poll_seconds=.01)
@@ -242,7 +311,7 @@ class ParallelSupervisorTests(unittest.TestCase):
         # This launcher exits immediately. Its detached child must continue.
         launcher="import subprocess,sys\nwith open(sys.argv[3],'wb') as f:\n p=subprocess.Popen([sys.executable,sys.argv[1],sys.argv[2],sys.argv[4]],stdin=subprocess.DEVNULL,stdout=f,stderr=f,start_new_session=True)\n print(p.pid)\n"
         pid=int(subprocess.check_output([sys.executable,'-c',launcher,str(owner),str(manifest),str(logpath),str(self.worker)],text=True))
-        deadline=time.monotonic()+5
+        deadline=time.monotonic()+12
         status={}
         try:
             while time.monotonic()<deadline:

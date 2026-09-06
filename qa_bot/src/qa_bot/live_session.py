@@ -294,6 +294,15 @@ class Session:
             body = req.post_data_buffer or b''
             report = dict(time=time.time(), host=url.hostname, path=url.path,
                           status=response.status, method=req.method, bytes=len(body))
+            from qa_bot.module_transition import PATHS, transition_evidence
+            if url.hostname == 'amcatglobalapi.aspiringminds.com' and url.path in PATHS:
+                try:
+                    transition = transition_evidence(url.path, body, await response.body())
+                    self.log('module-transitions.jsonl', {
+                        'time': time.time(), 'status': response.status, **transition})
+                except Exception as error:
+                    self.log('observer-errors.jsonl', {
+                        'type': type(error).__name__, 'phase': 'module_transition'})
             i = body.find(b'RIFF')
             if i >= 0 and body[i+8:i+12] == b'WAVE':
                 size = struct.unpack_from('<I', body, i+4)[0] + 8
@@ -318,6 +327,7 @@ class Session:
             self.log('observer-errors.jsonl', {'type':type(error).__name__})
 
     async def watch(self):
+        from qa_bot.solvers.device_check import advance_device_check
         previous = None
         while True:
             try:
@@ -365,20 +375,8 @@ class Session:
                         label='I confirm I have read and understood this Notice.'
                         if any(n.get('name',{}).get('value','').strip()==label for n in checkboxes):
                             await self.command({'action':'notice'})
-                        elif not self.preflight and (('Device Testing' in state['text'] and 'This is a sample question to check your device compatibility.' in state['text']) or ('Device testing successful' in state['text'] and 'Your device is compatible.' in state['text'])):
-                            try:await self.click('button','OK')
-                            except ValueError:pass
-                        elif not self.preflight and 'Device Testing' in state['text'] and 'Were you able to hear the question audio clearly?' in state['text'] and any(x.get('duration',0)>0 for x in state.get('heard',[])):
-                            try:await self.click('button','YES')
-                            except ValueError:pass
-                        elif not self.preflight and state.get('number')=='1' and 'Click NEXT if you can hear your voice clearly' in state['text'] and (state.get('read') or {}).get('siteId')=='navigation:1' and (state.get('read') or {}).get('replays',0)>0 and (state.get('microphone') or {}).get('signal',0)>2:
-                            try:await self.click('button','NEXT')
-                            except ValueError:
-                                if not getattr(self,'device_play_started',False):
-                                    try:
-                                        await self.click('button','Play')
-                                        self.device_play_started=True
-                                    except ValueError:pass
+                        elif await advance_device_check(self,state):
+                            pass
                         elif not self.preflight and (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English','Basic Computer Literacy Simulation (Windows 10)')))):
                             try:await self.click('button','NEXT')
                             except ValueError:pass
@@ -463,6 +461,18 @@ class Session:
             return await self.page.evaluate('''() => ({now:performance.now(),
                 scripts:[...document.scripts].map(s=>s.src).filter(Boolean).map(x=>new URL(x).pathname),
                 buttons:[...document.querySelectorAll('button')].filter(b=>b.textContent.trim()==='NEXT').map(b=>({text:b.textContent,disabled:b.disabled,html:b.outerHTML}))})''')
+        if action == 'device_diagnostics':
+            state = await self.page.evaluate(STATE_SCRIPT)
+            if state.get('number') != '1' or 'Section A: Read and Speak' not in state['text']:
+                raise ValueError('device sample question required')
+            dialogs = await self.page.locator('[id^="ngdialog"]').evaluate_all('''nodes => nodes.filter(n=>n.getClientRects().length).map(n=>({id:n.id,text:n.innerText,html:n.outerHTML.slice(0,20000)}))''')
+            tree=await self.cdp.send('Accessibility.getFullAXTree')
+            return {'dialogs': json.loads(safe_text(json.dumps(dialogs))), 'nodes': [
+                {'role': n.get('role',{}).get('value'), 'name': n.get('name',{}).get('value'),
+                 'backendDOMNodeId': n.get('backendDOMNodeId'), 'parentId': n.get('parentId'),
+                 'nodeId': n.get('nodeId'), 'properties': n.get('properties',[])}
+                for n in tree['nodes'] if not n.get('ignored') and n.get('role',{}).get('value')
+                in ('button','dialog','heading','StaticText')]}
         if action == 'ax':
             tree=await self.cdp.send('Accessibility.getFullAXTree')
             return {'nodes':[{'role':n.get('role',{}).get('value'),'name':n.get('name',{}).get('value'),'id':n.get('backendDOMNodeId'),'properties':n.get('properties',[])} for n in tree['nodes'] if not n.get('ignored') and n.get('role',{}).get('value') not in ('button','RootWebArea','generic')]}

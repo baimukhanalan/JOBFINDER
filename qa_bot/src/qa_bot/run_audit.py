@@ -25,6 +25,18 @@ STATUS = {"Complete", "Upcoming", "Later", "In Progress", "In progress"}
 DIAGNOSTICS = {"page-errors.jsonl", "observer-errors.jsonl"}
 
 
+def final_text_status(text):
+    """Only the exact observed terminal message and its known skip link qualify."""
+    if not isinstance(text, str):
+        return "absent"
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if FINAL not in lines:
+        return "absent"
+    if any(line not in {FINAL, "Skip to main content"} for line in lines) or lines.count(FINAL) != 1:
+        return "blocked"
+    return "clean"
+
+
 class Evidence:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -190,6 +202,15 @@ def audit(directory):
     coverage = bool(required) and all(modules.get(m, {}).get("coverage_complete", False) for m in required)
     requirements_known = bool(menu["menu_observations"]) and not menu["unknown_modules"] and not menu["count_mismatches"]
     final = any(FINAL in s.get("text", "") for s in states)
+    final_clean = bool(states) and final_text_status(states[-1].get("text")) == "clean"
+    final_reads = evidence.records("final-handshake.jsonl")
+    last_reads = final_reads[-2:]
+    stability = bool(len(last_reads) == 2 and all(r.get("source") == "owned_state_response"
+        and final_text_status(r.get("visible_text")) == "clean" for r in last_reads)
+        and all(isinstance(r.get("time"), (int, float)) for r in last_reads)
+        and last_reads[1]["time"] - last_reads[0]["time"] >= 1.0
+        and bool(states) and isinstance(states[-1].get("time"), (int, float))
+        and last_reads[0]["time"] >= states[-1]["time"])
     errors, diagnostics = {}, {}
     for path in evidence.directory.glob("*errors.jsonl"):
         records = evidence.records(path.name)
@@ -214,13 +235,18 @@ def audit(directory):
     expected_total = sum(COUNTS[m] for m in required)
     submitted_total = sum(modules.get(m, {}).get("submitted_unique", 0) for m in required)
     unexpected_modules = sorted(set(modules) - set(required))
-    complete = bool(requirements_known and coverage and final and not timeout and not duplicates and not evidence.malformed
+    eligible = bool(requirements_known and coverage and not timeout and not duplicates and not evidence.malformed
                     and not unexpected_modules and ("diagnostic" not in menu["expected"] or diagnostic_complete))
+    complete = eligible and final_clean and stability
     warnings = []
     if not requirements_known:
         warnings.append("complete_module_requirements_not_verified")
     if final and not coverage:
         warnings.append("final_page_does_not_prove_all_required_answers_were_submitted")
+    if final and not final_clean:
+        warnings.append("final_message_has_other_visible_content_or_is_no_longer_current")
+    if final and not stability:
+        warnings.append("stable_final_page_not_verified_by_fresh_reads")
     if timeout:
         warnings.append("timeout_or_runner_failure_observed")
     if not diagnostic_complete and "diagnostic" in menu["expected"]:
@@ -237,6 +263,8 @@ def audit(directory):
     return {"version": 1, "audited_at": time.time(), "state_records": len(states),
             "evidence_directory": str(evidence.directory.resolve()),
             "requirements": menu, "platform_final_observed": final,
+            "platform_final_clean": final_clean, "final_stability_verified": stability,
+            "completion_coverage_eligible": eligible,
             "submission_coverage_complete": coverage, "completion_verified": complete,
             "correctness_verified": False, "autonomy_verified": False,
             "expected_scored": expected_total, "submitted_scored_unique": submitted_total,

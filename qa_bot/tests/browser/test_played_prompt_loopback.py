@@ -8,6 +8,33 @@ from tests.browser.test_dynamic_read_aloud import _tone_wav
 
 
 class PlayedPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_decoder_keeps_host_encoded_buffer_available_for_reuse(self):
+        origin='https://assessment.example'
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                context=await browser.new_context()
+                await context.add_init_script(script=SharedMicrophoneBridge(origin).init_script()+'\n'+
+                    PlayedPromptLoopback(origin,'t'*32,'synthetic','test').init_script())
+                page=await context.new_page()
+                await page.route(origin+'/',lambda r:r.fulfill(content_type='text/html',body='<button>Begin</button>'))
+                await page.route(origin+'/fixture.wav',lambda r:r.fulfill(content_type='audio/wav',body=_tone_wav()))
+                await page.goto(origin+'/');await page.click('button')
+                result=await page.evaluate('''async()=>{
+                    const c=new AudioContext();
+                    const bytes=await (await fetch('/fixture.wav')).arrayBuffer();
+                    const before=bytes.byteLength;
+                    let callbackBytes=null;
+                    const first=await c.decodeAudioData(bytes,()=>{callbackBytes=new Uint8Array(bytes).length});
+                    const second=await c.decodeAudioData(bytes);
+                    return {before,after:bytes.byteLength,callbackBytes,first:first.duration,second:second.duration};
+                }''')
+                self.assertEqual(result['before'],result['after'])
+                self.assertEqual(result['before'],result['callbackBytes'])
+                self.assertEqual(result['first'],result['second'])
+                self.assertGreater(result['first'],0)
+            finally:await browser.close()
+
     async def test_html_conversation_captures_only_played_turns(self):
         origin='https://assessment.example'
         async with async_playwright() as pw:

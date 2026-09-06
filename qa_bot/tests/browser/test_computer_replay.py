@@ -171,3 +171,33 @@ class ComputerReplayTests(unittest.IsolatedAsyncioTestCase):
                     serialized=(Path(directory)/'computer-events.jsonl').read_text()
                     self.assertNotIn('token=abc',serialized);self.assertNotIn('not retained',serialized)
             finally:await browser.close()
+
+    async def test_provider_verified_repeat_uses_no_model(self):
+        calls=[]
+        class Client:
+            def __init__(self,*args,**kwargs):pass
+            async def complete(self,q,**kwargs):
+                calls.append(q['question_id'])
+                return {'question_id':q['question_id'],'content_hash':q['content_hash'],'status':'answer','confidence':.91,
+                    'action':'click','id':'go','value':None,'target_id':None}
+        origin='https://amcatglobal.aspiringminds.com'
+        frame=FRAME.replace('parent.advance()',"parent.postMessage({message:{score:1,log:[]}},'*');setTimeout(()=>parent.advance(),50)")
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page()
+                await page.route(origin+'/assets/msOfficeSimulation/**',lambda r:r.fulfill(content_type='text/html',body=frame))
+                await page.route(origin+'/',lambda r:r.fulfill(content_type='text/html',body=BODY))
+                with tempfile.TemporaryDirectory() as directory:
+                    for n in (1,2):
+                        await page.goto(origin+'/');await page.frame_locator('#frame').locator('#go').wait_for()
+                        output=Path(directory)/str(n);output.mkdir()
+                        session=Session(page,output);session.project_root=Path(directory);session.test_id=str(n);session.replay_only=n==2
+                        with patch('qa_bot.adapters.llm.codex_cli.CodexCLIClient',Client),patch('shutil.which',return_value='/bin/true' if n==1 else None):
+                            await automate(session,page.frames[1])
+                        self.assertIn('Assessments',await page.inner_text('body'))
+                    self.assertEqual(calls,['1'])
+                    action=json.loads((Path(directory)/'2/computer-actions.jsonl').read_text().splitlines()[0])
+                    self.assertEqual(action['source'],'previous_exact');self.assertEqual(action['confidence'],.91)
+                    self.assertTrue(action['correctness_verified'])
+            finally:await browser.close()

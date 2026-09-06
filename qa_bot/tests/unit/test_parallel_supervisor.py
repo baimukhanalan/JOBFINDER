@@ -136,6 +136,14 @@ class ParallelSupervisorTests(unittest.TestCase):
             self.assertEqual(built[role][built[role].index('--speech-bank-dir')+1],str(self.root/'bank'))
         self.assertNotIn('accept_terms',json.dumps(built))
 
+    def test_environment_ports_do_not_depend_on_json_object_key_order(self):
+        spec=self.plan['attempts'][0]
+        spec['ports']=dict(reversed(list(spec['ports'].items())))
+        validate_plan(self.plan)
+        attempt=self.attempt('terms')
+        worker=json.loads((attempt.path/'worker.json').read_text())
+        self.assertEqual(worker['ports'],['19769','19770','19771','19772'])
+
     def test_learning_requires_explicit_boolean_and_omits_replay_only_flag(self):
         plan=make_plan(self.scope,self.root/'learning',[26],concurrency=1,replay_only=False)
         validate_plan(plan)
@@ -177,6 +185,28 @@ class ParallelSupervisorTests(unittest.TestCase):
         self.assertEqual(attempt.error_count,1)
         self.assertEqual(attempt.children['browser'].pid,original)
         self.assertIsNone(attempt.children['browser'].poll())
+
+    def test_diagnostic_errors_do_not_block_reviewed_terms_control(self):
+        attempt=self.attempt('terms');self.poll_until(attempt,'awaiting_terms')
+        evidence=attempt.path/'evidence'/'owned'
+        (evidence/'page-errors.jsonl').write_text('{"error":"site animation"}\n')
+        (evidence/'observer-errors.jsonl').write_text('{"error":"optional observer"}\n')
+        self.assertEqual(attempt.poll(),'awaiting_terms')
+        self.assertEqual(attempt.error_count,0)
+        self.assertEqual(attempt.diagnostic_count,2)
+        # A genuine module failure stays visible, while the separately observed
+        # terms state still permits the existing DOM-guarded explicit command.
+        (evidence/'choice-errors.jsonl').write_text('{"error":"missing exact answer"}\n')
+        self.assertEqual(attempt.poll(),'needs_attention')
+        self.assertTrue(attempt.terms_visible)
+        write_json(attempt.path/'control.json',{'sequence':1,'action':'accept_reviewed_terms'})
+        attempt.control()
+        deadline=time.monotonic()+3
+        while attempt.terms_visible and time.monotonic()<deadline:
+            attempt.poll();time.sleep(.01)
+        self.assertFalse(attempt.terms_visible)
+        self.assertEqual(attempt.state,'needs_attention')
+        self.assertEqual(attempt.summary()['diagnostics'],2)
 
     def test_timeout_and_child_exit_are_not_reported_as_completion(self):
         attempt=self.attempt('timeout');self.poll_until(attempt,'timed_out')

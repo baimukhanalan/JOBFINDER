@@ -148,8 +148,9 @@ async def _automate(session,frame,cache):
                 if not any(marker in state['text'] for marker in ('Assessments\n','ASSESSMENT DESCRIPTION','Your test is now complete')):
                     await asyncio.sleep(.3);continue
                 if previous and previous not in seen:
-                    cache.promote(pending,source_test);cache.record_outcome(source_test,previous,[e for e in events if e.get('question')==previous]);pending=[]
-                    session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':False,'time':time.time()})
+                    outcome=cache.promote(pending,source_test,question=previous,events=events,advanced_at_ms=time.time()*1000);pending=[]
+                    session.log('computer-outcomes.jsonl',{'question':previous,**outcome})
+                    session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':outcome['verification']=='verified_success','time':time.time()})
                     seen.add(previous)
                 print(json.dumps({'computer_stopped':len(seen)}),flush=True);return
             frames=[f for f in session.page.frames if urlsplit(f.url).path=='/assets/msOfficeSimulation/run.html']
@@ -174,8 +175,9 @@ async def _automate(session,frame,cache):
                 continue
             if not result_screen:active_frames.add(number)
             if previous and number!=previous:
-                cache.promote(pending,source_test);cache.record_outcome(source_test,previous,[e for e in events if e.get('question')==previous]);pending=[]
-                session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':False,'time':time.time()})
+                outcome=cache.promote(pending,source_test,question=previous,events=events,advanced_at_ms=time.time()*1000);pending=[]
+                session.log('computer-outcomes.jsonl',{'question':previous,**outcome})
+                session.log('computer.jsonl',{'number':previous,'advanced':True,'correctness_verified':outcome['verification']=='verified_success','time':time.time()})
                 seen.add(previous)
             previous=number
             task=re.search(r'QUESTION\n\d+ out of 16\n(.*?)\n(?:SKIP|SUBMIT)(?:\n|$)',state['text'],re.S)
@@ -225,12 +227,12 @@ async def _automate(session,frame,cache):
             if fresh_key!=key:
                 session.log('computer-retries.jsonl',{'question':number,'reason':'scene_changed_before_action','source':source})
                 continue
-            await capture_message_evidence(session)
+            action_events=await capture_message_evidence(session)
             current_state=await session.page.evaluate(STATE_SCRIPT)
             if session.timeout_seen or 'Assessment Time out' in current_state['text']:return
             if current_state.get('number')!=number or task[1] not in current_state['text']:continue
             if cached and cache.lookup(key,canonical)!=cached:continue
-            metadata={'key':key,'correctness_verified':bool(cached),'source':source,'original_test':original_test,'screenshot':shot.name}
+            metadata={'action_started_ms':time.time()*1000,'event_sequence_before_action':max((e.get('sequence',0) for e in action_events),default=0),'key':key,'correctness_verified':bool(cached),'source':source,'original_test':original_test,'screenshot':shot.name}
             known={n['id'] for n in nodes}
             if result['action'].endswith('_point'):
                 box=await session.page.locator('#frame').bounding_box()
@@ -243,7 +245,8 @@ async def _automate(session,frame,cache):
                     await session.page.mouse.move(x,y);await session.page.mouse.down();await session.page.mouse.move(box['x']+tx,box['y']+ty,steps=20);await session.page.mouse.up()
                 elif result['action']=='double_click_point':await session.page.mouse.dblclick(x,y)
                 else:await session.page.mouse.click(x,y,button='right' if result['action']=='right_click_point' else 'left')
-                pending.append((key,canonical,result))
+                metadata['action_finished_ms']=time.time()*1000
+                pending.append((key,canonical,{**result,**metadata}))
                 if cached:cache.used(key,source_test,number,original_test)
                 session.log('computer-actions.jsonl',{'question':number,**result,**metadata})
                 print(json.dumps({'computer_step':number,'action':result['action'],'confidence':result['confidence']}),flush=True)
@@ -267,7 +270,8 @@ async def _automate(session,frame,cache):
                 if result['target_id'] not in known:raise ValueError('unknown drag destination')
                 await target.drag_to(frame.locator('[id='+json.dumps(result['target_id'])+']'),timeout=5000)
             else:raise ValueError('unsupported simulation action')
-            pending.append((key,canonical,result))
+            metadata['action_finished_ms']=time.time()*1000
+            pending.append((key,canonical,{**result,**metadata}))
             if cached:cache.used(key,source_test,number,original_test)
             session.log('computer-actions.jsonl',{'question':number,**result,**metadata})
             print(json.dumps({'computer_step':number,'action':action,'confidence':result['confidence']}),flush=True)

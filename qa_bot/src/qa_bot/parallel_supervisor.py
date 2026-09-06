@@ -181,13 +181,15 @@ class Attempt:
         self.offsets = {}
         self.state = "starting"
         self.error_count = 0
+        self.diagnostic_count = 0
+        self.terms_visible = False
         self.last_question = None
         self.started_at = time.time()
         self.reason = None
         self.command_sequence = 0
         token = secrets.token_hex(32)
         environment = os.environ.copy()
-        environment.update(dict(zip(PORT_ENV, map(str, spec["ports"].values()))))
+        environment.update({variable: str(spec["ports"][name]) for name, variable in zip(PORT_NAMES, PORT_ENV)})
         environment.update(QA_LOCAL_BRIDGE_TOKEN=token, QA_CAPTURE_TOKEN=token)
         try:
             for role, command in command_factory(spec, plan):
@@ -240,17 +242,21 @@ class Attempt:
         for record in self.tail(evidence / "states.jsonl"):
             text = record.get("text", "")
             self.last_question = record.get("number")
+            self.terms_visible = "TERMS & CONDITIONS" in text
             if "Assessment Time out" in text:
                 self.state, self.reason = "timed_out", "platform_time_limit"
             elif "Your test is now complete. Thank you!" in text and self.state not in {"timed_out", "failed", "cancelled", "interrupted"}:
                 self.state, self.reason = "platform_complete", "question_counts_and_correctness_not_yet_audited"
-            elif "TERMS & CONDITIONS" in text and self.state not in TERMINAL:
-                self.state = "awaiting_terms"
+            elif self.terms_visible and self.state not in TERMINAL:
+                self.state = "awaiting_terms" if not self.error_count else "needs_attention"
             elif self.state == "awaiting_terms":
                 self.state = "running" if not self.error_count else "needs_attention"
         for path in evidence.glob("*errors.jsonl"):
             added = len(self.tail(path))
             if added:
+                if path.name in {"page-errors.jsonl", "observer-errors.jsonl"}:
+                    self.diagnostic_count += added
+                    continue
                 self.error_count += added
                 if self.state not in TERMINAL:
                     self.state, self.reason = "needs_attention", path.name
@@ -273,7 +279,7 @@ class Attempt:
         if type(sequence) is not int or sequence <= self.command_sequence:
             raise ValueError("control sequence must increase")
         action = value.get("action")
-        if action == "accept_reviewed_terms" and self.state == "awaiting_terms":
+        if action == "accept_reviewed_terms" and self.terms_visible and self.state not in TERMINAL:
             # Explicit local operator request only; no automatic terms acceptance.
             self.send({"action": "auto_modules", "module": "accept_terms"})
         elif action == "close":
@@ -286,7 +292,8 @@ class Attempt:
     def summary(self):
         return {"row": self.spec["row"], "profile_id": self.spec["profile_id"],
                 "state": self.state, "reason": self.reason, "last_question": self.last_question,
-                "errors": self.error_count, "started_at": self.started_at,
+                "errors": self.error_count, "diagnostics": self.diagnostic_count,
+                "terms_visible": self.terms_visible, "started_at": self.started_at,
                 "pids": {role: process.pid for role, process in self.children.items()}}
 
     def close(self):

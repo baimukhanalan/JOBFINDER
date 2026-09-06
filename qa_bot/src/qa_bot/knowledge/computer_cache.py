@@ -67,16 +67,27 @@ class ComputerActionCache:
         with self.db:self.db.execute('INSERT INTO question_outcomes VALUES(?,?,?,?,?)',
             (source_test,str(question),1,'unverified',json.dumps(events,sort_keys=True)))
 
-    def promote(self,steps,source_test):
-        """Archive observed steps as unverified; advancement can exhaust attempts."""
+    def promote(self,steps,source_test,*,question=None,events=(),advanced_at_ms=None):
+        """Archive a sequence; only the validated typed task result verifies it."""
+        from qa_bot.knowledge.computer_protocol import outcome
+        verification=outcome(question,steps,events,advanced_at_ms)
         with self.db:
             # Serialize read-then-insert across concurrent browser workers.
             self.db.execute('BEGIN IMMEDIATE')
             for key,canonical,action in steps:
                 self._validate(key,canonical)
                 payload=json.dumps({k:action.get(k) for k in ACTION_FIELDS},sort_keys=True,separators=(',',':'))
-                old=self.db.execute('SELECT canonical,action FROM actions WHERE key=?',(key,)).fetchone()
+                old=self.db.execute('SELECT canonical,action,verification FROM actions WHERE key=?',(key,)).fetchone()
                 if old:
-                    if old!=(canonical,payload):self.db.execute('UPDATE actions SET conflict=1 WHERE key=?',(key,))
-                else:self.db.execute('INSERT INTO actions(key,canonical,action,source_test,observed_confidence) VALUES(?,?,?,?,?)',
-                    (key,canonical,payload,source_test,action.get('confidence')))
+                    if old[:2]!=(canonical,payload):self.db.execute('UPDATE actions SET conflict=1 WHERE key=?',(key,))
+                    elif verification['verification']=='verified_success':
+                        self.db.execute('UPDATE actions SET verification=? WHERE key=?',('verified_success',key))
+                    elif verification['verification']=='reported_failure':
+                        if old[2]=='verified_success':self.db.execute('UPDATE actions SET conflict=1,verification=? WHERE key=?',('conflicting_outcomes',key))
+                        else:self.db.execute('UPDATE actions SET verification=? WHERE key=?',('reported_failure',key))
+                else:self.db.execute('INSERT INTO actions(key,canonical,action,source_test,observed_confidence,verification) VALUES(?,?,?,?,?,?)',
+                    (key,canonical,payload,source_test,action.get('confidence'),verification['verification']))
+
+            self.db.execute('INSERT INTO question_outcomes VALUES(?,?,?,?,?)',
+                (source_test,str(question),1,verification['verification'],json.dumps({'outcome':verification,'events':list(events)},sort_keys=True)))
+        return verification

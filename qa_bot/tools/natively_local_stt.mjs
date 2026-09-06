@@ -65,6 +65,13 @@ try {
     logprob_threshold: -1,
     no_speech_threshold: 0.6,
   };
+  // Whisper's feature extractor truncates inputs to its 30-second window.
+  // The pipeline merges overlapping chunks and retains the final partial chunk.
+  // Short clips keep the original single-window path and latency.
+  if (transcriber.model.config.model_type === 'whisper' && audio.length > 30 * 16000) {
+    generation.chunk_length_s = 30;
+    generation.stride_length_s = 5;
+  }
   if (!modelId.startsWith('distil-whisper/') && !modelId.endsWith('.en')) {
     generation.task = 'transcribe';
     generation.language = 'english';

@@ -438,6 +438,11 @@ class Session:
 
     async def command(self, command):
         action = command['action']
+        self.command_sequence=getattr(self,'command_sequence',0)+1
+        module=command.get('module')
+        self.log('operator-commands.jsonl',{'sequence':self.command_sequence,'time':time.time(),
+            'action':action,'module':module.split(':',1)[0] if isinstance(module,str) else None,
+            'origin':'stdin','phase':'requested'})
         if self.preflight and action in ('auto_speech','auto_choices','auto_modules','retry_read'):
             raise ValueError('preflight cannot enable answer automation')
         if action == 'state':
@@ -560,6 +565,9 @@ async def run(args):
             session.replay_only=getattr(args,'replay_only',False)
             session.profile_id=args.profile_id;session.test_id=args.test
             session.preflight=args.preflight
+            session.log('session-metadata.jsonl',{'command_audit_version':1,'time':time.time(),
+                'profile_id':args.profile_id,'test_id':args.test,'auto':args.auto,
+                'preflight':args.preflight,'replay_only':session.replay_only,'process_id':os.getpid()})
             if not args.preflight:
                 async def capture_played(item):
                     from qa_bot.audio import played_capture

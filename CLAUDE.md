@@ -1682,7 +1682,14 @@ video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_
   **speech recognition** — a fake tone is rejected ("unable to hear you") and retries hit `MIC200`. To
   clear SVAR you'd need real per-item intelligible speech (TTS of the shown sentence) AND **ASR of the
   played audio** to repeat listen-repeat items — i.e. actually pass a spoken-English exam — before the
-  cognitive module even unlocks. No TTS/ASR is installed. So the fake mic solved the DEVICE check but not
+  cognitive module even unlocks. **espeak-ng IS now installed** (`assets.speak_text_wav`/`_gen_speech`
+  speak real English into the fake mic, so read-aloud SVAR items advance a bit further than a tone) — but
+  per-item TTS of the shown sentence by OVERWRITING the fake-audio file does NOT work: **Chromium reads
+  `--use-file-for-fake-audio-capture` ONCE at launch and never re-reads the overwrite** (verified live —
+  only the first ~2 items pass, then the mic content no longer matches). Feeding correct per-item audio
+  would need a **virtual audio device** (pulseaudio null-sink + real-time playback timed to each recording
+  window) + ASR for any listen-repeat item — a major, fragile build for a unique-per-session (≈zero replay
+  value) cognitive corpus; NOT recommended. So the fake mic solved the DEVICE check but not
   the speech-RECOGNITION gate; the cognitive modules stay behind it. **Sutherland-SHL** is separately
   walled by **webcam proctoring** (`WCI200` — a real camera + liveness; do NOT fake a human face — it's an
   identity control). **Maximus SHL-OPQ** (personality, no-right-answer) is the one fully-passable

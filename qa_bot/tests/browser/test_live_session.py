@@ -6,6 +6,43 @@ from qa_bot.live_session import Session
 
 
 class NativeSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_disables_all_automatic_answers_and_navigation(self):
+        import asyncio
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page();await page.set_content('Assessment Time out')
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    session.auto_navigation=session.auto_choices=session.auto_speech=True
+                    task=asyncio.create_task(session.watch())
+                    await asyncio.sleep(.25);task.cancel();await asyncio.gather(task,return_exceptions=True)
+                    self.assertTrue(session.timeout_seen)
+                    self.assertFalse(session.auto_navigation or session.auto_choices or session.auto_speech)
+                    self.assertIn('assessment_time_out',(Path(directory)/'run-failures.jsonl').read_text())
+            finally:await browser.close()
+
+    async def test_notice_does_not_uncheck_already_acknowledged_checkbox(self):
+        async with async_playwright() as pw:
+            browser=await pw.chromium.launch(headless=True)
+            try:
+                page=await browser.new_page();await page.set_content('<label><input checked type="checkbox">I confirm I have read and understood this Notice.</label><button>Continue</button>')
+                await page.evaluate("document.querySelector('button').onclick=()=>window.accepted=document.querySelector('input').checked")
+                with tempfile.TemporaryDirectory() as directory:
+                    session=Session(page,Path(directory));session.cdp=await page.context.new_cdp_session(page)
+                    await session.command({'action':'notice'})
+                    self.assertTrue(await page.evaluate('accepted'))
+            finally:await browser.close()
+
+    async def test_preflight_cannot_enable_answer_automation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session=Session(None,Path(directory));session.preflight=True
+            for action in ('auto_speech','auto_choices','auto_modules','retry_read'):
+                with self.assertRaisesRegex(ValueError,'preflight'):
+                    await session.command({'action':action})
+            self.assertFalse(session.auto_speech)
+            self.assertFalse(session.auto_choices)
+
     async def test_closed_shadow_hidden_radio_is_selected_by_native_label(self):
         from qa_bot.solvers.analytical import options,click_node,label_info
         async with async_playwright() as pw:

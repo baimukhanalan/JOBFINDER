@@ -95,6 +95,7 @@ class Session:
         self.personality_tasks=set()
         self.module_tasks=set()
         self.timeout_seen=False
+        self.preflight=False
         self.output.mkdir(parents=True, exist_ok=True)
 
     async def click(self, role, name):
@@ -341,10 +342,10 @@ class Session:
                         label='I confirm I have read and understood this Notice.'
                         if any(n.get('name',{}).get('value','').strip()==label for n in checkboxes):
                             await self.command({'action':'notice'})
-                        elif (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English')))):
+                        elif not self.preflight and (('Assessments\n' in state['text'] and 'Upcoming' in state['text']) or ('ASSESSMENT DESCRIPTION' in state['text'] and any(x in state['text'] for x in ('Typing','Basic Analytical Ability','SVAR - Spoken English')))):
                             try:await self.click('button','NEXT')
                             except ValueError:pass
-                        elif 'Section ' in state['text'] and 'Listen Carefully' in state['text'] and 'NEXT' in state['text']:
+                        elif not self.preflight and 'Section ' in state['text'] and 'Listen Carefully' in state['text'] and 'NEXT' in state['text']:
                             try:await self.click('button','NEXT')
                             except ValueError:pass
                 prompt=self.topic_prompt(state)
@@ -397,6 +398,8 @@ class Session:
 
     async def command(self, command):
         action = command['action']
+        if self.preflight and action in ('auto_speech','auto_choices','auto_modules','retry_read'):
+            raise ValueError('preflight cannot enable answer automation')
         if action == 'state':
             return await self.page.evaluate(STATE_SCRIPT)
         if action == 'audio_evidence':
@@ -447,7 +450,10 @@ class Session:
             return {'clicked':command['name']}
         if action == 'notice':
             label = 'I confirm I have read and understood this Notice.'
-            await self.click('checkbox', label)
+            nodes=[n for n in await self.controls('checkbox') if n.get('name',{}).get('value','').strip()==label]
+            if len(nodes)!=1:raise ValueError('one exact notice checkbox required')
+            checked=any(p['name']=='checked' and p['value'].get('value') in (True,'true') for p in nodes[0].get('properties',[]))
+            if not checked:await self.click('checkbox', label)
             await self.click('button', 'Continue')
             return {'notice_acknowledged':True}
         if action == 'retry_read':
@@ -502,13 +508,16 @@ async def run(args):
         try:
             context = await browser.new_context()
             await context.grant_permissions(['local-network-access'], origin=ORIGIN)
-            await context.add_init_script(script=bundle(token,args.profile_id,args.test))
+            if not args.preflight:
+                await context.add_init_script(script=bundle(token,args.profile_id,args.test))
             page = await context.new_page()
             session = Session(page, args.output)
             session.cdp = await context.new_cdp_session(page)
             session.project_root=Path(__file__).resolve().parents[2]
             session.prompt_dir=args.prompt_dir
             session.profile_id=args.profile_id;session.test_id=args.test
+            session.preflight=args.preflight
+            if args.preflight:session.auto_navigation=True
             if args.auto:
                 session.auto_speech=session.auto_choices=session.auto_navigation=True
             page.on('response', session.response)
@@ -543,8 +552,10 @@ def main():
     parser.add_argument('--test',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--prompt-dir',type=Path,required=True)
+    parser.add_argument('--preflight',action='store_true',help='observe initial state without speech bridges or answer automation')
     parser.add_argument('--auto',action='store_true',help='run the explicitly authorized assessment flow')
     args=parser.parse_args()
+    if args.preflight and args.auto:parser.error("preflight cannot send answers")
     try:asyncio.run(run(args))
     except (KeyboardInterrupt,EOFError):pass
 

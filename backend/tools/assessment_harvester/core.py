@@ -21,11 +21,56 @@ still keep the captured item).
 from __future__ import annotations
 
 import asyncio
+import glob
+import hashlib
 import logging
+import os
 import random
 import re
+import tempfile
 
-from backend.tools.assessment_harvester import assets, bank, media
+from backend.tools.assessment_harvester import assets, asr, bank, media
+
+# Audio whose transcript is a section/instruction prompt, not harvestable content.
+_ASR_INSTR_RE = re.compile(
+    r"read out sentence|in this section|section [a-d]\b|listen and repeat|listen carefully|"
+    r"move ahead|submit answer|please speak|please repeat|\bpractice\b|you will hear a conversation|"
+    r"is now complete|we will now begin|^question \d+\.?$|^section [a-d]\.?$", re.I)
+
+
+def _bank_captured_audio(res: dict, mailbox: str, url: str, platform: str) -> None:
+    """Transcribe the captured question audio (listen-repeat sentences / listen-comprehension dialogs
+    + questions) with whisper and bank each distinct content sentence as a 'listening' item. The audio
+    is a plain S3 mp3 captured during the walk; instruction/section prompts are filtered out."""
+    adir = res.get("_audiodir")
+    if not adir or not os.path.isdir(adir) or not asr.available():
+        return
+    files = sorted(glob.glob(os.path.join(adir, "*.mp3")))
+    banked = 0
+    seen = set()
+    for f in files:
+        txt = asr.transcribe(f)
+        if not txt:
+            continue
+        t = " ".join(txt.split()).strip()
+        if len(t) < 8 or _ASR_INSTR_RE.search(t):
+            continue
+        key = t.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            bank.record(platform=platform, item_type="listening", question=t, options=[],
+                        media={"image": None, "audio": None, "prompt_text": t},
+                        chosen_answer={"text": None, "index": None, "value": "audio_transcribed", "source": "asr"},
+                        source={"mailbox": mailbox, "invite_url": url},
+                        kind_meta={"is_scored": False, "is_ability": False}, msig="")
+            banked += 1
+            res["banked"] += 1
+            res["by_type"]["listening"] = res["by_type"].get("listening", 0) + 1
+        except Exception:
+            pass
+    logger.info("[asr] banked %d listening sentences (from %d audio files) for %s", banked, len(files), mailbox)
 
 logger = logging.getLogger("assessment_harvester")
 
@@ -130,6 +175,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
            "walls": []}
     args, asset_paths = _launch_args()
     res["fake_media"] = asset_paths
+    res["_audiodir"] = tempfile.mkdtemp(prefix="amcat_aud_")
 
     def _bank(item, item_type, is_ability, chosen, shot, free=None, audio_url=None):
         bank.record(
@@ -157,6 +203,32 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
             ctx = await b.new_context(viewport={"width": 1280, "height": 850},
                                       permissions=["microphone", "camera"])
             page = await ctx.new_page()
+            # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
+            # (Section B listen-repeat, Section C listen-comprehension) can be transcribed + banked.
+            _seen_aud = set()
+
+            async def _aud_sink(resp):
+                try:
+                    u = resp.url
+                    if "SpeechAssessmentBank" not in u:
+                        return
+                    base = u.split("?")[0]
+                    if not (base.lower().endswith((".mp3", ".wav"))
+                            or "audio" in (resp.headers or {}).get("content-type", "")):
+                        return
+                    if base in _seen_aud:
+                        return
+                    body = await resp.body()
+                    if not body or len(body) < 800:
+                        return
+                    _seen_aud.add(base)
+                    fn = os.path.join(res["_audiodir"], hashlib.sha1(base.encode()).hexdigest()[:16] + ".mp3")
+                    with open(fn, "wb") as w:
+                        w.write(body)
+                except Exception:
+                    pass
+
+            page.on("response", lambda r: asyncio.create_task(_aud_sink(r)))
             try:
                 await adapter.enter(page, url)
                 stale = 0
@@ -209,18 +281,21 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
                     if shot:
                         res["shots"].append((item_type, shot, q[:80]))
 
-                    # ---- SPEAKING (SVAR) — fake mic, record->stop->submit ----
+                    # ---- SPEAKING (SVAR) — fake mic; read-aloud sentences are banked, intros / audio-only
+                    #      listen items are _walk_only (advanced but not banked; their content is captured
+                    #      + transcribed by the ASR post-pass). ----
                     if item_type == "speaking":
-                        _bank(item, "speaking", False,
-                              {"text": None, "index": None, "value": "fake_audio_submitted", "source": "fake_device"},
-                              shot, free="speaking")
-                        logger.info("[%s] #%d speaking q=%r (fake mic)", mailbox, res["banked"], q[:60])
+                        if not item.get("_walk_only"):
+                            _bank(item, "speaking", False,
+                                  {"text": None, "index": None, "value": "fake_audio_submitted", "source": "fake_device"},
+                                  shot, free="speaking")
+                            logger.info("[%s] #%d speaking q=%r (fake mic)", mailbox, res["banked"], q[:60])
                         if await adapter.handle_speaking(page):
                             await page.wait_for_timeout(1500)
                             continue
                         res["walls"].append(("speaking", shot, q[:80]))
                         res["status"] = "stuck_free_response"
-                        res["note"] = f"speaking item did not advance even with fake mic (item {res['banked']})"
+                        res["note"] = f"svar item did not advance (banked {res['banked']}, walk_only={item.get('_walk_only', False)})"
                         return
 
                     # ---- VIDEO — fake camera, record cycle ----
@@ -321,4 +396,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 140,
             res["status"] = "partial_timeout"
     except Exception as exc:
         res["note"] = f"{type(exc).__name__}: {exc}"[:200]
+    # After the walk, transcribe the captured question audio and bank the listen-repeat /
+    # listen-comprehension sentences (outside the browser watchdog; blocking ASR is fine here).
+    try:
+        _bank_captured_audio(res, mailbox, url, adapter.platform)
+    except Exception as exc:
+        logger.info("[asr] post-walk bank failed: %s", exc)
+    try:
+        import shutil
+        if res.get("_audiodir"):
+            shutil.rmtree(res["_audiodir"], ignore_errors=True)
+    except Exception:
+        pass
     return res

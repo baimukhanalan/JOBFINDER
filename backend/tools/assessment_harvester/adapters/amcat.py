@@ -261,14 +261,20 @@ class AmcatAdapter(Adapter):
         if not real_opts:
             sv = await self.svar_state(page)
             p = (sv.get("prompt") or "").strip()
-            if sv.get("isSvar") and len(p) >= 6 and not _SVAR_INTRO_RE.search(p):
+            if sv.get("isSvar"):
+                # Route EVERY SVAR page (read-aloud sentences, Section-B/C audio-only listen items, and
+                # section intros) to handle_speaking so the core walks them (forward-first CTA). The
+                # question audio is captured + transcribed by the ASR post-pass, so audio-only items and
+                # intros are marked _walk_only (advanced but NOT banked here as empty speaking).
                 it = dict(it)
-                it["question"] = p
                 it["options"] = []
                 it["has_mic"] = True
                 it["has_textarea"] = it["has_audio"] = it["has_video"] = False
                 it["qimgs"] = []
                 it["_svar"] = sv
+                it["question"] = p
+                if not (len(p) >= 6 and not _SVAR_INTRO_RE.search(p)):
+                    it["_walk_only"] = True     # intro / audio-only listen item -> walk, don't bank
                 return it
         if _GATE_RE.search(it.get("body") or ""):
             it = dict(it)

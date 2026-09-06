@@ -1737,6 +1737,39 @@ video-capture` + `--autoplay-policy=no-user-gesture-required`, in `core._launch_
   assessment and is already auto-completed + banked by the etalon (`shl_assessment.py`, 263 items in the
   unified bank). Only the harvester files change for this; nothing live imports them (no pm2 restart).
 
+### Answer key + REPLAY — answer correctly, not random (`answer_key.py` + `core`, 2026-09-07)
+The harvester's random-answer seam is now a solve-once / replay-on-recurrence ANSWER KEY (owner-directed:
+"собери все вопросы… потом просто нажимать"). `answer_key.py` computes the correct answer for every banked
+MCQ and stores it on the item as `answer_key={text,index,source,needs_vision}`; `core` then REPLAYS it.
+- **What solves what (NO external API — `ANTHROPIC_API_KEY` empty):** TEXT items (personality/SJT/verbal/
+  comprehension) → the LOCAL model (`settings.llm_*`, sumrak-smart). IMAGE items (diagram/table/picture
+  math) → the local model is TEXT-ONLY (422s on image content), so those were solved by VISION offline (a
+  subagent read the screenshots) and written `source="claude_vision"`. Listening dialogue → whisper (`asr`)
+  transcribes the clip, then the local model answers WITH the transcript (`source="dialogue_llm"`).
+- **`core` answer selection (per MCQ):** (1) REPLAY the banked `answer_key`, matched by ANSWER TEXT (option
+  order varies between sessions, so the stored index alone is unsafe); (2) else a NEW TEXT question is
+  LIVE-solved by the local model (`answer_key.solve_one`) and cached (`bank.set_answer`) so it replays next
+  time — listening items are solved with the dialogue transcript; (3) else random (an image new-question,
+  which the text model can't see → random now + solved offline by vision; or `HARVEST_MODE=random` for pure
+  capture). `has_img` = explicit images OR an image-reference in the text (`_IMG_REF_RE`), so text-cognitive
+  (e.g. "percent savings", data in the text) is live-solved while diagram/table questions are not blind-guessed.
+- **Typing** now types the passage at a realistic **75 WPM** (was inhumanly fast). **Speaking / listen-repeat**
+  are produced live via the virtual mic (say the shown sentence / whisper-echo the audio) — no stored key.
+- **Option detection gotchas:** Section C MCQ options are `.option-lable`; the cognitive (Basic Analytical)
+  module's are `.optionDiv` whose radio is `display:none` (`EliminatorMaskerOptionInput`) — matched as
+  `.optionDiv:has(input.EliminatorMaskerOptionInput)` so Section C's ROW-container `.optionDiv` isn't caught
+  (that collision stopped Section C advancing). Click the VISIBLE option element when the inner radio is hidden.
+- **Resume-safety (critical):** a token that resumes past the diagnostic (opens inside a scored module — a
+  running MM:SS timer / SVAR / "Question N out of M", not a gate/terminal page) marks the diagnostic done,
+  re-checked EACH gate iteration, so the gate never re-clicks `#submit1` (which logs the session out — this
+  burned a token before the per-iteration check). A stuck item is `try_skip`-ped (bounded) rather than
+  ending the run.
+- **LIVE-VALIDATED 2026-09-07:** a clean walk answered SVAR (mic) → Section C (answer_key + live_llm, advances)
+  → typing 75 WPM → all 72 Personality (answer_key, opts=5) → into Basic Analytical, banking 120 in one walk,
+  every answer from the key/live-solve (not random). Bank ≈ 897 items; MCQ answer-key 397/398 (375 local text
+  + 22 vision; 1 un-keyable sequencing question). `max_items` is 320 so a full battery completes. Tests: none
+  new (live-driven); the bank/key JSON is gitignored runtime data.
+
 ## Teleperformance (iCIMS) apply — SERVER-SIDE FULL-AUTO NOW WORKS END-TO-END (paid NopeCHA, 2026-09-01)
 > **BREAKTHROUGH 2026-09-01 — a full TP application was submitted AUTONOMOUSLY, server-side, from the
 > DATACENTER IP (no residential tunnel), NopeCHA solving every captcha.** Ground truth: two real emails

@@ -11,6 +11,7 @@ import time
 from urllib.parse import urlsplit
 from qa_bot.domain.question import QuestionSpec,OptionSpec,AssetRef,ResponseContract,ResponseKind
 from qa_bot.knowledge.bank import QuestionBank,fingerprint
+from qa_bot.knowledge.live_archive import session_archive
 
 async def label_info(session,node):
     resolved=await session.cdp.send('DOM.resolveNode',{'backendNodeId':node})
@@ -121,8 +122,8 @@ async def run_module(session,module):
                         q=replace(q,content_hash=fingerprint(q)[0])
                         root=session.project_root.parent
                         historical=HistoricalAnswerResolver.from_files(root/'data/questions.jsonl',root/'SHL_answers_all.csv')
-            with QuestionBank(session.output/'analytical.sqlite3') as bank:
-                answer=await engine.AnswerEngine(bank,client,historical=historical).propose(q,authorized_qa=True,timeout=45)
+            with QuestionBank(session.output/'analytical.sqlite3') as bank, session_archive(session,ignored_observation_assets=('question-image',)) as archive:
+                answer=await engine.AnswerEngine(bank,client,historical=historical,archive=archive).propose(q,authorized_qa=True,allow_model=not getattr(session,'replay_only',False),timeout=45)
             if not answer.proposal:raise ValueError(answer.reason)
             selected=next(i for i,o in enumerate(q.options) if o.id==answer.proposal.selections[0].option_id)
             fresh=await session.page.evaluate(STATE_SCRIPT);fresh_opts=await options(session)

@@ -28,6 +28,41 @@ def answer(q):
 
 
 class AnswerSystemTests(unittest.IsolatedAsyncioTestCase):
+    async def test_arithmetic_with_named_options_keeps_explicit_choice(self):
+        from qa_bot.domain.question import OptionSpec
+        q=replace(spec(),options=(OptionSpec('a',1,'Alice and Ben'),OptionSpec('b',2,'Carl and Dana')))
+        q=replace(q,content_hash=fingerprint(q)[0])
+        client=AsyncMock()
+        client.complete.return_value={'question_id':q.question_id,'content_hash':q.content_hash,'status':'answer','kind':'single_choice','confidence':1,'selections':[{'option_id':'b','role':None}],'text':None,'calculation':{'op':'add','args':['4','5']}}
+        with QuestionBank(':memory:') as bank:
+            result=await AnswerEngine(bank,client).propose(q,authorized_qa=True)
+        self.assertEqual(result.proposal.selections[0].option_id,'b')
+        client.complete.return_value['selections']=[{'option_id':'missing','role':None}]
+        with QuestionBank(':memory:') as bank:
+            result=await AnswerEngine(bank,client).propose(q,authorized_qa=True)
+        self.assertIsNone(result.proposal)
+
+    async def test_currency_and_grouped_options_remain_exact(self):
+        from decimal import Decimal
+        from qa_bot.domain.question import OptionSpec
+        q=replace(spec(),options=(OptionSpec('a',1,'$950'),OptionSpec('b',2,'$1,500.25')))
+        self.assertEqual(match_number(q,Decimal('1500.25')),'b')
+        for label,error in (('€1,500.25','mixed'),('$1,50.25','unsupported')):
+            with self.assertRaisesRegex(ValueError,error):
+                match_number(replace(q,options=(q.options[0],OptionSpec('b',2,label))),Decimal('1500.25'))
+
+    async def test_clock_options_use_minutes_since_midnight(self):
+        from decimal import Decimal
+        from qa_bot.domain.question import OptionSpec
+        q=replace(spec(),options=tuple(OptionSpec(str(i),i,label) for i,label in enumerate(('12:00 AM','12:00 PM','4:30 PM'),1)))
+        for value,identity in ((0,'1'),(720,'2'),(990,'3')):
+            self.assertEqual(match_number(q,Decimal(value)),identity)
+        with self.assertRaisesRegex(ValueError,'absent'):
+            match_number(q,Decimal('4.5'))
+        mixed=replace(q,options=(q.options[0],OptionSpec('4',4,'990 min')))
+        with self.assertRaisesRegex(ValueError,'mixed'):
+            match_number(mixed,Decimal(990))
+
     async def test_calculation_binds_unit_option_without_second_text_payload(self):
         from qa_bot.domain.question import OptionSpec
         q=replace(spec(),options=(OptionSpec('a',1,'55.75 inches'),OptionSpec('b',2,'57.75 inches')))

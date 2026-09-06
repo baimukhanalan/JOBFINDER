@@ -2,8 +2,9 @@
 import json
 
 
-def recording_observer_script(origin, token):
-    config = json.dumps({'origin':origin, 'token':token})
+def recording_observer_script(origin, token, *, port=18772):
+    if type(port) is not int or not 1024<=port<=65535:raise ValueError('invalid recording capture port')
+    config = json.dumps({'origin':origin, 'token':token,'captureUrl':'http://127.0.0.1:'+str(port)+'/capture'})
     return r'''(() => {
       const cfg = CONFIG;
       if (location.origin !== cfg.origin || !globalThis.__qaMicrophoneBus) return;
@@ -44,7 +45,7 @@ def recording_observer_script(origin, token):
               for(const v of samples){peak=Math.max(peak,Math.abs(v));sq+=v*v;}
               record.duration=decoded.duration;record.peak=peak;record.rms=Math.sqrt(sq/samples.length);
               const name='recorder-'+Date.now()+(data.type.startsWith('audio/mp4')?'.m4a':'.webm');
-              const response=await fetch('http://127.0.0.1:18772/capture',{
+              const response=await fetch(cfg.captureUrl,{
                 method:'POST',headers:{'Content-Type':data.type,'X-Capture-Token':cfg.token,'X-Capture-Name':name},body:bytes});
               if(response.ok)record.artifact=name;else record.error='capture_http_'+response.status;
             }catch(error){record.error=error.name;}

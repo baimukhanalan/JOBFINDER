@@ -41,12 +41,13 @@ ORIGIN = 'https://amcatglobal.aspiringminds.com'
 
 
 def bundle(token, profile, test):
+    from qa_bot.runtime_ports import loopback_port,loopback_url
     return '\n'.join((
         SharedMicrophoneBridge(ORIGIN,idle_floor=.001).init_script(),
-        recording_observer_script(ORIGIN, token),
+        recording_observer_script(ORIGIN, token,port=loopback_port('QA_RECORDING_CAPTURE_PORT',18772)),
         topic_bridge_script(ORIGIN),
-        PlayedPromptLoopback(ORIGIN,token,profile,test).init_script(),
-        DynamicReadAloudBridge('http://127.0.0.1:18769', token, ORIGIN, '/',
+        PlayedPromptLoopback(ORIGIN,token,profile,test,capture_url=loopback_url('QA_PROMPT_CAPTURE_PORT',18771)).init_script(),
+        DynamicReadAloudBridge(loopback_url('QA_SPEECH_PORT',18769), token, ORIGIN, '/',
             profile, test, auto_detect=True, question_counter_selector='button.currentQue',
             suspension_selector='[id^="ngdialog"]',section_heading='Section A: Read and Speak').init_script(),
     ))
@@ -123,20 +124,28 @@ class Session:
                 n.get('role',{}).get('value') in ((role,) if role else ('button','radio','checkbox'))]
 
     async def transcribe(self, item):
+        from qa_bot.audio.transcript_cache import TranscriptCache, natively_model_identity
         digest=item['sha256'];target=(self.prompt_dir/item['file']).resolve()
         if not target.is_relative_to(self.prompt_dir.resolve()):raise ValueError('prompt path rejected')
         encoded=target.read_bytes()
         if hashlib.sha256(encoded).hexdigest()!=digest:raise ValueError('prompt integrity failure')
-        wav=self.output/(digest+'.wav')
-        if not wav.exists():wav.write_bytes(await decode_to_wav(self.page,encoded))
-        text_path=self.output/(digest+'.txt')
-        if text_path.exists():text=text_path.read_text()
-        else:
+        bank_dir=getattr(self,'speech_bank_dir',None) or self.prompt_dir.parent
+        cache=TranscriptCache(bank_dir/'transcripts')
+        stt=NativelyLocalSTT(self.project_root)
+        identity=await asyncio.to_thread(natively_model_identity,stt)
+        async def transcribe_new():
+            wav=self.output/(digest+'.wav')
+            # Decode from verified original bytes; never trust an old per-run WAV.
+            wav.write_bytes(await decode_to_wav(self.page,encoded))
             async with self.stt_lock:
-                text=await NativelyLocalSTT(self.project_root).transcribe_wav(wav,timeout=90)
-            text_path.write_text(text)
-        self.log('transcripts.jsonl',{'time':time.time(),**item,'transcript':text})
-        print(json.dumps({'transcript_ready':item['id'],'words':len(text.split())}),flush=True)
+                return await stt.transcribe_wav(wav,timeout=90)
+        result=await cache.get_or_transcribe(encoded,model_identity=identity,transcribe=transcribe_new,
+            source={'profile':self.profile_id,'test':self.test_id,'question':item.get('id','')})
+        text=result.text
+        (self.output/(digest+'.txt')).write_text(text)
+        self.log('transcripts.jsonl',{'time':time.time(),**item,'transcript':text,
+            'cache_source':result.source,'model_sha256':result.model_sha256,'text_sha256':result.text_sha256})
+        print(json.dumps({'transcript_ready':item['id'],'words':len(text.split()),'source':result.source}),flush=True)
         return text
 
     @staticmethod
@@ -154,16 +163,19 @@ class Session:
     async def prepare_topic(self,state,prompt):
         number=state['number']
         try:
-            with SpeechReplayBank(self.prompt_dir.parent/'speech.sqlite3',self.prompt_dir.parent/'answers') as bank:
-                replay=bank.replay(prompt,source_profile=self.profile_id,source_test=self.test_id,source_question='topic-'+number)
-                if replay is None:
+            bank_dir=getattr(self,'speech_bank_dir',None) or self.prompt_dir.parent
+            with SpeechReplayBank(bank_dir/'speech.sqlite3',bank_dir/'answers') as bank:
+                async def create_answer():
                     isolated=self.output/'isolated';isolated.mkdir(exist_ok=True)
                     client=CodexCLIClient(Path(shutil.which('codex')),self.project_root/'configs/answer_schema.json',isolated)
                     solver=SpokenTextSolver(client,min_words=75)
                     answer=await solver('Prepare a natural English spoken response of 80 to 95 words for this authorized test topic. Use complete sentences, a clear example and a short conclusion. Output only the spoken words in the text field. Topic: '+prompt,timeout=20)
                     if len(answer.split())>105:raise ValueError('topic answer too long')
-                    replay=await bank.get_or_create(prompt,answer,speech=MacOSLocalTTS(),voice='Samantha',model='macos-say',
-                        source_profile=self.profile_id,source_test=self.test_id,source_question='topic-'+number,timeout=10)
+                    return answer
+                replay=await bank.get_or_create_spoken(prompt,answer_factory=create_answer,
+                    speech=MacOSLocalTTS(),voice='Samantha',model='macos-say',
+                    source_profile=self.profile_id,source_test=self.test_id,source_question='topic-'+number,
+                    timeout=10,replay_only=getattr(self,'replay_only',False))
                 fresh=await self.page.evaluate(STATE_SCRIPT)
                 if fresh.get('number')!=number or prompt not in ' '.join(fresh['text'].split()):raise ValueError('topic changed during preparation')
                 result=await self.page.evaluate('x=>__qaTopicSpeech.arm(x)',{'number':number,'prompt':prompt,
@@ -227,8 +239,9 @@ class Session:
             if not executable:raise ValueError('Codex CLI unavailable')
             isolated=self.output/'isolated';isolated.mkdir(exist_ok=True)
             client=CodexCLIClient(Path(executable),self.project_root/'configs/answer_schema.json',isolated)
-            with QuestionBank(self.output/'listening.sqlite3') as bank:
-                answer=await AnswerEngine(bank,client).propose(q,authorized_qa=True,timeout=40)
+            from qa_bot.knowledge.live_archive import session_archive
+            with QuestionBank(self.output/'listening.sqlite3') as bank, session_archive(self) as archive:
+                answer=await AnswerEngine(bank,client,archive=archive).propose(q,authorized_qa=True,allow_model=not getattr(self,'replay_only',False),timeout=40)
             if not answer.proposal:raise ValueError(answer.reason)
             label=next(o.label for o in q.options if o.id==answer.proposal.selections[0].option_id)
             fresh=await self.page.evaluate(STATE_SCRIPT)
@@ -534,7 +547,10 @@ async def run(args):
             session = Session(page, args.output)
             session.cdp = await context.new_cdp_session(page)
             session.project_root=Path(__file__).resolve().parents[2]
+            session.answer_archive_path=session.project_root/'runs/answer-archive.sqlite3'
             session.prompt_dir=args.prompt_dir
+            session.speech_bank_dir=getattr(args,'speech_bank_dir',None)
+            session.replay_only=getattr(args,'replay_only',False)
             session.profile_id=args.profile_id;session.test_id=args.test
             session.preflight=args.preflight
             if not args.preflight:
@@ -579,6 +595,8 @@ def main():
     parser.add_argument('--test',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--prompt-dir',type=Path,required=True)
+    parser.add_argument('--speech-bank-dir',type=Path,help='shared speech.sqlite3 and answers directory')
+    parser.add_argument('--replay-only',action='store_true',help='use exact prior answers; never call a reasoning model')
     parser.add_argument('--preflight',action='store_true',help='observe initial state without speech bridges or answer automation')
     parser.add_argument('--auto',action='store_true',help='run the explicitly authorized assessment flow')
     args=parser.parse_args()

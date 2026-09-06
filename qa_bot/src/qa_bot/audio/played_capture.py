@@ -1,6 +1,7 @@
 """Capture an actually playing HTML audio URL using the owned browser client."""
 import os
 import asyncio
+from qa_bot.runtime_ports import loopback_url
 from urllib.parse import urlsplit
 
 async def capture_html(session,item):
@@ -21,7 +22,7 @@ async def capture_html(session,item):
     if response.status!=200:raise ValueError('full played audio unavailable')
     data=await response.body()
     if not 0<len(data)<=20000000:raise ValueError('audio size rejected')
-    receipt=await session.page.request.post('http://127.0.0.1:18771/capture-prompt',headers={
+    receipt=await session.page.request.post(loopback_url('QA_PROMPT_CAPTURE_PORT',18771)+'/capture-prompt',headers={
         'Origin':'https://amcatglobal.aspiringminds.com','Content-Type':response.headers.get('content-type','audio/mpeg'),
         'X-Prompt-Token':os.environ['QA_LOCAL_BRIDGE_TOKEN'],'X-Prompt-Source':'https://qbdata-amcat.s3.amazonaws.com'+url.path,
         'X-Source-Profile':session.profile_id,'X-Source-Test':session.test_id,'X-Source-Question':'heard-'+item['id']},data=data)

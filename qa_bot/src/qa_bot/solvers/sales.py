@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 from qa_bot.domain.question import QuestionSpec,OptionSpec,ResponseContract,ResponseKind
 from qa_bot.knowledge.bank import QuestionBank,fingerprint
+from qa_bot.knowledge.live_archive import session_archive
 from qa_bot.knowledge.historical import HistoricalAnswerResolver
 from qa_bot.adapters.llm.codex_cli import CodexCLIClient
 from qa_bot.solvers.engine import AnswerEngine
@@ -32,8 +33,8 @@ async def run_sales(session):
             q=replace(q,content_hash=fingerprint(q)[0])
             isolated=session.output/'isolated';isolated.mkdir(exist_ok=True)
             client=CodexCLIClient(Path(shutil.which('codex')),session.project_root/'configs/answer_schema.json',isolated,reasoning_effort='low')
-            with QuestionBank(session.output/'sales.sqlite3') as bank:
-                result=await AnswerEngine(bank,client,historical=historical).propose(q,authorized_qa=True,timeout=45)
+            with QuestionBank(session.output/'sales.sqlite3') as bank, session_archive(session) as archive:
+                result=await AnswerEngine(bank,client,historical=historical,archive=archive).propose(q,authorized_qa=True,allow_model=not getattr(session,'replay_only',False),timeout=45)
             if not result.proposal:raise ValueError(result.reason)
             if len({s.option_id for s in result.proposal.selections})!=2:raise ValueError('best and worst must differ')
             fresh=await session.page.evaluate(STATE_SCRIPT)

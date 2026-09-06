@@ -18,6 +18,10 @@ def main(argv=None):
     parser.add_argument("--profile", required=True)
     parser.add_argument("--test", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--speech-bank-dir", type=Path,
+                        help="Shared durable bank directory; defaults to this run output")
+    parser.add_argument("--replay-only", action="store_true",
+                        help="Reject unknown speech questions without generating audio")
     parser.add_argument("--counter-selector", default="")
     parser.add_argument("--suspension-selector", default="")
     parser.add_argument("--repeat-section", required=True)
@@ -32,6 +36,8 @@ def main(argv=None):
         parser.error("QA_LOCAL_BRIDGE_TOKEN must contain at least 24 characters")
     shared = SharedMicrophoneBridge(args.origin,idle_floor=.001)
     args.output.mkdir(parents=True, exist_ok=True)
+    bank_dir = args.speech_bank_dir or args.output
+    bank_dir.mkdir(parents=True, exist_ok=True)
     read = DynamicReadAloudBridge(
         f"http://127.0.0.1:{args.speech_port}", token, args.origin, "/",
         args.profile, args.test, auto_detect=True,
@@ -45,7 +51,8 @@ def main(argv=None):
     servers = []
     try:
         servers.append(speech_server(
-            LiveSpeechController(args.output / "speech.sqlite3", args.output / "answers"),
+            LiveSpeechController(bank_dir / "speech.sqlite3", bank_dir / "answers",
+                                 replay_only=args.replay_only),
             token=token, allowed_origin=args.origin, port=args.speech_port))
         servers.append(injection_server(
             bundle, token=token, allowed_origin=args.origin, port=args.script_port))

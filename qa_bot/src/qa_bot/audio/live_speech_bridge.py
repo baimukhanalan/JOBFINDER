@@ -17,10 +17,11 @@ from qa_bot.audio.replay_bank import SpeechReplayBank, normalize_prompt
 
 class LiveSpeechController:
     def __init__(self, database, artifacts, *, voice="Samantha", speech_factory=None,
-                 player=None):
+                 player=None, replay_only=False):
         self.database = Path(database)
         self.artifacts = Path(artifacts)
         self.voice = voice
+        self.replay_only = replay_only
         self.speech_factory = speech_factory or (
             lambda: MacOSLocalTTS(allowed_voices=(voice,))
         )
@@ -55,7 +56,7 @@ class LiveSpeechController:
                 data["question"], data["answer"], speech=speech, voice=self.voice,
                 model="macos-say", settings=None,
                 source_profile=data["source_profile"], source_test=data["source_test"],
-                source_question=data["source_question"], timeout=20,
+                source_question=data["source_question"], timeout=20, replay_only=self.replay_only,
             ))
             return {
                 "status": "ready", "source": replay.source,

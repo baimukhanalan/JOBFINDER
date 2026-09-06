@@ -59,9 +59,14 @@ def convert_unit(value, source, target):
 def match_number(q, value):
     parsed=[]
     for option in q.options:
-        match=re.fullmatch(r"(-?\d+(?:\.\d+)?)(?:\s*([A-Za-z%]+(?: [A-Za-z]+)*))?",option.label.strip())
+        clock=re.fullmatch(r"(1[0-2]|[1-9]):([0-5][0-9])\s*([AP]M)",option.label.strip(),re.I)
+        if clock:
+            minutes=(int(clock[1])%12+(12 if clock[3].upper()=='PM' else 0))*60+int(clock[2])
+            parsed.append((option.id,Decimal(minutes),'clock_minutes_since_midnight'))
+            continue
+        match=re.fullmatch(r"([$€£]?)\s*(-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?:\s*([A-Za-z%]+(?: [A-Za-z]+)*))?",option.label.strip())
         if not match:raise ValueError("numeric option format unsupported")
-        parsed.append((option.id,Decimal(match.group(1)),(match.group(2) or '').casefold()))
+        parsed.append((option.id,Decimal(match.group(2).replace(',','')),(match.group(1)+(match.group(3) or '')).casefold()))
     if len({unit for _,_,unit in parsed})!=1:
         raise ValueError("mixed numeric option units")
     matches=[identity for identity,number,_ in parsed if number==value]

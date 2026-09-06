@@ -1,6 +1,8 @@
 """Persistent exact-match speech answers with reusable MP3/WAV artifacts."""
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -8,6 +10,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unicodedata
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -75,7 +78,10 @@ class SpeechReplayBank:
         self.artifact_dir = Path(artifact_dir).resolve()
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         self.converter = converter or MacOSAudioConverter()
-        self.db = sqlite3.connect(database)
+        self.db = sqlite3.connect(database, timeout=30)
+        self.db.execute("PRAGMA busy_timeout=30000")
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA foreign_keys=ON")
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS speech_answers(
@@ -127,8 +133,10 @@ class SpeechReplayBank:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _decode(self, row, *, source: str) -> SpeechReplay:
-        mp3_path = self.artifact_dir / row["mp3_path"]
-        wav_path = self.artifact_dir / row["wav_path"]
+        mp3_path = (self.artifact_dir / row["mp3_path"]).resolve()
+        wav_path = (self.artifact_dir / row["wav_path"]).resolve()
+        if not mp3_path.is_relative_to(self.artifact_dir) or not wav_path.is_relative_to(self.artifact_dir):
+            raise ValueError("speech artifact escapes bank directory")
         if (not mp3_path.is_file() or not wav_path.is_file()
                 or self._sha(mp3_path) != row["audio_sha256"]
                 or self._sha(wav_path) != row["wav_sha256"]):
@@ -190,9 +198,14 @@ class SpeechReplayBank:
         try:
             self.converter.mp3_to_wav(staged_mp3, staged_wav)
             audio_sha, wav_sha = self._sha(staged_mp3), self._sha(staged_wav)
-            os.replace(staged_mp3, mp3_path)
-            os.replace(staged_wav, wav_path)
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                # Recheck under the writer lock: another process may have won.
+                found = self.lookup(question_text, answer_text)
+                if found:
+                    return found
+                os.replace(staged_mp3, mp3_path)
+                os.replace(staged_wav, wav_path)
                 self.db.execute(
                     """INSERT INTO speech_answers(
                         question_key,canonical,question_text,answer_text,voice,model,
@@ -212,12 +225,11 @@ class SpeechReplayBank:
                     ) VALUES(?,?,?,?, 'generated')""",
                     (key, source_profile, source_test, source_question),
                 )
-        except Exception:
+        finally:
+            # Never delete a published artifact: a competing writer may own it.
+            # An interrupted insertion leaves harmless unreferenced files only.
             staged_mp3.unlink(missing_ok=True)
             staged_wav.unlink(missing_ok=True)
-            mp3_path.unlink(missing_ok=True)
-            wav_path.unlink(missing_ok=True)
-            raise
         row = self.db.execute("SELECT * FROM speech_answers WHERE question_key=?", (key,)).fetchone()
         return self._decode(row, source="generated")
 
@@ -287,35 +299,82 @@ class SpeechReplayBank:
         ).fetchone()
         return self._decode(row, source="replay")
 
+    @asynccontextmanager
+    async def generation_lock(self, question_text: str, *, timeout: float = 60):
+        """Coordinate generation across independent bridge processes, not just threads."""
+        key, _ = prompt_fingerprint(question_text)
+        locks = self.artifact_dir / ".locks"
+        locks.mkdir(exist_ok=True)
+        with (locks / (key + ".lock")).open("a+b") as stream:
+            deadline = asyncio.get_running_loop().time() + timeout
+            while True:
+                try:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if asyncio.get_running_loop().time() >= deadline:
+                        raise TimeoutError("speech generation lock timed out")
+                    await asyncio.sleep(.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
     async def get_or_create(
-        self,
-        question_text: str,
-        answer_text: str,
-        *,
-        speech,
-        voice: str,
-        model: str = "eleven_multilingual_v2",
-        settings=None,
-        source_profile: str,
-        source_test: str,
-        source_question: str,
-        timeout: float = 30,
+        self, question_text: str, answer_text: str, *, speech, voice: str,
+        model: str = "eleven_multilingual_v2", settings=None,
+        source_profile: str, source_test: str, source_question: str,
+        timeout: float = 30, replay_only: bool = False,
     ) -> SpeechReplay:
-        found = self.replay(
-            question_text, answer_text, source_profile=source_profile,
-            source_test=source_test, source_question=source_question,
-        )
-        if found:
-            return found
-        mp3 = await speech.synthesize_mp3(
-            normalize_prompt(answer_text), voice=voice, model=model,
-            settings=settings, synthetic=True, timeout=timeout,
-        )
-        return self.record(
-            question_text, answer_text, mp3, voice=voice, model=model,
-            source_profile=source_profile, source_test=source_test,
-            source_question=source_question,
-        )
+        async with self.generation_lock(question_text, timeout=timeout + 30):
+            found = self.replay(
+                question_text, answer_text, source_profile=source_profile,
+                source_test=source_test, source_question=source_question,
+            )
+            if found:
+                return found
+            if replay_only:
+                raise ValueError("exact speech answer missing from replay-only bank")
+            mp3 = await speech.synthesize_mp3(
+                normalize_prompt(answer_text), voice=voice, model=model,
+                settings=settings, synthetic=True, timeout=timeout,
+            )
+            return self.record(
+                question_text, answer_text, mp3, voice=voice, model=model,
+                source_profile=source_profile, source_test=source_test,
+                source_question=source_question,
+            )
+
+    async def get_or_create_spoken(
+        self, question_text: str, *, answer_factory, speech, voice: str,
+        model: str = "macos-say", settings=None,
+        source_profile: str, source_test: str, source_question: str,
+        timeout: float = 30, replay_only: bool = False,
+    ) -> SpeechReplay:
+        """One exact lookup, answer callback and synthesis across concurrent runs.
+
+        The callback is invoked only by the process that owns the missing-question
+        lock. Repeats skip both answer generation and synthesis entirely.
+        """
+        async with self.generation_lock(question_text, timeout=timeout + 60):
+            found = self.replay(
+                question_text, source_profile=source_profile,
+                source_test=source_test, source_question=source_question,
+            )
+            if found:
+                return found
+            if replay_only:
+                raise ValueError("exact speech answer missing from replay-only bank")
+            answer_text = normalize_prompt(await answer_factory())
+            mp3 = await speech.synthesize_mp3(
+                answer_text, voice=voice, model=model,
+                settings=settings, synthetic=True, timeout=timeout,
+            )
+            return self.record(
+                question_text, answer_text, mp3, voice=voice, model=model,
+                source_profile=source_profile, source_test=source_test,
+                source_question=source_question,
+            )
 
     def stats(self) -> dict[str, int]:
         row = self.db.execute(

@@ -57,9 +57,12 @@ class NativelyLocalSTT:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            process.kill()
+        except (asyncio.TimeoutError, asyncio.CancelledError) as error:
+            if process.returncode is None:
+                process.kill()
             await process.wait()
+            if isinstance(error, asyncio.CancelledError):
+                raise
             raise TimeoutError("local STT timed out") from None
         records = []
         for line in stdout.decode("utf-8", "replace").splitlines():

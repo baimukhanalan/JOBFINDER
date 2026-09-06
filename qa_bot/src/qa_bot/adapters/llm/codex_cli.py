@@ -2,6 +2,10 @@
 import asyncio
 import json
 import hashlib
+import os
+import re
+import time
+import uuid
 from pathlib import Path
 
 
@@ -15,6 +19,45 @@ class CodexCLIClient:
         self.best_effort=best_effort
 
     async def complete(self, question: dict, *, timeout: float):
+        requested=time.time();started=time.monotonic()
+        identity=question.get('question_id') if isinstance(question,dict) else None
+        safe_id=(identity if isinstance(identity,str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,100}',identity)
+                 else 'sha256:'+hashlib.sha256(str(identity).encode()).hexdigest())
+        def digest(value):
+            return value.lower() if isinstance(value,str) and re.fullmatch(r'[a-fA-F0-9]{64}',value) else None
+        images=question.get('_image_attachments',[]) if isinstance(question,dict) else []
+        images=images if isinstance(images,list) else []
+        call={'call_id':str(uuid.uuid4()),'requested_at':requested,'question_id':safe_id,
+              'content_hash':digest(question.get('content_hash')) if isinstance(question,dict) else None,
+              'reasoning_effort':self.reasoning_effort,'best_effort':self.best_effort,
+              'image_count':len(images),'image_sha256':[digest(a.get('sha256')) if isinstance(a,dict) else None for a in images],
+              'process_started':False}
+        outcome='error';error_type=None
+        try:
+            result=await self._complete(question,timeout=timeout,call=call)
+            outcome='abstain' if isinstance(result,dict) and result.get('status')=='abstain' else 'completed'
+            return result
+        except BaseException as error:
+            outcome='timeout' if isinstance(error,TimeoutError) else 'error'
+            error_type=type(error).__name__
+            raise
+        finally:
+            self._ledger({**call,'event':'completed','completed_at':time.time(),
+                          'elapsed_seconds':time.monotonic()-started,'outcome':outcome,'error_type':error_type})
+
+    def _ledger(self, record):
+        """Best-effort telemetry: one append write, no prompts or exception text."""
+        try:
+            encoded=(json.dumps(record,separators=(',',':'))+'\n').encode()
+            descriptor=os.open(self.workspace/'model-calls.jsonl',os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+            try:
+                os.write(descriptor,encoded)
+            finally:
+                os.close(descriptor)
+        except Exception:
+            pass
+
+    async def _complete(self, question: dict, *, timeout: float, call):
         # Native executable is required on Windows; no shell/command interpolation.
         if not self.executable.is_file() or not self.schema.is_file() or not self.workspace.is_dir():
             raise ValueError("CLI executable/schema/isolated workspace required")
@@ -62,6 +105,8 @@ class CodexCLIClient:
             "--output-schema", str(self.schema.resolve()), "-C", str(self.workspace.resolve()), *image_args, "-",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL)
+        call.update(process_started=True,started_at=time.time())
+        self._ledger({**call,'event':'started'})
         try:
             stdout, _ = await asyncio.wait_for(process.communicate(prompt.encode()), timeout)
         except BaseException:
@@ -69,6 +114,8 @@ class CodexCLIClient:
                 process.kill()
             await process.wait()
             raise
+        finally:
+            call['returncode']=process.returncode if type(process.returncode) is int else None
         if process.returncode or len(stdout) > 1_000_000:
             raise ValueError("CLI failed or output too large")
         final = None

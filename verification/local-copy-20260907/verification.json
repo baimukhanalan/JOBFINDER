@@ -1,0 +1,14 @@
+{
+  "source_commit": "d58fdae5bf0e4cdad6d0086018cd5f8509e24381",
+  "verified_on": "2026-09-07",
+  "restored_files": 8136,
+  "restored_symlinks": 3,
+  "restored_directories": 1032,
+  "restored_fifos": 2,
+  "full_source_inventory_matched": true,
+  "source_file_hashes_matched": true,
+  "restored_file_hashes_matched": true,
+  "restored_file_modes_matched": true,
+  "restored_symlink_targets_matched": true,
+  "wrong_key_rejected_before_extraction": true
+}

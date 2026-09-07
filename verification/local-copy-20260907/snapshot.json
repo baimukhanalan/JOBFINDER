@@ -1,0 +1,80 @@
+{
+  "format": 1,
+  "encryption": "AES-256-GCM",
+  "compression": "gzip",
+  "created_at": "2026-09-07T01:04:03.039Z",
+  "source_commit": "d58fdae5bf0e4cdad6d0086018cd5f8509e24381",
+  "exclusions": [
+    ".git",
+    "verification/local-copy-20260907"
+  ],
+  "files": 8136,
+  "symlinks": 3,
+  "directories": 1032,
+  "original_file_bytes": 889162446,
+  "nonce": "c4e2be9f103b7343c4853928",
+  "tag": "021385c96809d57a4cc4c43efc9cfc9c",
+  "parts": [
+    {
+      "name": "archive.part001",
+      "bytes": 41943040,
+      "sha256": "ae1697e0e3cfb1e38e4821624415340550a65dfe3ce52effabb80df155e0defb"
+    },
+    {
+      "name": "archive.part002",
+      "bytes": 41943040,
+      "sha256": "d2265bd97bb4f24e5bff3dd4c4b7e4641605df709191cd0515d50cb122d636f2"
+    },
+    {
+      "name": "archive.part003",
+      "bytes": 41943040,
+      "sha256": "0925c95c787f213b7b5066ed2bd56cecdd699d3a36e10ecb4df39530dff970b4"
+    },
+    {
+      "name": "archive.part004",
+      "bytes": 41943040,
+      "sha256": "0ea0277335312d3465e1aa7c188c7c3d5d21d95ca4c98633c560e8d737ccc4b1"
+    },
+    {
+      "name": "archive.part005",
+      "bytes": 41943040,
+      "sha256": "24cb6609dd484efb49ad0334c1799c1b0e27b14ee36b134cdd9f60e771cad944"
+    },
+    {
+      "name": "archive.part006",
+      "bytes": 41943040,
+      "sha256": "d39b1d670077f337a6f09ca9a58abfc4a26967cde8abbe83631f85518c35060f"
+    },
+    {
+      "name": "archive.part007",
+      "bytes": 41943040,
+      "sha256": "525067b1a53ae10c8a34593e4d95aa4f9748ad141ec384e4f32ca8119fc9253e"
+    },
+    {
+      "name": "archive.part008",
+      "bytes": 41943040,
+      "sha256": "91a8dc65a11c9fb27374bbd34b641495cb49733dac4dd2b32eaae3018a07647f"
+    },
+    {
+      "name": "archive.part009",
+      "bytes": 41943040,
+      "sha256": "48db0983f6933da54d2a5175e2ee376c91b376caa2f96901c9246bad16acb6fc"
+    },
+    {
+      "name": "archive.part010",
+      "bytes": 41943040,
+      "sha256": "b778863851227a0f61b9afbfb3acd369ed8c4a6ffd88af94dd580156bc3cd97d"
+    },
+    {
+      "name": "archive.part011",
+      "bytes": 41943040,
+      "sha256": "f01f819d4cebc502d7cef34444f00b01d00a75b1bb3bf5e0abb1e31278b968f7"
+    },
+    {
+      "name": "archive.part012",
+      "bytes": 9726744,
+      "sha256": "7b6b552dc08d3b9707b7f6489644449de9cbc2421e150c9e7af090171e32bda2"
+    }
+  ],
+  "fifos": 2
+}

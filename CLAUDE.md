@@ -1770,6 +1770,40 @@ MCQ and stores it on the item as `answer_key={text,index,source,needs_vision}`; 
   + 22 vision; 1 un-keyable sequencing question). `max_items` is 320 so a full battery completes. Tests: none
   new (live-driven); the bank/key JSON is gitignored runtime data.
 
+### qa_bot snapshot IMPORT — Sales + Analytical + WriteX answered into the bank (`import_qa_snapshot.py`, 2026-09-08)
+Owner-directed corpus import from the separate mature `qa_bot` project's snapshot (a 1251-question SHL
+capture + a derived answers CSV) into OUR unified `assessment_bank.json`, so the harvester REPLAYS the
+qa_bot answers instead of guessing. Owner picked 4 of the 5 recommended items (calculator.py deliberately
+SKIPPED — text-math is rare + the answers are already in the CSV). Source (gitignored, persisted so the
+importer is reproducible) = `backend/data/qa_snapshot/{questions.jsonl, SHL_answers_all.csv,
+SHL_QA_task_type_catalog_RU.md}`. Join key = the question `id`; everything banked under platform `amcat`
+with the SAME live dedup_key (`norm(question) || sorted-norm(options) || msig=""`, question = the snapshot
+`text`), so an import UPGRADES the matching live-harvested item in place OR is net-new coverage. Idempotent
+(bank.record dedups; the answer_key is (re)written with `source="qa_bot_csv"`). CLI:
+`python -m backend.tools.assessment_harvester.import_qa_snapshot [--sections sales,analytical,writex] [--dry-run]`.
+- **Sales Competency (120 items → 42 unique situations):** best/worst SJT — `answer_key={kind:'best_worst',
+  best:{text,index}, worst:{text,index}, text/index=BEST}`. Our bank had 0 sales before. classify() now labels
+  a harvested best/worst item `sales` (`_SALES_RE`), and `core` replays BOTH best+worst via a NEW
+  `adapter.answer_best_worst` hook — base returns False (single-BEST fallback) since we have NOT captured a
+  live AMCAT Sales DOM yet (Sales is LAST in the battery, never reached — the DATA is ready, the two-column
+  UI driver is a TODO for when a run reaches it).
+- **Basic Analytical (228 → 226 mapped, 2 skipped image-only options):** single-choice cognitive, mostly
+  `confidence='высокая по сохранённой формулировке'`. `answer_key={text,index,source:'qa_bot_csv',
+  needs_vision:False, confidence, reasoning, image_dependent}`. needs_vision=False even for table/diagram items
+  because the CSV answer is authoritative (a confident human/vision answer beats a text-model guess).
+- **WriteX Email Writing (6):** free-response email — banked as item_type `writing` with `answer_key={kind:
+  'email', to, subject, body}`. `writex.py` (NEW solver) + `AmcatAdapter.handle_writex` fill the 3 fields
+  (`To:`/`Subject`/`Compose your response` placeholders, per the qa_bot recon) + submit; `core`'s `writing`
+  branch REPLAYS the banked email else drafts one via the local model (`writex.draft_email`) with a
+  deterministic >=30-word fallback, so the run never STALLS at the email module (defensive, owner's #4).
+  classify() routes a free-text EMAIL task to `writing` (`writex.is_writex`) vs a typing-SPEED test to `typing`.
+- **Task-type catalog (`SHL_QA_task_type_catalog_RU.md`, item #5, reference):** used to refine `classify()`
+  (the Sales + WriteX detections above); stored in the repo (gitignored) as the routing reference.
+- **Live effect (verified):** one real import added +99 distinct items (bank 897→996) + 105 `qa_bot_csv`
+  answer keys; MCQ answer-key coverage 492/493. NOTHING live imports these files (the harvester is a
+  manual/cron tool under `DISPLAY=:98`) → no pm2 restart; the changes take effect on the next harvest run,
+  the bank is data-only. Tests: `test_import_qa_snapshot.py`, `test_writex.py` (offline; temp bank + fixture).
+
 ## Teleperformance (iCIMS) apply — SERVER-SIDE FULL-AUTO NOW WORKS END-TO-END (paid NopeCHA, 2026-09-01)
 > **BREAKTHROUGH 2026-09-01 — a full TP application was submitted AUTONOMOUSLY, server-side, from the
 > DATACENTER IP (no residential tunnel), NopeCHA solving every captcha.** Ground truth: two real emails

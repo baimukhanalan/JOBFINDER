@@ -29,7 +29,7 @@ import random
 import re
 import tempfile
 
-from backend.tools.assessment_harvester import answer_key, assets, asr, bank, media, mic
+from backend.tools.assessment_harvester import answer_key, assets, asr, bank, media, mic, writex
 
 # Audio whose transcript is a section/instruction prompt, not harvestable content.
 _ASR_INSTR_RE = re.compile(
@@ -99,6 +99,11 @@ _PERS_Q_RE = re.compile(
     r"describes you (the )?best|which statement|strongly agree|strongly disagree|\bi (am|prefer|enjoy|like|tend)\b|"
     r"how (often|much) do you|rate (yourself|how)|to what extent", re.I)
 _TF_RE = re.compile(r"^(true|false|cannot say|can'?t say|not enough information)$", re.I)
+# Sales Competency Test — a best/worst situational-judgement item (catalog SALES-01). Recognised so a
+# harvested Sales item gets the 'sales' label and looks up the imported best/worst answer key.
+_SALES_RE = re.compile(
+    r"choose the ['\"]?best['\"]? and (the )?['\"]?worst['\"]?|'best' and the 'worst'|"
+    r"best and (the )?worst (action|response|option)", re.I)
 # The question's DATA lives in an image/diagram/table (not the text) -> the text-only local model can't
 # solve it, so never live-solve/cache it (random now + offline vision). Deliberately NOT matching
 # verbal "passage/paragraph/sentence" (those are text-solvable).
@@ -121,12 +126,18 @@ def classify(item: dict) -> tuple[str, bool]:
     if item.get("has_mic") and not opt_txt:
         return ("video" if item.get("has_video") else "speaking"), False
     if item.get("has_textarea") and not opt_txt:
+        # A WriteX email-writing task (a free-text email) vs a plain typing-SPEED test: the email task
+        # needs a drafted business email, the speed test a copy of the shown paragraph.
+        if writex.is_writex((item.get("question", "") or "") + " " + (item.get("body") or "")):
+            return "writing", False
         return "typing", False
     # a listening item carries audio AND MCQ options
     if item.get("has_audio") and opt_txt:
         return "listening", False
     q = item.get("question", "") or ""
     imgs = item.get("qimgs") or []
+    if opt_txt and (_SALES_RE.search(q) or _SALES_RE.search(item.get("body") or "")):
+        return "sales", False
     if _PIC_Q_RE.search(q) or (imgs and (not opt_txt or all(len(o) <= 3 for o in opt_txt))):
         return "picture", True
     if item.get("has_table"):
@@ -322,7 +333,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     item_type, is_ability = classify(item)
 
                     # ---- landing / transition (nothing to answer, no media widget) ----
-                    if not opts and item_type not in ("speaking", "video", "typing"):
+                    if not opts and item_type not in ("speaking", "video", "typing", "writing"):
                         if await adapter.advance(page):
                             await page.wait_for_timeout(1200)
                             stale = 0
@@ -340,7 +351,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     stale = 0
 
                     q = item.get("question", "")
-                    need_shot = (item_type in ("speaking", "video", "typing", "listening", "picture")
+                    need_shot = (item_type in ("speaking", "video", "typing", "writing", "listening", "picture")
                                  or is_ability or bool(item.get("qimgs"))
                                  or item.get("has_table") or any(o.get("image") for o in opts)
                                  or not opt_txt)
@@ -417,6 +428,32 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         res["note"] = f"typing item did not advance (item {res['banked']})"
                         return
 
+                    # ---- WRITING (WriteX email) — draft/replay a business email, fill + submit ----
+                    if item_type == "writing":
+                        _bank(item, "writing", False,
+                              {"text": None, "index": None, "value": "email_submitted", "source": "writex"},
+                              shot, free="typing")
+                        logger.info("[%s] #%d writex q=%r", mailbox, res["banked"], q[:60])
+                        try:
+                            banked = bank.answer_for(adapter.platform, q, [], _msig(item))
+                        except Exception:
+                            banked = None
+                        try:
+                            email = await writex.draft_email(q or item.get("body") or "", banked=banked)
+                        except Exception:
+                            email = None
+                        if email and await adapter.handle_writex(page, email):
+                            await page.wait_for_timeout(1500)
+                            continue
+                        # fall back to plain typing of the body so the run still advances past the module
+                        if await adapter.handle_typing(page, (email or {}).get("body") or _FAKE_SPEECH_TEXT):
+                            await page.wait_for_timeout(1200)
+                            continue
+                        res["walls"].append(("writing", shot, q[:80]))
+                        res["status"] = "stuck_free_response"
+                        res["note"] = f"writex item did not advance (item {res['banked']})"
+                        return
+
                     # ---- LISTENING — capture audio, then it's an MCQ ----
                     audio_url = None
                     if item_type == "listening":
@@ -463,11 +500,21 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     pick_src = "random"
                     live_cache = False
                     cache_src = "live_llm"
+                    bw = None            # (best_idx, worst_idx) for a Sales best/worst replay
                     if not harvest_random:
                         try:
                             ak = bank.answer_for(adapter.platform, q, opt_txt, _msig(item))
                         except Exception:
                             ak = None
+                        if ak and ak.get("kind") == "best_worst":
+                            _bt = (ak.get("best") or {}).get("text") or ""
+                            _wt = (ak.get("worst") or {}).get("text") or ""
+                            _bi = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == _bt.strip().lower()), None)
+                            _wi = next((i for i, t in enumerate(opt_txt) if t.strip().lower() == _wt.strip().lower()), None)
+                            if _bi is not None:
+                                idx, pick_src = _bi, "answer_key"
+                            if _bi is not None and _wi is not None and _bi != _wi:
+                                bw = (_bi, _wi)
                         strong = bool(ak) and ak.get("source") in ("claude_vision", "dialog_llm")
                         # replay a stored key UNLESS it's a weak text-only key for a listening item we can
                         # now upgrade with the dialogue transcript.
@@ -508,7 +555,9 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
 
                     prev = (q, tuple(o.get("text", "") for o in opts), item.get("progress"))
                     await asyncio.sleep(random.uniform(min_delay, max_delay))
-                    if not await adapter.answer_mcq(page, item, idx):
+                    if bw is not None and await adapter.answer_best_worst(page, item, bw[0], bw[1]):
+                        pass                                   # both best + worst selected
+                    elif not await adapter.answer_mcq(page, item, idx):
                         await adapter.advance(page)
                     advanced = False
                     for _ in range(10):

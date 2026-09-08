@@ -902,6 +902,41 @@ class AmcatAdapter(Adapter):
                     pass
         return False
 
+    async def handle_writex(self, page, email: dict) -> bool:
+        """AMCAT WriteX "Email Writing": three fields — `To:` / `Subject` / `Compose your response`
+        (placeholders, per the qa_bot recon) — plus a SUBMIT ANSWER (`.primary-cta-btn`). Fill each,
+        then submit via the SVAR primary clicker (the gate `advance` refuses `#submit1`). Falls back to
+        the generic single-field fill if the named placeholders aren't found. `email` = {to,subject,body}."""
+        to = (email or {}).get("to") or ""
+        subject = (email or {}).get("subject") or ""
+        body = (email or {}).get("body") or ""
+        if not body:
+            return False
+        filled = 0
+        for placeholder, value in (("To:", to), ("Subject", subject), ("Compose your response", body)):
+            if not value:
+                continue
+            try:
+                f = page.get_by_placeholder(re.compile(re.escape(placeholder), re.I))
+                if await f.count():
+                    el = f.first
+                    await el.scroll_into_view_if_needed(timeout=3000)
+                    await el.fill(value[:1600], timeout=8000)
+                    filled += 1
+            except Exception:
+                pass
+        if filled == 0:                       # named fields not found -> generic single-field fallback
+            return await super().handle_writex(page, email)
+        await page.wait_for_timeout(700)
+        try:
+            await page.evaluate(_SVAR_CLICK_PRIMARY_JS)
+        except Exception:
+            pass
+        await self._click_by_re(page, re.compile(r"submit answer|\bsubmit\b|\bnext\b|\bcontinue\b"))
+        await page.wait_for_timeout(1600)
+        logger.info("[amcat] writex filled %d field(s), submitted (body %d words)", filled, len(body.split()))
+        return True
+
     async def wall(self, page) -> str | None:
         if await self.is_terminal(page):
             return "terminal_token"

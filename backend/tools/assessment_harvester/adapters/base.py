@@ -311,6 +311,25 @@ class Adapter:
             await self.advance(page)
         return ok
 
+    async def handle_writex(self, page, email: dict) -> bool:
+        """Fill a WriteX email item and advance. Generic default: drop the drafted body into the single
+        biggest free-text field and advance (a platform with separate To/Subject/body fields overrides
+        this — see AmcatAdapter). `email` is {to, subject, body}. Returns True if it advanced."""
+        body = (email or {}).get("body") or ""
+        if not body:
+            return False
+        to = (email or {}).get("to") or ""
+        subj = (email or {}).get("subject") or ""
+        text = (f"To: {to}\nSubject: {subj}\n\n{body}") if to else body
+        return await self.handle_typing(page, text)
+
+    async def answer_best_worst(self, page, item: dict, best_index: int, worst_index: int) -> bool:
+        """Select BOTH a best and a worst option (Sales SJT, catalog SALES-01). No generic default — the
+        best/worst UI (two role-tagged columns) is platform-specific and we have not captured a live one
+        yet, so this returns False and the core falls back to a single BEST click. Override per-platform
+        once the real Sales DOM is known (the banked answer already carries both indices)."""
+        return False
+
     async def answer_mcq(self, page, item: dict, index: int) -> bool:
         """Click the visible option at `index`. Generic: re-derive the option elements the same way
         the reader did, in DOM order, and click the nth. Overridden per-platform when needed."""

@@ -22,6 +22,9 @@ backend/data/shl_assess_runner.lock
 # assessment question-bank HARVESTER (runtime data + PII source + big regenerable media assets)
 backend/data/assessment_bank.json
 backend/data/assessment_media/
+# qa_bot snapshot source (questions.jsonl + SHL_answers_all.csv) — SHL question content, big, gitignored;
+# it feeds import_qa_snapshot.py into the (also gitignored) assessment_bank.json.
+backend/data/qa_snapshot/
 backend/data/harvest_state.json
 backend/tools/assessment_harvester/assets/*.wav
 backend/tools/assessment_harvester/assets/*.y4m

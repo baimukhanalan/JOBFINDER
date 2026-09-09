@@ -232,18 +232,23 @@ Assessment question-bank harvester (see the harvester section):
   ли на них может податься любой казахстанец?» — it was NOT: OTHER alone returned 2439 jobs, most
   PINNED to one foreign country — Remote-India 47, Germany 38, Hong Kong 44, Mexico 43…).** A
   `job_catalog.open_anywhere BOOLEAN` (in `_EXTRA_COLS`) is computed deterministically by
-  `applier/regions.open_anywhere(job)`: TRUE for a bare «Remote»-style location, a worldwide word, a
-  broad region that INCLUDES Central Asia (Asia/EMEA/APAC/CIS/Eurasia/Global), or an empty location
-  whose text matches the strict `_WORLDWIDE_RE`; FALSE for any NAMED country/US state/city, for
-  «Europe»/«European Union» (EU residence), for sub-regions that exclude Central Asia
-  (`_LOC_SUBREGION_PIN_RE`: South-East/East/South Asia, ANZ, MENA, Nordics, DACH…), and for an
-  unrecognised location (precision over recall). A country query for the OTHER bucket now ANDs
-  `(open_anywhere OR location ILIKE ANY(aliases))` where `query_country_aliases` gives the asked
-  country's names (a curated set for Kazakhstan: kazakhstan/казахстан/almaty/astana/central asia/
-  cis/снг/eurasia; any other term matches itself). Live: 2439 → 347 jobs / 26 companies (156 of them
-  binance «Asia»). Set at collect time (`catalog_collector.collect_board`, upsert new-first) +
-  one-shot `catalog_collector --backfill-open [--all]` (seconds, no network). Tests:
-  `test_regions.py` (open_anywhere / aliases / sub-regions).
+  `applier/regions.open_anywhere(job)`, tuned by a 120-posting Sonnet audit (old precision 6.9%):
+  TRUE when the location/title names Kazakhstan/CIS/Central Asia (`_KZ_TOKENS_RE`); a worldwide /
+  Global / CIS location unless the text carries a role-level pin (`_NEG_TEXT_RE`: «must be based
+  in», «only open to candidates in», US-timezone required, on-site days, relocation, native-X
+  speaker…); a bare «Asia» (156 binance rows) unless the text narrows it (`_ASIA_NARROW_RE`:
+  SE Asia/APAC/Singapore/HK/Japan/India…); and a bare «Remote» or EMPTY location ONLY when the text
+  has a role-level anywhere phrase (`_POS_TEXT_RE`) and no pin — neither → closed. FALSE for any
+  NAMED country/US state/city (multi-location strings incl.), Europe/EU/EEA, **EMEA and APAC (0
+  eligible of 6 in the audit — the text always narrowed to a country)**, sub-regions excluding
+  Central Asia, hybrid/office words in the location, a country in the title's trailing segment
+  («… (Bulgaria)», «… - Philippines», «based in Japan»), and unrecognised location words. A country
+  query for the OTHER bucket ANDs `(open_anywhere OR location ILIKE ANY(aliases))`
+  (`query_country_aliases`: kazakhstan/казахстан/almaty/astana/central asia/cis/снг/eurasia; other
+  terms match themselves). Live: 2439 → **248 jobs / 12 companies** (Asia 156, empty-with-anywhere-
+  phrase 36, Kazakhstan 15, Global/Worldwide 20, CIS 6, Remote 12). Set at collect time
+  (`catalog_collector.collect_board`, upsert new-first) + `catalog_collector --backfill-open --all`
+  after any rule change (seconds, no network). Tests: `test_regions.py` (29).
 - **Custom persona NAME (#4A)** — a «Имя» field on each card's «Заполнить» and in the Фильтры bulk bar
   overrides the auto-generated name. `synth_persona(job, gender, name=, email=, pid=)` uses it verbatim
   (not history-avoided); email/pid pin a stable identity (used by campaigns). Threaded through

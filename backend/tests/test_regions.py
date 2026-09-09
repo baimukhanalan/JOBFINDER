@@ -160,34 +160,53 @@ def test_query_eligibility_regions_none_for_non_country():
 
 
 # ---- open_anywhere: finer than OTHER (a Kazakhstani can't take a "Remote - India" posting) ------
-def _oa(location, description=""):
-    return regions.open_anywhere({"location": location, "description": description})
+def _oa(location, description="", title=""):
+    return regions.open_anywhere({"location": location, "description": description, "title": title})
 
 
-def test_open_anywhere_bare_remote_and_worldwide():
-    for loc in ("Remote", "Fully Remote", "remote - remote", "Anywhere", "Worldwide", "Global - Remote",
-                "Remote (Worldwide)", "Work from home"):
+def test_open_anywhere_worldwide_and_own_region_locations():
+    for loc in ("Anywhere", "Worldwide", "Global - Remote", "Remote, Global", "Remote (Worldwide)",
+                "Home based - Worldwide", "Kazakhstan", "Kazakhstan, Astana", "CIS Region", "Central Asia"):
         assert _oa(loc), loc
+    # a worldwide location still loses to a role-level pin in the text
+    assert not _oa("Remote, Global", "You must be located in the United States for this role.")
 
 
-def test_open_anywhere_broad_regions_including_central_asia():
-    for loc in ("Asia", "Remote - EMEA", "Remote-EMEA", "APAC", "Central Asia", "CIS", "Kazakhstan"):
-        # Kazakhstan itself is a named country -> pinned (False); the query's alias match covers it
-        assert _oa(loc) == (loc != "Kazakhstan"), loc
+def test_open_anywhere_asia_kept_unless_the_text_narrows_it():
+    assert _oa("Asia", "Join our distributed team. Flexible hours, fully remote.")
+    assert not _oa("Asia", "This role supports our Singapore hub and works APAC hours.")
+    assert not _oa("REMOTE - Asia", "Candidates based in the Philippines only.")
 
 
-def test_open_anywhere_pinned_country_or_city_is_closed():
-    for loc in ("Remote - India", "Germany", "Hong Kong", "Amsterdam, Netherlands; Remote - Europe",
-                "Remote - Europe", "European Union", "Remote Poland", "MEXICO", "Remote - Mexico",
-                "South Africa - Cape Town", "Singapore", "Remote-Australia", "Taiwan, Taipei",
-                "Remote - LATAM", "United States", "London, United Kingdom", "Toronto, Canada"):
+def test_open_anywhere_pinned_country_city_or_region_is_closed():
+    for loc in ("Remote - India", "Germany", "Germany - Remote", "Hong Kong", "Amsterdam, Netherlands; Remote - Europe",
+                "Remote - Europe", "European Union", "EU | Remote", "Remote Poland", "MEXICO", "Remote - Mexico",
+                "South Africa - Cape Town", "Singapore", "Remote-Australia", "Taiwan, Taipei", "Remote - LATAM",
+                "United States", "London, United Kingdom", "Toronto, Canada", "Remote-EMEA", "Remote in EMEA",
+                "Remote, Ireland, EMEA", "APAC", "Remote-APAC", "South East Asia", "Remote (ANZ)", "MENA",
+                "Nordics", "Bucharest (Hybrid)", "Anywhere In Philippines"):
         assert not _oa(loc), loc
 
 
-def test_open_anywhere_empty_location_needs_an_anywhere_phrase():
+def test_open_anywhere_bare_remote_or_empty_is_decided_by_the_text():
+    # neither a positive nor a negative phrase -> closed (precision over recall)
+    assert not _oa("Remote", "A great role on a friendly team.")
     assert not _oa("", "Great remote role. Our users are worldwide.")
+    # role-level positives
+    assert _oa("Remote", "As a fully remote company, we welcome applicants from almost anywhere.")
     assert _oa("", "This role is remote — you can work from anywhere in the world.")
-    assert _oa("", "We hire from anywhere; open to candidates globally.")
+    assert _oa("Fully Remote", "We hire from anywhere; open to candidates globally.")
+    # role-level negatives win over a bare remote
+    assert not _oa("Remote", "We are a remote-first company. This role must be based in Latin America.")
+    assert not _oa("", "Strictly for Philippines based applicants only. Work from anywhere in the Philippines.")
+    assert not _oa("Remote", "Working hours: EST–PST overlap required.")
+    assert not _oa("", "Relocate to Lisbon; 2 days a week in the office.")
+    assert not _oa("Remote", "Native French speaker required.")
+    # a country in the title's trailing segment pins it; our own country opens it
+    assert not _oa("", "Remote role.", title="Customer Support Specialist (Bulgaria)")
+    assert not _oa("Remote", "Remote role.", title="Sales Development Rep - Philippines")
+    assert not _oa("Remote", "Remote role.", title="Math teacher based in Japan")
+    assert _oa("", "Remote role.", title="Solutions Specialist (Kazakhstan, remote)")
 
 
 def test_query_country_aliases():
@@ -195,9 +214,3 @@ def test_query_country_aliases():
         al = regions.query_country_aliases(q)
         assert "%kazakhstan%" in al and "%казахстан%" in al and "%central asia%" in al, q
     assert regions.query_country_aliases("Uzbekistan") == ["%uzbekistan%"]
-
-
-def test_open_anywhere_subregions_that_exclude_central_asia_are_pinned():
-    for loc in ("South East Asia", "Remote - Southeast Asia", "East Asia", "Remote (ANZ)", "MENA", "Nordics"):
-        assert not regions.open_anywhere({"location": loc}), loc
-    assert regions.open_anywhere({"location": "Remote - Asia"})

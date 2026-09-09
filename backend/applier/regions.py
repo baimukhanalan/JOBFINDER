@@ -251,42 +251,91 @@ def _norm_country_term(q: str) -> str:
 # worldwide word, or a broad region that INCLUDES Central Asia — or the text says "work from
 # anywhere". Conservative: an unrecognised location, or an empty one without an anywhere-phrase,
 # is NOT open (precision over recall — the owner asked for "really can apply").
+# Rules tuned by a 120-posting Sonnet audit (2026-09-09): location-only rules rejected 99/108 of
+# the non-eligible with 0 false rejects; EMEA/APAC/Europe never produced an eligible posting (the
+# text always narrows to a country); a bare «Remote»/empty location is a coin flip that the TEXT
+# decides (negatives first). "Asia" (156 binance rows) is kept unless the text narrows it.
 _LOC_BROAD_INCL_RE = re.compile(
-    r"\bemea\b|\basia\b|\bapac\b|\basia[- ]pacific\b|\beurasia\b|\bcentral asia\b|\bcis\b"
-    r"|\bснг\b|\bglobal\b|\binternational\b|\bworldwide\b|\banywhere\b|\beverywhere\b")
+    r"\beurasia\b|\bcentral asia\b|\bcis\b|\bснг\b|\bglobal\b|\binternational\b|\bworldwide\b"
+    r"|\banywhere\b|\beverywhere\b|\basia\b")
 _LOC_SUBREGION_PIN_RE = re.compile(
     r"\bsouth[- ]?east asia\b|\bse asia\b|\beast asia\b|\bsouth asia\b|\bnorth asia\b|\bwest asia\b"
-    r"|\bgreater china\b|\banz\b|\boceania\b|\bmena\b|\bnordics?\b|\bbenelux\b|\bdach\b|\biberia\b")
+    r"|\bgreater china\b|\banz\b|\boceania\b|\bmena\b|\bnordics?\b|\bbenelux\b|\bdach\b|\biberia\b"
+    r"|\beurope(?:an)?\b|\beu\b|\beea\b|\bemea\b|\bapac\b|\basia[- ]pacific\b|\blatam\b|\blatin america\b")
 _LOC_REMOTE_ONLY_RE = re.compile(
     r"^[\s\-–—,/()·]*(?:(?:fully|100%|fully-|entirely)\s*)?"
     r"(?:remote|virtual|distributed|home[- ]?based|home office|work from home|wfh|telecommute|telework)"
-    r"(?:[\s\-–—,/()·]*(?:remote|first|ok|only|friendly|position|role|job|work|anywhere|worldwide|global))*"
+    r"(?:[\s\-–—,/()·]*(?:remote|first|ok|only|friendly|position|role|job|work))*"
     r"[\s\-–—,/()·]*$")
+_LOC_HYBRID_RE = re.compile(r"\bhybrid\b|\bon[- ]?site\b|\bin[- ]office\b|\boffice\b")
+_KZ_TOKENS_RE = re.compile(
+    r"\bkazakhstan\b|\bказахстан|\balmaty\b|\bалматы\b|\bastana\b|\bастана\b|\bcentral asia\b"
+    r"|\bcis\b|\bснг\b|\beurasia\b")
+# per-role sentences that pin a bare-remote posting somewhere else (company-culture blurbs like
+# "remote-first company" never count — only these role-level phrases)
+_NEG_TEXT_RE = re.compile(
+    r"(?:must|need to|needs to|required to|have to|should|expected to) be (?:located|based|residing|living|physically located)(?: in| within)"
+    r"|only (?:open|available) to (?:candidates|applicants|people)(?: who are)? (?:in|based in|residing in|located in|from)"
+    r"|strictly for .{0,40}?based (?:applicants|candidates)"
+    r"|candidates (?:residing|based|located) in"
+    r"|only able to accept applications from"
+    r"|hire[sd]? .{0,30}?exclusively"
+    r"|based in (?:latin america|latam)|from latam"
+    r"|(?:est|pst|et|pt|pacific|eastern|central|mountain|us) (?:time ?zones?|hours|working hours|business hours).{0,60}?(?:required|must|mandatory)"
+    r"|\best\s*[–-]\s*pst\b"
+    r"|days? (?:a|per) week in the office|site visits|on[- ]site (?:role|position|presence|attendance)|in[- ]office (?:role|position)"
+    r"|relocat(?:e|ion) to"
+    r"|native (?:french|arabic|german|japanese|spanish|portuguese|serbian|italian|korean|polish|dutch|ukrainian|mandarin|chinese|turkish|hebrew) (?:speaker|fluency|level|proficiency)")
+_POS_TEXT_RE = re.compile(
+    _WORLDWIDE_RE.pattern
+    + r"|from (?:almost )?anywhere|hire[sd]? (?:from )?anywhere|any country|no location restriction"
+    + r"|(?:all|any) time ?zones?|open to (?:candidates|applicants) (?:worldwide|globally|in any country)")
+_ASIA_NARROW_RE = re.compile(
+    r"south[- ]?east asia|\bsea\b|\bapac\b|\b(?:singapore|hong kong|japan|taiwan|korea|vietnam|thailand"
+    r"|malaysia|indonesia|philippines|india|china)\b")
+
+
+def _names_a_place(s: str) -> bool:
+    """A country / US state / UK-CA-US city named in a (location-like) string."""
+    return bool(_OTHER_RE.search(s) or _NA_RE.search(s) or _US_STRONG_RE.search(s)
+                or _US_LOC_RE.search(s) or _US_STATE_RE.search(s) or _US_CITY_RE.search(s)
+                or _CA_RE.search(s) or _UK_STRONG_RE.search(s) or _UK_LOC_RE.search(s)
+                or re.search(r"\bgeorgia\b", s))
+
+
+def _title_pins(title: str) -> bool:
+    """A country in the title's trailing segment — «… (Bulgaria)», «… - Philippines», «… based in
+    Japan» — pins a bare-remote posting."""
+    m = re.search(r"\(([^()]*)\)\s*$|[-–—|]\s*([^-–—|()]{2,48})\s*$", title)
+    seg = ((m.group(1) or m.group(2)) if m else "") or ""
+    if seg and _names_a_place(seg):
+        return True
+    m2 = re.search(r"based in ([a-z ,.'-]{2,40})", title)
+    return bool(m2 and _names_a_place(m2.group(1)))
 
 
 def open_anywhere(job: dict) -> bool:
     """True when the posting is open to a remote applicant regardless of country (see above)."""
     loc = re.sub(r"[_\s]+", " ", (job.get("location") or "").strip().lower())
-    desc = (job.get("description") or "")[:6000].lower()
-    if not loc:
-        return bool(_WORLDWIDE_RE.search(desc))
-    if _LOC_REMOTE_ONLY_RE.match(loc):
-        return True
-    # a SUB-region that excludes Central Asia is a pin, even though it contains "asia"
-    if _LOC_SUBREGION_PIN_RE.search(loc):
+    title = (job.get("title") or "").lower()
+    text = title + " " + (job.get("description") or "")[:6000].lower()
+    if _KZ_TOKENS_RE.search(loc + " " + title):
+        return True                                   # names our own country/region
+    if loc and not _LOC_REMOTE_ONLY_RE.match(loc):
+        if _LOC_SUBREGION_PIN_RE.search(loc) or _LOC_HYBRID_RE.search(loc):
+            return False
+        stripped = _LOC_BROAD_INCL_RE.sub(" ", loc)
+        if _names_a_place(stripped):
+            return False                              # "Remote - India", "Amsterdam; Remote - Europe"
+        if re.search(r"\basia\b", loc):
+            return not (_ASIA_NARROW_RE.search(text) or _NEG_TEXT_RE.search(text))
+        if _LOC_BROAD_INCL_RE.search(loc) or _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
+            return not _NEG_TEXT_RE.search(text)      # "Remote, Global", "Worldwide", "CIS Region"
+        return False                                  # unrecognised place words -> closed
+    # bare «Remote» / empty location: the TEXT decides, negatives first; neither -> closed
+    if _title_pins(title) or _NEG_TEXT_RE.search(text):
         return False
-    # a NAMED place (country/US state/city) pins the posting — checked with the broad-region
-    # tokens removed so "Remote - EMEA" isn't mistaken for a country
-    stripped = _LOC_BROAD_INCL_RE.sub(" ", loc)
-    named = (_OTHER_RE.search(stripped) or _NA_RE.search(stripped) or _US_STRONG_RE.search(stripped)
-             or _US_LOC_RE.search(stripped) or _US_STATE_RE.search(stripped) or _US_CITY_RE.search(stripped)
-             or _CA_RE.search(stripped) or _UK_STRONG_RE.search(stripped) or _UK_LOC_RE.search(stripped)
-             or re.search(r"\bgeorgia\b", stripped))
-    if named:
-        return False
-    if _LOC_BROAD_INCL_RE.search(loc) or _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
-        return True
-    return bool(_WORLDWIDE_RE.search(desc))
+    return bool(_POS_TEXT_RE.search(text))
 
 
 # Location aliases per queried country/region: a posting that NAMES the asked country is eligible

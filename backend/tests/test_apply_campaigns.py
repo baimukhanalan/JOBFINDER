@@ -51,10 +51,22 @@ def test_resolve_search_excludes_applied_and_submitted(tmp_path, monkeypatch):
     ac.create(name="S", target_kind="search", q="Kazakhstan", per_day=2, today="2026-09-09")
     ac.note_run(1, [100], "2026-09-09")     # already applied 100 (and used 1 of 2 today)
     c = ac.list_campaigns()[0]
-    rows = [{"id": 100}, {"id": 101}, {"id": 102}, {"id": 103}]
+    rows = [{"id": 100, "ats": "greenhouse"}, {"id": 101, "ats": "ashby"},
+            {"id": 102, "ats": "greenhouse"}, {"id": 103, "ats": "greenhouse"}]
     got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: rows, submitted={102})
     # remaining today = 1; 100 already applied, 102 submitted -> first fresh is 101
     assert got == [101]
+
+
+def test_resolve_search_skips_non_auto_submittable_ats(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    ac.create(name="A", target_kind="search", q="us", per_day=2, today="2026-09-09")
+    c = ac.list_campaigns()[0]
+    rows = [{"id": 1, "ats": "lever"}, {"id": 2, "ats": "workable"},
+            {"id": 3, "ats": "greenhouse"}, {"id": 4, "ats": "ashby"}]
+    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: rows, submitted=set())
+    # lever/workable (live-captcha, can't auto-submit) skipped -> only greenhouse/ashby
+    assert got == [3, 4]
 
 
 def test_inactive_campaign_resolves_nothing(tmp_path, monkeypatch):

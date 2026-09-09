@@ -795,7 +795,10 @@ window.mkCampaign = async function(){
   var msg=document.getElementById('campMsg');
   var nmEl=document.getElementById('bulkName'), name=(nmEl&&nmEl.value||'').trim();
   if(!name){ if(msg) msg.textContent='Впиши имя в «Массовая подача»'; return; }
+  // read the LIVE search term: #catq on desktop, the top pill on mobile (where #catq is hidden)
   var q=(document.getElementById('catq')||{}).value||'';
+  if(!q.trim()){ var pill=document.querySelector('.gm-search input[type=search]');
+                 if(pill) q=pill.value||''; }
   var gEl=document.getElementById('bulkGender'), rEl=document.getElementById('bulkRegion');
   var gender=(gEl&&gEl.value)||'', region=(rEl&&rEl.value)||'';
   var per=(document.getElementById('campPerDay')||{}).value||'1';
@@ -816,11 +819,13 @@ window.loadCampaigns = async function(){
   try{
     var j=await (await fetch('/catalog/campaigns')).json(), cs=j.campaigns||[];
     if(!cs.length){ box.textContent='Пока нет кампаний'; return; }
+    var h=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(ch){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});};
     box.innerHTML=cs.map(function(c){
-      var tgt=c.target_kind==='job'?('вакансия #'+c.job_id)
-              :('поиск: '+((c.q||'').trim()||'все')+(c.region?(' · '+c.region):''));
+      var tgt=c.target_kind==='job'?('вакансия #'+(parseInt(c.job_id,10)||0))
+              :('поиск: '+h((c.q||'').trim()||'все')+(c.region?(' \\u00b7 '+h(c.region)):''));
       return '<div class="cs-camp-row"><span class="cc-dot '+(c.active?'cc-on':'cc-off')+'">\\u25cf</span> '
-        +'<b>'+c.name+'</b> \\u00b7 '+c.per_day+'/\\u0434\\u0435\\u043d\\u044c \\u00b7 '+tgt
+        +'<b>'+h(c.name)+'</b> \\u00b7 '+(parseInt(c.per_day,10)||1)+'/\\u0434\\u0435\\u043d\\u044c \\u00b7 '+tgt
         +' <button type="button" onclick="toggleCampaign('+c.id+','+(c.active?'0':'1')+')">'
         +(c.active?'\\u043f\\u0430\\u0443\\u0437\\u0430':'\\u0432\\u043a\\u043b')+'</button>'
         +' <button type="button" onclick="delCampaign('+c.id+')">\\u0443\\u0434\\u0430\\u043b\\u0438\\u0442\\u044c</button></div>';

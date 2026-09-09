@@ -4,10 +4,12 @@ with a FRESH résumé. A campaign targets EITHER one job (`job`) or a search que
 
 Store: backend/data/apply_campaigns.json (gitignored), atomic-write + RLock (mirrors mh_settings).
 
-SAFETY (owner-approved defaults 2026-09-09):
-  * a SINGLE-job campaign is capped at 1 application/day — applying N× to ONE posting under one name
-    is employer-visible duplicate spam. `per_day` only multiplies a SEARCH campaign (N distinct NEW
-    jobs/day).
+SEMANTICS (owner-approved 2026-09-09):
+  * SEARCH campaign: `per_day` = N distinct NEW jobs/day (never re-applies a job it already did or one
+    already submitted globally), and only auto-submittable ATSes (`_AUTO_ATS`).
+  * SINGLE-job campaign: `per_day` applications/day to that ONE posting (owner-requested — same name,
+    fresh résumé each). NB the campaign's ONE stable mailbox means an ATS usually dedupes the repeats,
+    so the ATS — not us — decides how many actually land; the UI warns about this.
   * ONE stable mailbox per campaign (`email`/`pid` pinned at create) so all of a campaign's replies
     land in a single inbox and the applications read as one coherent person.
 Pure/offline helpers are unit-tested in backend/tests/test_apply_campaigns.py (no DB/network).
@@ -22,6 +24,9 @@ from pathlib import Path
 
 _PATH = Path(__file__).resolve().parent.parent / "data" / "apply_campaigns.json"
 _LOCK = threading.RLock()
+# Only these ATSes auto-submit end-to-end from the datacenter IP (emailed code, not a live captcha),
+# so a SEARCH campaign only targets them — else the budget is spent on jobs that can't complete.
+_AUTO_ATS = {"greenhouse", "ashby"}
 
 
 def _load() -> list:
@@ -154,9 +159,15 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None) -
         submitted = submitted_jobids()
     submitted = set(int(x) for x in (submitted or []))
     rows = list_jobs(q=(camp.get("q") or None), region=(camp.get("region") or None),
-                     remote_only=True, limit=max(n * 6, 30))
+                     remote_only=True, limit=max(n * 8, 40))
     out = []
     for r in rows:
+        # Only greenhouse/ashby auto-submit end-to-end from the datacenter IP (email-code, not a
+        # live captcha); Lever/Workable would be filled but never submitted, then marked applied
+        # forever — burning the daily budget on un-completable jobs. Mirrors the bulk lane's
+        # _PARA_ATS filter.
+        if (r.get("ats") or "") not in _AUTO_ATS:
+            continue
         jid = int(r.get("id") or r.get("jobid") or 0)
         if not jid or jid in applied or jid in submitted:
             continue

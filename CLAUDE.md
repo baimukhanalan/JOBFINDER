@@ -296,6 +296,99 @@ Assessment question-bank harvester (see the harvester section):
   both run under `SET LOCAL lock_timeout='15s'` so a DDL that IS blocked fails fast instead of queuing
   every reader behind it for hours. Both complete in ~0.04s live. Keep new columns on that pattern
   (add to `_EXTRA_COLS` / the `_missing_columns` tuple — don't add a bare nightly ALTER).
+- **PHONE REWORK of «Вакансии» (2026-09-09 evening, owner: "всё максимально удобно для телефона").**
+  The owner works from a phone; the previous header/switcher rounds were rejected for wasted space,
+  full reloads between sub-tabs, dead buttons and chores (refresh/export/name input). What's live:
+  - **Bottom tab bar (WhatsApp-style) + in-place switching.** `mailcrm_ui.vac_tabbar(active)` renders
+    `<nav class="jf-tabbar">` (Каталог · Mass Hiring · Незавершённые, icon + label + count badge) from
+    `_page` OUTSIDE `<main>`, phone-only (≤760px; desktop keeps the pill switcher `.seg-nav.vac-seg`,
+    which is hidden on phones). `jfSwap(url)` in the shell `_JS` switches WITHOUT a reload: fetch the
+    target page → take its `<main>` (all page CSS/JS/FAB live inside main) → slide out/in
+    (`main.jf-leave/.jf-enter`) → `pushState` → replace the `.gm-pill` middle (search ↔ title) → re-execute
+    the page's inline scripts. The other two tabs are PREFETCHED on idle (their counts fill the badges),
+    the page being left is dropped from the cache (its data may have changed), cache TTL 90s. Back/forward
+    replay via `history.state.jf` (the old shell `popstate→reload` is guarded). Hard fallbacks to a real
+    navigation: non-OK, redirected (expired session → `/login` doc), or no `<main>`.
+    **Page-script contract (RE-ENTRANCY):** `<head>` defines `window.jfPage` (an AbortController,
+    recreated per swap) and `window.__jfGen` (bumped per swap). A page script must (a) use only
+    `var`/function declarations/`window.x=` at top level, (b) register window/document listeners with
+    `{signal:(window.jfPage||{}).signal}`, (c) have every async poll chain capture `var gen=window.__jfGen`
+    and bail when it changed (unfPoll, mhPoll/mhStatusPoll, the catalog chains). `teardown()` also clears
+    `window._mhTimer` and `document.body.style.overflow`. The scroll behaviour (pill hide + FAB collapse)
+    is ONE generic shell handler (lazy lookups) — `_MH_SCROLL_JS` was deleted; don't add per-page copies.
+    **Review-driven rules baked into `jfSwap` (adversarial review + live repro, same day):** (1) a poll
+    chain captures `gen` ONCE at the click and threads it through every re-entry (`unfPoll(btn,gen,
+    fails)`, `mhPoll(id,btn,gen,fails)`) — a per-call capture silently survived a tab switch and then
+    `jfSwap`ed whatever tab the user had moved to (reproduced: it closed a half-filled campaign sheet);
+    failures stop after 5; a page refresh is only issued when still on that tab. (2) A same-URL call
+    (`{force:true}`, the post-drain refresh) bypasses the cache and `replaceState`s (a `pushState` made
+    Back need two taps); Back/forward keep the instant cache path. (3) A tap/popstate that lands mid-swap
+    is queued in `pending` and replayed, never dropped (else URL ≠ shown tab). (4) `lastUrl[tab]`
+    remembers each tab's last `?region=`/`?q=` (the catalog `runSearch` mirrors `q` into the URL with
+    `replaceState`) and `scrollPos` is restored on a tab tap too — a filter/search/scroll survives a
+    round trip. (5) The slide animates `left` on a `position:relative` main, NOT `transform`: a
+    transformed ancestor becomes the containing block of the fixed FAB/selection bar/toast inside main
+    and threw them off-screen for the whole animation. (6) `--jf-tabbar:56px` is scoped
+    `body:has(.jf-tabbar)` — an unconditional `:root` value had lifted the Кандидаты compose FAB 56px
+    and padded every non-vacancy list. (7) `.ph-pop` is viewport-pinned on phones (`position:fixed;
+    left/right:12px`) — anchored at the ⓘ it was two-thirds off-screen.
+  - **Header chrome on a phone:** `.page-head:has(.vac-seg)` hides its `.head-actions` (the primary is the
+    FAB, the catalog filter is the funnel `.gm-tune` INSIDE the search pill → `toggleFilters()`), and a
+    head with no `.ph-meta` disappears entirely — the first card now sits at ~62px under the pill (was
+    180-365). The FAB sits above the bar (`bottom: var(--jf-tabbar) + 14px`), `main` pads for both.
+    `:root{--jf-tabbar:0px}` / `56px` ≤760 is the variable other fixed bars (the catalog selection bar)
+    stack on.
+  - **Незавершённые: EVERY button had been dead since 2026-08-25** — commit 68a6280 dropped the
+    `}catch(e){…}}` tail of `unfDone`, so the page's whole inline `<script>` was a SyntaxError and
+    `unfRerunAll`/`unfDone`/`unfFinish` were never defined (the owner: «нажимаешь докрутить всё не
+    работает»; no `START` in `bulk_apply.log` from the button since then). Fixed + a regression test
+    `test_inline_js_syntax.py` runs `node --check` on every inline script of the shell, /unfinished and
+    /mass-hiring — keep it green when editing hand-concatenated JS strings. «Докрутить всё» no longer
+    redirects to noVNC (basic-auth on a phone, and the drain runs on HEADLESS workers — nothing to watch):
+    it polls `/catalog/fill_all_status` and shows «Докрутка N/M…» ON the button, then refreshes the list
+    via `jfSwap`. The «скачать лог» icon is gone (the download stays in the /catalog Фильтры sheet). The
+    render does ONE `catalog_db.jobs_by_ids()` batch instead of 114 `get_job()` calls (~0.4s → ~10ms).
+  - **Mass Hiring:** the «Обновить» icon is gone (owner: refresh in the background) — the collect cron is
+    now `30 */6 * * *` under `flock -n logs/masshiring.lock` (`:30` avoids the apply lanes at `:00`; the
+    Health lane max-age is 8h). The large-employer reference panel moved UNDER the job list (it cost
+    ~114px of the first phone screen) and its collapsed summary is one line on a phone; `.mh-wrap` has no
+    side padding on phones (cards as wide as on the other tabs). `POST /mass-hiring/collect` still exists
+    as an unused manual trigger.
+  - **Каталог: SELECT vacancies → «Настроить кампанию» (replaces the per-card name input, #4A).**
+    Each card has a round `.cat-pick` checkbox (44px tap target, right of `.cat-top`); ticked cards get
+    `.sel`, the selection lives in `sessionStorage['cat_sel']` (+ `cat_sel_meta`) so it survives search,
+    pagination and tab switches; `syncPicks()` re-checks after every list re-render. A fixed
+    `#catSelBar` («Выбрано N · Снять · Настроить кампанию», z-index 45, stacked above `--jf-tabbar`)
+    opens `#campSheet` (its own `.cat-modal`): Имя персоны (optional — empty → the store generates one
+    via `synth_persona._pick_name` for the first job's country), Пол М/Ж, Подач в день 1-5 (default 2),
+    the selected jobs list, «Создать кампанию» → `POST /catalog/campaigns`
+    `target_kind=jobs&job_ids=1,2,3&name=&gender=&per_day=` → `apply_campaigns.create(job_ids=…)`.
+    **Store kind `jobs`** (`apply_campaigns.py`): the row keeps `job_ids` + a persisted `cursor`;
+    `resolve_targets` drops dead/missing ids for the run (`catalog_db.jobs_by_ids`) and cycles the
+    alive list round-robin from the cursor, `per_day` ids per run (a job repeats only after all
+    selected ones were hit; NO applied/submitted exclusion — the owner chose them). **The cursor is a
+    position in the FULL `job_ids` list on BOTH sides** (review fix): `resolve_targets` walks from it
+    skipping dead ids, `note_run` places it right after the LAST job actually done — an earlier
+    dead-filtered index vs full-list modulo mismatch repeated some jobs and starved others. The cron
+    counts a fill only when `apply_campaigns.fill_counts_as_done(_FILL_JOBS[jid])` (`state=='done'`) —
+    `_do_fill` never raises, so an `error` fill used to spend the daily budget. Mutations take an
+    `fcntl` sidecar lock (`apply_campaigns.lock`) besides the RLock: the cron and the dashboard are
+    different processes rewriting one JSON. Kinds `job`/`search` unchanged. `apply_campaign_cron
+    --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (19). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»
+    creator, `#bulkName` and the `name` Form params of `catalog_fill`/`catalog_fill_all` are gone (the
+    internal `name`/`email`/`pid` kwargs stay — the cron pins the persona through them).
+  - **Каталог is LIGHT now: 813 KB → ~284 KB per page.** `description_html` is no longer inlined —
+    each «Описание» `<details data-desc="/catalog/<id>/desc">` lazy-loads ONCE on open
+    (`catLoadDesc`, route `GET /catalog/{id}/desc` → `catalog_ui.desc_html`, the same formatter;
+    `fetch_desc_job` selects only that column); question rows are compact `<li>`s; `catalog_db.counts()`
+    is TTL-cached 60s (`_counts_cached`). On a phone the header «Фильтры» button and the desktop search
+    row are hidden — the funnel `.gm-tune` in the search pill opens the same `#catSettings` sheet
+    (`.on` when a region filter is active). `fragUrl` now forwards `company` (pagination on a company
+    drill-down used to drop it). `_CAT_JS` is re-entrant per the shell contract. Reserved names:
+    `.cat-selbar* .cat-pick .cat-toast .camp-*`, ids `#catSelBar #catSelN #campSheet #campName #campSex
+    #campPer #campJobs #campJobsN #campMsg #campGo #catToast`. `test_inline_js_syntax.py` covers the
+    catalog too (stubbed DB). Untouched follow-up: `catalog_db._LIST_COLS` still SELECTs
+    `description_html`/`description` for the list page — the card no longer needs them.
 
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright

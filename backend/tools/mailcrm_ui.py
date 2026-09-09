@@ -454,6 +454,23 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-search input[type=search]:focus{outline:none;box-shadow:none;border:0;}
 .gm-title{flex:1;font-weight:600;color:var(--ink-soft);font-size:16px;padding-left:6px;}
 .gm-ava{flex:0 0 auto;width:32px;height:32px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12.5px;margin-right:2px;}
+/* the catalog's filter entry on a phone — a funnel inside the search pill (no header row) */
+.gm-tune{flex:0 0 auto;width:38px;height:38px;border:0;background:transparent;color:var(--ink-soft);display:inline-flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;position:relative;-webkit-tap-highlight-color:transparent;}
+.gm-tune svg{width:19px;height:19px;}
+.gm-tune.on{color:var(--accent);}
+.gm-tune.on::after{content:'';position:absolute;top:7px;right:7px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
+/* phone bottom tab bar for the «Вакансии» sub-surfaces (hidden on desktop; see the ≤760 block) */
+:root{--jf-tabbar:0px;}
+.jf-tabbar{display:none;}
+/* in-place tab switch: the leaving <main> slides out, the new one slides in (WhatsApp-like).
+   The slide is `left` on a relatively-positioned main, NOT transform: a transformed ancestor becomes
+   the containing block of every position:fixed descendant (the FAB, the catalog selection bar, the
+   toast all live INSIDE main) and would throw them off-screen for the whole animation. */
+main.jf-leave,main.jf-enter,main.jf-enter-active{position:relative;}
+main.jf-leave{opacity:0;left:var(--jf-dx,-18px);transition:opacity .13s ease,left .13s ease;}
+main.jf-enter{opacity:0;left:calc(var(--jf-dx,-18px) * -1);}
+main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubic-bezier(.2,.7,.2,1);}
+@media(prefers-reduced-motion:reduce){main.jf-leave,main.jf-enter,main.jf-enter-active{transition:none;left:0;opacity:1;}}
 .gm-scrim{position:fixed;inset:0;background:rgba(32,33,36,.5);z-index:60;opacity:0;visibility:hidden;transition:opacity .2s;}
 .gm-scrim.open{opacity:1;visibility:visible;}
 .gm-drawer{position:fixed;top:0;left:0;bottom:0;width:284px;max-width:82vw;background:var(--panel);z-index:61;transform:translateX(-102%);transition:transform .22s ease;box-shadow:0 0 40px -8px rgba(32,33,36,.45);display:flex;flex-direction:column;padding:6px 0;}
@@ -508,8 +525,36 @@ button.primary:hover{background:var(--accent-deep);}
   .page-head:has(.vac-seg){flex-wrap:wrap;}
   .page-head:has(.vac-seg) .ph-left{flex:1 1 100%;}
   .page-head:has(.vac-seg) .ph-titlewrap{width:100%;}
+  /* «Вакансии» on a phone: the bottom tab bar IS the switcher (the pill row goes), the header's
+     action row goes too (the primary is the FAB, the catalog filter is in the search pill), and
+     a head left with nothing but the hidden switcher disappears entirely — the list starts right
+     under the search pill instead of ~180px down. Only a meta line (Mass Hiring) keeps the head. */
+  /* only a page that renders the bar reserves room for it — Кандидаты/Статистика/Пользователи keep
+     their old FAB offset + list padding (the var stays 0px there) */
+  body:has(.jf-tabbar){--jf-tabbar:56px;}
+  .seg-nav.vac-seg{display:none;}
+  /* the ⓘ popover is anchored at the ⓘ's left edge, which sits near the right screen edge on a
+     phone → two thirds of it were off-screen; pin it to the viewport width instead (top:auto keeps
+     its in-flow vertical spot under the ⓘ) */
+  .ph-pop{position:fixed;top:auto;left:12px;right:12px;width:auto;}
+  .page-head:has(.vac-seg) .head-actions{display:none;}
+  .page-head:has(.vac-seg){padding-top:2px;margin-bottom:10px;}
+  .page-head:has(.vac-seg):not(:has(.ph-meta)){display:none;}
+  .jf-tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:44;
+    height:calc(var(--jf-tabbar) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
+    background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -8px 20px -14px rgba(15,23,42,.35);}
+  .jf-tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    font-size:11px;font-weight:600;color:var(--ink-mute);text-decoration:none;position:relative;
+    -webkit-tap-highlight-color:transparent;transition:color .15s;}
+  .jf-tabbar a svg{width:22px;height:22px;}
+  .jf-tabbar a.active{color:var(--accent);}
+  .jf-tabbar a.active svg{stroke-width:2.1;}
+  .jf-tabbar a .jf-badge{position:absolute;top:5px;left:calc(50% + 5px);min-width:17px;height:17px;padding:0 4px;
+    border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;font-family:var(--ff-mono);
+    display:inline-flex;align-items:center;justify-content:center;line-height:1;}
+  .jf-tabbar a .jf-badge[hidden]{display:none;}
   .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
-    bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
+    bottom:calc(var(--jf-tabbar) + 14px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
     border:none;border-radius:var(--r-full);height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
     cursor:pointer;box-shadow:0 6px 18px -4px rgba(12,71,194,.55);overflow:hidden;
     transition:padding .26s cubic-bezier(.4,0,.2,1),gap .26s cubic-bezier(.4,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1);}
@@ -521,7 +566,7 @@ button.primary:hover{background:var(--accent-deep);}
   .fab-compose.collapsed{padding:0 15px;gap:0;border-radius:50%;}
   .fab-compose.collapsed span{max-width:0;opacity:0;}
   .fab-compose:active{transform:translateY(1px);}
-  main{padding-bottom:92px;}
+  main{padding-bottom:calc(var(--jf-tabbar) + 92px + env(safe-area-inset-bottom));}
 }
 @media(max-width:760px){
   .candidate-tools{display:none;}
@@ -692,6 +737,15 @@ def _topbar(active: str) -> str:
         route, ph = ctx
         mid = (f'<form class="gm-search" method="get" action="{route}" role="search">'
                f'<input type="search" name="q" placeholder="{ph}" autocomplete="off"></form>')
+        if active == "catalog":
+            # The catalog's Фильтры sheet opens from a funnel icon INSIDE the search pill on a
+            # phone (Gmail's "tune" control) — the header button row is gone there, so filters
+            # sit on the same line as search instead of costing a row of their own.
+            mid += ('<button type="button" class="gm-tune" onclick="toggleFilters()" '
+                    'aria-label="Фильтры" title="Фильтры">'
+                    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                    'stroke-linecap="round" stroke-linejoin="round">'
+                    '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg></button>')
     else:
         lbl = next((l for _h, k, l, _s in _NAV if k == active), "")
         if not lbl and active in _VAC_KEYS:   # mass-hiring / unfinished live under «Вакансии»
@@ -711,6 +765,34 @@ def _drawer(active: str) -> str:
             '<div class="gm-drawer-foot">'
             f'<a class="gm-logout" href="/logout">{_IC_LOGOUT}<span>Выйти из админки</span></a>'
             '</div></aside>')
+
+
+# Bottom tab-bar icons (phone): one per «Вакансии» sub-surface.
+_TAB_ICONS = {
+    "catalog": _IC_CATALOG,
+    "masshiring": ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+                   'stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>'
+                   '<circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/>'
+                   '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'),
+    "unfinished": ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+                   'stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/>'
+                   '<polyline points="12 6 12 12 16 14"/></svg>'),
+}
+
+
+def vac_tabbar(active: str) -> str:
+    """WhatsApp-style FIXED bottom tab bar for the three «Вакансии» sub-surfaces, phone only
+    (hidden ≥761px, where the in-page pill switcher stays). Rendered by the shell OUTSIDE <main>
+    so it persists across the in-place tab switches (`jfSwap` in _JS replaces only <main>).
+    The per-tab count badge is filled client-side (from the page's own count + prefetches)."""
+    if active not in _VAC_KEYS:
+        return ""
+    items = []
+    for href, key, label in _VAC_TABS:
+        cls = ' class="active"' if key == active else ""
+        items.append(f'<a{cls} href="{href}" data-key="{key}">{_TAB_ICONS[key]}'
+                     f'<span>{label}</span><b class="jf-badge" hidden></b></a>')
+    return f'<nav class="jf-tabbar" aria-label="Вакансии">{"".join(items)}</nav>'
 
 
 def vacancies_seg(active: str, counts: dict | None = None) -> str:
@@ -772,14 +854,20 @@ def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
     # topbar=False → a dedicated full screen (the open-message view): no Gmail search pill /
     # drawer, just the message's own sticky toolbar, like tapping a mail in Gmail.
     chrome = f"{_topbar(active)}{_drawer(active)}" if topbar else ""
+    tabbar = vac_tabbar(active) if topbar else ""
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         + _HEAD_PWA +
         "<title>JobFinder — почта кандидатов</title>" + _FONTS +
+        # Page-lifetime handles for the in-place tab switch (jfSwap): page scripts register their
+        # window/document listeners with `{signal: window.jfPage.signal}` and poll chains capture
+        # `window.__jfGen`, so a swap can abort/orphan them. Defined BEFORE <main> because the page
+        # scripts run before the shell _JS at the end of <body>.
+        "<script>window.jfPage=new AbortController();window.__jfGen=0;</script>"
         f"<style>{_CSS}</style></head><body{'' if topbar else ' class=full-view'}>"
         f"{chrome}"
-        f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}"
+        f"<div class='layout'>{_sidebar(active)}<main>{body}</main></div>{modal}{tabbar}"
         + _JS + _SW_REG + "</body></html>")
 
 
@@ -1394,7 +1482,9 @@ document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=functi
     }catch(err){location.href=a.href;return;}
     funnel.classList.remove('busy');filtering=false;
   });
-  window.addEventListener('popstate',function(){location.reload();});
+  // a history entry made by the in-place «Вакансии» tab switch (jfSwap) is replayed by its own
+  // popstate handler below — never reload over it.
+  window.addEventListener('popstate',function(){if(history.state&&history.state.jf)return;location.reload();});
 })();
 // infinite scroll (keyset) + auto-hide header + SSE live refresh
 (function(){
@@ -1444,5 +1534,100 @@ document.querySelectorAll('iframe.mail-frame').forEach(function(f){var go=functi
 function gmDrawer(open){var d=document.querySelector('.gm-drawer'),s=document.querySelector('.gm-scrim');if(!d||!s)return;if(open){d.classList.add('open');s.classList.add('open');document.body.style.overflow='hidden';}else{d.classList.remove('open');s.classList.remove('open');document.body.style.overflow='';}}
 document.addEventListener('keydown',function(e){if(e.key==='Escape')gmDrawer(false);});
 (function(){try{var q=new URLSearchParams(location.search).get('q');if(q){var i=document.querySelector('.gm-search input[name=q]');if(i)i.value=q;}}catch(e){}})();
+// Generic mobile scroll behaviour for pages WITHOUT the inbox list (which has its own above):
+// scrolling down hides the top pill + collapses the FAB to a round button, scrolling up brings
+// them back. Elements are looked up lazily so it keeps working after an in-place tab switch.
+(function(){
+  if(document.getElementById('maillist'))return;
+  var lastY=window.scrollY;
+  window.addEventListener('scroll',function(){var y=window.scrollY,dy=y-lastY;if(Math.abs(dy)<=6)return;lastY=y;
+    var pill=document.querySelector('.gm-topbar'),fab=document.querySelector('.fab-compose');
+    if(dy>0&&y>90){if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
+    else if(dy<0){if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
+  },{passive:true});
+})();
+// «Вакансии» tabs (Каталог · Mass Hiring · Незавершённые) switch IN PLACE: fetch the target page,
+// swap <main> with a short slide, pushState — no full reload. The other two tabs are prefetched
+// when idle so a tap is instant; each page's own count feeds the tab-bar badges.
+(function(){
+  var TABS=['/catalog','/mass-hiring','/unfinished'],cache={},scrollPos={},busy=false;
+  function bar(){return document.querySelector('.jf-tabbar');}
+  if(!bar())return;
+  function tabIdx(p){p=(p||'').split('?')[0];for(var i=0;i<TABS.length;i++)if(p===TABS[i])return i;return -1;}
+  function keyOf(url){var u=new URL(url,location.href);return u.pathname+u.search;}
+  try{history.scrollRestoration='manual';}catch(e){}
+  if(!history.state||!history.state.jf)history.replaceState({jf:1,url:keyOf(location.href)},'',location.href);
+  async function load(url){
+    var r=await fetch(url,{credentials:'same-origin',headers:{'X-Swap':'1'}});
+    if(!r.ok||r.redirected||new URL(r.url,location.href).pathname==='/login')return null;
+    var doc=new DOMParser().parseFromString(await r.text(),'text/html');
+    var m=doc.querySelector('main');if(!m)return null;
+    var pill=doc.querySelector('.gm-pill'),cnt=doc.querySelector('.vac-seg a.active b');
+    return {main:m.innerHTML,pill:pill?pill.innerHTML:null,count:cnt?cnt.textContent:null,ts:Date.now()};
+  }
+  function setBadge(path,count){var b=bar();if(!b)return;var a=b.querySelector('a[href="'+path.split('?')[0]+'"]');if(!a)return;
+    var bd=a.querySelector('.jf-badge');if(!bd)return;var t=(count||'').replace(/\\s/g,'');
+    if(t&&t!=='0'){bd.textContent=t;bd.hidden=false;}else bd.hidden=true;}
+  function runScripts(root){root.querySelectorAll('script').forEach(function(s){var n=document.createElement('script');
+    if(s.src)n.src=s.src;else n.textContent=s.textContent;s.replaceWith(n);});}
+  function teardown(){
+    try{window.jfPage.abort();}catch(e){}
+    window.jfPage=new AbortController();window.__jfGen=(window.__jfGen||0)+1;
+    if(window._mhTimer){clearTimeout(window._mhTimer);window._mhTimer=null;}
+    document.body.style.overflow='';
+    var p=document.querySelector('.gm-topbar');if(p)p.classList.remove('hide');
+  }
+  function prefetchOthers(){var cur=tabIdx(location.pathname);
+    TABS.forEach(function(t){if(tabIdx(t)===cur)return;load(t).then(function(d){if(d){cache[t]=d;setBadge(t,d.count);}}).catch(function(){});});}
+  // lastUrl: the URL (with ?region=/?q=) each tab was last seen at — a tab tap returns to it, so a
+  // catalog filter/search survives a round trip (WhatsApp keeps a tab's state). pending: a request
+  // that arrived mid-swap (a fast second tap, a popstate) is replayed instead of dropped.
+  var lastUrl={},pending=null;
+  async function swap(url,opts){
+    opts=opts||{};var main=document.querySelector('main');if(!main)return;
+    if(busy){pending={url:url,opts:opts};return;}
+    var key=keyOf(url),from=tabIdx(location.pathname),to=tabIdx(key),same=key===keyOf(location.href);
+    busy=true;
+    // a same-page refresh (opts.force, e.g. after the drain ends) must hit the server, not the cache;
+    // Back/forward (opts.pop) to the same key is the instant-from-cache case and keeps the lookup.
+    if(same&&!opts.pop)delete cache[key];
+    var data=(cache[key]&&Date.now()-cache[key].ts<90000)?cache[key]:null;
+    if(!data){try{data=await load(url);}catch(e){data=null;}
+      if(!data){busy=false;location.href=url;return;}cache[key]=data;}
+    scrollPos[location.pathname]=window.scrollY;
+    if(from>=0)lastUrl[from]=keyOf(location.href);
+    delete cache[keyOf(location.href)];   // the page we leave may have changed under our actions
+    main.style.setProperty('--jf-dx',(to>from?-18:18)+'px');
+    main.classList.add('jf-leave');
+    await new Promise(function(r){setTimeout(r,130);});
+    teardown();
+    if(!opts.pop){if(same)history.replaceState({jf:1,url:key},'',key);else history.pushState({jf:1,url:key},'',key);}
+    var pill=document.querySelector('.gm-pill');if(pill&&data.pill!==null)pill.innerHTML=data.pill;
+    var q=new URL(key,location.href).searchParams.get('q'),qi=document.querySelector('.gm-search input[name=q]');if(qi)qi.value=q||'';
+    var b=bar();if(b)b.querySelectorAll('a').forEach(function(a){a.classList.toggle('active',tabIdx(a.getAttribute('href'))===to);});
+    main.classList.remove('jf-leave');main.classList.add('jf-enter');
+    main.innerHTML=data.main;
+    setBadge(key,data.count);
+    runScripts(main);
+    // Back/forward and a tab tap return to where the tab was scrolled; a fresh visit/refresh starts at top
+    window.scrollTo(0,(opts.pop||opts.tab)?(scrollPos[key.split('?')[0]]||0):0);
+    requestAnimationFrame(function(){requestAnimationFrame(function(){main.classList.add('jf-enter-active');});});
+    setTimeout(function(){main.classList.remove('jf-enter','jf-enter-active');main.style.removeProperty('--jf-dx');busy=false;
+      if(pending){var p=pending;pending=null;swap(p.url,p.opts);return;}
+      (window.requestIdleCallback||function(f){setTimeout(f,600);})(prefetchOthers);},280);
+  }
+  window.jfSwap=swap;
+  document.addEventListener('click',function(e){
+    var a=e.target.closest('.jf-tabbar a, .seg-nav.vac-seg a');if(!a)return;
+    if(e.metaKey||e.ctrlKey||e.shiftKey||e.button)return;
+    var href=a.getAttribute('href'),ti=tabIdx(href);if(!href||ti<0)return;
+    e.preventDefault();
+    if(ti===tabIdx(location.pathname)){window.scrollTo({top:0,behavior:'smooth'});return;}
+    swap(lastUrl[ti]||href,{tab:true});
+  });
+  window.addEventListener('popstate',function(e){if(e.state&&e.state.jf&&tabIdx(location.pathname)>=0)swap(location.pathname+location.search,{pop:true});});
+  var c=document.querySelector('.vac-seg a.active b');if(c)setBadge(location.pathname,c.textContent);
+  (window.requestIdleCallback||function(f){setTimeout(f,800);})(prefetchOthers);
+})();
 </script>
 """

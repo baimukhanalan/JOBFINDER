@@ -92,7 +92,7 @@ _CRONS = [
     ("Каталог: формы", "forms.log", 30),
     ("Каталог: est-comp", "est_comp.log", 30),
     ("Компании: discovery (weekly)", "discovery.log", 24 * 8),
-    ("Mass Hiring: сбор", "masshiring.log", 30),
+    ("Mass Hiring: сбор", "masshiring.log", 8),      # cron every 6h since 2026-09-09 (no manual button)
     ("Прокси: Bright Data (daily)", "brightdata.log", 30),
     ("Почта: retention", "retention.log", 30),
     ("Почта: health-probe", "health.log", 1),

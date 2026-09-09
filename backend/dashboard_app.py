@@ -581,13 +581,20 @@ def unfinished_index():
 
     from backend.tools import bulk_log, catalog_db, catalog_drafts, mailcrm_ui
     items = bulk_log.unfinished()
+    # ONE batched lookup for every ledger row (was a sequential get_job() per row — 114 SELECTs
+    # ≈ 0.4 s per render, the whole reason this tab felt slow to switch to on a phone).
+    try:
+        jobs = catalog_db.jobs_by_ids([it.get("jobid") for it in items
+                                       if str(it.get("jobid") or "").isdigit()])
+    except Exception:
+        jobs = {}
     cards = []
     for i, it in enumerate(items):
         jid = it.get("jobid")
         ats = ""
         aurl = ""
         try:
-            job = catalog_db.get_job(int(jid))
+            job = jobs.get(int(jid))
             if job:
                 ats = job.get("ats") or ""
                 aurl = catalog_drafts.apply_url_for_job(job) or job.get("url") or ""
@@ -717,39 +724,54 @@ def unfinished_index():
           "var h=document.querySelector('.vac-seg a.active b');"
           "if(h){var n=parseInt((h.textContent||'').replace(/\\D/g,''),10);"
           "if(n>0)h.textContent=String(n-1);}"
+          "var tb=document.querySelector('.jf-tabbar a.active .jf-badge');"
+          "if(tb&&!tb.hidden){var m=parseInt(tb.textContent,10);if(m>1)tb.textContent=String(m-1);else tb.hidden=true;}"
           "var l=document.querySelector('.unf-list');"
           "if(l&&!l.querySelector('.unf-card'))"
           "l.innerHTML='<div class=unf-empty>Пусто — все заявки завершены 🎉</div>';};"
           "card.addEventListener('transitionend',fin,{once:true});setTimeout(fin,480);}"
+          # ^ the `}catch{}}` tail below closes unfDone's try AND the function — commit 68a6280
+          #   dropped it, which made this WHOLE <script> a SyntaxError for two weeks (no button on
+          #   this page worked); test_inline_js_syntax.py now node-checks every page script.
+          "catch(e){btn.disabled=false;}}"
+          # The label lives in a <span> on the FAB and as a trailing text node on the header button.
+          "function unfLbl(btn,t){var s=btn.querySelector('span');if(s){s.textContent=t;return;}"
+          "var n=btn.lastChild;if(n&&n.nodeType===3)n.textContent=t;else btn.textContent=t;}"
+          # Progress is shown ON the button (the drain runs on headless workers — there is nothing
+          # to watch in noVNC, and /vnc/ is basic-auth on a phone); when it ends the list refreshes.
+          # `gen` is captured ONCE when the drain is started and threaded through every re-entry, so
+          # an in-place tab switch (which bumps window.__jfGen) ends the chain — it must never
+          # refresh whatever tab the user moved to. Failures stop after a few tries (an expired
+          # session returns the login page, whose .json() throws).
+          "async function unfPoll(btn,gen,fails){fails=fails||0;if(gen!==window.__jfGen||!btn.isConnected)return;"
+          "try{var j=await (await fetch('/catalog/fill_all_status')).json();if(gen!==window.__jfGen)return;"
+          "if(j.state==='running'){unfLbl(btn,'Докрутка '+(j.done||0)+'/'+(j.total||0)+'…');"
+          "setTimeout(function(){unfPoll(btn,gen,0);},3000);}"
+          "else{unfLbl(btn,'Готово · обновляю');setTimeout(function(){if(gen!==window.__jfGen)return;"
+          "if(window.jfSwap&&location.pathname==='/unfinished')window.jfSwap(location.pathname+location.search,{force:true});else location.reload();},900);}}"
+          "catch(e){if(fails<5)setTimeout(function(){unfPoll(btn,gen,fails+1);},5000);else{btn.disabled=false;unfLbl(btn,'Нет связи — обнови страницу');}}}"
           "async function unfRerunAll(btn){"
-          "if(!confirm('Перезапустить все заявки, упавшие на загрузке (ошибка сети/прокси)? "
-          "Они пойдут через рабочие прокси в параллельном режиме.'))return;"
-          "btn.disabled=true;var o=btn.textContent;btn.textContent='Запускаю…';"
+          "if(!confirm('Докрутить все заявки, которые можно доделать автоматически? "
+          "Это займёт время — прогресс будет на кнопке.'))return;"
+          "btn.disabled=true;var o=(btn.querySelector('span')||btn).textContent,gen=window.__jfGen;unfLbl(btn,'Запускаю…');"
           "try{var j=await (await fetch('/unfinished/rerun',{method:'POST',"
           "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'gender='})).json();"
-          "if(j.started){btn.textContent='Пошло: '+j.total+' — открываю noVNC…';"
-          "window.location.href=j.novnc||'/vnc/vnc_lite.html?path=vnc/websockify&scale=true';}"
-          "else{btn.textContent=(j.reason==='already_running'?'Уже идёт прогон':"
-          "(j.reason==='nothing_to_rerun'?'Нечего перезапускать':'Ошибка'));"
-          "setTimeout(function(){btn.disabled=false;btn.textContent=o;},2500);}}"
-          "catch(e){btn.disabled=false;btn.textContent=o;}}"
+          "if(j.started||j.reason==='already_running'){unfLbl(btn,j.started?('Пошло: '+j.total):'Уже идёт прогон');unfPoll(btn,gen,0);}"
+          "else{unfLbl(btn,j.reason==='nothing_to_rerun'?'Нечего докручивать':'Ошибка');"
+          "setTimeout(function(){btn.disabled=false;unfLbl(btn,o);},2500);}}"
+          "catch(e){btn.disabled=false;unfLbl(btn,o);}}"
           "</script>")
     # Canonical shell header (same structure/button scale as Каталог + Mass Hiring): the pill
-    # switcher, ONE blue primary «Докрутить всё» (→ the thumb-zone FAB on a phone), «скачать лог» as
-    # a secondary icon button.
+    # switcher + ONE blue primary «Докрутить всё» (→ the thumb-zone FAB on a phone). The log
+    # download icon was removed by owner request (the log stays reachable from the /catalog
+    # Фильтры sheet).
     _rerun_svg = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
                   'stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/>'
                   '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>')
-    _dl_icon = ('<a class="iconbtn" href="/catalog/fill_all_log" download title="Скачать лог" '
-                'aria-label="Скачать лог"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-                '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>'
-                '<line x1="12" y1="15" x2="12" y2="3"/></svg></a>')
     head = mailcrm_ui._page_head(
         "Незавершённые",
         primary=({"label": f"Докрутить всё ({n_rerun})", "onclick": "unfRerunAll(this)",
                   "svg": _rerun_svg} if n_rerun else None),
-        icons=_dl_icon,
         seg_html=mailcrm_ui.vacancies_seg("unfinished", {"unfinished": n}))
     body = css + head + f'<div class="unf-list">{list_html}</div>' + js
     return HTMLResponse(mailcrm_ui._page("unfinished", body))
@@ -890,6 +912,21 @@ def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = 
         return HTMLResponse("", status_code=200)
 
 
+@app.get("/catalog/{job_id}/desc", response_class=HTMLResponse)
+def catalog_desc(job_id: int):
+    """Lazy description fragment for one /catalog card (the card's «Описание» <details>
+    fetches it on first open instead of every card inlining its full JD — that inlining
+    made /catalog ~800 KB on a phone). Same formatter as the inline fallback."""
+    from backend.tools import catalog_ui
+    try:
+        job = catalog_ui.fetch_desc_job(job_id)
+    except Exception as exc:
+        return HTMLResponse(f"<p>Описание недоступно: {escape(str(exc))}</p>", status_code=502)
+    if not job:
+        return HTMLResponse("<p>Вакансия не найдена</p>", status_code=404)
+    return HTMLResponse(catalog_ui.desc_html(job))
+
+
 @app.get("/mass-hiring", response_class=HTMLResponse)
 def mass_hiring_page(category: str = "", comp: str = ""):
     """«Mass Hiring» tab — REMOTE-only, mass-hiring US jobs the human applies to by hand.
@@ -1028,12 +1065,13 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
 
 
 @app.post("/catalog/{job_id}/fill")
-def catalog_fill(job_id: int, gender: str = Form(""), name: str = Form("")):
+def catalog_fill(job_id: int, gender: str = Form("")):
     """Start the one-click fill in the background and return immediately (poll
     /catalog/{id}/fill_status). Generates the ideal draft if missing, wires it into the
     co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC), then
     the co-pilot clicks Submit automatically. `gender` ('male'/'female' from the M/Ж
-    buttons) picks the persona's sex."""
+    buttons) picks the persona's sex. The persona name is always auto-picked here — a
+    custom name belongs to a campaign (`_do_fill`'s `name` kwarg is the campaign cron's)."""
     import threading
     g = gender if gender in ("male", "female") else None
     st = _FILL_JOBS.get(job_id)
@@ -1052,7 +1090,7 @@ def catalog_fill(job_id: int, gender: str = Form(""), name: str = Form("")):
                 httpx.post("http://127.0.0.1:8102/goto", data={"url": aurl}, timeout=30)
         except Exception:
             pass
-        threading.Thread(target=_do_fill, args=(job_id, g, (name or "").strip() or None),
+        threading.Thread(target=_do_fill, args=(job_id, g, None),
                          daemon=True).start()
     return JSONResponse({"started": True, "novnc": _NOVNC_URL})
 
@@ -1568,8 +1606,7 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 @app.post("/catalog/fill_all")
 def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
                      company: str = Form(""), region: str = Form(""),
-                     workers: str = Form(""), randomize: str = Form(""),
-                     name: str = Form("")):
+                     workers: str = Form(""), randomize: str = Form("")):
     """Start a PARALLEL bulk run over the catalog. Greenhouse/Ashby fan out across
     `workers` headless browser workers and auto-submit end-to-end; Lever/Workable (and any
     other ATS) go STRAIGHT to the «Незавершённые» ledger for a human to finish the captcha
@@ -1625,7 +1662,7 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     _FILL_ALL.update({"state": "running", "total": len(job_ids), "done": 0,
                       "ok": 0, "failed": 0, "current": None, "current_id": None,
                       "workers": ("auto" if adaptive else nw)})
-    nm = (name or "").strip() or None      # optional custom persona name for the whole run
+    nm = None      # persona names are auto-picked per job; a custom name is a campaign's (cron)
     if adaptive:
         threading.Thread(target=_do_fill_all_adaptive, args=(job_ids, g, nm),
                          daemon=True).start()
@@ -1679,7 +1716,11 @@ def catalog_campaigns_list():
 @app.post("/catalog/campaigns")
 def catalog_campaign_create(name: str = Form(""), target_kind: str = Form("search"),
                             job_id: str = Form(""), q: str = Form(""), region: str = Form(""),
-                            gender: str = Form(""), per_day: str = Form("1")):
+                            gender: str = Form(""), per_day: str = Form("1"),
+                            job_ids: str = Form("")):
+    """Create a recurring campaign. `job_ids` (a CSV of catalog ids — the /catalog card
+    selection) makes a `jobs` campaign (the default kind whenever ids are given); `job` /
+    `search` stay as before. The store validates and raises ValueError → 400."""
     import datetime
     from backend.tools import apply_campaigns
     try:
@@ -1687,10 +1728,14 @@ def catalog_campaign_create(name: str = Form(""), target_kind: str = Form("searc
     except ValueError:
         pd = 1
     jid = int(job_id.strip()) if (job_id or "").strip().isdigit() else None
+    ids = [int(x) for x in (job_ids or "").split(",") if x.strip().isdigit()]
+    kind = (target_kind or "").strip() or ("jobs" if ids else "search")
+    kw = dict(name=name, target_kind=kind, job_id=jid, q=q, region=region,
+              gender=gender, per_day=pd, today=datetime.date.today().isoformat())
+    if ids:
+        kw["job_ids"] = ids
     try:
-        camp = apply_campaigns.create(
-            name=name, target_kind=(target_kind or "search"), job_id=jid, q=q, region=region,
-            gender=gender, per_day=pd, today=datetime.date.today().isoformat())
+        camp = apply_campaigns.create(**kw)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({"created": True, "campaign": camp})

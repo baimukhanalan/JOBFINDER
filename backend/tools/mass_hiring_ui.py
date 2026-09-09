@@ -30,17 +30,21 @@ async function mhFill(id, btn){
     const j = await r.json();
     if(j.novnc) window.open(j.novnc, '_blank', 'noopener');
     btn.textContent = 'Заполняется — смотри в окне';
-    mhPoll(id, btn);
+    mhPoll(id, btn, window.__jfGen, 0);
   }catch(e){ btn.textContent = 'Ошибка'; btn.disabled = false; }
 }
-async function mhPoll(id, btn){
+// `gen` is captured once at the click and threaded through, so an in-place tab switch (which bumps
+// window.__jfGen) ends the chain instead of polling a detached button forever; errors stop after 5.
+async function mhPoll(id, btn, gen, fails){
+  if(gen !== window.__jfGen || !btn.isConnected) return;
   try{
     const r = await fetch('/mass-hiring/' + id + '/fill_status');
     const j = await r.json();
+    if(gen !== window.__jfGen) return;
     if(j.state === 'done'){ btn.textContent = j.dry_run ? 'Заполнено (тест) ✓' : 'Подано ✓'; return; }
     if(j.state === 'error'){ btn.textContent = 'Ошибка: ' + (j.error || ''); btn.disabled = false; return; }
-    setTimeout(function(){ mhPoll(id, btn); }, 3000);
-  }catch(e){ setTimeout(function(){ mhPoll(id, btn); }, 5000); }
+    setTimeout(function(){ mhPoll(id, btn, gen, 0); }, 3000);
+  }catch(e){ if((fails||0) < 5) setTimeout(function(){ mhPoll(id, btn, gen, (fails||0) + 1); }, 5000); }
 }
 </script>
 """
@@ -120,7 +124,7 @@ details[open] .mh-caret{transform:rotate(90deg);}
 .mh-jloc{color:var(--ink-soft);font-size:12.5px;}
 .mh-apply{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--accent);text-decoration:none;white-space:nowrap;}
 .mh-empty{text-align:center;color:var(--ink-soft);padding:60px 20px;}
-.mh-emp{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:18px;overflow:hidden;}
+.mh-emp{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin:18px 0 0;overflow:hidden;}
 .mh-emp-sum{display:flex;align-items:center;gap:10px;padding:13px 16px;cursor:pointer;list-style:none;}
 .mh-emp-sum::-webkit-details-marker{display:none;}
 .mh-emp-t{font-weight:700;font-size:15px;letter-spacing:-.01em;}
@@ -133,7 +137,11 @@ details[open] .mh-caret{transform:rotate(90deg);}
 .mh-emp-s{color:var(--ink-soft);font-size:12px;margin-left:auto;font-variant-numeric:tabular-nums;}
 .mh-emp-note{color:var(--ink-soft);font-size:12px;padding:10px 16px 13px;border-top:1px solid var(--line);}
 @media(max-width:760px){
-  .mh-job{padding-left:16px;}.mh-apply{margin-left:0;}.mh-emp-s{margin-left:0;}}
+  /* main already pads 12px on a phone — no second gutter, so cards are as wide as on the other tabs */
+  .mh-wrap{padding:0 0 24px;}
+  .mh-job{padding-left:16px;}.mh-apply{margin-left:0;}.mh-emp-s{margin-left:0;}
+  .mh-emp-sum{flex-wrap:nowrap;}.mh-emp-c{display:none;}
+  .mh-emp-t{flex:1;min-width:0;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}}
 </style>
 """
 
@@ -258,10 +266,12 @@ def _everify_panel(limit: int = 40) -> str:
                 f'<span class="mh-emp-s">{sites:,} площадок найма'
                 + (f' · {_esc(geo)}' if geo else '') + '</span></div>')
         total = int(data.get("count") or len(emps))
+        caret = ('<svg class="mh-caret" width="18" height="18" viewBox="0 0 24 24" fill="none" '
+                 'stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>')
         return (
             f'<details class="mh-emp"><summary class="mh-emp-sum">'
             f'<span class="mh-emp-t">Крупные работодатели США (10 000+ сотрудников)</span>'
-            f'<span class="mh-emp-c">{total} компаний · по числу площадок найма</span></summary>'
+            f'<span class="mh-emp-c">{total} компаний · по числу площадок найма</span>{caret}</summary>'
             f'<div class="mh-emp-list">{"".join(rows)}</div>'
             f'<div class="mh-emp-note">Справочный список крупнейших работодателей США — '
             f'сигнал масс-хайринга для ручного поиска вакансий (не автоподача).</div></details>')
@@ -354,8 +364,9 @@ async function mhStartRun(){
 }
 async function mhStopRun(){try{var r=await fetch('/mass-hiring/apply_all_stop',{method:'POST'});mhRender(await r.json());}catch(e){}}
 async function mhStatusPoll(){
-  try{var r=await fetch('/mass-hiring/apply_all_status');var j=await r.json();mhRender(j);
-    if(j.active){window._mhTimer=setTimeout(mhStatusPoll,3000);}}catch(e){window._mhTimer=setTimeout(mhStatusPoll,5000);}
+  var gen=window.__jfGen;   // an in-place tab switch orphans this chain (and clears _mhTimer)
+  try{var r=await fetch('/mass-hiring/apply_all_status');var j=await r.json();if(gen!==window.__jfGen)return;mhRender(j);
+    if(j.active){window._mhTimer=setTimeout(mhStatusPoll,3000);}}catch(e){if(gen===window.__jfGen)window._mhTimer=setTimeout(mhStatusPoll,5000);}
 }
 function mhRender(j){
   var s=document.getElementById('mhStatus');if(!s)return;
@@ -372,53 +383,38 @@ function mhRender(j){
 """
 
 
-# Sticky-header hide + FAB collapse on scroll (self-contained; this page has neither the
-# inbox #maillist nor the candidates #mbxlist scroll IIFE, so there is no double-bind).
-_MH_SCROLL_JS = """
-<script>(function(){
-  var head=document.querySelector('.page-head'),
-      pill=document.querySelector('.gm-topbar'),
-      fab=document.querySelector('.fab-compose'),lastY=window.scrollY;
-  if(!head&&!fab)return;
-  window.addEventListener('scroll',function(){
-    var y=window.scrollY,dy=y-lastY;if(Math.abs(dy)<=6)return;lastY=y;
-    if(dy>0&&y>90){if(head)head.classList.add('hide');if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
-    else if(dy<0){if(head)head.classList.remove('hide');if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
-  },{passive:true});
-})();</script>
-"""
+# The scroll behaviour (pill hide + FAB collapse) is the SHELL's generic handler now
+# (mailcrm_ui._JS) — a per-page copy would double-bind after an in-place tab switch.
 
 _PLAY_SVG = ('<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
              '<polygon points="6 4 20 12 6 20"/></svg>')
-_REFRESH_ICON = ('<form method="post" action="/mass-hiring/collect" style="display:inline">'
-                 '<button class="iconbtn" type="submit" title="Обновить вакансии" aria-label="Обновить вакансии">'
-                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-                 'stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/>'
-                 '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button></form>')
 
 
 def render_page(category: str | None = None, comp: str | None = None) -> str:
     # Filters were removed by owner request — the board shows all active jobs; the only
     # display toggle is «Показывать испанские» (persisted in mh_settings, default hidden).
+    # The manual «Обновить» button is gone too (owner: refresh in the background) — the board
+    # is re-collected by cron every 6 h; the meta line shows how fresh it is.
     st = mass_hiring.stats()
     cos = mass_hiring.companies(limit=200)
 
     body = "".join(_company_card(c, None, None) for c in cos) or \
-        ('<div class="mh-empty">Пока пусто. Нажми «Обновить», чтобы собрать вакансии '
-         'из источников (Conduent / Alorica / Himalayas / …).</div>')
+        ('<div class="mh-empty">Пока пусто — вакансии собираются автоматически каждые 6 часов '
+         '(Conduent / Alorica / Himalayas / …).</div>')
 
     info = ('<b style="color:#f5a623">★</b> — стабильная оплата (не комиссия).<br>'
-            '«оц.» рядом со ставкой — оценка по типу роли (точную смотри в вакансии).')
+            '«оц.» рядом со ставкой — оценка по типу роли (точную смотри в вакансии).<br>'
+            'Список обновляется сам каждые 6 часов.')
     ph = mailcrm_ui._page_head(
         "Mass Hiring", count=st["active"],
         primary={"label": "Запустить подачу", "onclick": "mhOpenRun()", "svg": _PLAY_SVG},
-        icons=_REFRESH_ICON,
         meta=(f'{st["active"]} вакансий · {st["companies"]} компаний · '
               f'обновлено {_ago(st.get("last_collected", 0))}'),
         info=info,
         seg_html=mailcrm_ui.vacancies_seg("masshiring", {"masshiring": st["active"]}))
+    # The large-employer reference panel sits UNDER the job list (it cost ~114px of the first
+    # phone screen at the top; the jobs are what the owner opens the tab for).
     head = (
         f'<div class="mh-wrap">{_CSS}{_MODAL_CSS}{ph}'
-        f'{_everify_panel()}'
-        f'{body}{_run_modal()}</div>{_JS}{_RUN_JS}{_MH_SCROLL_JS}')
+        f'{body}{_everify_panel()}{_run_modal()}</div>{_JS}{_RUN_JS}')
     return mailcrm_ui._page("masshiring", head)

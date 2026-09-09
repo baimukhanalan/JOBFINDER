@@ -88,10 +88,12 @@ def _questions_block(questions: list) -> str:
         if not isinstance(qz, dict):
             continue
         label = esc(str(qz.get("label") or "").strip() or "(без текста)")
-        req = '<span class="cat-req" title="обязательный">*</span>' if qz.get("required") else ""
+        # Compact markup on purpose (a first page carries ~900 of these rows): the row is a
+        # bare <li>, `*` = required (<b>), <i> = the field type — styled via .cat-qlist.
+        req = '<b title="обязательный">*</b>' if qz.get("required") else ""
         qtype = esc(str(qz.get("type") or "").strip())
-        tag = f'<span class="cat-qtype">{qtype}</span>' if qtype else ""
-        items.append(f'<li class="cat-q"><span class="cat-qlbl">{label}{req}</span>{tag}</li>')
+        tag = f'<i>{qtype}</i>' if qtype else ""
+        items.append(f'<li><span>{label}{req}</span>{tag}</li>')
     if not items:
         return ""
     n = len(items)
@@ -117,14 +119,18 @@ def _card(j: dict) -> str:
     comp = comp_fmt.comp_html(j)
     comp_row = f'<div class="cat-comp">{comp}</div>' if comp else ""
 
-    desc_html = j.get("description_html")
-    if desc_html:
-        desc = desc_html
+    jid = j.get("id")
+    # The description is the heavy part of a card (the full JD HTML, ~25 KB each); it is
+    # NOT inlined — the <details> lazy-loads it from /catalog/{id}/desc on first open
+    # (catLoadDesc, fetched once, marked data-loaded). Keeps the page light on a phone.
+    if jid:
+        desc_det = (
+            f'<details class="cat-det cat-descdet" data-desc="/catalog/{jid}/desc" '
+            'ontoggle="catLoadDesc(this)"><summary>Описание</summary>'
+            '<div class="cat-desc cat-desc-lazy">Загружаю…</div></details>')
     else:
-        desc = "<p>" + esc(j.get("description") or "") + "</p>"
-    desc_det = (
-        '<details class="cat-det cat-descdet"><summary>Описание</summary>'
-        f'<div class="cat-desc">{desc}</div></details>')
+        desc_det = ('<details class="cat-det cat-descdet"><summary>Описание</summary>'
+                    f'<div class="cat-desc">{desc_html(j)}</div></details>')
 
     questions = j.get("questions") or []
     qblock = _questions_block(questions)
@@ -136,8 +142,9 @@ def _card(j: dict) -> str:
     else:
         title_html = f'<div class="cat-title" title="{title}">{title}</div>'
 
-    jid = j.get("id")
     # ONE primary action per card ("Заполнить") + a compact М/Ж sex toggle (no emoji).
+    # The persona NAME is no longer per card — a custom name belongs to a CAMPAIGN (the
+    # selection sheet), the one-click fill always auto-picks one.
     if jid:
         fill_row = (
             '<div class="cat-fill-row">'
@@ -146,21 +153,52 @@ def _card(j: dict) -> str:
             'onclick="pickSex(this)" aria-pressed="true">М</button>'
             '<button type="button" class="cat-sex-b" data-gender="female" '
             'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
-            '<input class="cat-name" type="text" placeholder="Имя" '
-            'title="Своё имя персоны (необязательно)" '
-            'autocomplete="off" aria-label="Имя персоны (необязательно)">'
             f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
             '<span class="cat-fill-res"></span></div>')
+        # Selection control (round checkbox, 44px tap target) — ticked cards feed the
+        # bottom «Выбрано N · Настроить кампанию» bar. State lives in sessionStorage
+        # (survives search / pagination / tab switches); syncPicks() re-checks after
+        # every list re-render.
+        pick = (
+            f'<label class="cat-pick" title="Выбрать в кампанию">'
+            f'<input type="checkbox" data-id="{jid}" onchange="pickJob(this)" '
+            f'aria-label="Выбрать вакансию"><span></span></label>')
     else:
         fill_row = ""
+        pick = ""
 
     return (
-        '<article class="cat-card">'
+        f'<article class="cat-card" data-id="{jid or ""}">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
-        f'<span class="cat-wp {wt_cls}">{esc(wt)}</span></div>'
+        f'<span class="cat-wp {wt_cls}">{esc(wt)}</span>{pick}</div>'
         f'{title_html}{meta}{comp_row}'
         f'{fill_row}{desc_det}{qblock}'
         "</article>")
+
+
+def desc_html(job: dict) -> str:
+    """The description body of a card — the stored JD HTML when the collector kept it,
+    else the plain text as one escaped paragraph. Shared by the inline fallback and the
+    lazy GET /catalog/{id}/desc fragment so both render identically."""
+    d = job.get("description_html")
+    if d:
+        return d
+    return "<p>" + esc(job.get("description") or "") + "</p>"
+
+
+def fetch_desc_job(job_id: int) -> dict | None:
+    """The minimal row the lazy description fragment needs. `catalog_db.get_job` selects
+    `_JOB_COLS`, which deliberately omits the heavy `description_html`, so this reads just
+    the two description columns (a tiny primary-key SELECT). None when the id is unknown."""
+    try:
+        job_id = int(job_id)
+    except (TypeError, ValueError):
+        return None
+    with catalog_db._cur() as cur:
+        cur.execute("SELECT id, description, description_html FROM job_catalog WHERE id=%s",
+                    (job_id,))
+        r = cur.fetchone()
+        return dict(r) if r else None
 
 
 # Region axis for the catalog — a job's regions[] ∈ {US,CA,UK,OTHER} (multi). This is
@@ -178,6 +216,22 @@ def _region_bar(active: str, q: str, company: str, by_region: dict, total: int) 
     for code, label in _REGIONS:
         out.append(pill(code, label, by_region.get(code, 0), active == code))
     return f'<div class="cat-regions">{"".join(out)}</div>'
+
+
+# catalog_db.counts() runs 6 COUNT(*) scans (~120 ms) and only feeds the header count + the
+# region chip counts, which change once a night (the collector cron) — cache it 60 s.
+_COUNTS_TTL = 60.0
+_COUNTS_CACHE: dict = {"ts": 0.0, "val": None}
+
+
+def _counts_cached() -> dict:
+    import time
+    now = time.monotonic()
+    if _COUNTS_CACHE["val"] is not None and now - _COUNTS_CACHE["ts"] < _COUNTS_TTL:
+        return _COUNTS_CACHE["val"]
+    val = catalog_db.counts()
+    _COUNTS_CACHE["ts"], _COUNTS_CACHE["val"] = now, val
+    return val
 
 
 def render_page(company: str = "", q: str = "", region: str = "",
@@ -210,7 +264,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
     has_more = 1 if len(jobs) == PAGE else 0
 
     try:
-        cnt = catalog_db.counts()
+        cnt = _counts_cached()
         remote_total = cnt.get("remote", 0)
         by_region = cnt.get("by_region", {})
     except Exception:
@@ -290,10 +344,6 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<select class="cat-bulk-sel" id="bulkGender" aria-label="Пол">{gender_opts}</select>'
         f'<select class="cat-bulk-sel" id="bulkCompany" aria-label="Компания">{comp_opts}</select>'
         f'<select class="cat-bulk-sel" id="bulkRegion" aria-label="Регион">{region_opts}</select>'
-        '<label class="cat-bulk-n">Имя'
-        '<input type="text" id="bulkName" placeholder="Необяз." '
-        'title="Кастомное имя персоны для всей подачи (необязательно)" '
-        'style="min-width:120px"></label>'
         '<label class="cat-bulk-n">Кол-во'
         '<input type="number" id="bulkN" min="1" step="1" placeholder="Все" '
         'inputmode="numeric" title="Пусто = все доступные вакансии"></label>'
@@ -320,20 +370,59 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
         '</details>')
+    # Campaigns are CREATED from the card selection (tick cards → bottom bar → the campaign
+    # sheet); this section only LISTS them (pause / delete).
     campaigns_block = (
         '<div class="cs-camp">'
-        '<div class="cs-camp-new">'
-        '<label class="cat-bulk-n">В день<select id="campPerDay">'
-        '<option>1</option><option>2</option><option>3</option><option>4</option>'
-        '<option>5</option></select></label>'
-        '<button class="cat-bulk-go" onclick="mkCampaign()">Создать из поиска</button>'
-        '<span class="cat-proxy-msg" id="campMsg"></span></div>'
-        '<div class="cat-proxy-hint">Каждый день авто-подача под именем из «Массовая подача» на '
-        'вакансии текущего поиска (напр. «Казахстан»), N раз в день, каждый раз со свежим резюме. '
-        'NB: одна вакансия N× под одним именем — работодатель/ATS увидит повторы и обычно их '
-        'отклоняет; для дневного потока лучше поиск (каждый день новые вакансии).</div>'
+        '<div class="cat-proxy-hint">Отметьте вакансии галочкой в списке — внизу появится '
+        '«Настроить кампанию». Кампания каждый день подаёт N заявок по кругу по выбранным '
+        'вакансиям под одним именем, каждый раз со свежим резюме.</div>'
         '<div class="cs-camp-list" id="campList">—</div>'
         '</div>')
+    # Selection bar (hidden until ≥1 card is ticked) + the campaign sheet it opens. The
+    # sheet reuses the .cat-modal chrome (desktop dialog / phone bottom-sheet) but is a
+    # SEPARATE element from #catSettings. The two segmented controls share the card's
+    # .cat-sex look (pickSex toggles any .cat-sex group).
+    _seg_btn = (lambda attr, val, lbl, on:
+                f'<button type="button" class="cat-sex-b{" on" if on else ""}" {attr}="{val}" '
+                f'onclick="pickSex(this)" aria-pressed="{"true" if on else "false"}">{lbl}</button>')
+    sex_seg = ('<div class="cat-sex camp-seg" id="campSex" role="group" aria-label="Пол персоны">'
+               + _seg_btn("data-gender", "male", "М", True)
+               + _seg_btn("data-gender", "female", "Ж", False) + '</div>')
+    per_seg = ('<div class="cat-sex camp-seg" id="campPer" role="group" aria-label="Подач в день">'
+               + "".join(_seg_btn("data-per", str(i), str(i), i == 2) for i in range(1, 6))
+               + '</div>')
+    selbar = (
+        '<div class="cat-selbar" id="catSelBar" role="region" aria-label="Выбранные вакансии">'
+        '<span class="cat-selbar-n" id="catSelN">Выбрано 0</span>'
+        '<button type="button" class="ghost cat-selbar-clear" onclick="clearPicks()">Снять</button>'
+        '<button type="button" class="primary cat-selbar-go" onclick="openCampSheet()">'
+        'Настроить кампанию</button></div>')
+    camp_sheet = (
+        '<div class="cat-modal" id="campSheet" hidden>'
+        '<div class="cat-modal-backdrop" onclick="closeCampSheet()"></div>'
+        '<div class="cat-modal-panel" role="dialog" aria-modal="true" aria-label="Кампания">'
+        '<div class="cat-modal-head"><span class="cat-modal-title">Кампания · '
+        '<span id="campSheetN">0 вакансий</span></span>'
+        '<button class="cat-modal-x" onclick="closeCampSheet()" aria-label="Закрыть">&#10005;</button></div>'
+        '<div class="cat-modal-body">'
+        '<div class="cs-sec"><div class="cs-label">Имя персоны</div>'
+        '<input type="text" class="camp-input" id="campName" placeholder="Авто" '
+        'autocomplete="off" maxlength="80" aria-label="Имя персоны (необязательно)">'
+        '<div class="cat-proxy-hint">Пусто — имя подберётся автоматически. Одна почта на всю '
+        'кампанию, резюме каждый раз новое.</div></div>'
+        f'<div class="cs-sec"><div class="cs-label">Пол</div>{sex_seg}</div>'
+        f'<div class="cs-sec"><div class="cs-label">Подач в день</div>{per_seg}'
+        '<div class="cat-proxy-hint">Каждый день по столько заявок, по кругу по выбранным '
+        'вакансиям.</div></div>'
+        '<div class="cs-sec"><div class="cs-label">Вакансии <b id="campJobsN">0</b></div>'
+        '<div class="camp-jobs" id="campJobs"></div></div>'
+        '</div>'
+        '<div class="cat-modal-foot">'
+        '<span class="cat-bulk-prog" id="campMsg"></span>'
+        '<button class="cat-launch" id="campGo" onclick="mkCampaign()">Создать кампанию</button>'
+        '</div></div></div>')
+    toast = '<div class="cat-toast" id="catToast" role="status" aria-live="polite"></div>'
     settings = (
         '<div class="cat-modal" id="catSettings" hidden>'
         '<div class="cat-modal-backdrop" onclick="toggleFilters()"></div>'
@@ -356,7 +445,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
 
     list_html = cards or '<div class="empty">Вакансий не найдено</div>'
     body = (
-        _CAT_CSS + head + settings
+        _CAT_CSS + head + settings + camp_sheet + selbar + toast
         + f'<div class="cat-list" id="catlist">{list_html}</div>'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _CAT_JS)
@@ -434,9 +523,47 @@ _CAT_CSS = """<style>
 .cat-reg.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 2px 8px -2px rgba(12,71,194,.5)}
 .cat-reg.on b{color:rgba(255,255,255,.85)}
 .cat-list{display:flex;flex-direction:column;gap:10px}
-.cat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px}
-.cat-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px}
-.cat-co{font-size:12px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em}
+/* room under the list so the fixed selection bar never covers the last card's controls */
+.cat-list.selon{padding-bottom:84px}
+.cat-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;transition:border-color .15s,background-color .15s,box-shadow .15s}
+.cat-card.sel{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent) inset}
+.cat-top{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.cat-co{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em}
+/* Selection checkbox: a 26px round control inside a 44px tap target (negative margins keep
+   the top row 26px tall). Ticked -> accent fill + white check; the card gets .sel. */
+.cat-pick{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin:-9px -11px -9px -6px;cursor:pointer;position:relative;border-radius:50%}
+.cat-pick input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.cat-pick span{width:26px;height:26px;border-radius:50%;border:2px solid var(--line-strong);background:var(--panel);display:flex;align-items:center;justify-content:center;transition:background-color .12s,border-color .12s,transform .12s;box-sizing:border-box}
+.cat-pick span::after{content:"";width:6px;height:11px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg) translate(-1px,-1px);opacity:0}
+.cat-pick:hover span{border-color:var(--accent)}
+.cat-pick input:checked+span{background:var(--accent);border-color:var(--accent)}
+.cat-pick input:checked+span::after{opacity:1}
+.cat-pick input:focus-visible+span{box-shadow:0 0 0 3px var(--accent-soft)}
+.cat-pick:active span{transform:scale(.92)}
+/* Selection bar: fixed, centered pill; hidden at 0 selected, slides in when >=1. Sits ABOVE
+   the shell's mobile tab bar (var(--jf-tabbar)) and BELOW the .cat-modal sheets (z 1000). */
+.cat-selbar{position:fixed;left:0;right:0;bottom:18px;margin:0 auto;width:max-content;max-width:min(520px,calc(100vw - 24px));z-index:45;display:flex;align-items:center;gap:10px;padding:8px 8px 8px 18px;background:var(--panel);border:1px solid var(--line-strong);border-radius:var(--r-full);box-shadow:0 14px 36px -10px rgba(15,23,42,.42),0 2px 8px -2px rgba(15,23,42,.18);opacity:0;visibility:hidden;transform:translateY(14px);transition:opacity .2s ease,transform .22s cubic-bezier(.22,.61,.36,1),visibility 0s linear .22s}
+.cat-selbar.on{opacity:1;visibility:visible;transform:none;transition:opacity .2s ease,transform .22s cubic-bezier(.22,.61,.36,1)}
+.cat-selbar-n{font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap}
+.cat-selbar-n b{font-family:var(--ff-mono);font-weight:600;color:var(--accent)}
+.cat-selbar .cat-selbar-clear{flex:0 0 auto}
+.cat-selbar .cat-selbar-go{flex:0 0 auto;white-space:nowrap}
+/* Campaign sheet controls */
+.camp-input{width:100%;box-sizing:border-box;height:var(--ctl-h);padding:0 14px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:15px;background:var(--panel);color:var(--ink);min-height:0}
+.camp-input::placeholder{color:var(--ink-mute)}
+.camp-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.camp-seg{display:inline-flex}
+.camp-seg .cat-sex-b{min-width:44px}
+.camp-jobs{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-app);padding:6px 12px;font-size:13px;line-height:1.4}
+.camp-job{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
+.camp-job:last-child{border-bottom:0}
+.camp-job-co{flex:0 0 auto;font-size:11px;font-weight:700;color:var(--ink-mute);text-transform:uppercase;letter-spacing:.03em;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.camp-job-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.camp-job-more{color:var(--ink-mute);padding:5px 0;font-size:12.5px}
+/* Toast (3 s) after a campaign is created */
+.cat-toast{position:fixed;left:50%;bottom:calc(var(--jf-tabbar,0px) + env(safe-area-inset-bottom) + 26px);transform:translate(-50%,16px);z-index:1100;background:var(--ink);color:#fff;font-size:13.5px;font-weight:500;padding:11px 18px;border-radius:var(--r-full);box-shadow:0 8px 24px -6px rgba(32,33,36,.5);opacity:0;transition:opacity .25s,transform .25s;pointer-events:none;max-width:88vw;text-align:center}
+.cat-toast.show{opacity:1;transform:translate(-50%,0)}
+@media (prefers-reduced-motion:reduce){.cat-selbar,.cat-toast,.cat-pick span,.cat-card{transition:none}}
 .cat-wp{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
 .cat-wp-remote{color:#188038;border-color:#bcdfc4}.cat-wp-hybrid{color:var(--accent);border-color:#b8d3f5}.cat-wp-onsite{color:var(--ink-mute)}
 .cat-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15.5px;font-weight:600;color:var(--ink);line-height:1.3;min-height:calc(1.3em*2);margin-bottom:5px;text-decoration:none}
@@ -457,11 +584,11 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-desc table{max-width:100%;display:block;overflow-x:auto}
 .cat-desc a{color:var(--accent)}
 .cat-qlist{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-app);overflow:auto;max-height:360px}
-.cat-q{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;line-height:1.4}
-.cat-q:last-child{border-bottom:0}
-.cat-qlbl{color:var(--ink);min-width:0}
-.cat-req{color:var(--danger);font-weight:700;margin-left:3px}
-.cat-qtype{flex:0 0 auto;margin-top:1px;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
+.cat-qlist li{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-size:13px;line-height:1.4}
+.cat-qlist li:last-child{border-bottom:0}
+.cat-qlist li>span{color:var(--ink);min-width:0}
+.cat-qlist b{color:var(--danger);font-weight:700;margin-left:3px}
+.cat-qlist i{flex:0 0 auto;margin-top:1px;font-style:normal;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
 .cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
 /* Sex is a compact segmented toggle, not two big buttons — one modifier for the single
@@ -469,10 +596,7 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-sex{display:inline-flex;align-items:center;height:var(--ctl-h);background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:3px}
 .cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:var(--ctl-fs);font-weight:600;line-height:1;min-width:40px;height:calc(var(--ctl-h) - 8px);padding:0 12px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .cat-sex-b.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.cat-name{flex:0 1 150px;min-width:110px;max-width:170px;height:var(--ctl-h);padding:0 12px;font-size:var(--ctl-fs);border:1px solid var(--line-strong);border-radius:var(--r-full);background:var(--panel);color:var(--ink);min-height:0}
-.cat-name::placeholder{color:var(--ink-mute)}
-.cat-name:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-@media(max-width:760px){.cat-h-row{flex-wrap:wrap}.cat-h-title{flex:1 1 100%;order:2}.cat-h-btns{order:1;margin-left:auto}.cat-name{flex:1 1 90px;min-width:90px;max-width:none}}
+@media(max-width:760px){.cat-h-row{flex-wrap:wrap}.cat-h-title{flex:1 1 100%;order:2}.cat-h-btns{order:1;margin-left:auto}}
 .cat-fill{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:600;cursor:pointer}
 .cat-fill:hover{background:var(--accent-deep)}
 .cat-fill:disabled{opacity:.6;cursor:default}
@@ -499,7 +623,6 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-proxy-body{max-width:640px}
 .cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
 .cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
-.cs-camp-new{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .cs-camp-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .cs-camp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
 .cs-camp-row button{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-sm);padding:3px 9px;font-size:12px;cursor:pointer}
@@ -530,6 +653,15 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
    keep the header to just title + Фильтры. */
 @media(max-width:760px){
   .cat-q{display:none}
+  /* the shell's top pill carries the funnel (.gm-tune -> toggleFilters) on phones, so the
+     header's own «Фильтры» button goes; with .head-actions then empty the shell hides it. */
+  .cat-filters-btn{display:none}
+  .cat-search-row{display:none}
+  /* selection bar: full width minus margins, above the shell's fixed bottom tab bar */
+  .cat-selbar{left:12px;right:12px;width:auto;max-width:none;margin:0;bottom:calc(var(--jf-tabbar,0px) + env(safe-area-inset-bottom) + 10px);padding:8px 8px 8px 16px;gap:8px}
+  .cat-selbar-n{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .cat-selbar .cat-selbar-clear,.cat-selbar .cat-selbar-go{padding:0 14px}
+  .cat-list.selon{padding-bottom:calc(var(--jf-tabbar,0px) + 84px)}
   .cat-head{gap:6px;margin-bottom:2px}
   .cat-h-title{font-size:17px}
   .cat-title{font-size:15px}
@@ -547,38 +679,145 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 </style>"""
 
 _CAT_JS = """<script>
-// One-click: start the fill (the server first points the co-pilot at THIS job, then
-// generates + fills in the background) and go straight to noVNC to WATCH that job fill.
-// Redirect the SAME tab — window.open('_blank') is popup-blocked on mobile (that was the
-// "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
-// noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
-// ♂/♀ segmented toggle: mark the tapped segment active (per card).
+// Catalog page script. RE-ENTRANT by contract: the «Вакансии» tabs swap <main>'s innerHTML and
+// re-run this inline script in the SAME document, so: only var / function declarations /
+// window.x= at top level (no top-level const/let), every window/document-level listener is
+// registered with the shell's per-page AbortSignal (window.jfPage), and every async chain
+// captures window.__jfGen and bails once the page was switched away. Both shell globals are
+// optional — without them the page behaves as a plain document.
+function catSig(){ return (window.jfPage||{}).signal; }
+function catEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(ch){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];}); }
+function catPlural(n,one,few,many){ n=Math.abs(n|0); var a=n%10, b=n%100;
+  if(a===1&&b!==11) return one; if(a>=2&&a<=4&&!(b>=12&&b<=14)) return few; return many; }
+// ♂/♀ segmented toggle (per card + the campaign sheet's М/Ж and 1..5 groups): mark the
+// tapped segment active within its .cat-sex group.
 window.pickSex = function(b){
   var g=b.closest('.cat-sex'); if(!g) return;
   g.querySelectorAll('.cat-sex-b').forEach(function(x){
     var on=(x===b); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on?'true':'false');
   });
 };
+// One-click: start the fill (the server first points the co-pilot at THIS job, then
+// generates + fills in the background) and go straight to noVNC to WATCH that job fill.
+// Redirect the SAME tab — window.open('_blank') is popup-blocked on mobile (that was the
+// "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
+// noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
 window.fillJob = async function(btn){
   if(btn.disabled) return;
   var id=btn.dataset.id,
       row=btn.closest('.cat-fill-row'),
       sel=row?row.querySelector('.cat-sex-b.on'):null,
       gender=sel?(sel.dataset.gender||''):'',
-      nameEl=row?row.querySelector('.cat-name'):null,
-      name=nameEl?(nameEl.value||'').trim():'',
       res=row?row.querySelector('.cat-fill-res'):null,
       label=btn.textContent;
   var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
   btn.disabled=true; btn.textContent='⏳…'; if(res) res.textContent='';
   try{
-    var body='gender='+encodeURIComponent(gender)+'&name='+encodeURIComponent(name);
+    var body='gender='+encodeURIComponent(gender);
     var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
   }catch(e){
     btn.disabled=false; btn.textContent=label;
     if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
+  }
+};
+// ---- card selection -> campaign ---------------------------------------------------
+// Selected ids (+ company/title for the sheet's list) persist in sessionStorage so a
+// search, a pagination scroll or a tab switch never loses the pick. Reloaded on every run
+// of this script (re-entrant); the DOM checkboxes are re-synced by syncPicks().
+window.catSel = (function(){
+  var ids=[], meta={};
+  try{ ids=JSON.parse(sessionStorage.getItem('cat_sel')||'[]'); }catch(e){ ids=[]; }
+  try{ meta=JSON.parse(sessionStorage.getItem('cat_sel_meta')||'{}'); }catch(e){ meta={}; }
+  if(!Array.isArray(ids)) ids=[];
+  if(!meta || typeof meta!=='object') meta={};
+  var set=new Set(); ids.forEach(function(x){ x=parseInt(x,10); if(x>0) set.add(x); });
+  return {ids:set, meta:meta};
+})();
+function catSaveSel(){
+  var S=window.catSel, m={};
+  S.ids.forEach(function(i){ if(S.meta[i]) m[i]=S.meta[i]; });
+  S.meta=m;
+  try{ sessionStorage.setItem('cat_sel', JSON.stringify(Array.from(S.ids)));
+       sessionStorage.setItem('cat_sel_meta', JSON.stringify(m)); }catch(e){}
+}
+window.pickJob = function(cb){
+  var id=parseInt(cb.dataset.id,10); if(!(id>0)) return;
+  var S=window.catSel, card=cb.closest('.cat-card');
+  if(cb.checked){
+    S.ids.add(id);
+    if(card){ var co=card.querySelector('.cat-co'), t=card.querySelector('.cat-title');
+      S.meta[id]={co:(co?co.textContent:'').trim(), t:(t?t.textContent:'').trim()}; }
+  }else{ S.ids.delete(id); delete S.meta[id]; }
+  if(card) card.classList.toggle('sel', cb.checked);
+  catSaveSel(); renderSelBar();
+};
+window.syncPicks = function(root){
+  var S=window.catSel;
+  (root||document).querySelectorAll('.cat-pick input[type=checkbox]').forEach(function(cb){
+    var on=S.ids.has(parseInt(cb.dataset.id,10)); cb.checked=on;
+    var card=cb.closest('.cat-card'); if(card) card.classList.toggle('sel', on);
+  });
+  renderSelBar();
+};
+window.clearPicks = function(){
+  var S=window.catSel; S.ids.clear(); S.meta={}; catSaveSel(); syncPicks();
+};
+window.renderSelBar = function(){
+  var n=window.catSel.ids.size, bar=document.getElementById('catSelBar'),
+      nEl=document.getElementById('catSelN'), list=document.getElementById('catlist');
+  if(nEl) nEl.innerHTML='Выбрано <b>'+n+'</b>';
+  if(bar) bar.classList.toggle('on', n>0);
+  if(list) list.classList.toggle('selon', n>0);
+};
+// The campaign sheet (#campSheet, .cat-modal chrome): name (optional) · М/Ж · 1..5 per day ·
+// the selected jobs. «Создать кампанию» posts ONE daily campaign over the selection.
+window.openCampSheet = function(){
+  var S=window.catSel, ids=Array.from(S.ids); if(!ids.length) return;
+  var s=document.getElementById('campSheet'); if(!s) return;
+  var n=ids.length, MAX=6;
+  var nEl=document.getElementById('campSheetN');
+  if(nEl) nEl.textContent=n+' '+catPlural(n,'вакансия','вакансии','вакансий');
+  var jn=document.getElementById('campJobsN'); if(jn) jn.textContent=n;
+  var box=document.getElementById('campJobs');
+  if(box){
+    var rows=ids.slice(0,MAX).map(function(i){ var m=S.meta[i]||{};
+      return '<div class="camp-job"><span class="camp-job-co">'+catEsc(m.co||'')+'</span>'
+        +'<span class="camp-job-t">'+catEsc(m.t||('#'+i))+'</span></div>'; });
+    if(n>MAX) rows.push('<div class="camp-job-more">и ещё '+(n-MAX)+'</div>');
+    box.innerHTML=rows.join('');
+  }
+  var msg=document.getElementById('campMsg'); if(msg) msg.textContent='';
+  var go=document.getElementById('campGo'); if(go) go.disabled=false;
+  s.removeAttribute('hidden'); document.body.style.overflow='hidden';
+};
+window.closeCampSheet = function(){
+  var s=document.getElementById('campSheet'); if(!s) return;
+  s.setAttribute('hidden','');
+  var f=document.getElementById('catSettings');
+  if(!f || f.hasAttribute('hidden')) document.body.style.overflow='';
+};
+var catToastT;
+window.catToast = function(msg){
+  var t=document.getElementById('catToast'); if(!t) return;
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(catToastT); catToastT=setTimeout(function(){ t.classList.remove('show'); }, 3000);
+};
+// Lazy job description: fetched ONCE on the first open of the card's «Описание».
+window.catLoadDesc = async function(det){
+  if(!det || !det.open || det.dataset.loaded) return;
+  var url=det.dataset.desc, box=det.querySelector('.cat-desc'); if(!url||!box) return;
+  det.dataset.loaded='1';
+  var gen=window.__jfGen;
+  try{
+    var r=await fetch(url), txt=r.ok?await r.text():'';
+    if(gen!==window.__jfGen) return;
+    box.innerHTML=txt||'<p>Описание недоступно</p>'; box.classList.remove('cat-desc-lazy');
+  }catch(e){
+    if(gen!==window.__jfGen) return;
+    box.textContent='Не удалось загрузить — откройте ещё раз'; delete det.dataset.loaded;
   }
 };
 // Bulk "apply to all": ONE sequential queue on the server over every greenhouse+ashby
@@ -590,7 +829,7 @@ window.bulkFillAll = async function(){
       nEl=document.getElementById('bulkN'), gEl=document.getElementById('bulkGender'),
       cEl=document.getElementById('bulkCompany'), rEl=document.getElementById('bulkRegion'),
       wEl=document.getElementById('bulkW');
-  if(go.disabled) return;
+  if(!go || go.disabled) return;
   var raw=(nEl&&nEl.value||'').trim();
   var n=parseInt(raw,10);
   var all=!(n>=1);                 // пусто / не число / <=0 => все доступные
@@ -604,7 +843,6 @@ window.bulkFillAll = async function(){
   var wStr=wAuto?'':String(wnum);
   var wLbl=wAuto?'авто':String(wnum);
   var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
-  var nmEl=document.getElementById('bulkName'), bulkName=(nmEl&&nmEl.value||'').trim();
   var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
   var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
   if(!confirm('Массовая подача: '+nLbl+'\\n'
@@ -614,15 +852,17 @@ window.bulkFillAll = async function(){
       +'Lever/Workable (капча) сразу уходят в «Незавершённые» на ручное дожатие. '
       +'Прервать — «Стоп».')) return;
   go.disabled=true; if(prog) prog.textContent='Запуск…';
+  var gen=window.__jfGen;
   try{
     var body='count='+encodeURIComponent(countStr)+'&gender='+encodeURIComponent(gender)
         +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region)
-        +'&workers='+encodeURIComponent(wStr)+'&name='+encodeURIComponent(bulkName);
+        +'&workers='+encodeURIComponent(wStr);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
+    if(gen!==window.__jfGen) return;
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }
     else if(prog && j.total!==undefined){ prog.textContent='Найдено '+j.total+' — запуск…'; }
-  }catch(e){ go.disabled=false; if(prog) prog.textContent='Ошибка запуска'; return; }
+  }catch(e){ if(gen!==window.__jfGen) return; go.disabled=false; if(prog) prog.textContent='Ошибка запуска'; return; }
   bulkPoll();
 };
 window.bulkStop = async function(){
@@ -634,13 +874,16 @@ async function bulkPoll(){
   var go=document.getElementById('bulkGo'), stop=document.getElementById('bulkStop'),
       prog=document.getElementById('bulkProg');
   if(!go||!stop||!prog) return;
+  var gen=window.__jfGen;
+  function again(ms){ setTimeout(function(){ if(gen===window.__jfGen) bulkPoll(); }, ms); }
   try{
     var s=await (await fetch('/catalog/fill_all_status')).json();
+    if(gen!==window.__jfGen) return;
     var line=(s.done||0)+'/'+(s.total||0)+' · ✓'+(s.ok||0)+' ✗'+(s.failed||0)
              +(s.current?(' · '+s.current):'');
     if(s.state==='running'){
       go.style.display='none'; go.disabled=true; stop.style.display='';
-      prog.textContent=line; setTimeout(bulkPoll, 3000);
+      prog.textContent=line; again(3000);
     }else if(s.state==='done'||s.state==='stopped'){
       stop.style.display='none'; go.style.display=''; go.disabled=false;
       prog.textContent=(s.state==='stopped'?'Остановлено':'Готово')+': '+line;
@@ -648,11 +891,12 @@ async function bulkPoll(){
     }else{
       go.disabled=false;
     }
-  }catch(e){ setTimeout(bulkPoll, 5000); }
+  }catch(e){ again(5000); }
 }
 bulkPoll();   // resume progress if a batch is already running when the page loads
 
-// Filters/settings sheet holds regions + mass-apply + proxy — declutters the top.
+// Filters/settings sheet holds regions + mass-apply + proxy — declutters the top. Callable
+// from OUTSIDE <main> too (the shell's mobile top-pill funnel button).
 window.toggleFilters=function(){
   var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
   if(!s) return;
@@ -662,18 +906,23 @@ window.toggleFilters=function(){
   if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
 document.addEventListener('keydown',function(e){
-  if(e.key==='Escape'){ var s=document.getElementById('catSettings');
-    if(s && !s.hasAttribute('hidden')) window.toggleFilters(); }
-});
+  if(e.key!=='Escape') return;
+  var c=document.getElementById('campSheet');
+  if(c && !c.hasAttribute('hidden')){ window.closeCampSheet(); return; }
+  var s=document.getElementById('catSettings');
+  if(s && !s.hasAttribute('hidden')) window.toggleFilters();
+},{signal:catSig()});
 // Last bulk-run report (survives restart — read from logs/bulk_apply_last.json).
 async function bulkReport(){
   var el=document.getElementById('bulkReport'); if(!el) return;
+  var gen=window.__jfGen;
   try{
     var r=await (await fetch('/catalog/fill_all_report')).json();
+    if(gen!==window.__jfGen) return;
     if(!r || !r.run_id){ el.innerHTML=''; return; }
     var st=r.state==='running'?'идёт':(r.state==='stopped'?'остановлен':'завершён');
     el.innerHTML=
-      '<div>Прогон <b>'+r.run_id+'</b> — '+st+'</div>'+
+      '<div>Прогон <b>'+catEsc(r.run_id)+'</b> — '+st+'</div>'+
       '<div class="r-sub">заполнено '+(r.filled_ok||0)+' · ошибок '+(r.errors||0)+
       ' · клик Submit '+(r.submit_clicked||0)+' · подтверждено '+(r.submit_confirmed||0)+
       ' · пропущено '+(r.skipped||0)+' из '+(r.total||0)+'</div>'+
@@ -693,14 +942,16 @@ function _pxAgo(ts){
 function pxRenderList(ips){
   var list=document.getElementById('pxList'); if(!list) return;
   list.innerHTML=(ips||[]).map(function(x){
-    return '<span class="px-ip">'+((x.ip||x.server||'')+'').replace(/</g,'&lt;')+'</span>';}).join('');
+    return '<span class="px-ip">'+catEsc(x.ip||x.server||'')+'</span>';}).join('');
 }
 async function pxRefresh(){
   var c=document.getElementById('pxCount'), sum=document.getElementById('pxSummary'),
       st=document.getElementById('pxStatus'), tog=document.getElementById('pxToggle'),
       list=document.getElementById('pxList');
+  var gen=window.__jfGen;
   try{
     var s=await (await fetch('/proxies')).json();
+    if(gen!==window.__jfGen) return;
     var n=s.count||0;
     if(c) c.textContent=n;
     if(sum) sum.textContent=n+(n===1?' живой · ':' живых · ')+_pxAgo(s.last_check);
@@ -747,35 +998,47 @@ pxRefresh();   // show pool summary on load
   var list=document.getElementById('catlist'), more=document.getElementById('catmore');
   if(!list) return;
   var qp=new URLSearchParams(location.search);
-  var region=qp.get('region')||'', curQ=(qp.get('q')||'').trim();
-  var loading=false, PAGE=30, seq=0;
+  var region=qp.get('region')||'', company=(qp.get('company')||'').trim(),
+      curQ=(qp.get('q')||'').trim();
+  var loading=false, PAGE=30, seq=0, sig=catSig();
+  // the shell's mobile top-pill funnel shows the active region filter as an "on" state
+  var tune=document.querySelector('.gm-tune'); if(tune) tune.classList.toggle('on', !!region);
   function fragUrl(offset){
     var sp=new URLSearchParams();
     if(curQ) sp.set('q', curQ);
     if(region) sp.set('region', region);
+    if(company) sp.set('company', company);
     sp.set('offset', offset);
     return '/catalog/more?'+sp.toString();
   }
   async function runSearch(){
-    var mine=++seq; loading=true;
+    var mine=++seq, gen=window.__jfGen; loading=true;
     try{
       var r=await fetch(fragUrl(0)), txt=r.ok?await r.text():'';
-      if(mine!==seq) return;                 // a newer keystroke already fired
+      if(mine!==seq || gen!==window.__jfGen) return;   // a newer keystroke / another page
       list.innerHTML = txt.trim() || '<div class="empty">Вакансий не найдено</div>';
+      syncPicks(list);
       var added=(txt.match(/class="cat-card"/g)||[]).length;
       if(more){ more.dataset.offset=String(added); more.dataset.more=(added>=PAGE)?'1':'0'; }
       window.scrollTo(0,0);
+      // mirror the live query into the URL (replace, not push) so the shell's tab switch brings the
+      // user back to this search and Back/reload restore it
+      try{ var u=new URL(location.href); if(curQ) u.searchParams.set('q',curQ); else u.searchParams.delete('q');
+        history.replaceState(history.state,'',u.pathname+u.search); }catch(e){}
     }catch(e){}finally{ loading=false; }
   }
   async function loadMore(){
     if(loading||!more||more.dataset.more!=='1')return;
     loading=true;
+    var gen=window.__jfGen;
     try{
       var r=await fetch(fragUrl(more.dataset.offset));
+      if(gen!==window.__jfGen) return;
       if(r.ok){
         var txt=await r.text();
+        if(gen!==window.__jfGen) return;
         var added=(txt.match(/class="cat-card"/g)||[]).length;
-        if(added){list.insertAdjacentHTML('beforeend',txt);
+        if(added){list.insertAdjacentHTML('beforeend',txt); syncPicks(list);
           more.dataset.offset=String((parseInt(more.dataset.offset,10)||0)+added);}
         if(added<PAGE)more.dataset.more='0';
       }
@@ -783,7 +1046,7 @@ pxRefresh();   // show pool summary on load
   }
   window.addEventListener('scroll',function(){
     if(window.innerHeight+window.scrollY>=document.documentElement.scrollHeight-500)loadMore();
-  },{passive:true});
+  },{passive:true,signal:sig});
   // Live search: type in the desktop input OR the mobile top pill — debounced, and
   // Enter is intercepted so it filters in place instead of reloading.
   var deb;
@@ -792,51 +1055,61 @@ pxRefresh();   // show pool summary on load
    document.querySelector('.gm-search input[type=search]')].forEach(function(inp){
     if(!inp) return;
     if(curQ) inp.value=curQ;
-    if(inp.form) inp.form.addEventListener('submit',function(e){ e.preventDefault(); onType(inp.value); });
-    inp.addEventListener('input',function(){ onType(inp.value); });
+    if(inp.form) inp.form.addEventListener('submit',function(e){ e.preventDefault(); onType(inp.value); },{signal:sig});
+    inp.addEventListener('input',function(){ onType(inp.value); },{signal:sig});
   });
+  syncPicks(list);   // restore the persisted selection onto the freshly rendered cards
 })();
-// ---- recurring apply campaigns (custom name + daily cyclicity + N/day) ----
+// ---- recurring apply campaigns (a selection of jobs, daily, N/day, fresh résumé) ----
 window.mkCampaign = async function(){
-  var msg=document.getElementById('campMsg');
-  var nmEl=document.getElementById('bulkName'), name=(nmEl&&nmEl.value||'').trim();
-  if(!name){ if(msg) msg.textContent='Впиши имя в «Массовая подача»'; return; }
-  // read the LIVE search term: #catq on desktop, the top pill on mobile (where #catq is hidden)
-  var q=(document.getElementById('catq')||{}).value||'';
-  if(!q.trim()){ var pill=document.querySelector('.gm-search input[type=search]');
-                 if(pill) q=pill.value||''; }
-  var gEl=document.getElementById('bulkGender'), rEl=document.getElementById('bulkRegion');
-  var gender=(gEl&&gEl.value)||'', region=(rEl&&rEl.value)||'';
-  var per=(document.getElementById('campPerDay')||{}).value||'1';
-  var body='name='+encodeURIComponent(name)+'&target_kind=search&q='+encodeURIComponent(q)
-    +'&region='+encodeURIComponent(region)+'&gender='+encodeURIComponent(gender)
+  var ids=Array.from(window.catSel.ids); if(!ids.length) return;
+  var msg=document.getElementById('campMsg'), go=document.getElementById('campGo');
+  if(go && go.disabled) return;
+  var name=((document.getElementById('campName')||{}).value||'').trim();
+  var sx=document.querySelector('#campSex .cat-sex-b.on'), gender=sx?(sx.dataset.gender||'male'):'male';
+  var pd=document.querySelector('#campPer .cat-sex-b.on'), per=pd?(pd.dataset.per||'2'):'2';
+  var body='target_kind=jobs&job_ids='+encodeURIComponent(ids.join(','))
+    +'&name='+encodeURIComponent(name)+'&gender='+encodeURIComponent(gender)
     +'&per_day='+encodeURIComponent(per);
-  if(msg) msg.textContent='…';
+  if(go) go.disabled=true; if(msg) msg.textContent='Создаю…';
+  var gen=window.__jfGen;
   try{
-    var j=await (await fetch('/catalog/campaigns',{method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
-    if(j.error){ if(msg) msg.textContent=j.error; return; }
-    if(msg) msg.textContent='Создана: '+j.campaign.name+' · '+j.campaign.per_day+'/день';
+    var r=await fetch('/catalog/campaigns',{method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body});
+    var j={}; try{ j=await r.json(); }catch(e){ j={}; }
+    if(gen!==window.__jfGen) return;
+    if(!r.ok || j.error || !j.created){
+      if(msg) msg.textContent=j.error||('Ошибка '+r.status);
+      if(go) go.disabled=false; return;
+    }
+    closeCampSheet(); clearPicks();
+    catToast('Кампания создана — первая подача по расписанию');
     loadCampaigns();
-  }catch(e){ if(msg) msg.textContent='Ошибка'; }
+  }catch(e){
+    if(gen!==window.__jfGen) return;
+    if(msg) msg.textContent='Ошибка запроса'; if(go) go.disabled=false;
+  }
 };
 window.loadCampaigns = async function(){
   var box=document.getElementById('campList'); if(!box) return;
+  var gen=window.__jfGen;
   try{
     var j=await (await fetch('/catalog/campaigns')).json(), cs=j.campaigns||[];
+    if(gen!==window.__jfGen) return;
     if(!cs.length){ box.textContent='Пока нет кампаний'; return; }
-    var h=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(ch){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});};
     box.innerHTML=cs.map(function(c){
+      var per=(parseInt(c.per_day,10)||1)+'/день';
       var tgt=c.target_kind==='job'?('вакансия #'+(parseInt(c.job_id,10)||0))
-              :('поиск: '+h((c.q||'').trim()||'все')+(c.region?(' \\u00b7 '+h(c.region)):''));
-      return '<div class="cs-camp-row"><span class="cc-dot '+(c.active?'cc-on':'cc-off')+'">\\u25cf</span> '
-        +'<b>'+h(c.name)+'</b> \\u00b7 '+(parseInt(c.per_day,10)||1)+'/\\u0434\\u0435\\u043d\\u044c \\u00b7 '+tgt
-        +' <button type="button" onclick="toggleCampaign('+c.id+','+(c.active?'0':'1')+')">'
-        +(c.active?'\\u043f\\u0430\\u0443\\u0437\\u0430':'\\u0432\\u043a\\u043b')+'</button>'
-        +' <button type="button" onclick="delCampaign('+c.id+')">\\u0443\\u0434\\u0430\\u043b\\u0438\\u0442\\u044c</button></div>';
+            :c.target_kind==='jobs'?('вакансий: '+((c.job_ids||[]).length))
+            :('поиск: '+catEsc((c.q||'').trim()||'все')+(c.region?(' · '+catEsc(c.region)):''));
+      var id=parseInt(c.id,10)||0;
+      return '<div class="cs-camp-row"><span class="cc-dot '+(c.active?'cc-on':'cc-off')+'">●</span> '
+        +'<b>'+catEsc(c.name||'')+'</b> · '+tgt+' · '+per
+        +' <button type="button" onclick="toggleCampaign('+id+','+(c.active?'0':'1')+')">'
+        +(c.active?'пауза':'вкл')+'</button>'
+        +' <button type="button" onclick="delCampaign('+id+')">удалить</button></div>';
     }).join('');
-  }catch(e){ box.textContent='\\u2014'; }
+  }catch(e){ if(gen===window.__jfGen) box.textContent='—'; }
 };
 window.toggleCampaign = async function(id,on){
   try{ await fetch('/catalog/campaigns/'+id+'/toggle',{method:'POST',
@@ -844,7 +1117,7 @@ window.toggleCampaign = async function(id,on){
   loadCampaigns();
 };
 window.delCampaign = async function(id){
-  if(!confirm('\\u0423\\u0434\\u0430\\u043b\\u0438\\u0442\\u044c \\u043a\\u0430\\u043c\\u043f\\u0430\\u043d\\u0438\\u044e?')) return;
+  if(!confirm('Удалить кампанию?')) return;
   try{ await fetch('/catalog/campaigns/'+id+'/delete',{method:'POST'}); }catch(e){}
   loadCampaigns();
 };

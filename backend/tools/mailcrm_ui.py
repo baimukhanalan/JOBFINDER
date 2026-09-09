@@ -459,11 +459,11 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-tune svg{width:19px;height:19px;}
 .gm-tune.on{color:var(--accent);}
 .gm-tune.on::after{content:'';position:absolute;top:7px;right:7px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
-/* phone chrome: the glass bottom main-nav (.jf-nav) + the «Вакансии» sub-tab pill in the top bar
-   (.jf-subtabs) — both hidden on desktop; see the ≤760 block. --jf-tabbar = the room the bottom
-   bar takes (FAB offset + list padding), 0 where there is no bar. */
+/* phone chrome: the «Вакансии» sub-tab pill in the top bar (.jf-subtabs) — hidden on desktop; see
+   the ≤760 block. --jf-tabbar = the room a fixed bottom bar would take (FAB offset + list padding);
+   0 now that the bottom main-nav is gone (kept as the hook the catalog selection bar stacks on). */
 :root{--jf-tabbar:0px;}
-.jf-nav,.jf-subtabs{display:none;}
+.jf-subtabs{display:none;}
 /* in-place tab switch: the leaving <main> slides out, the new one slides in (WhatsApp-like).
    The slide is `left` on a relatively-positioned main, NOT transform: a transformed ancestor becomes
    the containing block of every position:fixed descendant (the FAB, the catalog selection bar, the
@@ -531,12 +531,9 @@ main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubi
      action row goes too (the primary is the FAB, the catalog filter is in the search pill), and
      a head left with nothing but the hidden switcher disappears entirely — the list starts right
      under the search pill instead of ~180px down. Only a meta line (Mass Hiring) keeps the head. */
-  /* only a page that renders the bottom bar reserves room for it (the var stays 0px otherwise) */
-  body:has(.jf-nav){--jf-tabbar:76px;}
   .seg-nav.vac-seg{display:none;}
-  /* GLASS chrome (owner: «как dynamic island»): the top bar and the bottom bar are translucent
-     + blurred over the scrolling content; the top bar (search pill + the «Вакансии» sub-tabs)
-     slides away on scroll-down, the bottom bar stays. */
+  /* GLASS chrome (owner: «как dynamic island»): the top bar (search pill + the «Вакансии»
+     sub-tabs) is translucent + blurred over the scrolling content and slides away on scroll-down. */
   .gm-topbar{padding:8px 12px 6px;background:color-mix(in srgb,var(--bg-app) 72%,transparent);
     -webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);}
   .gm-pill{background:color-mix(in srgb,var(--panel) 78%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
@@ -552,19 +549,6 @@ main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubi
   .jf-subtabs a .jf-badge[hidden]{display:none;}
   @media(max-width:400px){.jf-subtabs a{font-size:12.5px;gap:4px;}}
   body:has(.jf-subtabs) main{padding-top:124px;}   /* pill 56 + sub-tabs 40 + gaps (measured 116) */
-  .jf-nav{display:flex;position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:44;
-    height:58px;padding:0 4px;border-radius:22px;
-    background:color-mix(in srgb,var(--panel) 74%,transparent);border:1px solid color-mix(in srgb,var(--line) 75%,transparent);
-    -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
-    box-shadow:0 12px 30px -14px rgba(15,23,42,.45),0 1px 0 rgba(255,255,255,.6) inset;}
-  .jf-nav a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;
-    font-size:10.5px;font-weight:600;color:var(--ink-mute);text-decoration:none;border-radius:16px;
-    -webkit-tap-highlight-color:transparent;transition:color .15s,background .15s;}
-  .jf-nav a svg{width:22px;height:22px;flex:0 0 auto;}
-  .jf-nav a span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .jf-nav a.active{color:var(--accent);}
-  .jf-nav a.active svg{stroke-width:2.1;}
-  .jf-nav a:active{background:color-mix(in srgb,var(--accent) 8%,transparent);}
   /* the ⓘ popover is anchored at the ⓘ's left edge, which sits near the right screen edge on a
      phone → two thirds of it were off-screen; pin it to the viewport width instead (top:auto keeps
      its in-flow vertical spot under the ⓘ) */
@@ -815,19 +799,6 @@ def vac_subtabs(active: str) -> str:
     return f'<nav class="jf-subtabs" aria-label="Вакансии">{"".join(items)}</nav>'
 
 
-# Bottom-bar labels must fit a fifth of a 390px phone (~70px): «Пользователи» clipped, so the
-# bar shows «Команда» (the tab manages the interview team); the rail/drawer keep the full names.
-_NAV_SHORT = {"users": "Команда"}
-
-
-def main_nav_bar(active: str) -> str:
-    """Phone-only floating glass bottom bar with the 5 main sections (the same entries as the
-    desktop rail / the drawer). Full navigations — only the «Вакансии» sub-tabs switch in place."""
-    links = "".join(
-        f'<a class="{"active" if (active in _VAC_KEYS if key == "vacancies" else active == key) else ""}" '
-        f'href="{href}">{svg}<span>{_NAV_SHORT.get(key, label)}</span></a>'
-        for href, key, label, svg in _NAV)
-    return f'<nav class="jf-nav" aria-label="Разделы">{links}</nav>'
 
 
 def vacancies_seg(active: str, counts: dict | None = None) -> str:
@@ -889,7 +860,7 @@ def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
     # topbar=False → a dedicated full screen (the open-message view): no Gmail search pill /
     # drawer, just the message's own sticky toolbar, like tapping a mail in Gmail.
     chrome = f"{_topbar(active)}{_drawer(active)}" if topbar else ""
-    tabbar = main_nav_bar(active) if topbar else ""
+    tabbar = ""    # the floating bottom main-nav was tried and REMOVED by the owner (2026-09-09): ☰ drawer stays
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"

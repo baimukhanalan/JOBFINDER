@@ -299,14 +299,14 @@ Assessment question-bank harvester (see the harvester section):
 - **PHONE REWORK of «Вакансии» (2026-09-09 evening, owner: "всё максимально удобно для телефона").**
   The owner works from a phone; the previous header/switcher rounds were rejected for wasted space,
   full reloads between sub-tabs, dead buttons and chores (refresh/export/name input). What's live:
-  - **Phone chrome (final shape, owner-directed the same evening): GLASS top bar + GLASS bottom
-    main-nav, sub-tabs on TOP.** `_topbar` renders the search pill AND `vac_subtabs(active)` — a
-    segmented pill `<nav class="jf-subtabs">` (Каталог · Mass Hiring · Незавершённые + count
-    badges) INSIDE the fixed `.gm-topbar`, so both hide together on scroll-down; `_page` renders
-    `main_nav_bar(active)` — a floating translucent `<nav class="jf-nav">` (blur/`color-mix`, rounded
-    "island") with the 5 main sections on EVERY phone page (full navigations; label «Команда» for
-    users via `_NAV_SHORT`). `body:has(.jf-nav){--jf-tabbar:76px}` reserves the room (FAB offset +
-    list padding), `body:has(.jf-subtabs) main{padding-top:124px}`. Desktop is unchanged (rail + the
+  - **Phone chrome (final shape, owner-directed the same evening): GLASS top bar with the sub-tabs
+    on TOP; the main menu stays the standard ☰ drawer.** `_topbar` renders the search pill AND
+    `vac_subtabs(active)` — a segmented pill `<nav class="jf-subtabs">` (Каталог · Mass Hiring ·
+    Незавершённые + count badges) INSIDE the fixed `.gm-topbar`, so both hide together on
+    scroll-down; `body:has(.jf-subtabs) main{padding-top:124px}`. A floating glass BOTTOM main-nav
+    (`.jf-nav`, 5 sections) was built the same evening and REMOVED an hour later on the owner's
+    word («убери нижнюю, пусть будет стандартное меню») — don't reintroduce it; `--jf-tabbar` stays
+    0px as the hook the catalog selection bar stacks on. Desktop is unchanged (rail + the
     in-page pill switcher `.seg-nav.vac-seg`, hidden on phones). The FAB collapse animates ONLY
     `max-width` (right-anchored) + label opacity, and the generic scroll handler has hysteresis
     (28px net travel, ≥320ms between flips, one decision per frame) — the old 6px flip-flop read as

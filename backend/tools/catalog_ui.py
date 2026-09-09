@@ -319,6 +319,20 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
         '</details>')
+    campaigns_block = (
+        '<div class="cs-camp">'
+        '<div class="cs-camp-new">'
+        '<label class="cat-bulk-n">В день<select id="campPerDay">'
+        '<option>1</option><option>2</option><option>3</option><option>4</option>'
+        '<option>5</option></select></label>'
+        '<button class="cat-bulk-go" onclick="mkCampaign()">Создать из поиска</button>'
+        '<span class="cat-proxy-msg" id="campMsg"></span></div>'
+        '<div class="cat-proxy-hint">Каждый день авто-подача под именем из «Массовая подача» на '
+        'вакансии текущего поиска (напр. «Казахстан»), N раз в день, каждый раз со свежим резюме. '
+        'NB: одна вакансия N× под одним именем — работодатель/ATS увидит повторы и обычно их '
+        'отклоняет; для дневного потока лучше поиск (каждый день новые вакансии).</div>'
+        '<div class="cs-camp-list" id="campList">—</div>'
+        '</div>')
     settings = (
         '<div class="cat-modal" id="catSettings" hidden>'
         '<div class="cat-modal-backdrop" onclick="toggleFilters()"></div>'
@@ -329,6 +343,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<div class="cs-sec"><div class="cs-label">Регион</div>{region_chips}</div>'
         f'<div class="cs-sec"><div class="cs-label">Массовая подача</div>{bulk_bar}'
         '<div class="cat-bulk-report" id="bulkReport"></div></div>'
+        f'<div class="cs-sec"><div class="cs-label">Кампании (каждый день)</div>{campaigns_block}</div>'
         '<div class="cs-sec"><div class="cs-label">Прокси <b id="pxCount">0</b></div>'
         f'<div class="cat-proxy-body">{proxy_block}</div></div>'
         '</div>'  # /cat-modal-body — filters above, launch pinned below
@@ -478,6 +493,12 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-proxy-body{max-width:640px}
 .cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
 .cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
+.cs-camp-new{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cs-camp-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.cs-camp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
+.cs-camp-row button{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-sm);padding:3px 9px;font-size:12px;cursor:pointer}
+.cs-camp-row button:hover{background:var(--panel-2)}
+.cc-dot.cc-on{color:var(--ok)}.cc-dot.cc-off{color:var(--ink-mute)}
 .cat-proxy-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cat-proxy-go{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:600;cursor:pointer}
 .cat-proxy-go:hover{background:var(--accent-deep)}
@@ -630,7 +651,7 @@ window.toggleFilters=function(){
   var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
   if(!s) return;
   var willOpen=s.hasAttribute('hidden');
-  if(willOpen){ s.removeAttribute('hidden'); document.body.style.overflow='hidden'; pxRefresh(); bulkPoll(); bulkReport(); }
+  if(willOpen){ s.removeAttribute('hidden'); document.body.style.overflow='hidden'; pxRefresh(); bulkPoll(); bulkReport(); loadCampaigns(); }
   else{ s.setAttribute('hidden',''); document.body.style.overflow=''; }
   if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
@@ -769,4 +790,51 @@ pxRefresh();   // show pool summary on load
     inp.addEventListener('input',function(){ onType(inp.value); });
   });
 })();
+// ---- recurring apply campaigns (custom name + daily cyclicity + N/day) ----
+window.mkCampaign = async function(){
+  var msg=document.getElementById('campMsg');
+  var nmEl=document.getElementById('bulkName'), name=(nmEl&&nmEl.value||'').trim();
+  if(!name){ if(msg) msg.textContent='Впиши имя в «Массовая подача»'; return; }
+  var q=(document.getElementById('catq')||{}).value||'';
+  var gEl=document.getElementById('bulkGender'), rEl=document.getElementById('bulkRegion');
+  var gender=(gEl&&gEl.value)||'', region=(rEl&&rEl.value)||'';
+  var per=(document.getElementById('campPerDay')||{}).value||'1';
+  var body='name='+encodeURIComponent(name)+'&target_kind=search&q='+encodeURIComponent(q)
+    +'&region='+encodeURIComponent(region)+'&gender='+encodeURIComponent(gender)
+    +'&per_day='+encodeURIComponent(per);
+  if(msg) msg.textContent='…';
+  try{
+    var j=await (await fetch('/catalog/campaigns',{method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
+    if(j.error){ if(msg) msg.textContent=j.error; return; }
+    if(msg) msg.textContent='Создана: '+j.campaign.name+' · '+j.campaign.per_day+'/день';
+    loadCampaigns();
+  }catch(e){ if(msg) msg.textContent='Ошибка'; }
+};
+window.loadCampaigns = async function(){
+  var box=document.getElementById('campList'); if(!box) return;
+  try{
+    var j=await (await fetch('/catalog/campaigns')).json(), cs=j.campaigns||[];
+    if(!cs.length){ box.textContent='Пока нет кампаний'; return; }
+    box.innerHTML=cs.map(function(c){
+      var tgt=c.target_kind==='job'?('вакансия #'+c.job_id)
+              :('поиск: '+((c.q||'').trim()||'все')+(c.region?(' · '+c.region):''));
+      return '<div class="cs-camp-row"><span class="cc-dot '+(c.active?'cc-on':'cc-off')+'">\\u25cf</span> '
+        +'<b>'+c.name+'</b> \\u00b7 '+c.per_day+'/\\u0434\\u0435\\u043d\\u044c \\u00b7 '+tgt
+        +' <button type="button" onclick="toggleCampaign('+c.id+','+(c.active?'0':'1')+')">'
+        +(c.active?'\\u043f\\u0430\\u0443\\u0437\\u0430':'\\u0432\\u043a\\u043b')+'</button>'
+        +' <button type="button" onclick="delCampaign('+c.id+')">\\u0443\\u0434\\u0430\\u043b\\u0438\\u0442\\u044c</button></div>';
+    }).join('');
+  }catch(e){ box.textContent='\\u2014'; }
+};
+window.toggleCampaign = async function(id,on){
+  try{ await fetch('/catalog/campaigns/'+id+'/toggle',{method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'active='+on}); }catch(e){}
+  loadCampaigns();
+};
+window.delCampaign = async function(id){
+  if(!confirm('\\u0423\\u0434\\u0430\\u043b\\u0438\\u0442\\u044c \\u043a\\u0430\\u043c\\u043f\\u0430\\u043d\\u0438\\u044e?')) return;
+  try{ await fetch('/catalog/campaigns/'+id+'/delete',{method:'POST'}); }catch(e){}
+  loadCampaigns();
+};
 </script>"""

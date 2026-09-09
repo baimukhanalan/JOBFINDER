@@ -968,12 +968,14 @@ _NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
 _FILL_JOBS: dict[int, dict] = {}
 
 
-def _do_fill(job_id: int, gender: str | None = None, name: str | None = None) -> None:
+def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
+             email: str | None = None, pid: str | None = None) -> None:
     import httpx
 
     from backend.tools import catalog_drafts
     try:
-        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id, gender=gender, name=name)
+        pid, jid, generated = catalog_drafts.ensure_and_wire(
+            job_id, gender=gender, name=name, email=email, pid=pid)
     except Exception as exc:
         _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
         return
@@ -1652,6 +1654,46 @@ def catalog_fill_all_log():
                         media_type="text/plain; charset=utf-8")
     return FileResponse(str(p), media_type="text/plain; charset=utf-8",
                         filename="bulk_apply.log")
+
+
+# ---- Recurring apply campaigns (custom name + daily cyclicity + N/day) ------
+@app.get("/catalog/campaigns")
+def catalog_campaigns_list():
+    from backend.tools import apply_campaigns
+    return JSONResponse({"campaigns": apply_campaigns.list_campaigns()})
+
+
+@app.post("/catalog/campaigns")
+def catalog_campaign_create(name: str = Form(""), target_kind: str = Form("search"),
+                            job_id: str = Form(""), q: str = Form(""), region: str = Form(""),
+                            gender: str = Form(""), per_day: str = Form("1")):
+    import datetime
+    from backend.tools import apply_campaigns
+    try:
+        pd = int((per_day or "1").strip() or "1")
+    except ValueError:
+        pd = 1
+    jid = int(job_id.strip()) if (job_id or "").strip().isdigit() else None
+    try:
+        camp = apply_campaigns.create(
+            name=name, target_kind=(target_kind or "search"), job_id=jid, q=q, region=region,
+            gender=gender, per_day=pd, today=datetime.date.today().isoformat())
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"created": True, "campaign": camp})
+
+
+@app.post("/catalog/campaigns/{cid}/delete")
+def catalog_campaign_delete(cid: int):
+    from backend.tools import apply_campaigns
+    return JSONResponse({"deleted": apply_campaigns.delete(cid)})
+
+
+@app.post("/catalog/campaigns/{cid}/toggle")
+def catalog_campaign_toggle(cid: int, active: str = Form("")):
+    from backend.tools import apply_campaigns
+    on = (active or "").strip().lower() in ("1", "true", "on", "yes")
+    return JSONResponse({"ok": apply_campaigns.set_active(cid, on)})
 
 
 # ---- Proxy pool (rotating egress IPs for applications) ---------------------

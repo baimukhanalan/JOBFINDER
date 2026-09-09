@@ -299,10 +299,19 @@ Assessment question-bank harvester (see the harvester section):
 - **PHONE REWORK of «Вакансии» (2026-09-09 evening, owner: "всё максимально удобно для телефона").**
   The owner works from a phone; the previous header/switcher rounds were rejected for wasted space,
   full reloads between sub-tabs, dead buttons and chores (refresh/export/name input). What's live:
-  - **Bottom tab bar (WhatsApp-style) + in-place switching.** `mailcrm_ui.vac_tabbar(active)` renders
-    `<nav class="jf-tabbar">` (Каталог · Mass Hiring · Незавершённые, icon + label + count badge) from
-    `_page` OUTSIDE `<main>`, phone-only (≤760px; desktop keeps the pill switcher `.seg-nav.vac-seg`,
-    which is hidden on phones). `jfSwap(url)` in the shell `_JS` switches WITHOUT a reload: fetch the
+  - **Phone chrome (final shape, owner-directed the same evening): GLASS top bar + GLASS bottom
+    main-nav, sub-tabs on TOP.** `_topbar` renders the search pill AND `vac_subtabs(active)` — a
+    segmented pill `<nav class="jf-subtabs">` (Каталог · Mass Hiring · Незавершённые + count
+    badges) INSIDE the fixed `.gm-topbar`, so both hide together on scroll-down; `_page` renders
+    `main_nav_bar(active)` — a floating translucent `<nav class="jf-nav">` (blur/`color-mix`, rounded
+    "island") with the 5 main sections on EVERY phone page (full navigations; label «Команда» for
+    users via `_NAV_SHORT`). `body:has(.jf-nav){--jf-tabbar:76px}` reserves the room (FAB offset +
+    list padding), `body:has(.jf-subtabs) main{padding-top:124px}`. Desktop is unchanged (rail + the
+    in-page pill switcher `.seg-nav.vac-seg`, hidden on phones). The FAB collapse animates ONLY
+    `max-width` (right-anchored) + label opacity, and the generic scroll handler has hysteresis
+    (28px net travel, ≥320ms between flips, one decision per frame) — the old 6px flip-flop read as
+    a stutter. **In-place switching:** `jfSwap(url)` in the shell `_JS` (driven by `.jf-subtabs a`
+    and the desktop `.seg-nav.vac-seg a`) switches WITHOUT a reload: fetch the
     target page → take its `<main>` (all page CSS/JS/FAB live inside main) → slide out/in
     (`main.jf-leave/.jf-enter`) → `pushState` → replace the `.gm-pill` middle (search ↔ title) → re-execute
     the page's inline scripts. The other two tabs are PREFETCHED on idle (their counts fill the badges),
@@ -328,16 +337,17 @@ Assessment question-bank harvester (see the harvester section):
     `replaceState`) and `scrollPos` is restored on a tab tap too — a filter/search/scroll survives a
     round trip. (5) The slide animates `left` on a `position:relative` main, NOT `transform`: a
     transformed ancestor becomes the containing block of the fixed FAB/selection bar/toast inside main
-    and threw them off-screen for the whole animation. (6) `--jf-tabbar:56px` is scoped
-    `body:has(.jf-tabbar)` — an unconditional `:root` value had lifted the Кандидаты compose FAB 56px
-    and padded every non-vacancy list. (7) `.ph-pop` is viewport-pinned on phones (`position:fixed;
+    and threw them off-screen for the whole animation. (6) `--jf-tabbar` is set only where a bottom
+    bar exists (`body:has(.jf-nav){--jf-tabbar:76px}`, 0px otherwise) — an unconditional `:root` value
+    had lifted the Кандидаты compose FAB and padded every list before the main nav moved down there.
+    (7) `.ph-pop` is viewport-pinned on phones (`position:fixed;
     left/right:12px`) — anchored at the ⓘ it was two-thirds off-screen.
   - **Header chrome on a phone:** `.page-head:has(.vac-seg)` hides its `.head-actions` (the primary is the
     FAB, the catalog filter is the funnel `.gm-tune` INSIDE the search pill → `toggleFilters()`), and a
     head with no `.ph-meta` disappears entirely — the first card now sits at ~62px under the pill (was
-    180-365). The FAB sits above the bar (`bottom: var(--jf-tabbar) + 14px`), `main` pads for both.
-    `:root{--jf-tabbar:0px}` / `56px` ≤760 is the variable other fixed bars (the catalog selection bar)
-    stack on.
+    180-365 — now ~124px under the pill + sub-tabs). The FAB sits above the bottom bar (`bottom:
+    var(--jf-tabbar) + 14px`), `main` pads for both. `--jf-tabbar` (0px / 76px ≤760 with the bar) is
+    the variable other fixed bars (the catalog selection bar) stack on.
   - **Незавершённые: EVERY button had been dead since 2026-08-25** — commit 68a6280 dropped the
     `}catch(e){…}}` tail of `unfDone`, so the page's whole inline `<script>` was a SyntaxError and
     `unfRerunAll`/`unfDone`/`unfFinish` were never defined (the owner: «нажимаешь докрутить всё не
@@ -360,7 +370,8 @@ Assessment question-bank harvester (see the harvester section):
     pagination and tab switches; `syncPicks()` re-checks after every list re-render. A fixed
     `#catSelBar` («Выбрано N · Снять · Настроить кампанию», z-index 45, stacked above `--jf-tabbar`)
     opens `#campSheet` (its own `.cat-modal`): Имя персоны (optional — empty → the store generates one
-    via `synth_persona._pick_name` for the first job's country), Пол М/Ж, Подач в день 1-5 (default 2),
+    via `synth_persona._pick_name` for the first job's country), Пол М/Ж, Подач в день = a FREE number
+    input `#campPerN` (1..100, default 2) with quick chips 1/2/3/5/10 (`campPerPick`/`campPerTyped`),
     the selected jobs list, «Создать кампанию» → `POST /catalog/campaigns`
     `target_kind=jobs&job_ids=1,2,3&name=&gender=&per_day=` → `apply_campaigns.create(job_ids=…)`.
     **Store kind `jobs`** (`apply_campaigns.py`): the row keeps `job_ids` + a persisted `cursor`;

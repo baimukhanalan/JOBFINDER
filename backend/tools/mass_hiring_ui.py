@@ -96,11 +96,12 @@ _CSS = """
 .mh-st{font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;white-space:nowrap;}
 .mh-st.st-auto{background:#0f7b3e;color:#fff;}
 .mh-st.st-blk{background:var(--panel-2);color:var(--ink-soft);border:1px solid var(--line);}
-.mh-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden;}
-.mh-crow{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;list-style:none;}
+/* compact company rows (owner: «карточки компании сделать компактнее») — ~62px instead of ~88px */
+.mh-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:8px;overflow:hidden;}
+.mh-crow{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;list-style:none;}
 .mh-crow::-webkit-details-marker{display:none;}
 /* Demand tier leads with a WORD; the raw index is secondary (no naked number, no mid-blue). */
-.mh-score{flex:0 0 auto;min-width:66px;padding:7px 9px;border-radius:11px;display:flex;flex-direction:column;
+.mh-score{flex:0 0 auto;min-width:56px;padding:5px 7px;border-radius:9px;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:1px;line-height:1.05;font-variant-numeric:tabular-nums;text-align:center;}
 .mh-score .mh-tier{font-weight:700;font-size:12px;white-space:nowrap;}
 .mh-score .mh-num{font-size:10px;font-weight:600;opacity:.72;}
@@ -108,8 +109,8 @@ _CSS = """
 .mh-score.mid{background:#fef2d6;color:#8a5a04;}
 .mh-score.lo{background:var(--panel-2);color:var(--ink-soft);}
 .mh-cinfo{min-width:0;flex:1 1 auto;}
-.mh-cname{font-weight:700;font-size:16px;letter-spacing:-.01em;}
-.mh-cstats{color:var(--ink-soft);font-size:13px;margin-top:2px;}
+.mh-cname{font-weight:700;font-size:15px;letter-spacing:-.01em;line-height:1.2;}
+.mh-cstats{color:var(--ink-soft);font-size:12.5px;margin-top:1px;line-height:1.25;}
 .mh-src{font-size:11.5px;font-weight:500;color:var(--ink-mute);margin-left:7px;}
 .mh-caret{flex:0 0 auto;color:var(--ink-soft);transition:transform .15s;}
 details[open] .mh-caret{transform:rotate(90deg);}

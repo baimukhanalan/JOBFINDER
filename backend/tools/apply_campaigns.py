@@ -144,7 +144,7 @@ def create(*, name: str, target_kind: str, job_id=None, job_ids=None, q: str = "
         raise ValueError("target_kind must be 'job', 'search' or 'jobs'")
     gender = gender if gender in ("male", "female") else ""
     try:
-        per_day = max(1, min(int(per_day), 5))
+        per_day = max(1, min(int(per_day), 100))    # owner: a free number, not a 1-5 picker
     except (TypeError, ValueError):
         per_day = 1
     if target_kind == "job" and not job_id:

@@ -724,7 +724,7 @@ def unfinished_index():
           "var h=document.querySelector('.vac-seg a.active b');"
           "if(h){var n=parseInt((h.textContent||'').replace(/\\D/g,''),10);"
           "if(n>0)h.textContent=String(n-1);}"
-          "var tb=document.querySelector('.jf-tabbar a.active .jf-badge');"
+          "var tb=document.querySelector('.jf-subtabs a.active .jf-badge');"
           "if(tb&&!tb.hidden){var m=parseInt(tb.textContent,10);if(m>1)tb.textContent=String(m-1);else tb.hidden=true;}"
           "var l=document.querySelector('.unf-list');"
           "if(l&&!l.querySelector('.unf-card'))"

@@ -117,7 +117,8 @@ def test_create_jobs_dedups_and_sets_cursor(tmp_path, monkeypatch):
     assert c["target_kind"] == "jobs"
     assert c["job_ids"] == [3, 1, 2]          # de-duplicated, ORDER PRESERVED, ints
     assert c["cursor"] == 0
-    assert c["per_day"] == 5                  # clamp 1..5 kept
+    assert c["per_day"] == 9                  # a free number (clamped 1..100), not a 1-5 picker
+    assert _jobs_campaign([1], per_day=500)["per_day"] == 100 and _jobs_campaign([1], per_day=0)["per_day"] == 1
     assert c["email"].endswith("@takhet.com") and c["pid"].startswith("demo_camp1")
     # the form-encoded "1,2,3" the /catalog sheet POSTs is accepted too
     c2 = ac.create(name="J2", target_kind="jobs", job_ids="1, 2,2 3", today="2026-09-09")

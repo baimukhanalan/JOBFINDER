@@ -459,9 +459,11 @@ button.primary:hover{background:var(--accent-deep);}
 .gm-tune svg{width:19px;height:19px;}
 .gm-tune.on{color:var(--accent);}
 .gm-tune.on::after{content:'';position:absolute;top:7px;right:7px;width:7px;height:7px;border-radius:50%;background:var(--accent);}
-/* phone bottom tab bar for the «Вакансии» sub-surfaces (hidden on desktop; see the ≤760 block) */
+/* phone chrome: the glass bottom main-nav (.jf-nav) + the «Вакансии» sub-tab pill in the top bar
+   (.jf-subtabs) — both hidden on desktop; see the ≤760 block. --jf-tabbar = the room the bottom
+   bar takes (FAB offset + list padding), 0 where there is no bar. */
 :root{--jf-tabbar:0px;}
-.jf-tabbar{display:none;}
+.jf-nav,.jf-subtabs{display:none;}
 /* in-place tab switch: the leaving <main> slides out, the new one slides in (WhatsApp-like).
    The slide is `left` on a relatively-positioned main, NOT transform: a transformed ancestor becomes
    the containing block of every position:fixed descendant (the FAB, the catalog selection bar, the
@@ -529,10 +531,40 @@ main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubi
      action row goes too (the primary is the FAB, the catalog filter is in the search pill), and
      a head left with nothing but the hidden switcher disappears entirely — the list starts right
      under the search pill instead of ~180px down. Only a meta line (Mass Hiring) keeps the head. */
-  /* only a page that renders the bar reserves room for it — Кандидаты/Статистика/Пользователи keep
-     their old FAB offset + list padding (the var stays 0px there) */
-  body:has(.jf-tabbar){--jf-tabbar:56px;}
+  /* only a page that renders the bottom bar reserves room for it (the var stays 0px otherwise) */
+  body:has(.jf-nav){--jf-tabbar:76px;}
   .seg-nav.vac-seg{display:none;}
+  /* GLASS chrome (owner: «как dynamic island»): the top bar and the bottom bar are translucent
+     + blurred over the scrolling content; the top bar (search pill + the «Вакансии» sub-tabs)
+     slides away on scroll-down, the bottom bar stays. */
+  .gm-topbar{padding:8px 12px 6px;background:color-mix(in srgb,var(--bg-app) 72%,transparent);
+    -webkit-backdrop-filter:saturate(180%) blur(18px);backdrop-filter:saturate(180%) blur(18px);}
+  .gm-pill{background:color-mix(in srgb,var(--panel) 78%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
+    box-shadow:0 4px 18px -10px rgba(15,23,42,.35);}
+  .jf-subtabs{display:flex;gap:4px;margin:8px 2px 0;padding:3px;border-radius:var(--r-full);
+    background:color-mix(in srgb,var(--panel-2) 82%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);}
+  .jf-subtabs a{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;min-width:0;
+    border-radius:var(--r-full);font-size:13px;font-weight:600;color:var(--ink-soft);text-decoration:none;
+    white-space:nowrap;-webkit-tap-highlight-color:transparent;transition:background .18s,color .18s,box-shadow .18s;}
+  .jf-subtabs a.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 3px rgba(15,23,42,.14);}
+  .jf-subtabs a .jf-badge{font-family:var(--ff-mono);font-size:10.5px;font-weight:700;line-height:1;padding:2px 5px;
+    border-radius:8px;background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);}
+  .jf-subtabs a .jf-badge[hidden]{display:none;}
+  @media(max-width:400px){.jf-subtabs a{font-size:12.5px;gap:4px;}}
+  body:has(.jf-subtabs) main{padding-top:124px;}   /* pill 56 + sub-tabs 40 + gaps (measured 116) */
+  .jf-nav{display:flex;position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:44;
+    height:58px;padding:0 4px;border-radius:22px;
+    background:color-mix(in srgb,var(--panel) 74%,transparent);border:1px solid color-mix(in srgb,var(--line) 75%,transparent);
+    -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+    box-shadow:0 12px 30px -14px rgba(15,23,42,.45),0 1px 0 rgba(255,255,255,.6) inset;}
+  .jf-nav a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-width:0;
+    font-size:10.5px;font-weight:600;color:var(--ink-mute);text-decoration:none;border-radius:16px;
+    -webkit-tap-highlight-color:transparent;transition:color .15s,background .15s;}
+  .jf-nav a svg{width:22px;height:22px;flex:0 0 auto;}
+  .jf-nav a span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .jf-nav a.active{color:var(--accent);}
+  .jf-nav a.active svg{stroke-width:2.1;}
+  .jf-nav a:active{background:color-mix(in srgb,var(--accent) 8%,transparent);}
   /* the ⓘ popover is anchored at the ⓘ's left edge, which sits near the right screen edge on a
      phone → two thirds of it were off-screen; pin it to the viewport width instead (top:auto keeps
      its in-flow vertical spot under the ⓘ) */
@@ -540,31 +572,19 @@ main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubi
   .page-head:has(.vac-seg) .head-actions{display:none;}
   .page-head:has(.vac-seg){padding-top:2px;margin-bottom:10px;}
   .page-head:has(.vac-seg):not(:has(.ph-meta)){display:none;}
-  .jf-tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:44;
-    height:calc(var(--jf-tabbar) + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom);
-    background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -8px 20px -14px rgba(15,23,42,.35);}
-  .jf-tabbar a{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
-    font-size:11px;font-weight:600;color:var(--ink-mute);text-decoration:none;position:relative;
-    -webkit-tap-highlight-color:transparent;transition:color .15s;}
-  .jf-tabbar a svg{width:22px;height:22px;}
-  .jf-tabbar a.active{color:var(--accent);}
-  .jf-tabbar a.active svg{stroke-width:2.1;}
-  .jf-tabbar a .jf-badge{position:absolute;top:5px;left:calc(50% + 5px);min-width:17px;height:17px;padding:0 4px;
-    border-radius:9px;background:var(--accent);color:#fff;font-size:10px;font-weight:700;font-family:var(--ff-mono);
-    display:inline-flex;align-items:center;justify-content:center;line-height:1;}
-  .jf-tabbar a .jf-badge[hidden]{display:none;}
-  .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
+  /* The FAB collapses to a circle on scroll-down. ONE animated box property (max-width of the
+     whole button, right-anchored so only the left edge moves) + the label's opacity — no padding /
+     gap / border-radius / span-width animations racing each other (that stuttered on phones). */
+  .fab-compose{display:inline-flex;align-items:center;justify-content:flex-start;gap:9px;position:fixed;right:16px;
     bottom:calc(var(--jf-tabbar) + 14px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
-    border:none;border-radius:var(--r-full);height:52px;padding:0 20px;font-size:14.5px;font-weight:600;
-    cursor:pointer;box-shadow:0 6px 18px -4px rgba(12,71,194,.55);overflow:hidden;
-    transition:padding .26s cubic-bezier(.4,0,.2,1),gap .26s cubic-bezier(.4,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1);}
+    border:none;border-radius:var(--r-full);height:52px;padding:0 15px;font-size:14.5px;font-weight:600;
+    cursor:pointer;box-shadow:0 6px 18px -4px rgba(12,71,194,.55);overflow:hidden;white-space:nowrap;
+    max-width:300px;will-change:max-width;
+    transition:max-width .32s cubic-bezier(.2,.7,.2,1),box-shadow .2s ease;}
   .fab-compose svg{width:22px;height:22px;flex:0 0 auto;}
-  /* 200px fits the longest page primary («Докрутить всё (56)») at 390px without clipping. */
-  .fab-compose span{white-space:nowrap;overflow:hidden;max-width:200px;transition:max-width .26s cubic-bezier(.4,0,.2,1),opacity .2s ease;}
-  /* scrolling down collapses it to a round pen (Gmail); scrolling up expands it back.
-     Width is left auto so it follows the animating label — no jump from an `auto` width. */
-  .fab-compose.collapsed{padding:0 15px;gap:0;border-radius:50%;}
-  .fab-compose.collapsed span{max-width:0;opacity:0;}
+  .fab-compose span{white-space:nowrap;padding-right:5px;transition:opacity .18s ease;}
+  .fab-compose.collapsed{max-width:52px;}
+  .fab-compose.collapsed span{opacity:0;}
   .fab-compose:active{transform:translateY(1px);}
   main{padding-bottom:calc(var(--jf-tabbar) + 92px + env(safe-area-inset-bottom));}
 }
@@ -752,7 +772,7 @@ def _topbar(active: str) -> str:
             lbl = "Вакансии"
         mid = f'<span class="gm-title">{lbl}</span>'
     return (f'<div class="gm-topbar"><div class="gm-pill">{burger}{mid}'
-            f'<span class="gm-ava">{_LOGO_IMG}</span></div></div>')
+            f'<span class="gm-ava">{_LOGO_IMG}</span></div>{vac_subtabs(active)}</div>')
 
 
 def _drawer(active: str) -> str:
@@ -780,19 +800,34 @@ _TAB_ICONS = {
 }
 
 
-def vac_tabbar(active: str) -> str:
-    """WhatsApp-style FIXED bottom tab bar for the three «Вакансии» sub-surfaces, phone only
-    (hidden ≥761px, where the in-page pill switcher stays). Rendered by the shell OUTSIDE <main>
-    so it persists across the in-place tab switches (`jfSwap` in _JS replaces only <main>).
-    The per-tab count badge is filled client-side (from the page's own count + prefetches)."""
+def vac_subtabs(active: str) -> str:
+    """Phone-only sub-tab pill for the three «Вакансии» surfaces, rendered INSIDE the fixed top bar
+    (under the search pill) so it hides with it on scroll-down and persists across the in-place
+    switches (`jfSwap` replaces only <main>). Count badges are filled client-side (the page's own
+    count + prefetches). Desktop keeps the in-page pill switcher (vacancies_seg)."""
     if active not in _VAC_KEYS:
         return ""
     items = []
     for href, key, label in _VAC_TABS:
         cls = ' class="active"' if key == active else ""
-        items.append(f'<a{cls} href="{href}" data-key="{key}">{_TAB_ICONS[key]}'
-                     f'<span>{label}</span><b class="jf-badge" hidden></b></a>')
-    return f'<nav class="jf-tabbar" aria-label="Вакансии">{"".join(items)}</nav>'
+        items.append(f'<a{cls} href="{href}" data-key="{key}"><span>{label}</span>'
+                     f'<b class="jf-badge" hidden></b></a>')
+    return f'<nav class="jf-subtabs" aria-label="Вакансии">{"".join(items)}</nav>'
+
+
+# Bottom-bar labels must fit a fifth of a 390px phone (~70px): «Пользователи» clipped, so the
+# bar shows «Команда» (the tab manages the interview team); the rail/drawer keep the full names.
+_NAV_SHORT = {"users": "Команда"}
+
+
+def main_nav_bar(active: str) -> str:
+    """Phone-only floating glass bottom bar with the 5 main sections (the same entries as the
+    desktop rail / the drawer). Full navigations — only the «Вакансии» sub-tabs switch in place."""
+    links = "".join(
+        f'<a class="{"active" if (active in _VAC_KEYS if key == "vacancies" else active == key) else ""}" '
+        f'href="{href}">{svg}<span>{_NAV_SHORT.get(key, label)}</span></a>'
+        for href, key, label, svg in _NAV)
+    return f'<nav class="jf-nav" aria-label="Разделы">{links}</nav>'
 
 
 def vacancies_seg(active: str, counts: dict | None = None) -> str:
@@ -854,7 +889,7 @@ def _page(active: str, body: str, modal: str = "", topbar: bool = True) -> str:
     # topbar=False → a dedicated full screen (the open-message view): no Gmail search pill /
     # drawer, just the message's own sticky toolbar, like tapping a mail in Gmail.
     chrome = f"{_topbar(active)}{_drawer(active)}" if topbar else ""
-    tabbar = vac_tabbar(active) if topbar else ""
+    tabbar = main_nav_bar(active) if topbar else ""
     return (
         "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
@@ -1539,19 +1574,25 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')gmDrawer(fal
 // them back. Elements are looked up lazily so it keeps working after an in-place tab switch.
 (function(){
   if(document.getElementById('maillist'))return;
-  var lastY=window.scrollY;
-  window.addEventListener('scroll',function(){var y=window.scrollY,dy=y-lastY;if(Math.abs(dy)<=6)return;lastY=y;
-    var pill=document.querySelector('.gm-topbar'),fab=document.querySelector('.fab-compose');
-    if(dy>0&&y>90){if(pill)pill.classList.add('hide');if(fab)fab.classList.add('collapsed');}
-    else if(dy<0){if(pill)pill.classList.remove('hide');if(fab)fab.classList.remove('collapsed');}
-  },{passive:true});
+  // Hysteresis: flip only after 28px of NET travel in the new direction, never twice within
+  // 320ms (the animation length), and batch to one decision per frame — momentum jitter used to
+  // reverse the FAB/pill transition mid-way, which read as a stutter.
+  var lastY=window.scrollY,acc=0,hidden=false,lastFlip=0,ticking=false;
+  function apply(h){var pill=document.querySelector('.gm-topbar'),fab=document.querySelector('.fab-compose');
+    if(pill)pill.classList.toggle('hide',h);if(fab)fab.classList.toggle('collapsed',h);}
+  function tick(){ticking=false;var y=window.scrollY,dy=y-lastY;lastY=y;
+    if((dy>0&&acc<0)||(dy<0&&acc>0))acc=0;acc+=dy;
+    var now=performance.now();if(now-lastFlip<320)return;
+    if(!hidden&&acc>28&&y>90){hidden=true;acc=0;lastFlip=now;apply(true);}
+    else if(hidden&&(acc<-28||y<=40)){hidden=false;acc=0;lastFlip=now;apply(false);}}
+  window.addEventListener('scroll',function(){if(!ticking){ticking=true;requestAnimationFrame(tick);}},{passive:true});
 })();
 // «Вакансии» tabs (Каталог · Mass Hiring · Незавершённые) switch IN PLACE: fetch the target page,
 // swap <main> with a short slide, pushState — no full reload. The other two tabs are prefetched
 // when idle so a tap is instant; each page's own count feeds the tab-bar badges.
 (function(){
   var TABS=['/catalog','/mass-hiring','/unfinished'],cache={},scrollPos={},busy=false;
-  function bar(){return document.querySelector('.jf-tabbar');}
+  function bar(){return document.querySelector('.jf-subtabs');}
   if(!bar())return;
   function tabIdx(p){p=(p||'').split('?')[0];for(var i=0;i<TABS.length;i++)if(p===TABS[i])return i;return -1;}
   function keyOf(url){var u=new URL(url,location.href);return u.pathname+u.search;}
@@ -1618,7 +1659,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')gmDrawer(fal
   }
   window.jfSwap=swap;
   document.addEventListener('click',function(e){
-    var a=e.target.closest('.jf-tabbar a, .seg-nav.vac-seg a');if(!a)return;
+    var a=e.target.closest('.jf-subtabs a, .seg-nav.vac-seg a');if(!a)return;
     if(e.metaKey||e.ctrlKey||e.shiftKey||e.button)return;
     var href=a.getAttribute('href'),ti=tabIdx(href);if(!href||ti<0)return;
     e.preventDefault();

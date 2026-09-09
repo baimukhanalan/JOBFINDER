@@ -389,9 +389,14 @@ def render_page(company: str = "", q: str = "", region: str = "",
     sex_seg = ('<div class="cat-sex camp-seg" id="campSex" role="group" aria-label="Пол персоны">'
                + _seg_btn("data-gender", "male", "М", True)
                + _seg_btn("data-gender", "female", "Ж", False) + '</div>')
-    per_seg = ('<div class="cat-sex camp-seg" id="campPer" role="group" aria-label="Подач в день">'
-               + "".join(_seg_btn("data-per", str(i), str(i), i == 2) for i in range(1, 6))
-               + '</div>')
+    # a free number (owner: «чтобы кастомно можно было писать»), with quick chips for the common values
+    per_seg = ('<div class="camp-per" id="campPer" role="group" aria-label="Подач в день">'
+               '<input type="number" id="campPerN" class="camp-per-n" min="1" max="100" value="2" '
+               'inputmode="numeric" aria-label="Подач в день" oninput="campPerTyped(this)">'
+               '<div class="cat-sex camp-seg camp-per-chips">'
+               + "".join(f'<button type="button" class="cat-sex-b{" on" if i == 2 else ""}" data-per="{i}" '
+                         f'onclick="campPerPick(this)">{i}</button>' for i in (1, 2, 3, 5, 10))
+               + '</div></div>')
     selbar = (
         '<div class="cat-selbar" id="catSelBar" role="region" aria-label="Выбранные вакансии">'
         '<span class="cat-selbar-n" id="catSelN">Выбрано 0</span>'
@@ -554,6 +559,13 @@ _CAT_CSS = """<style>
 .camp-input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .camp-seg{display:inline-flex}
 .camp-seg .cat-sex-b{min-width:44px}
+.camp-per{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.camp-per-n{width:84px;height:var(--ctl-h);border:1px solid var(--line-strong);border-radius:var(--r-full);
+  padding:0 12px;font-size:16px;font-weight:700;text-align:center;background:var(--panel);color:var(--ink);
+  -moz-appearance:textfield}
+.camp-per-n::-webkit-outer-spin-button,.camp-per-n::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.camp-per-n:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(12,71,194,.15)}
+.camp-per-chips .cat-sex-b{min-width:38px}
 .camp-jobs{display:flex;flex-direction:column;gap:2px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--bg-app);padding:6px 12px;font-size:13px;line-height:1.4}
 .camp-job{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
 .camp-job:last-child{border-bottom:0}
@@ -774,6 +786,11 @@ window.renderSelBar = function(){
 };
 // The campaign sheet (#campSheet, .cat-modal chrome): name (optional) · М/Ж · 1..5 per day ·
 // the selected jobs. «Создать кампанию» posts ONE daily campaign over the selection.
+// «Подач в день»: a free number input + quick chips that set it (a typed value un-highlights the chips)
+window.campPerPick = function(b){var n=document.getElementById('campPerN');if(n)n.value=b.dataset.per||'2';
+  var all=b.parentNode.querySelectorAll('.cat-sex-b');for(var i=0;i<all.length;i++)all[i].classList.toggle('on',all[i]===b);};
+window.campPerTyped = function(inp){var v=String(parseInt(inp.value,10)||'');
+  var all=document.querySelectorAll('#campPer .cat-sex-b');for(var i=0;i<all.length;i++)all[i].classList.toggle('on',all[i].dataset.per===v);};
 window.openCampSheet = function(){
   var S=window.catSel, ids=Array.from(S.ids); if(!ids.length) return;
   var s=document.getElementById('campSheet'); if(!s) return;
@@ -1067,7 +1084,7 @@ window.mkCampaign = async function(){
   if(go && go.disabled) return;
   var name=((document.getElementById('campName')||{}).value||'').trim();
   var sx=document.querySelector('#campSex .cat-sex-b.on'), gender=sx?(sx.dataset.gender||'male'):'male';
-  var pd=document.querySelector('#campPer .cat-sex-b.on'), per=pd?(pd.dataset.per||'2'):'2';
+  var pn=document.getElementById('campPerN'), per=Math.max(1,Math.min(100,parseInt(pn&&pn.value,10)||2));
   var body='target_kind=jobs&job_ids='+encodeURIComponent(ids.join(','))
     +'&name='+encodeURIComponent(name)+'&gender='+encodeURIComponent(gender)
     +'&per_day='+encodeURIComponent(per);

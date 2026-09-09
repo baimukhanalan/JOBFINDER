@@ -636,7 +636,8 @@ def _postal(country: str) -> str:
     return f"{random.randint(1000, 999999)}"
 
 
-def _build_candidate(raw: dict, country: str, job: dict) -> dict:
+def _build_candidate(raw: dict, country: str, job: dict,
+                     email: str | None = None, pid: str | None = None) -> dict:
     job_title = job.get("title", "") if job else (raw.get("headline") or "")
     name = str(raw.get("full_name") or "").strip()
     _city_src = str(raw.get("city") or "").strip() or (_CITIES.get(country) or [country])[0]
@@ -677,14 +678,15 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     # the same common name for two jobs (first.last573@takhet.com). Real onboarding via /setup
     # keeps the clean first.last@ (derive_email is unchanged) — the number is demo-only.
     num = random.randint(100, 9999)
-    base = derive_email(name)
-    if base:
-        local, _, dom = base.partition("@")
-        email = f"{local}{num}@{dom}"
-    else:
-        email = ""
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "candidate"
-    pid = f"demo_{slug}{num}"
+    # email/pid may be pinned by a recurring apply-campaign (one stable mailbox for the whole
+    # campaign so replies land in ONE inbox); otherwise a per-fill numeric suffix keeps each demo
+    # persona's mailbox unique even when the name repeats.
+    if email is None:
+        base = derive_email(name)
+        email = f"{base.partition('@')[0]}{num}@{base.partition('@')[2]}" if base else ""
+    if pid is None:
+        pid = f"demo_{slug}{num}"
     loc = f"{city}, {country}"
     phone = str(raw.get("phone") or "").strip() or _fictional_phone()
     zipc = str(raw.get("zip_code") or raw.get("postal_code") or "").strip() or _postal(country)
@@ -715,7 +717,8 @@ def _build_candidate(raw: dict, country: str, job: dict) -> dict:
     return {"profile": profile, "facts": facts}
 
 
-def synth_persona(job: dict, gender: str | None = None) -> dict:
+def synth_persona(job: dict, gender: str | None = None, name: str | None = None,
+                  email: str | None = None, pid: str | None = None) -> dict:
     """A fresh, fictional demo candidate whose nationality matches the job's country
     (never a real roster person). LLM-authored with a deterministic fallback.
 
@@ -727,13 +730,18 @@ def synth_persona(job: dict, gender: str | None = None) -> dict:
     country = _country_of(job)
     if gender not in ("male", "female"):
         gender = random.choice(("male", "female"))
-    name = _pick_name(country, gender)         # OUR choice, gendered + history-avoided
+    # A CUSTOM name (operator-typed on «Заполнить» / a recurring campaign) is used verbatim; else
+    # OUR gendered, history-avoided pick. A custom name is NOT fed to the avoid-history (it's meant
+    # to repeat), and the LLM is told to use it exactly.
+    custom = bool(name and str(name).strip())
+    name = str(name).strip() if custom else _pick_name(country, gender)
     raw = _llm_persona(job, country, name)
     if not (raw and str(raw.get("full_name") or "").strip()):
         raw = _fallback_persona(job, country, gender)
-    raw["full_name"] = name                     # force the diverse name in BOTH paths
-    _remember_name(name)
-    cand = _build_candidate(raw, country, job)
+    raw["full_name"] = name                     # force the name in BOTH paths
+    if not custom:
+        _remember_name(name)
+    cand = _build_candidate(raw, country, job, email=email, pid=pid)
     cand["gender"] = gender                      # top-level cache key for ensure_and_wire
     cand["profile"]["sex"] = gender              # persona's assigned sex -> coherent gender/pronoun
     return cand

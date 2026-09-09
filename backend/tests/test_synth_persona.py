@@ -182,3 +182,21 @@ def test_kazakh_surname_is_gendered(monkeypatch, tmp_path):
         assert not f.split()[-1].endswith(("ov", "ev", "in", "uly")), f
         m = sp.synth_persona(kz, gender="male")["profile"]["full_name"]
         assert not m.split()[-1].endswith(("ova", "eva", "ina", "kyzy")), m
+
+
+def test_synth_persona_custom_name_email_pid(monkeypatch, tmp_path):
+    """A custom name (operator-typed / campaign) is used verbatim, and email/pid overrides pin a
+    stable identity; a custom name repeats (NOT fed to the diversity avoid-history)."""
+    monkeypatch.setattr(sp, "_llm_persona", lambda job, country, name="": None)
+    monkeypatch.setattr(sp, "_USED_NAMES_PATH", str(tmp_path / "used.json"))
+    cand = sp.synth_persona(_job("Austin, TX, United States"),
+                            name="Jane Q Public", email="jane.camp@takhet.com", pid="demo_camp1")
+    assert cand["profile"]["full_name"] == "Jane Q Public"
+    assert cand["profile"]["email"] == "jane.camp@takhet.com"
+    assert cand["profile"]["id"] == "demo_camp1"
+    # same custom name again -> same name (repeatable; not history-avoided like auto-picks)
+    c2 = sp.synth_persona(_job("Austin, TX, United States"), name="Jane Q Public")
+    assert c2["profile"]["full_name"] == "Jane Q Public"
+    # without overrides, email/pid are still auto-derived (unique per fill)
+    c3 = sp.synth_persona(_job("Austin, TX, United States"), name="Jane Q Public")
+    assert c3["profile"]["email"].endswith("@takhet.com") and "jane" in c3["profile"]["email"].lower()

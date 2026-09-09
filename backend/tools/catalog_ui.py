@@ -146,6 +146,8 @@ def _card(j: dict) -> str:
             'onclick="pickSex(this)" aria-pressed="true">М</button>'
             '<button type="button" class="cat-sex-b" data-gender="female" '
             'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
+            '<input class="cat-name" type="text" placeholder="Имя (необяз.)" '
+            'autocomplete="off" aria-label="Имя персоны (необязательно)">'
             f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
             '<span class="cat-fill-res"></span></div>')
     else:
@@ -287,6 +289,10 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<select class="cat-bulk-sel" id="bulkGender" aria-label="Пол">{gender_opts}</select>'
         f'<select class="cat-bulk-sel" id="bulkCompany" aria-label="Компания">{comp_opts}</select>'
         f'<select class="cat-bulk-sel" id="bulkRegion" aria-label="Регион">{region_opts}</select>'
+        '<label class="cat-bulk-n">Имя'
+        '<input type="text" id="bulkName" placeholder="Необяз." '
+        'title="Кастомное имя персоны для всей подачи (необязательно)" '
+        'style="min-width:120px"></label>'
         '<label class="cat-bulk-n">Кол-во'
         '<input type="number" id="bulkN" min="1" step="1" placeholder="Все" '
         'inputmode="numeric" title="Пусто = все доступные вакансии"></label>'
@@ -532,12 +538,14 @@ window.fillJob = async function(btn){
       row=btn.closest('.cat-fill-row'),
       sel=row?row.querySelector('.cat-sex-b.on'):null,
       gender=sel?(sel.dataset.gender||''):'',
+      nameEl=row?row.querySelector('.cat-name'):null,
+      name=nameEl?(nameEl.value||'').trim():'',
       res=row?row.querySelector('.cat-fill-res'):null,
       label=btn.textContent;
   var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
   btn.disabled=true; btn.textContent='⏳…'; if(res) res.textContent='';
   try{
-    var body='gender='+encodeURIComponent(gender);
+    var body='gender='+encodeURIComponent(gender)+'&name='+encodeURIComponent(name);
     var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
@@ -569,6 +577,7 @@ window.bulkFillAll = async function(){
   var wStr=wAuto?'':String(wnum);
   var wLbl=wAuto?'авто':String(wnum);
   var gender=(gEl&&gEl.value)||'', company=(cEl&&cEl.value)||'', region=(rEl&&rEl.value)||'';
+  var nmEl=document.getElementById('bulkName'), bulkName=(nmEl&&nmEl.value||'').trim();
   var cLbl=(cEl&&cEl.selectedIndex>0)?cEl.options[cEl.selectedIndex].text:'все компании';
   var gLbl=gender==='female'?'женщины':(gender==='male'?'мужчины':'любой пол');
   if(!confirm('Массовая подача: '+nLbl+'\\n'
@@ -581,7 +590,7 @@ window.bulkFillAll = async function(){
   try{
     var body='count='+encodeURIComponent(countStr)+'&gender='+encodeURIComponent(gender)
         +'&company='+encodeURIComponent(company)+'&region='+encodeURIComponent(region)
-        +'&workers='+encodeURIComponent(wStr);
+        +'&workers='+encodeURIComponent(wStr)+'&name='+encodeURIComponent(bulkName);
     var j=await (await fetch('/catalog/fill_all',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
     if(j.started===false && prog){ prog.textContent = j.error||'Уже идёт'; }

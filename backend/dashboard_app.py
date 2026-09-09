@@ -968,12 +968,12 @@ _NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
 _FILL_JOBS: dict[int, dict] = {}
 
 
-def _do_fill(job_id: int, gender: str | None = None) -> None:
+def _do_fill(job_id: int, gender: str | None = None, name: str | None = None) -> None:
     import httpx
 
     from backend.tools import catalog_drafts
     try:
-        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id, gender=gender)
+        pid, jid, generated = catalog_drafts.ensure_and_wire(job_id, gender=gender, name=name)
     except Exception as exc:
         _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
         return
@@ -1013,7 +1013,7 @@ def _do_fill(job_id: int, gender: str | None = None) -> None:
 
 
 @app.post("/catalog/{job_id}/fill")
-def catalog_fill(job_id: int, gender: str = Form("")):
+def catalog_fill(job_id: int, gender: str = Form(""), name: str = Form("")):
     """Start the one-click fill in the background and return immediately (poll
     /catalog/{id}/fill_status). Generates the ideal draft if missing, wires it into the
     co-pilot, and fills the LIVE ATS form in the headful browser (watch in noVNC), then
@@ -1037,7 +1037,8 @@ def catalog_fill(job_id: int, gender: str = Form("")):
                 httpx.post("http://127.0.0.1:8102/goto", data={"url": aurl}, timeout=30)
         except Exception:
             pass
-        threading.Thread(target=_do_fill, args=(job_id, g), daemon=True).start()
+        threading.Thread(target=_do_fill, args=(job_id, g, (name or "").strip() or None),
+                         daemon=True).start()
     return JSONResponse({"started": True, "novnc": _NOVNC_URL})
 
 
@@ -1242,7 +1243,7 @@ def _bump(*, done=0, ok=0, failed=0, current=None):
             _FILL_ALL["current"] = current
 
 
-def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
+def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job, name=None) -> None:
     """Generate the persona/draft (LLM), pick a proxy, run fill+auto-submit on the headless
     worker at `port`. Records the outcome to bulk_log (unconfirmed → «Незавершённые»)."""
     import httpx
@@ -1251,7 +1252,7 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
     st: dict = {"state": "error"}
     pid = ""
     try:
-        pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender)
+        pid, jjid, _gen = catalog_drafts.ensure_and_wire(jid, gender=gender, name=name)
         base = f"http://127.0.0.1:{port}"
         # wait_submit=1 → the worker finishes the email-code + confirmation INLINE before
         # returning, so this worker doesn't cancel that job's watch by taking the next one.
@@ -1340,7 +1341,7 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job) -> None:
 
 
 def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,
-                          n_workers: int = 10) -> None:
+                          n_workers: int = 10, name: str | None = None) -> None:
     """Parallel bulk: greenhouse/ashby fan out across N headless workers (auto-submit);
     lever/workable + anything else go STRAIGHT to the «Незавершённые» ledger for a human to
     finish the captcha. One hung job can't stall the run (per-job timeout + independent
@@ -1388,7 +1389,7 @@ def _do_fill_all_parallel(job_ids: list[int], gender: str | None = None,
                             jid, job = q.get_nowait()
                         except _queue.Empty:
                             return
-                        _fill_one_on_worker(jid, gender, port, run, job)
+                        _fill_one_on_worker(jid, gender, port, run, job, name=name)
 
                 threads = [threading.Thread(target=_worker, args=(p,), daemon=True)
                            for p in ports]
@@ -1424,7 +1425,8 @@ _ADAPT_MAX = 6              # hard ceiling — matches single-LLM throughput, no
 _ADAPT_RESERVE_MB = 6000    # never grow if free RAM would drop below this
 
 
-def _do_fill_all_adaptive(job_ids: list[int], gender: str | None = None) -> None:
+def _do_fill_all_adaptive(job_ids: list[int], gender: str | None = None,
+                          name: str | None = None) -> None:
     """Like _do_fill_all_parallel but the worker count is AUTOMATIC: seed a few workers,
     then every ~12s add more while there's headroom — CPU < 70%, 1-min load < ~1.2×cores,
     and ≥6 GB RAM still free — up to a hard cap. The fill work is I/O-bound (proxy/page/LLM
@@ -1468,7 +1470,7 @@ def _do_fill_all_adaptive(job_ids: list[int], gender: str | None = None) -> None
                         jid, job = q.get_nowait()
                     except _queue.Empty:
                         return
-                    _fill_one_on_worker(jid, gender, port, run, job)
+                    _fill_one_on_worker(jid, gender, port, run, job, name=name)
 
             def _add_one() -> bool:
                 port = bulk_pool.add_worker(wait=90)
@@ -1551,7 +1553,8 @@ def _do_fill_all(job_ids: list[int], gender: str | None = None) -> None:
 @app.post("/catalog/fill_all")
 def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
                      company: str = Form(""), region: str = Form(""),
-                     workers: str = Form(""), randomize: str = Form("")):
+                     workers: str = Form(""), randomize: str = Form(""),
+                     name: str = Form("")):
     """Start a PARALLEL bulk run over the catalog. Greenhouse/Ashby fan out across
     `workers` headless browser workers and auto-submit end-to-end; Lever/Workable (and any
     other ATS) go STRAIGHT to the «Незавершённые» ledger for a human to finish the captcha
@@ -1607,11 +1610,12 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     _FILL_ALL.update({"state": "running", "total": len(job_ids), "done": 0,
                       "ok": 0, "failed": 0, "current": None, "current_id": None,
                       "workers": ("auto" if adaptive else nw)})
+    nm = (name or "").strip() or None      # optional custom persona name for the whole run
     if adaptive:
-        threading.Thread(target=_do_fill_all_adaptive, args=(job_ids, g),
+        threading.Thread(target=_do_fill_all_adaptive, args=(job_ids, g, nm),
                          daemon=True).start()
     else:
-        threading.Thread(target=_do_fill_all_parallel, args=(job_ids, g, nw),
+        threading.Thread(target=_do_fill_all_parallel, args=(job_ids, g, nw, nm),
                          daemon=True).start()
     return JSONResponse({"started": True, "total": len(job_ids),
                          "workers": ("auto" if adaptive else nw),

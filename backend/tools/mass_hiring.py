@@ -94,6 +94,15 @@ def _cur(dict_rows: bool = True):
 
 
 # ---- schema --------------------------------------------------------------------
+def _missing_columns(cur, table: str, cols) -> list[str]:
+    """Which of `cols` the table lacks — via information_schema (no table lock), so the nightly
+    ensure_schema never requests an exclusive lock for a column that already exists."""
+    cur.execute("SELECT column_name FROM information_schema.columns "
+                "WHERE table_name=%s AND column_name = ANY(%s)", (table, list(cols)))
+    have = {r[0] for r in cur.fetchall()}
+    return [c for c in cols if c not in have]
+
+
 def ensure_schema() -> None:
     with _cur(dict_rows=False) as cur:
         cur.execute("""
@@ -119,8 +128,15 @@ def ensure_schema() -> None:
           active       BOOLEAN DEFAULT TRUE,
           UNIQUE (source, source_id)
         );""")
-        cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS comp_type TEXT;")
-        cur.execute("ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS auto_status TEXT;")
+        # A blocked DDL must FAIL FAST, not queue every reader of the table behind it for hours
+        # (incident 2026-09-07..09: an idle-in-transaction session held the table, the nightly
+        # ALTER waited ~2 days for its ACCESS EXCLUSIVE lock, and /mass-hiring + all 6 apply lanes
+        # hung in the lock queue behind it). SET LOCAL scopes it to this transaction.
+        cur.execute("SET LOCAL lock_timeout = '15s'")
+        # `ADD COLUMN IF NOT EXISTS` still takes the exclusive lock even when the column exists,
+        # so check the catalog (a plain SELECT) and only ALTER when something is really missing.
+        for col in _missing_columns(cur, "mass_hiring_jobs", ("comp_type", "auto_status")):
+            cur.execute(f"ALTER TABLE mass_hiring_jobs ADD COLUMN IF NOT EXISTS {col} TEXT;")
         # Widen pay columns to NUMERIC so a real hourly rate keeps its cents (TTEC "$21.65").
         # Guarded: the ALTER (a table rewrite) runs ONCE, only while still integer.
         cur.execute("SELECT data_type FROM information_schema.columns "

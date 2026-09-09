@@ -134,10 +134,15 @@ def cron_lanes() -> list[dict]:
         # line — so scan only the last few lines, and never count a benign "errors=0" success summary
         # or a normal flock "still going — exiting" skip as a failure.
         err = any(_ERR_RE.search(ln) and not _BENIGN_RE.search(ln) for ln in tail[-4:])
+        # A lane that hasn't written ANYTHING for 2× its cadence is HUNG or never started — RED too.
+        # A stuck cron writes no error line at all (the 2026-09-07..09 DB-lock outage: 7 lanes sat
+        # silently in a lock queue for ~2 days and only ever showed as yellow "stale"), so silence
+        # past 2× the cadence must escalate and alert, not idle as a benign warn.
+        hung = age > 2 * max_h * 3600
         # An ERRORED lane is RED (down) so it drives the overall badge red and can't hide among the
         # benign yellow "stale-between-runs" lanes; a merely-stale (but not errored) lane stays warn.
-        status = "down" if err else ("warn" if stale else "ok")
-        note = "ОШИБКА · " if err else ("STALE · " if stale else "")
+        status = "down" if (err or hung) else ("warn" if stale else "ok")
+        note = "ОШИБКА · " if err else ("ЗАВИС/НЕ ЗАПУСКАЛСЯ · " if hung else ("STALE · " if stale else ""))
         rows.append({"name": label, "status": status,
                      "detail": f"{note}last run {_age_str(age)} · {last or '—'}"})
     return rows

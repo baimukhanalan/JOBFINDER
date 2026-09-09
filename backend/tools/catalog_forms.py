@@ -389,10 +389,11 @@ if __name__ == "__main__":
     _KNOWN = ("ashby", "lever", "workable")
     ap = argparse.ArgumentParser(
         description="Scrape ATS apply-form questions into job_catalog.questions.")
-    # default=[] (NOT list(_KNOWN)): with nargs="*" + choices, argparse validates a non-empty
-    # list default as a single choice and rejects it ("invalid choice: ['ashby','lever','workable']"),
-    # which broke every no-arg cron run (bpo-9625). Empty default -> run() expands it to all three.
-    ap.add_argument("ats", nargs="*", choices=_KNOWN, default=[],
+    # NO `choices=` here: with nargs="*" argparse (3.12, bpo-9625) validates the DEFAULT list itself
+    # as one choice — `default=list(_KNOWN)` failed "invalid choice: ['ashby','lever','workable']"
+    # and `default=[]` failed "invalid choice: []" — breaking every no-arg nightly cron run
+    # (2026-09-09, twice). Validate the names by hand below instead; empty -> all three.
+    ap.add_argument("ats", nargs="*", default=[], metavar="{ashby,lever,workable}",
                      help="ATS(es) to scrape (default: all three)")
     ap.add_argument("--limit", type=int, default=0,
                      help="cap rows scraped per ATS (bounded/cron runs). Default 0 = "
@@ -402,4 +403,7 @@ if __name__ == "__main__":
                      help="re-scrape ALL rows (not just missing) to add options to "
                           "already-collected questions")
     args = ap.parse_args()
+    bad = [a for a in args.ats if a not in _KNOWN]
+    if bad:
+        ap.error(f"argument ats: invalid choice: {bad} (choose from {', '.join(_KNOWN)})")
     run(ats_list=tuple(args.ats) or _KNOWN, limit=args.limit, refresh_all=args.refresh)

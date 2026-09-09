@@ -199,8 +199,14 @@ Assessment question-bank harvester (see the harvester section):
   `…Error`/`no module named`/NE500, scanning the last few log lines; benign `errors=0`/flock-skip
   excluded) to RED `down` → drives the overall badge red → `check_and_alert` pushes a throttled (4h)
   Telegram + a recovery note. This immediately surfaced a real dead cron: `catalog_forms` crashed
-  nightly at argparse (`nargs="*"` + choices + a non-empty list default rejects the default, bpo-9625)
-  — fixed with `default=[]`.
+  nightly at argparse (`nargs="*"` + choices + a non-empty list default rejects the default, bpo-9625).
+  **`default=[]` did NOT fix it** (3.12 then rejects `invalid choice: []` — caught by the next red
+  Health tick) — the real fix DROPS `choices=` and validates the ATS names by hand after `parse_args`
+  (a bad name still exits 2 with the same message). Smoke: `catalog_forms --limit 1` → exit 0.
+  **Hung-lane escalation (same day):** a lane that has written NOTHING for 2× its cadence (`hung`)
+  is RED «ЗАВИС/НЕ ЗАПУСКАЛСЯ» (a stuck cron writes no error line at all — the DB-lock outage kept 7
+  lanes silently yellow for 2 days), so silence alerts too; between 1× and 2× stays yellow STALE.
+  Tests: `test_health.py` (tmp log dir + `os.utime`, no DB).
 - `8 1,7,13,19 * * *` `apply_campaign_cron` — the recurring apply-campaign driver (custom-name daily
   campaigns; see the «Apply campaigns» gotcha). INERT until a campaign exists; per_day caps the daily
   total across the 4 runs. `cd` + `DISPLAY=:98` + `sg mail`.
@@ -250,6 +256,22 @@ Assessment question-bank harvester (see the harvester section):
   counts inside the pills («Незавершённые 114» can't fit a third of 340px). The card's «Имя» input is
   `.cat-name` on the 40px scale (shrinks to ~90px on a phone so М/Ж + Имя + Заполнить stay one line).
   Verified by screenshot at 1280 + 390 on all three surfaces.
+- **All three «Вакансии» surfaces now share ONE design (owner: "у разных кнопок разный дизайн",
+  2026-09-09).** Каталог and Незавершённые were migrated onto the canonical `mailcrm_ui._page_head`
+  (Mass Hiring already used it) with the pill switcher as `seg_html`, so the header structure is
+  identical: LEFT switcher (+ meta line: the company name on a catalog drill-down), RIGHT exactly
+  ONE blue `button.primary` + `.iconbtn`/`.hbtn` secondaries. Каталог keeps its owner-requested
+  exception (the single header control is «Фильтры», now the shared `.hbtn`; the launch stays in the
+  sheet footer) with the search input in its own `.cat-search-row` below. Незавершённые: primary =
+  «Докрутить всё (N)» (→ the mobile FAB), «скачать лог» = an `.iconbtn`; the old `.unf-head`/
+  `.unf-rerun`/`.unf-links` markup is gone (CSS left inert), and the unfDone count-decrement JS now
+  targets the switcher pill (`.vac-seg a.active b`). ONE primary colour: the green "execute"
+  buttons (`.unf-go` Докрутить, `.cat-launch` Запустить) are now the blue `--accent` like every other
+  primary — green is reserved for status. Card secondaries (`.unf-open`/`.unf-done`) are on the
+  ghost look (`--ink-soft`, outlined). Phone: the card primary spans the row (`.unf-go{flex:1 1
+  100%}`), and the shell bug where the header primary showed TWICE (header + FAB — `button.primary`
+  outranked the mobile `.ph-primary{display:none}`) is fixed with `button.primary.ph-primary`.
+  Verified by screenshot at 1280 + 390 on all three (+ a company drill-down).
 - **DB-lock outage RECURRED + preventive fix (2026-09-09).** `/mass-hiring` had been HUNG for ~2 days:
   a leaked `idle in transaction` session held a lock on `mass_hiring_jobs`, two `ensure_schema`
   `ALTER TABLE … ADD COLUMN comp_type` (from cron runs) queued behind it needing AccessExclusive, and
@@ -259,6 +281,19 @@ Assessment question-bank harvester (see the harvester section):
   SET idle_in_transaction_session_timeout='10min'` so a leaked transaction dies on its own instead of
   pinning the table for days (no legitimate code holds a transaction idle 10 min). If /mass-hiring ever
   hangs again, check `pg_stat_activity` for `idle in transaction` + a waiting `ALTER TABLE` first.
+  **Blast radius was bigger than the page (found after the cleanup): the nightly `mass_hiring
+  --collect` (3 runs) AND all 6 mass-hiring apply lanes (Maximus/TP/Taleo/Kelly/SR/Workday) sat in
+  the same lock queue for ~2 days** — the board went 3 days stale and no lane applied; when the
+  backends were terminated they all died `psycopg2.OperationalError: SSL connection has been closed` →
+  `InterfaceError: connection already closed` at `ensure_schema` (Health went red on all 7 at once).
+  A manual `--collect` re-run refreshed the board (668 rows / 209 active). **ROOT-CAUSE FIX (code):**
+  `ADD COLUMN IF NOT EXISTS` takes the ACCESS EXCLUSIVE lock even when the column already exists, so
+  every nightly `ensure_schema` was a no-op DDL that could hostage the table. Both `mass_hiring.
+  ensure_schema` (`_missing_columns`) and `catalog_db.ensure_schema` (`_EXTRA_COLS` + `_existing_columns`)
+  now check `information_schema` (a plain SELECT) and ALTER only a column that is really missing, and
+  both run under `SET LOCAL lock_timeout='15s'` so a DDL that IS blocked fails fast instead of queuing
+  every reader behind it for hours. Both complete in ~0.04s live. Keep new columns on that pattern
+  (add to `_EXTRA_COLS` / the `_missing_columns` tuple — don't add a bare nightly ALTER).
 
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright

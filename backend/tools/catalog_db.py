@@ -70,8 +70,48 @@ def _cur(dict_rows: bool = True):
             cur.close()
 
 
+# Columns added after the CREATE TABLE, with their DDL types. ensure_schema adds only the ones
+# the live table LACKS (checked via information_schema — a plain SELECT), because
+# `ADD COLUMN IF NOT EXISTS` takes the table's ACCESS EXCLUSIVE lock even when the column
+# already exists — and the nightly collector would then queue every /catalog reader behind a
+# no-op DDL if any session held the table (the 2026-09-07..09 mass_hiring_jobs outage pattern).
+_EXTRA_COLS = (
+    ("regions", "TEXT[]"), ("region_source", "TEXT"),
+    # role_category: a functional bucket derived from the title (+ department),
+    # classified deterministically at collect time (applier/role_category.py),
+    # like regions. Powers the /stats "По ролям" cut. comp_min/comp_max: the
+    # posted pay range annualized to USD ints (applier/comp_extract.py) — the
+    # range the posting states (mostly base, per US pay-transparency law), NOT a
+    # fabricated total comp. *_source ∈ {rule, llm, agent, unknown}.
+    ("role_category", "TEXT"), ("role_source", "TEXT"),
+    ("comp_min", "INT"), ("comp_max", "INT"), ("comp_currency", "TEXT"), ("comp_source", "TEXT"),
+    # est_*: a RESEARCHED APPROXIMATE comp for EVERY job (posted comp exists on only
+    # ~48% of rows). est_base_* = estimated base-salary range; est_total_* = estimated
+    # TOTAL compensation (base + bonus + equity); both annualized USD ints. Researched
+    # per company×role×region combo (a market estimate, NOT the posting's stated pay),
+    # so it is kept DISTINCT from the posted comp_* — /stats' posted median stays honest.
+    # est_comp_source ∈ {research, rule, none}.
+    ("est_base_min", "INT"), ("est_base_max", "INT"), ("est_total_min", "INT"),
+    ("est_total_max", "INT"), ("est_comp_currency", "TEXT"), ("est_comp_source", "TEXT"),
+    # draft: the full pre-generated application fill-packet (tailored résumé dict +
+    # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
+    ("draft", "JSONB"), ("draft_at", "TIMESTAMPTZ"),
+    # dead: a posting confirmed gone at the source (e.g. greenhouse job id 404s).
+    # Kept as a reversible blacklist marker (not deleted) — hidden from the catalog
+    # browse + the draft work-list so a human never opens an apply page that 404s.
+    ("dead", "BOOLEAN DEFAULT FALSE"), ("dead_reason", "TEXT"),
+)
+
+
+def _existing_columns(cur, table: str) -> set[str]:
+    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name=%s", (table,))
+    return {r[0] for r in cur.fetchall()}
+
+
 def ensure_schema() -> None:
     with _cur(False) as cur:
+        # A blocked DDL fails fast instead of holding the whole catalog hostage for hours.
+        cur.execute("SET LOCAL lock_timeout = '15s'")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS job_catalog (
           id            BIGSERIAL PRIMARY KEY,
@@ -98,43 +138,12 @@ def ensure_schema() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS jc_fts ON job_catalog USING gin "
                     "(to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
                     "||' '||coalesce(description,'')));")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS regions TEXT[]")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS region_source TEXT")
+        have = _existing_columns(cur, "job_catalog")
+        for col, decl in _EXTRA_COLS:
+            if col not in have:
+                cur.execute(f"ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS {col} {decl}")
         cur.execute("CREATE INDEX IF NOT EXISTS jc_regions ON job_catalog USING GIN (regions)")
-        # role_category: a functional bucket derived from the title (+ department),
-        # classified deterministically at collect time (applier/role_category.py),
-        # like regions. Powers the /stats "По ролям" cut. comp_min/comp_max: the
-        # posted pay range annualized to USD ints (applier/comp_extract.py) — the
-        # range the posting states (mostly base, per US pay-transparency law), NOT a
-        # fabricated total comp. *_source ∈ {rule, llm, agent, unknown}.
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS role_category TEXT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS role_source TEXT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_min INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_max INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_currency TEXT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS comp_source TEXT")
-        # est_*: a RESEARCHED APPROXIMATE comp for EVERY job (posted comp exists on only
-        # ~48% of rows). est_base_* = estimated base-salary range; est_total_* = estimated
-        # TOTAL compensation (base + bonus + equity); both annualized USD ints. Researched
-        # per company×role×region combo (a market estimate, NOT the posting's stated pay),
-        # so it is kept DISTINCT from the posted comp_* — /stats' posted median stays honest.
-        # est_comp_source ∈ {research, rule, none}.
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_base_min INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_base_max INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_total_min INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_total_max INT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_comp_currency TEXT")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS est_comp_source TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS jc_role ON job_catalog (role_category)")
-        # draft: the full pre-generated application fill-packet (tailored résumé dict +
-        # every question answered, per catalog_drafts.py). Reviewed on the /drafts page.
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft JSONB")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS draft_at TIMESTAMPTZ")
-        # dead: a posting confirmed gone at the source (e.g. greenhouse job id 404s).
-        # Kept as a reversible blacklist marker (not deleted) — hidden from the catalog
-        # browse + the draft work-list so a human never opens an apply page that 404s.
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS dead BOOLEAN DEFAULT FALSE")
-        cur.execute("ALTER TABLE job_catalog ADD COLUMN IF NOT EXISTS dead_reason TEXT")
 
 
 _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",

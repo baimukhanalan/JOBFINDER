@@ -295,6 +295,40 @@ _ASIA_NARROW_RE = re.compile(
     r"|malaysia|indonesia|philippines|india|china)\b")
 
 
+# --- residual leaks caught by the RE-audit of the filtered set (precision 93% → these) -----------
+_UTC_BAND_RE = re.compile(r"(?:utc|gmt)\s*([+-]\s*\d{1,2})(?::\d\d)?\s*(?:to|through|and|-|–|—|\.\.)\s*(?:utc|gmt)\s*([+-]\s*\d{1,2})")
+_TZ_REGION_RE = re.compile(
+    r"\b(?:apac|amer|latam|noram|us|u\.s\.|american|pacific|eastern|central|mountain)\s+(?:time ?zones?|hours|business hours|working hours)"
+    r"|(?:location|based|located|reside|residing)\s+(?:in|within)\s+(?:apac|amer|latam|us|u\.s\.)\s+time ?zones?")
+_HIRE_LIST_RE = re.compile(
+    r"(?:we |our |the company )?(?:hire|hires|hiring|employ|employs|build(?:ing)? (?:their |our )?remote teams?)"
+    r"(?: only| exclusively| people| talent)?\s+(?:in|across|from)\s+([^.;\n]{3,140})")
+_TITLE_REGION_RE = re.compile(r"\b(?:apac|emea|amer|latam|noram|anz)\b")
+_TITLE_INTERN_RE = re.compile(r"\bintern(?:ship)?\b|accelerator program|graduate program|working student")
+
+
+def _utc_band_excludes(text: str, tz: int = 5) -> bool:
+    """An explicit «UTC+2 to UTC-8» style band that does not contain the applicant's offset."""
+    for a, b in _UTC_BAND_RE.findall(text):
+        try:
+            lo, hi = sorted((int(a.replace(" ", "")), int(b.replace(" ", ""))))
+        except ValueError:
+            continue
+        if not (lo <= tz <= hi):
+            return True
+    return False
+
+
+def _hire_list_excludes(text: str) -> bool:
+    """«we hire in India, Philippines and Sri Lanka» — a named hiring footprint without us."""
+    for grp in _HIRE_LIST_RE.findall(text):
+        if _KZ_TOKENS_RE.search(grp):
+            return False
+        if _names_a_place(grp):
+            return True
+    return False
+
+
 def _names_a_place(s: str) -> bool:
     """A country / US state / UK-CA-US city named in a (location-like) string."""
     return bool(_OTHER_RE.search(s) or _NA_RE.search(s) or _US_STRONG_RE.search(s)
@@ -311,7 +345,17 @@ def _title_pins(title: str) -> bool:
     if seg and _names_a_place(seg):
         return True
     m2 = re.search(r"based in ([a-z ,.'-]{2,40})", title)
-    return bool(m2 and _names_a_place(m2.group(1)))
+    if m2 and _names_a_place(m2.group(1)):
+        return True
+    # «APAC Controller», «… (AMER/APAC)» — a regional qualifier in the title narrows the role;
+    # internships / accelerator programs are contracted per country («subject to local laws»)
+    return bool(_TITLE_REGION_RE.search(title) or _TITLE_INTERN_RE.search(title))
+
+
+def _text_pins(text: str) -> bool:
+    """Every role-level pin the text can carry (used for any location shape)."""
+    return bool(_NEG_TEXT_RE.search(text) or _TZ_REGION_RE.search(text)
+                or _utc_band_excludes(text) or _hire_list_excludes(text))
 
 
 def open_anywhere(job: dict) -> bool:
@@ -327,13 +371,15 @@ def open_anywhere(job: dict) -> bool:
         stripped = _LOC_BROAD_INCL_RE.sub(" ", loc)
         if _names_a_place(stripped):
             return False                              # "Remote - India", "Amsterdam; Remote - Europe"
+        if _title_pins(title) or _text_pins(text):
+            return False                              # a regional/intern title, timezone band, hire list…
         if re.search(r"\basia\b", loc):
-            return not (_ASIA_NARROW_RE.search(text) or _NEG_TEXT_RE.search(text))
+            return not _ASIA_NARROW_RE.search(text)
         if _LOC_BROAD_INCL_RE.search(loc) or _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
-            return not _NEG_TEXT_RE.search(text)      # "Remote, Global", "Worldwide", "CIS Region"
+            return True                               # "Remote, Global", "Worldwide", "CIS Region"
         return False                                  # unrecognised place words -> closed
     # bare «Remote» / empty location: the TEXT decides, negatives first; neither -> closed
-    if _title_pins(title) or _NEG_TEXT_RE.search(text):
+    if _title_pins(title) or _text_pins(text):
         return False
     return bool(_POS_TEXT_RE.search(text))
 

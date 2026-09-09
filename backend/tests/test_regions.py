@@ -214,3 +214,18 @@ def test_query_country_aliases():
         al = regions.query_country_aliases(q)
         assert "%kazakhstan%" in al and "%казахстан%" in al and "%central asia%" in al, q
     assert regions.query_country_aliases("Uzbekistan") == ["%uzbekistan%"]
+
+
+def test_open_anywhere_residual_leaks_from_the_recheck():
+    # UTC band that excludes UTC+5; APAC/AMER hours; a regional qualifier or internship in the title;
+    # a named hiring footprint without Kazakhstan — all closed; a band that CONTAINS +5 stays open
+    assert not _oa("Remote, Global", "We are open to candidates across UTC+2 to UTC-8.")
+    assert _oa("Remote, Global", "We are open to candidates across UTC-2 to UTC+8.")
+    assert not _oa("Remote, Global", "Required location in APAC time zones.")
+    assert not _oa("Remote, Global", "This role covers AMER business hours.")
+    assert not _oa("Remote, Global", "Remote role.", title="Platform Security Engineer (AMER/APAC)")
+    assert not _oa("Asia", "Generic remote role.", title="APAC Controller & Vertical Finance Lead")
+    assert not _oa("Asia", "Terms subject to local applicable laws.", title="Binance Accelerator Program - Backend")
+    assert not _oa("", "We help businesses build their remote teams in India, Philippines and Sri Lanka. Work from anywhere.")
+    assert _oa("", "We hire in over 30 countries — work from anywhere in the world.")
+    assert _oa("Remote, Global", "This is a remote position available anywhere in the world!")

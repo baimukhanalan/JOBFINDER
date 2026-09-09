@@ -245,10 +245,18 @@ Assessment question-bank harvester (see the harvester section):
   («… (Bulgaria)», «… - Philippines», «based in Japan»), and unrecognised location words. A country
   query for the OTHER bucket ANDs `(open_anywhere OR location ILIKE ANY(aliases))`
   (`query_country_aliases`: kazakhstan/казахстан/almaty/astana/central asia/cis/снг/eurasia; other
-  terms match themselves). Live: 2439 → **248 jobs / 12 companies** (Asia 156, empty-with-anywhere-
-  phrase 36, Kazakhstan 15, Global/Worldwide 20, CIS 6, Remote 12). Set at collect time
-  (`catalog_collector.collect_board`, upsert new-first) + `catalog_collector --backfill-open --all`
-  after any rule change (seconds, no network). Tests: `test_regions.py` (29).
+  terms match themselves). **A RE-AUDIT of the filtered set measured precision 6.9% → ~93%** (26
+  eligible / 2 not / 4 unclear of 32); its residual leaks became rules too (`_text_pins`): an
+  explicit UTC band that excludes UTC+5 (`_utc_band_excludes`: «UTC+2 to UTC-8»), APAC/AMER/LATAM/US
+  «hours / time zones» (`_TZ_REGION_RE`), a regional qualifier or internship in the TITLE («APAC
+  Controller», «(AMER/APAC)», «Accelerator Program» — `_TITLE_REGION_RE`/`_TITLE_INTERN_RE`), and a
+  named hiring footprint without Kazakhstan («build remote teams in India, Philippines and Sri
+  Lanka» — `_hire_list_excludes`). Live: 2439 → **243 jobs / 10 companies** (binance «Asia» 163,
+  nogigiddy 33, Supabase 15, Salmon «Kazakhstan» 14, monarchmoney/railway 6 each…). Set at collect
+  time (`catalog_collector.collect_board`, upsert new-first) + `catalog_collector --backfill-open
+  --all` after any rule change (seconds, no network). Tests: `test_regions.py` (30). To re-audit
+  after a rule change: dump a stratified sample of `list_jobs(q="Kazakhstan")` with descriptions and
+  run a Sonnet fleet judging each posting (the two workflow scripts of 2026-09-09 are the template).
 - **Custom persona NAME (#4A)** — a «Имя» field on each card's «Заполнить» and in the Фильтры bulk bar
   overrides the auto-generated name. `synth_persona(job, gender, name=, email=, pid=)` uses it verbatim
   (not history-avoided); email/pid pin a stable identity (used by campaigns). Threaded through

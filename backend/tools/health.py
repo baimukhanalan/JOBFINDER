@@ -116,6 +116,12 @@ _ERR_RE = re.compile(
 _BENIGN_RE = re.compile(r"errors?\s*[=:]\s*0\b|\b0\s+errors?\b|still going\s*[—-]\s*exiting", re.I)
 
 
+# A run-completion summary line — every cron here ends a successful run on one of these shapes
+# (`DONE …`, `FINISHED …`, `stats: {…}`/`collect: {…}`, `catalog counts -> …`, or a bare JSON/dict
+# summary). Seen as the newest line it means "the latest run completed", whatever sits above it.
+_SUCCESS_RE = re.compile(r"^\s*(?:DONE\b|FINISHED\b|stats:|collect:|catalog counts|\{)", re.I)
+
+
 def cron_lanes() -> list[dict]:
     rows = []
     for label, fn, max_h in _CRONS:
@@ -130,10 +136,20 @@ def cron_lanes() -> list[dict]:
         tail = _tail_lines(path)
         last = tail[-1] if tail else ""
         stale = age > max_h * 3600
-        # A FAILED run ends on its error; a run that hit a transient and RECOVERED ends on a success
-        # line — so scan only the last few lines, and never count a benign "errors=0" success summary
-        # or a normal flock "still going — exiting" skip as a failure.
-        err = any(_ERR_RE.search(ln) and not _BENIGN_RE.search(ln) for ln in tail[-4:])
+        # A FAILED run ends on its error; a run that completed ends on its summary line. Walk the last
+        # few lines NEWEST-first: the first completion summary (or a benign "errors=0" / flock-skip
+        # line) means the latest run is alive — anything older belongs to a PRIOR run (e.g. yesterday's
+        # traceback still sitting 2 lines under today's `collect:`/`stats:`, which used to keep the
+        # lane red after it had recovered); the first error line before any summary = failed.
+        err = False
+        for ln in reversed(tail[-4:]):
+            if not ln.strip():
+                continue
+            if _SUCCESS_RE.search(ln) or _BENIGN_RE.search(ln):
+                break
+            if _ERR_RE.search(ln):
+                err = True
+                break
         # A lane that hasn't written ANYTHING for 2× its cadence is HUNG or never started — RED too.
         # A stuck cron writes no error line at all (the 2026-09-07..09 DB-lock outage: 7 lanes sat
         # silently in a lock queue for ~2 days and only ever showed as yellow "stale"), so silence

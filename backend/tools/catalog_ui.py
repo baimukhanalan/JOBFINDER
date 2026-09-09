@@ -146,7 +146,8 @@ def _card(j: dict) -> str:
             'onclick="pickSex(this)" aria-pressed="true">М</button>'
             '<button type="button" class="cat-sex-b" data-gender="female" '
             'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
-            '<input class="cat-name" type="text" placeholder="Имя (необяз.)" '
+            '<input class="cat-name" type="text" placeholder="Имя" '
+            'title="Своё имя персоны (необязательно)" '
             'autocomplete="off" aria-label="Имя персоны (необязательно)">'
             f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
             '<span class="cat-fill-res"></span></div>')

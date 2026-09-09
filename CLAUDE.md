@@ -196,8 +196,10 @@ Assessment question-bank harvester (see the harvester section):
   DOWN (added 2026-09-09 → `logs/health_alert.log`). The Health tab was PULL-only + showed a failing
   cron as an ignorable yellow, so a broken cron (the harvester ran 2 days dead) went unnoticed until
   the owner looked. Now: `health.cron_lanes` escalates an ERRORED lane (regex catches CamelCase
-  `…Error`/`no module named`/NE500, scanning the last few log lines; benign `errors=0`/flock-skip
-  excluded) to RED `down` → drives the overall badge red → `check_and_alert` pushes a throttled (4h)
+  `…Error`/`no module named`/NE500, scanning the last few log lines NEWEST-first and stopping at the
+  first completion summary — `_SUCCESS_RE`: `DONE`/`FINISHED`/`stats:`/`collect:`/`catalog counts`/
+  a bare `{…}` line — so yesterday's traceback sitting under today's `stats:` no longer keeps a
+  recovered lane red; benign `errors=0`/flock-skip excluded) to RED `down` → drives the overall badge red → `check_and_alert` pushes a throttled (4h)
   Telegram + a recovery note. This immediately surfaced a real dead cron: `catalog_forms` crashed
   nightly at argparse (`nargs="*"` + choices + a non-empty list default rejects the default, bpo-9625).
   **`default=[]` did NOT fix it** (3.12 then rejects `invalid choice: []` — caught by the next red

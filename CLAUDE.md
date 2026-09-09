@@ -173,9 +173,15 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
   (as do all other lines now — see the note at the top of this section).
 
 Assessment question-bank harvester (see the harvester section):
-- `30 * * * *` `harvest_runner --platform amcat --limit 3 --concurrency 1` — HOURLY headful AMCAT/TP
-  harvest (fresh single-use invites from the TP apply lane), flock-guarded (`logs/harvest_amcat.lock`),
-  `DISPLAY=:98` + `sg mail`, one paced browser → `logs/harvest_cron.log`. It walks each pending invite,
+- `*/20 * * * *` `harvest_runner --platform amcat --limit 1 --concurrency 1` — AMCAT/TP harvest, one
+  paced token every 20 min (was `30 * * * * --limit 3` — DE-BURSTED 2026-09-09: 3 tokens back-to-back
+  on one IP is exactly the burst that trips AMCAT's **NE500** per-IP rate-limit, killing ~2/3 of
+  attempts mid-session at the SVAR/listening block; same ~3/hour ceiling spread evenly avoids the
+  burst. Do NOT raise concurrency — parallel browsers fight the one virtual mic AND worsen NE500; and
+  do NOT enable HARVEST_PROXY, documented as not helping this platform). flock-guarded
+  (`logs/harvest_amcat.lock`), `DISPLAY=:98` + `sg mail`, one browser → `logs/harvest_cron.log`.
+  NB of the ~700 «Действие» items only ~55% (amcat/TP) are this bot's domain — 120 are the separate
+  Maximus-SHL etalon lane, ~260 (Harver/SkillCheck/proctored) are human-only. It walks each pending invite,
   answers via the bank's answer keys (now incl. the qa_bot Sales/Analytical/WriteX import), and banks new
   items. **GOTCHA (found + fixed 2026-09-09): this line was added WITHOUT `cd /home/projects/jobfinder`
   and only set `PYTHONPATH=.` — but cron's cwd is `$HOME`, so `.` was the wrong dir and EVERY hourly run
@@ -186,8 +192,53 @@ Assessment question-bank harvester (see the harvester section):
   keep the `cd`. The apply lanes (`0 1,6,11,15,20`) keep the AMCAT invites flowing; the harvester is
   READ/answer, never an apply.
 
+- `*/15 * * * *` `health --alert` — probe `health.gather()` and Telegram the owner when anything is
+  DOWN (added 2026-09-09 → `logs/health_alert.log`). The Health tab was PULL-only + showed a failing
+  cron as an ignorable yellow, so a broken cron (the harvester ran 2 days dead) went unnoticed until
+  the owner looked. Now: `health.cron_lanes` escalates an ERRORED lane (regex catches CamelCase
+  `…Error`/`no module named`/NE500, scanning the last few log lines; benign `errors=0`/flock-skip
+  excluded) to RED `down` → drives the overall badge red → `check_and_alert` pushes a throttled (4h)
+  Telegram + a recovery note. This immediately surfaced a real dead cron: `catalog_forms` crashed
+  nightly at argparse (`nargs="*"` + choices + a non-empty list default rejects the default, bpo-9625)
+  — fixed with `default=[]`.
+- `8 1,7,13,19 * * *` `apply_campaign_cron` — the recurring apply-campaign driver (custom-name daily
+  campaigns; see the «Apply campaigns» gotcha). INERT until a campaign exists; per_day caps the daily
+  total across the 4 runs. `cd` + `DISPLAY=:98` + `sg mail`.
+
 - **No apply/prefill batch cron in this deploy** — `apply_cli` is a manual tool if used at all (real
   submits are human, from Alan's Mac; see the co-pilot/extension gotchas).
+
+## Vacancies tab + catalog features (2026-09-09)
+- **Nav merged to «Вакансии»** (`mailcrm_ui._NAV` now 5 entries). Каталог + Mass Hiring +
+  Незавершённые collapsed behind ONE rail entry (key `"vacancies"`) with an in-page segmented control
+  `mailcrm_ui.vacancies_seg(active, counts)` (Каталог · Mass Hiring · Незавершённые). Routes UNCHANGED
+  (/catalog, /mass-hiring, /unfinished + all sub-endpoints byte-identical → deep-links keep working);
+  `_nav_links` lights the one entry for any of `_VAC_KEYS`; `_topbar` keeps catalog's search pill,
+  masshiring/unfinished show a «Вакансии» pill title; `_page_head` gained keyword-only `seg_html=`.
+  Callers host the seg: mass_hiring_ui/catalog_ui/dashboard_app-unfinished. Only the dashboard restarts.
+  The top-of-file "nav is 6 tabs" line is stale — it's 5 entries, one merging 3 surfaces.
+- **Catalog search by COUNTRY = eligibility, not text** (`regions.query_eligibility_regions` +
+  `catalog_db.list_jobs`). Typing «Казахстан»/«Kazakhstan»/«KZ» (or any non-US/CA/UK country) →
+  `regions && ARRAY['OTHER']` (a Kazakhstani's eligible pool incl. remote-anywhere: 2 literal → 2440
+  live); US/CA/UK map to their code; a non-country query keeps full-text search. Coarse by design
+  (OTHER includes country-pinned foreign roles). Ambiguous ISO-2 (ca/in/de/no/or…) excluded.
+- **Custom persona NAME (#4A)** — a «Имя» field on each card's «Заполнить» and in the Фильтры bulk bar
+  overrides the auto-generated name. `synth_persona(job, gender, name=, email=, pid=)` uses it verbatim
+  (not history-avoided); email/pid pin a stable identity (used by campaigns). Threaded through
+  ensure_and_wire → `_do_fill`/`_fill_one_on_worker`/`_do_fill_all_*` → the `catalog_fill`/`fill_all`
+  routes (`name` Form). The name is never gated (the reserved 555-01xx phone is).
+- **Recurring apply CAMPAIGNS (#4B)** — `backend/tools/apply_campaigns.py` (gitignored
+  `data/apply_campaigns.json`) + `apply_campaign_cron.py` + a «Кампании (каждый день)» section in the
+  Фильтры sheet + routes `GET/POST /catalog/campaigns`, `/{id}/delete|toggle`. A campaign applies daily
+  under a fixed name, N/day (1-5), fresh résumé each; targets a SEARCH query (N distinct NEW jobs/day,
+  only `_AUTO_ATS` greenhouse/ashby, excludes already-applied + globally-submitted) or a single job
+  (N/day literal — the ATS usually dedupes repeats under the campaign's one stable mailbox; the UI
+  warns). The cron drives fills SEQUENTIALLY via the single co-pilot (`_do_fill`) to avoid the
+  bulk_pool port race. Tests: `test_apply_campaigns.py`. **Un-smoke-tested live end-to-end** — watch
+  the first real campaign's first run.
+- **«Пользователи» note:** logins `1`/`2`/`3` are REAL interviewers (Alan/Аружан/Нурбол — собесы +
+  availability + Telegram), not junk — do NOT delete (breaks their scheduling); the confusing bit is
+  just the single-digit logins.
 
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright

@@ -470,6 +470,20 @@ def get_job(job_id: int) -> dict | None:
         return dict(r) if r else None
 
 
+def jobs_by_ids(ids) -> dict:
+    """Full rows for a set of ids in ONE query (`id = ANY`), keyed by int id. Dead rows are
+    INCLUDED, each carrying its `dead` flag, so a caller can decide: the /unfinished ledger still
+    wants the apply url of a posting that went dead, while a campaign rotation skips it. Replaces
+    N sequential get_job() calls (the /unfinished page did 114 of them per render)."""
+    ids = [int(x) for x in (ids or []) if x is not None]
+    if not ids:
+        return {}
+    with _cur() as cur:
+        cur.execute("SELECT " + ",".join(_JOB_COLS) + ", COALESCE(dead, FALSE) AS dead "
+                    "FROM job_catalog WHERE id = ANY(%s)", (ids,))
+        return {int(r["id"]): dict(r) for r in cur.fetchall()}
+
+
 def jobs_for_drafting(limit: int = 150, regions=("US", "CA"),
                       min_q: int = 1) -> list:
     """A representative work-list for a draft batch: jobs with real questions whose

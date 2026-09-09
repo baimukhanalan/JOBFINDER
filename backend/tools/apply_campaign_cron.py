@@ -38,10 +38,16 @@ def main() -> None:
 
     if args.list:
         for c in camps:
+            kind = c.get("target_kind")
+            if kind == "job":
+                target = c.get("job_id")
+            elif kind == "jobs":
+                target = f"jobs={len(c.get('job_ids') or [])} cursor={c.get('cursor', 0)}"
+            else:
+                target = f"q={c.get('q')!r} region={c.get('region')!r}"
             log.info("campaign %s %r kind=%s per_day=%s active=%s runs_today=%s target=%s",
-                     c.get("id"), c.get("name"), c.get("target_kind"), c.get("per_day"),
-                     c.get("active"), c.get("runs_today"),
-                     (c.get("job_id") if c.get("target_kind") == "job" else f"q={c.get('q')!r} region={c.get('region')!r}"))
+                     c.get("id"), c.get("name"), kind, c.get("per_day"),
+                     c.get("active"), c.get("runs_today"), target)
         return
 
     lock = os.path.join(os.path.dirname(__file__), "..", "..", "logs", "apply_campaign_cron.lock")
@@ -77,8 +83,11 @@ def main() -> None:
                 log.info("campaign %s job %s -> %s%s", c.get("id"), jid, st.get("state"),
                          (" submit=" + str((st.get("submit") or {}).get("reason") or
                                            (st.get("submit") or {}).get("confirmed"))) if st.get("submit") else "")
-                done.append(int(jid))
-                total += 1
+                # _do_fill never raises — a failed fill is state 'error'. Only a fill that ran counts
+                # against the daily budget / advances the rotation; a failure is retried next run.
+                if apply_campaigns.fill_counts_as_done(st):
+                    done.append(int(jid))
+                    total += 1
             except Exception as exc:
                 log.info("campaign %s job %s ERROR %s", c.get("id"), jid, str(exc)[:160])
         if done:

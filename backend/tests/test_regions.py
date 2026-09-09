@@ -131,3 +131,29 @@ def test_llm_skipped_when_disabled(monkeypatch):
     monkeypatch.setattr(regions, "_llm_regions", lambda job: ["US"])
     out, src = regions.classify_with_source(_j(location="Remote"), use_llm=False)
     assert out == [] and src == "unknown"
+
+
+# ---- catalog search: country/nationality term -> region eligibility ----------------
+def test_query_eligibility_regions_kazakhstan():
+    for term in ("Kazakhstan", "Казахстан", "KZ", "kazakh", "казах", " KZ ", '"Kazakhstan"'):
+        assert regions.query_eligibility_regions(term) == ["OTHER"], term
+
+
+def test_query_eligibility_regions_us_ca_uk():
+    for t in ("США", "USA", "United States", "us", "America", "американец"):
+        assert regions.query_eligibility_regions(t) == ["US"], t
+    for t in ("Canada", "Канада", "canadian"):
+        assert regions.query_eligibility_regions(t) == ["CA"], t
+    for t in ("UK", "United Kingdom", "Великобритания", "england"):
+        assert regions.query_eligibility_regions(t) == ["UK"], t
+
+
+def test_query_eligibility_regions_foreign_fullmatch_is_other():
+    for t in ("Germany", "Japan", "Latin America", "Индия", "europe"):
+        assert regions.query_eligibility_regions(t) == ["OTHER"], t
+
+
+def test_query_eligibility_regions_none_for_non_country():
+    # role/company/multi-word/empty queries must NOT be treated as a country -> keep text search
+    for t in ("customer support", "engineer", "japan support", "", "  ", "openai", "sales rep"):
+        assert regions.query_eligibility_regions(t) is None, repr(t)

@@ -597,7 +597,7 @@ _NAV = [
 _SEARCH_CTX = {
     "inbox": ("/mail", "Поиск в почте"),
     "candidates": ("/mail/candidates", "Поиск кандидата"),
-    "catalog": ("/catalog", "Поиск вакансий"),
+    "catalog": ("/catalog", "Вакансия, компания, страна"),
 }
 
 

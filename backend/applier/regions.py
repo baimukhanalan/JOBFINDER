@@ -205,3 +205,56 @@ def classify_with_source(job: dict, use_llm: bool = True) -> tuple[list[str], st
         if llm:
             return llm, "llm"
     return [], "unknown"
+
+
+# ---- catalog SEARCH: a COUNTRY / nationality term -> region-ELIGIBILITY filter -------------------
+# Typing a country/nationality in /catalog search should return the jobs a person of that country
+# CAN apply to (by the job's `regions` eligibility), not just jobs whose TEXT mentions the country.
+# A non-country query returns None here and falls through to normal full-text search. Any non-US/CA/UK
+# country -> OTHER, which — because a worldwide-remote job is tagged all four codes incl. OTHER —
+# already includes the remote-anywhere jobs. Ambiguous ISO-2 codes that collide with English words
+# ("ca"=California, in/de/no/or/…) are DELIBERATELY excluded to avoid mis-firing on role queries.
+_ELIG_US = {"us", "u.s.", "u.s", "usa", "u.s.a", "u.s.a.", "united states",
+            "united states of america", "america", "american", "сша", "соединённые штаты",
+            "соединенные штаты", "штаты", "америка", "американец", "американка"}
+_ELIG_CA = {"canada", "canadian", "канада", "канадец", "канадка"}
+_ELIG_UK = {"uk", "u.k.", "u.k", "gb", "united kingdom", "great britain", "britain", "british",
+            "england", "великобритания", "англия", "британия", "британец"}
+_ELIG_OTHER = {
+    "kazakhstan", "kz", "kazakh", "казахстан", "казах", "казашка", "казахстанец", "казахстанка",
+    "russia", "россия", "ru", "russian", "русский", "россиянин",
+    "ukraine", "украина", "ua", "kyrgyzstan", "кыргызстан", "киргизия", "kg",
+    "uzbekistan", "узбекистан", "uz", "tajikistan", "таджикистан",
+    "azerbaijan", "азербайджан", "armenia", "армения", "georgia", "грузия",
+    "belarus", "беларусь", "turkey", "турция", "tr",
+    "germany", "германия", "france", "франция", "spain", "испания",
+    "poland", "польша", "portugal", "португалия", "india", "индия",
+    "philippines", "филиппины", "ph", "brazil", "бразилия", "br",
+    "mexico", "мексика", "mx", "argentina", "аргентина",
+    "europe", "европа", "emea", "apac", "latam", "latin america", "латам", "латинская америка",
+}
+# whole-string match of any foreign country the classifier already knows (e.g. "japan", "germany",
+# "latin america") -> OTHER, without needing to list every one twice.
+_OTHER_FULL_RE = re.compile(_OTHER_RE.pattern, re.I)
+
+
+def _norm_country_term(q: str) -> str:
+    t = (q or "").strip().strip("\"'").strip().casefold().replace("ё", "е")
+    return re.sub(r"\s+", " ", t)
+
+
+def query_eligibility_regions(q: str) -> list[str] | None:
+    """If the search query is a COUNTRY / nationality term, return the region codes that country's
+    people are eligible for (a single-item list of 'US'|'CA'|'UK'|'OTHER'); else None so the caller
+    keeps normal full-text search."""
+    t = _norm_country_term(q)
+    if not t:
+        return None
+    for terms, code in ((_ELIG_US, "US"), (_ELIG_CA, "CA"), (_ELIG_UK, "UK"), (_ELIG_OTHER, "OTHER")):
+        if t in terms:
+            return [code]
+    # a whole-string foreign-country name not enumerated above -> OTHER (never US/CA/UK)
+    if _OTHER_FULL_RE.fullmatch(t) and not (
+            _US_STRONG_RE.search(t) or _CA_RE.search(t) or _UK_STRONG_RE.search(t)):
+        return ["OTHER"]
+    return None

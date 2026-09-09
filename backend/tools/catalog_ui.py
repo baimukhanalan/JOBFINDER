@@ -237,7 +237,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
     # so this input is desktop-only.
     search = (
         f'<input id="catq" class="cat-q" type="search" value="{esc(q)}" '
-        'placeholder="Поиск: должность или компания…" autocomplete="off" '
+        'placeholder="Должность, компания или страна…" autocomplete="off" '
         'aria-label="Поиск вакансий">')
     head = (
         '<div class="cat-head">'

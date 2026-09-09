@@ -207,9 +207,18 @@ def list_jobs(company: str | None = None, q: str | None = None, remote_only: boo
         where.append("%s = ANY(regions)")
         args.append(region)
     if q:
-        where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
-                     "||' '||coalesce(description,'')) @@ plainto_tsquery('simple', %s)")
-        args.append(q)
+        # A pure COUNTRY/nationality term ("Kazakhstan"/"Казахстан"/"KZ") means "jobs I'm eligible
+        # for", so translate it to a region-eligibility overlap (uses the GIN index on regions);
+        # anything else stays full-text search over title/company/description.
+        from backend.applier.regions import query_eligibility_regions
+        elig = query_eligibility_regions(q)
+        if elig is not None:
+            where.append("regions && %s::text[]")
+            args.append(elig)
+        else:
+            where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
+                         "||' '||coalesce(description,'')) @@ plainto_tsquery('simple', %s)")
+            args.append(q)
     w = " AND ".join(where)
     with _cur() as cur:
         cur.execute("SELECT " + ",".join(_LIST_COLS) + " FROM job_catalog WHERE " + w +

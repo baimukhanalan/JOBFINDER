@@ -86,8 +86,10 @@ def main() -> None:
                 attempted.append(int(jid))
                 st = _FILL_JOBS.get(int(jid), {}) or {}
                 sub = st.get("submit") or {}
-                log.info("campaign %s job %s -> %s%s", c.get("id"), jid, st.get("state"),
-                         (" submit=" + str(sub.get("reason") or sub.get("confirmed"))) if sub else "")
+                log.info("campaign %s job %s -> %s%s%s%s", c.get("id"), jid, st.get("state"),
+                         (" submit=" + str(sub.get("reason") or sub.get("clicked"))) if sub else "",
+                         " CONFIRMED" if sub.get("confirmed") else "",
+                         (" blocked=" + str(sub.get("blocked"))[:80]) if sub.get("blocked") else "")
                 # A posting the co-pilot found NO form for is gone at the ATS (the first live run
                 # hit one) — mark it dead so the rotation skips it from now on.
                 if apply_campaigns.fill_is_dead_posting(st):

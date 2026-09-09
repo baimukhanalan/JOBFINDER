@@ -378,7 +378,13 @@ def fill_counts_as_done(fill_state: dict | None) -> bool:
     sub = st.get("submit")
     if sub is None:
         return True          # a fill without a submit phase (dry-run style) — nothing to judge
-    return bool(sub.get("clicked") or sub.get("confirmed"))
+    # A pressed Submit is NOT an application on GH/Ashby: the ATS still needs the emailed code
+    # (the cron waits for it inline) and may reject the submit outright (Ashby's datacenter-IP
+    # «flagged as possible spam» — run #2 of the first campaign: 3 clicked, 0 accepted). Only a
+    # CONFIRMED submit counts; a `blocked` one never does.
+    if sub.get("blocked"):
+        return False
+    return bool(sub.get("confirmed"))
 
 
 def fill_is_dead_posting(fill_state: dict | None) -> bool:

@@ -245,8 +245,11 @@ def test_jobs_cursor_walks_full_list_past_a_dead_gap(tmp_path, monkeypatch):
 
 def test_fill_counts_as_done_only_for_a_real_submit():
     assert ac.fill_counts_as_done({"state": "done", "submit": {"confirmed": True}})
-    assert ac.fill_counts_as_done({"state": "done", "submit": {"clicked": True, "confirmed": False}})
     assert ac.fill_counts_as_done({"state": "done"})                       # no submit phase at all
+    # pressed but never confirmed (the emailed code never came) or rejected by the ATS -> not counted
+    assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": True, "confirmed": False}})
+    assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": True, "confirmed": True,
+                                                                     "blocked": "flagged as possible spam"}})
     # filled but never submitted, a dead posting, an error, still running -> not an application
     assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": False, "reason": "incomplete"}})
     assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": False, "reason": "no_form"}})

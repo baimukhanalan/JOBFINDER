@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import backend.dashboard_app as dash
 import backend.profiles.facts as facts_lib
 import backend.profiles.store as profile_store
+from backend.interviews import dash_auth
 
 KATE = {"id": "kate", "full_name": "Kate Person", "email": "kate@example.com",
         "phone": "555-0100", "mailbox": "kate@mail.test"}
@@ -30,6 +31,10 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(facts_lib, "FACTS_DIR", facts_dir)
     monkeypatch.setattr(dash, "ETALONS_DIR", etalons_dir)
     monkeypatch.setattr(dash, "_PROFILES_CACHE", {"mtime": None, "profiles": {}})
+    # The dashboard is gated by dash_auth's admin middleware; authenticate the test client
+    # as an active admin (no DB needed) so these route tests reach their handlers.
+    monkeypatch.setattr(dash_auth, "_responsible_from_request",
+                        lambda request: {"id": 1, "role": "admin", "active": True})
     profiles_file.write_text(json.dumps([KATE]), encoding="utf-8")
     (facts_dir / "sample.json").write_text(json.dumps(SAMPLE_FACTS), encoding="utf-8")
     (etalons_dir / "kate.json").write_text(json.dumps(

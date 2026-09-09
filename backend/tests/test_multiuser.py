@@ -130,22 +130,22 @@ def test_cannot_load_just_under_ttl():
 
 def test_badge_needs_review():
     job = {"review_items": [{"question": "Q1"}, {"question": "Q2"}], "unfilled": []}
-    assert _badge(job, "") == ("NEEDS REVIEW (2)", "warn")
+    assert _badge(job, "") == ("НУЖНА ПРОВЕРКА (2)", "warn")
 
 
 def test_badge_unfilled_beats_review():
     job = {"review_items": [{"question": "Q"}], "unfilled": ["Cover letter"]}
     label, cls = _badge(job, "")
-    assert label.startswith("NEEDS INFO") and cls == "warn"
+    assert label.startswith("НУЖНЫ ДАННЫЕ") and cls == "warn"
 
 
 def test_badge_status_beats_review():
     job = {"review_items": [{"question": "Q"}]}
-    assert _badge(job, "submitted") == ("SUBMITTED", "sub")
+    assert _badge(job, "submitted") == ("ОТПРАВЛЕНО", "sub")
 
 
 def test_badge_ready_without_review():
-    assert _badge({"unfilled": [], "review_items": []}, "") == ("READY TO SUBMIT", "ready")
+    assert _badge({"unfilled": [], "review_items": []}, "") == ("ГОТОВО К ОТПРАВКЕ", "ready")
 
 
 # --- E4/E6: batch terminal-state classification + queue keys -------------------

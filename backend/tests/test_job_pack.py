@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.dashboard_app as dash
+from backend.interviews import dash_auth
 
 PDF = b"%PDF-1.4 dummy resume bytes"
 
@@ -39,6 +40,10 @@ def client(monkeypatch, tmp_path):
     # root from runner.OUT_ROOT at call time — keep both roots in sync here
     from backend.applier import runner
     monkeypatch.setattr(runner, "OUT_ROOT", tmp_path)
+    # /mark is a gated operator route (only /mark_ext is on the dash_auth allowlist),
+    # so authenticate the client as an active admin for the /mark test.
+    monkeypatch.setattr(dash_auth, "_responsible_from_request",
+                        lambda request: {"id": 1, "role": "admin", "active": True})
     d = tmp_path / "kate" / "acme-support-123"
     d.mkdir(parents=True)
     (d / "report.json").write_text(json.dumps(REPORT), encoding="utf-8")

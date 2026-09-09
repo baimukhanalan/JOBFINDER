@@ -19,6 +19,22 @@ sys.modules.setdefault("backend.tools.mail_db", fake_db)
 
 from backend.tools import mailcrm, mailcrm_ui  # noqa: E402
 
+import contextlib
+
+
+@contextlib.contextmanager
+def _default_keywords():
+    """Force mailcrm.classify onto DEFAULT_KEYWORDS by pointing KEYWORDS_FILE at a path that
+    does not exist — so the classifier LOGIC is tested deterministically, independent of the
+    live, owner-editable uploads/mail_keywords.json."""
+    orig_file, orig_cache = mailcrm.KEYWORDS_FILE, mailcrm._KEYWORDS_CACHE
+    mailcrm.KEYWORDS_FILE = Path(tempfile.gettempdir()) / "no_such_mail_keywords_xyz.json"
+    mailcrm._KEYWORDS_CACHE = {"mtime": None, "rules": None}
+    try:
+        yield
+    finally:
+        mailcrm.KEYWORDS_FILE, mailcrm._KEYWORDS_CACHE = orig_file, orig_cache
+
 
 class ClassifierTests(unittest.TestCase):
     def test_application_ack_with_generic_next_steps_is_not_interview(self):
@@ -32,7 +48,8 @@ class ClassifierTests(unittest.TestCase):
 
     def test_explicit_interview_invitation(self):
         body = "We would like to schedule an interview. Please select a time that works."
-        self.assertEqual(mailcrm.classify("Next steps", body), "interview")
+        with _default_keywords():
+            self.assertEqual(mailcrm.classify("Next steps", body), "interview")
 
     def test_explicit_offer(self):
         self.assertEqual(mailcrm.classify("Offer letter", "We are pleased to offer you the role."),
@@ -73,7 +90,7 @@ class ClassifierTests(unittest.TestCase):
             path.write_bytes(msg.as_bytes())
             box = {"id": "p1", "email": "candidate@example.com", "name": "Candidate",
                    "maildir": str(root)}
-            with patch.object(mailcrm, "candidates", return_value=[box]):
+            with patch.object(mailcrm, "candidates", return_value=[box]), _default_keywords():
                 row = mailcrm.build_index_row(str(path), 0)
             self.assertNotIn("schedule an interview", row["snippet"])
             self.assertEqual(row["kind"], "interview")

@@ -62,7 +62,7 @@ DEFAULT_KEYWORDS = {
         "interview invitation", "invitation to interview", "invitation to an interview",
         "invitation to a technical interview", "hr interview", "schedule your interview", "to schedule your interview", "phone screen invitation", "invite you to an interview",
         "invite you for an interview", "invite you to schedule", "would like to invite you to an interview",
-        "schedule a first interview", "confirmation of your upcoming interview",
+        "schedule an interview", "schedule a first interview", "confirmation of your upcoming interview",
         "choose a time for your interview", "select a time for your interview",
         "share your availability for an interview", "assessment invitation",
         "приглашение на собеседование", "приглашение на интервью",

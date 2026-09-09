@@ -203,7 +203,7 @@ def test_cli_setavail_upserts_single_day_and_preserves_others():
     assert rows[0]["enabled"] is True
     assert rows[0]["start_min"] == 540
     assert rows[0]["end_min"] == 1020
-    assert rows[1]["enabled"] is False  # untouched day still filled False
+    assert 1 not in rows  # untouched days have no stored window (raw rows now, not padded-to-7)
 
     # setting a second day must preserve the first
     admin_cli.main(["setavail", "--login", "test_iv_ivan", "--dow", "2",
@@ -230,19 +230,20 @@ def test_cli_setavail_rejects_out_of_range_dow():
     assert all(r["enabled"] is False for r in rows)
 
 
-def test_cli_setavail_rejects_inverted_window():
+def test_cli_setavail_accepts_overnight_and_24h_windows():
+    # Overnight (end<start, e.g. 17:00->09:00 for US hours) and 24h (start==end) windows are BOTH
+    # VALID now (see the availability rework) — the CLI must STORE them as-is, never reject.
     admin_cli.main(["add", "--login", "test_iv_karl", "--name", "Karl", "--password", "x"])
     rid = db.get_responsible_by_login("test_iv_karl")["id"]
 
-    with pytest.raises(SystemExit) as exc:
-        admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
-                         "--start", "17:00", "--end", "09:00"])
-    assert exc.value.code != 0
-
+    admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
+                     "--start", "17:00", "--end", "09:00"])
     rows = {r["dow"]: r for r in db.get_availability(rid)}
-    assert rows[1]["enabled"] is False  # rejected, never written
+    assert rows[1]["enabled"] is True
+    assert rows[1]["start_min"] == 1020 and rows[1]["end_min"] == 540  # overnight stored as-is
 
-    # an EQUAL start/end is also invalid (empty window)
-    with pytest.raises(SystemExit):
-        admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
-                         "--start", "09:00", "--end", "09:00"])
+    # a 24h window (start==end) is also valid; it replaces the day's window
+    admin_cli.main(["setavail", "--login", "test_iv_karl", "--dow", "1",
+                     "--start", "09:00", "--end", "09:00"])
+    rows = {r["dow"]: r for r in db.get_availability(rid)}
+    assert rows[1]["start_min"] == 540 and rows[1]["end_min"] == 540

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 import backend.dashboard_app as dash
 import backend.profiles.store as profile_store
+from backend.interviews import dash_auth
 from backend.applier.strategies.base import review_from_known, strip_review
 from backend.dashboard_app import _split_review
 
@@ -119,6 +120,10 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(dash, "PREFILL_ROOT", prefill)
     monkeypatch.setattr(dash, "INBOX_DIR", inbox)
     monkeypatch.setattr(dash, "_PROFILES_CACHE", {"mtime": None, "profiles": {}})
+    # The dashboard is gated by dash_auth's admin middleware; authenticate the test client
+    # as an active admin (no DB needed) so these route tests reach their handlers.
+    monkeypatch.setattr(dash_auth, "_responsible_from_request",
+                        lambda request: {"id": 1, "role": "admin", "active": True})
 
     class Env:
         client = TestClient(dash.app)
@@ -144,7 +149,7 @@ def test_ready_tab_holds_only_clean_filled_forms(env):
     env.add("vera", "beta-2", _report("BetaCo", "https://x.test/2", filled=0))
     env.add("vera", "gamma-3", _report("GammaCo", "https://x.test/3", failed=2))
     html = env.client.get("/queue?profile=vera").text
-    assert "Ready (1)" in html and "Needs info (2)" in html
+    assert "Готовы (1)" in html and "Нужны данные (2)" in html
     ready, info = _panes(html)
     assert "AcmeCo" in ready and "AcmeCo" not in info
     assert "BetaCo" in info and "GammaCo" in info
@@ -158,8 +163,8 @@ def test_junk_page_types_in_neither_tab_only_counted(env):
     html = env.client.get("/queue?profile=vera").text
     for co in ("DeadCo", "ListCo", "MistCo"):
         assert co not in html
-    assert "<b>3</b><span>skipped: no form</span>" in html
-    assert "Ready (1)" in html and "Needs info (0)" in html
+    assert "<b>3</b><span>без формы</span>" in html
+    assert "Готовы (1)" in html and "Нужны данные (0)" in html
 
 
 def test_terminal_status_never_in_ready_tab(env):
@@ -167,7 +172,7 @@ def test_terminal_status_never_in_ready_tab(env):
     (env.prefill / "vera" / "status.json").write_text(
         json.dumps({"acme-1": {"status": "submitted"}}), encoding="utf-8")
     html = env.client.get("/queue?profile=vera").text
-    assert "Ready (0)" in html
+    assert "Готовы (0)" in html
     ready, info = _panes(html)
     assert "AcmeCo" in info and "AcmeCo" not in ready
 
@@ -181,39 +186,39 @@ def test_card_anchor_present_for_deep_links(env):
 def test_valid_profile_has_apply_affordances_no_banner(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
     html = env.client.get("/queue?profile=vera").text
-    assert "Applications are paused" not in html
-    assert "Apply (1-click)" in html
-    assert "Open form" in html
-    assert "Open in co-pilot" in html and "copilotLoad('acme-1'" in html
+    assert "приостановлены" not in html
+    assert "Подать в один клик" in html
+    assert "Открыть форму" in html
+    assert "Открыть в помощнике" in html and "copilotLoad('acme-1'" in html
     assert "/copilot/load" in html  # the co-pilot POST target
 
 
 def test_invalid_profile_banner_and_no_apply_affordances(env):
     env.add("kate", "acme-1", _report("AcmeCo", "https://x.test/1"))
     html = env.client.get("/queue?profile=kate").text
-    assert "Applications are paused" in html
+    assert "приостановлены" in html
     assert "reserved-fictional" in html         # the phone problem, spelled out
     assert "placeholder" in html                # the email problem
     assert "/setup?profile=kate" in html        # the fix link
-    assert "Apply (1-click)" not in html
-    assert "Open form" not in html
-    assert "Open in co-pilot" not in html
+    assert "Подать в один клик" not in html
+    assert "Открыть форму" not in html
+    assert "Открыть в помощнике" not in html
     # viewing and bookkeeping stay available
-    assert "Résumé PDF" in html
-    assert "mark submitted" in html
+    assert "Резюме PDF" in html
+    assert "Отметить отправленной" in html
 
 
 def test_unknown_profile_is_blocked_too(env):
     env.add("ghost", "acme-1", _report("AcmeCo", "https://x.test/1"))
     html = env.client.get("/queue?profile=ghost").text
-    assert "Applications are paused" in html
-    assert "Apply (1-click)" not in html
+    assert "приостановлены" in html
+    assert "Подать в один клик" not in html
 
 
 def test_last_review_never_without_status_file(env):
     env.add("vera", "acme-1", _report("AcmeCo", "https://x.test/1"))
     html = env.client.get("/queue?profile=vera").text
-    assert "<b>never</b><span>last review</span>" in html
+    assert "<b>никогда</b><span>проверено</span>" in html
     assert "stat alert" not in html
 
 
@@ -224,7 +229,7 @@ def test_last_review_stale_goes_red(env):
     stale = time.time() - 4 * 86400
     os.utime(st, (stale, stale))
     html = env.client.get("/queue?profile=vera").text
-    assert "<b>4d ago</b><span>last review</span>" in html
+    assert "<b>4 дн. назад</b><span>проверено</span>" in html
     assert "class='stat alert'" in html
 
 
@@ -233,5 +238,5 @@ def test_last_review_fresh_not_red(env):
     (env.prefill / "vera" / "status.json").write_text(
         json.dumps({"old-jid": {"status": "submitted"}}), encoding="utf-8")
     html = env.client.get("/queue?profile=vera").text
-    assert "<b>today</b><span>last review</span>" in html
+    assert "<b>сегодня</b><span>проверено</span>" in html
     assert "stat alert" not in html

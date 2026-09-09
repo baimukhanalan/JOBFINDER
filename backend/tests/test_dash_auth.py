@@ -88,14 +88,26 @@ def test_admin_login_then_root_passes_gate():
     assert r2.headers["location"].endswith("/mail/candidates")
 
 
-def test_employee_login_rejected():
+def test_employee_login_succeeds_but_is_confined_to_cabinet():
     db.add_responsible(_EMP_LOGIN, auth.hash_password(_PW), "Dash Emp", role="employee")
 
+    # One login serves BOTH roles since the cabinet merge (2026-08-29): an employee login SUCCEEDS
+    # and is routed to /cabinet with a session cookie — it is NOT rejected at /login any more.
     r = client.post("/login", data={"login": _EMP_LOGIN, "password": _PW},
                     follow_redirects=False)
-    assert r.status_code == 200  # re-rendered login page, not a redirect
-    assert not _has_set_cookie(r)  # no admin session granted
-    assert 'name="password"' in r.text
+    assert r.status_code == 303
+    assert r.headers["location"] == "/cabinet"
+    assert _has_set_cookie(r)
+    cookie = r.cookies.get(auth.COOKIE_NAME)
+    assert cookie
+
+    # ...but the employee session is CONFINED to /cabinet — the gate bounces it off any admin route.
+    try:
+        client.cookies.set(auth.COOKIE_NAME, cookie)
+        r2 = client.get("/mail/candidates", follow_redirects=False)
+        assert r2.status_code == 303 and r2.headers["location"] == "/cabinet"
+    finally:
+        client.cookies.clear()
 
 
 def test_extension_endpoint_bypasses_gate():

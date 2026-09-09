@@ -172,6 +172,20 @@ Job catalog (added 2026-08-20, `docs/superpowers/plans/phase1-cron.txt`):
   `logs/prefill_retention.log`. Added 2026-08-24; `cd`s into the LOWERCASE `/home/projects/jobfinder`
   (as do all other lines now — see the note at the top of this section).
 
+Assessment question-bank harvester (see the harvester section):
+- `30 * * * *` `harvest_runner --platform amcat --limit 3 --concurrency 1` — HOURLY headful AMCAT/TP
+  harvest (fresh single-use invites from the TP apply lane), flock-guarded (`logs/harvest_amcat.lock`),
+  `DISPLAY=:98` + `sg mail`, one paced browser → `logs/harvest_cron.log`. It walks each pending invite,
+  answers via the bank's answer keys (now incl. the qa_bot Sales/Analytical/WriteX import), and banks new
+  items. **GOTCHA (found + fixed 2026-09-09): this line was added WITHOUT `cd /home/projects/jobfinder`
+  and only set `PYTHONPATH=.` — but cron's cwd is `$HOME`, so `.` was the wrong dir and EVERY hourly run
+  died instantly with `ModuleNotFoundError: No module named 'backend'` (never harvested a thing; the log
+  was 100% that error).** Fixed by inserting `cd /home/projects/jobfinder &&` inside the `sg mail -c "…"`
+  (like every other line — see the top-of-section rule). When editing this line, extract it VERBATIM from
+  `crontab -l` and install via `crontab - < file` (feeding a filename arg mangled `.new`→`.n` here) — and
+  keep the `cd`. The apply lanes (`0 1,6,11,15,20`) keep the AMCAT invites flowing; the harvester is
+  READ/answer, never an apply.
+
 - **No apply/prefill batch cron in this deploy** — `apply_cli` is a manual tool if used at all (real
   submits are human, from Alan's Mac; see the co-pilot/extension gotchas).
 

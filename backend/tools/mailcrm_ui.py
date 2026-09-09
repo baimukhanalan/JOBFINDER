@@ -218,12 +218,32 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .seg-nav a b{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:var(--ink-mute);}
 .seg-nav a.active{color:var(--ink);box-shadow:0 2px 0 var(--accent);}
 .seg-nav a.active b{color:var(--accent);}
-/* «Вакансии» merged-tab segmented control: 3 RU labels must fit/scroll on a phone */
-.vac-seg{flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;}
+/* «Вакансии» merged-tab switcher: a COMPACT PILL segmented control (same visual language as the
+   М/Ж toggle — rounded track, active pill lifted + accent) so it reads as a switcher, not as three
+   headings. Overrides the text-tab .seg-nav look for this variant only; scrolls on a narrow phone. */
+.vac-seg{display:inline-flex;align-items:center;gap:2px;flex:0 0 auto;max-width:100%;
+  height:var(--ctl-h);padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);
+  border-radius:var(--r-full);overflow-x:auto;scrollbar-width:none;}
 .vac-seg::-webkit-scrollbar{display:none;}
-.vac-seg a{white-space:nowrap;}
-@media(max-width:760px){.vac-seg a{font-size:16px;}}
-@media(max-width:420px){.vac-seg{gap:12px;}.vac-seg a{font-size:14px;}}
+.seg-nav.vac-seg a{font-size:var(--ctl-fs);font-weight:600;color:var(--ink-mute);letter-spacing:0;
+  padding:0 14px;height:calc(var(--ctl-h) - 8px);border-radius:var(--r-full);
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap;box-shadow:none;}
+.seg-nav.vac-seg a:hover{color:var(--ink-soft);}
+.seg-nav.vac-seg a.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.seg-nav.vac-seg a b{font-family:var(--ff-mono);font-size:11px;font-weight:500;color:inherit;opacity:.75;}
+.seg-nav.vac-seg a.active b{color:inherit;}
+/* phone: the switcher takes a FULL row of its own (3 pills share the width evenly) instead of
+   fighting a right-side button for 390px and clipping. (.seg-nav.vac-seg specificity beats the
+   shell's later `@media .seg-nav a{font-size:19px}` rule, which otherwise re-inflates the pills.) */
+@media(max-width:760px){
+  .seg-nav.vac-seg{flex:1 1 100%;width:100%;overflow:hidden;}
+  .seg-nav.vac-seg a{flex:1;justify-content:center;font-size:13px;padding:0 6px;min-width:0;}
+  .seg-nav.vac-seg a b{font-size:10.5px;}
+}
+/* narrow phone: drop the mono counts inside the pills — «Незавершённые 114» can't fit a third of
+   ~340px and would clip; the totals are shown in-page anyway. Labels stay fully readable. */
+@media(max-width:420px){.seg-nav.vac-seg a{font-size:12px;padding:0 4px;gap:0;}
+  .seg-nav.vac-seg a b{display:none;}}
 .head-actions{display:flex;gap:8px;align-items:center;}
 /* Canonical page-head partial (_page_head): title once + one primary + secondary icons. */
 .ph-titlewrap{display:flex;flex-direction:column;gap:1px;min-width:0;}
@@ -480,6 +500,11 @@ button.primary:hover{background:var(--accent-deep);}
   .page-head:has(.ph-titlewrap){flex-wrap:nowrap;align-items:center;}
   .page-head:has(.ph-titlewrap) .ph-left{flex:1;min-width:0;}
   .page-head:has(.ph-titlewrap) .ph-meta{white-space:normal;}
+  /* a page-head hosting the «Вакансии» pill switcher: the switcher needs a FULL row on a phone —
+     the nowrap rule above (title+actions on one row) would crush the 3 pills into the narrow cell. */
+  .page-head:has(.vac-seg){flex-wrap:wrap;}
+  .page-head:has(.vac-seg) .ph-left{flex:1 1 100%;}
+  .page-head:has(.vac-seg) .ph-titlewrap{width:100%;}
   .fab-compose{display:inline-flex;align-items:center;gap:9px;position:fixed;right:16px;
     bottom:calc(16px + env(safe-area-inset-bottom));z-index:40;background:var(--accent);color:#fff;
     border:none;border-radius:var(--r-full);height:52px;padding:0 20px;font-size:14.5px;font-weight:600;

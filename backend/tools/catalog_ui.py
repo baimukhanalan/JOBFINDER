@@ -467,6 +467,10 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-sex{display:inline-flex;align-items:center;height:var(--ctl-h);background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:3px}
 .cat-sex-b{border:0;background:transparent;color:var(--ink-mute);font-size:var(--ctl-fs);font-weight:600;line-height:1;min-width:40px;height:calc(var(--ctl-h) - 8px);padding:0 12px;border-radius:var(--r-full);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
 .cat-sex-b.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.cat-name{flex:0 1 150px;min-width:110px;max-width:170px;height:var(--ctl-h);padding:0 12px;font-size:var(--ctl-fs);border:1px solid var(--line-strong);border-radius:var(--r-full);background:var(--panel);color:var(--ink);min-height:0}
+.cat-name::placeholder{color:var(--ink-mute)}
+.cat-name:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+@media(max-width:760px){.cat-h-row{flex-wrap:wrap}.cat-h-title{flex:1 1 100%;order:2}.cat-h-btns{order:1;margin-left:auto}.cat-name{flex:1 1 90px;min-width:90px;max-width:none}}
 .cat-fill{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:600;cursor:pointer}
 .cat-fill:hover{background:var(--accent-deep)}
 .cat-fill:disabled{opacity:.6;cursor:default}

@@ -239,6 +239,26 @@ Assessment question-bank harvester (see the harvester section):
 - **«Пользователи» note:** logins `1`/`2`/`3` are REAL interviewers (Alan/Аружан/Нурбол — собесы +
   availability + Telegram), not junk — do NOT delete (breaks their scheduling); the confusing bit is
   just the single-digit logins.
+- **Switcher DESIGN = compact PILL segmented control (owner rejected the first cut, 2026-09-09).** The
+  first version rendered the 3 tabs as `.seg-nav` text headings (22px bold «Каталог 8 675 Mass Hiring
+  Незавершённые») — read as one weird long title, not a switcher. Now `.seg-nav.vac-seg` is a rounded
+  track with the active pill lifted + accent — the SAME visual language as the card's М/Ж toggle
+  (`.cat-sex`), on the 40px `--ctl-h` scale. Keep `.seg-nav.vac-seg` (double-class) specificity: the
+  shell's later `@media(max-width:760px) .seg-nav a{font-size:19px}` otherwise re-inflates the pills.
+  PHONE rules: the switcher takes a FULL row (`.cat-h-row` wraps; `.page-head:has(.vac-seg)` overrides
+  the shell's nowrap title+actions rule that crushed the pills on Mass Hiring); ≤420px hides the mono
+  counts inside the pills («Незавершённые 114» can't fit a third of 340px). The card's «Имя» input is
+  `.cat-name` on the 40px scale (shrinks to ~90px on a phone so М/Ж + Имя + Заполнить stay one line).
+  Verified by screenshot at 1280 + 390 on all three surfaces.
+- **DB-lock outage RECURRED + preventive fix (2026-09-09).** `/mass-hiring` had been HUNG for ~2 days:
+  a leaked `idle in transaction` session held a lock on `mass_hiring_jobs`, two `ensure_schema`
+  `ALTER TABLE … ADD COLUMN comp_type` (from cron runs) queued behind it needing AccessExclusive, and
+  every `/mass-hiring` stats SELECT since (incl. screenshot attempts) queued behind the ALTER (~15
+  backends, oldest 2d 9h). Cleared per the documented remediation (`pg_terminate_backend` on idle-in-tx
+  >5min + anything on that table >1h) → page back to ~3ms. **Preventive:** `ALTER DATABASE jobfinder_crm
+  SET idle_in_transaction_session_timeout='10min'` so a leaked transaction dies on its own instead of
+  pinning the table for days (no legitimate code holds a transaction idle 10 min). If /mass-hiring ever
+  hangs again, check `pg_stat_activity` for `idle in transaction` + a waiting `ALTER TABLE` first.
 
 ## Apply engine
 `applier/runner.prefill_application`: tailor résumé → render PDF → open apply page (reuse saved Playwright

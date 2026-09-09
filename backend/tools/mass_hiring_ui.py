@@ -415,7 +415,8 @@ def render_page(category: str | None = None, comp: str | None = None) -> str:
         icons=_REFRESH_ICON,
         meta=(f'{st["active"]} вакансий · {st["companies"]} компаний · '
               f'обновлено {_ago(st.get("last_collected", 0))}'),
-        info=info)
+        info=info,
+        seg_html=mailcrm_ui.vacancies_seg("masshiring", {"masshiring": st["active"]}))
     head = (
         f'<div class="mh-wrap">{_CSS}{_MODAL_CSS}{ph}'
         f'{_everify_panel()}'

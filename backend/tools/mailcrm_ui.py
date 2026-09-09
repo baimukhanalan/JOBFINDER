@@ -218,6 +218,12 @@ main{flex:1;padding:22px 30px;min-width:0;}
 .seg-nav a b{font-family:var(--ff-mono);font-size:12px;font-weight:400;color:var(--ink-mute);}
 .seg-nav a.active{color:var(--ink);box-shadow:0 2px 0 var(--accent);}
 .seg-nav a.active b{color:var(--accent);}
+/* «Вакансии» merged-tab segmented control: 3 RU labels must fit/scroll on a phone */
+.vac-seg{flex:1;min-width:0;overflow-x:auto;scrollbar-width:none;}
+.vac-seg::-webkit-scrollbar{display:none;}
+.vac-seg a{white-space:nowrap;}
+@media(max-width:760px){.vac-seg a{font-size:16px;}}
+@media(max-width:420px){.vac-seg{gap:12px;}.vac-seg a{font-size:14px;}}
 .head-actions{display:flex;gap:8px;align-items:center;}
 /* Canonical page-head partial (_page_head): title once + one primary + secondary icons. */
 .ph-titlewrap{display:flex;flex-direction:column;gap:1px;min-width:0;}
@@ -585,13 +591,20 @@ _IC_LOGOUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 _IC_HEALTH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'
 _NAV = [
     ("/mail/candidates", "candidates", "Кандидаты", _IC_CANDIDATES),
-    ("/catalog", "catalog", "Каталог", _IC_CATALOG),
-    ("/unfinished", "unfinished", "Незавершённые", _IC_UNFINISHED),
-    ("/mass-hiring", "masshiring", "Mass Hiring", _IC_MASS),
+    ("/catalog", "vacancies", "Вакансии", _IC_CATALOG),
     ("/stats", "stats", "Статистика", _IC_STATS),
     ("/users", "users", "Пользователи", _IC_USERS),
     ("/health", "health", "Health", _IC_HEALTH),
 ]
+# The «Вакансии» nav entry hosts three surfaces behind one tab, switched by an in-page
+# segmented control (vacancies_seg): the job Каталог, the Mass Hiring board, and Незавершённые.
+# Any of these active-keys lights the single «Вакансии» rail entry.
+_VAC_TABS = [
+    ("/catalog", "catalog", "Каталог"),
+    ("/mass-hiring", "masshiring", "Mass Hiring"),
+    ("/unfinished", "unfinished", "Незавершённые"),
+]
+_VAC_KEYS = {"catalog", "masshiring", "unfinished", "vacancies"}
 # Per-screen context for the Gmail-style mobile search pill: active -> (route,
 # placeholder). Screens absent here (e.g. Заявки) show a title instead of a field.
 _SEARCH_CTX = {
@@ -621,8 +634,11 @@ _SW_REG = ("<script>if('serviceWorker' in navigator){window.addEventListener('lo
 
 
 def _nav_links(active: str) -> str:
+    def _is_active(key: str) -> bool:
+        # the single «Вакансии» entry lights for any of its three sub-surfaces
+        return active in _VAC_KEYS if key == "vacancies" else active == key
     return "".join(
-        f'<a class="{"active" if active == key else ""}" href="{href}">{svg}<span>{label}</span></a>'
+        f'<a class="{"active" if _is_active(key) else ""}" href="{href}">{svg}<span>{label}</span></a>'
         for href, key, label, svg in _NAV)
 
 
@@ -649,6 +665,8 @@ def _topbar(active: str) -> str:
                f'<input type="search" name="q" placeholder="{ph}" autocomplete="off"></form>')
     else:
         lbl = next((l for _h, k, l, _s in _NAV if k == active), "")
+        if not lbl and active in _VAC_KEYS:   # mass-hiring / unfinished live under «Вакансии»
+            lbl = "Вакансии"
         mid = f'<span class="gm-title">{lbl}</span>'
     return (f'<div class="gm-topbar"><div class="gm-pill">{burger}{mid}'
             f'<span class="gm-ava">{_LOGO_IMG}</span></div></div>')
@@ -666,8 +684,24 @@ def _drawer(active: str) -> str:
             '</div></aside>')
 
 
+def vacancies_seg(active: str, counts: dict | None = None) -> str:
+    """The in-page segmented control for the merged «Вакансии» tab (Каталог · Mass Hiring ·
+    Незавершённые). `active` is the sub-surface key; `counts` optionally maps a key -> a mono count
+    shown on that link (usually only the active tab's own already-computed count, to avoid adding
+    cross-module DB calls). Reuses the shared .seg-nav look with a horizontally-scrollable modifier
+    so the three RU labels fit on a phone."""
+    counts = counts or {}
+    out = []
+    for href, key, label in _VAC_TABS:
+        c = counts.get(key)
+        cnt = f' <b>{_fmt(c)}</b>' if c is not None else ""
+        out.append(f'<a class="{"active" if key == active else ""}" href="{href}">{label}{cnt}</a>')
+    return f'<div class="seg-nav vac-seg">{"".join(out)}</div>'
+
+
 def _page_head(title: str, count=None, primary: dict | None = None,
-               icons: str = "", meta: str | None = None, info: str | None = None) -> str:
+               icons: str = "", meta: str | None = None, info: str | None = None,
+               *, seg_html: str | None = None) -> str:
     """Canonical sticky page header, reused across tabs (replaces bespoke per-tab headers +
     the old centered/floating button pairs). LEFT: the tab title ONCE + optional mono count +
     optional ⓘ popover, with one thin meta line under it. RIGHT (desktop): exactly ONE filled
@@ -696,9 +730,11 @@ def _page_head(title: str, count=None, primary: dict | None = None,
         prim_btn = f'<button class="primary ph-primary" type="button" {act}>{svg}{lbl}</button>'
         fab = (f'<button class="fab-compose" type="button" {act} aria-label="{lbl}">'
                f'{svg or ""}<span>{lbl}</span></button>')
+    title_block = (seg_html if seg_html else
+                   f'<div class="seg-nav"><span class="ph-title">{escape(title)}{cnt}</span></div>')
     return (
         '<div class="page-head"><div class="ph-left"><div class="ph-titlewrap">'
-        f'<div class="seg-nav"><span class="ph-title">{escape(title)}{cnt}</span></div>'
+        f'{title_block}'
         f'{meta_html}</div></div>'
         f'<div class="head-actions">{prim_btn}{icons}</div></div>{fab}')
 

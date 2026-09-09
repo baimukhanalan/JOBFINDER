@@ -239,9 +239,13 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<input id="catq" class="cat-q" type="search" value="{esc(q)}" '
         'placeholder="Должность, компания или страна…" autocomplete="off" '
         'aria-label="Поиск вакансий">')
+    # The «Вакансии» segmented control is the header (Каталог · Mass Hiring · Незавершённые);
+    # on a company drill-down keep the company name as a small caption beside it.
+    _seg = mailcrm_ui.vacancies_seg("catalog", ({} if company else {"catalog": n}))
+    _seg_cap = (f'<span class="cat-h-co">{title_txt}</span>' if company else "")
     head = (
         '<div class="cat-head">'
-        f'<div class="cat-h-row"><div class="cat-h-title">{title_txt} {head_n}</div>'
+        f'<div class="cat-h-row"><div class="cat-h-title">{_seg}{_seg_cap}</div>'
         '<div class="cat-h-btns">'
         # ONE control (owner-requested exception): «Фильтры» is the single entry to the settings
         # sheet; «Запустить подачу» lives in that sheet's sticky footer (configure + launch in one
@@ -357,7 +361,8 @@ _CAT_CSS = """<style>
 .cat-head{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
 .cat-head{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
 .cat-h-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-.cat-h-title{font-size:19px;font-weight:700;color:var(--ink)}
+.cat-h-title{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1;color:var(--ink)}
+.cat-h-co{color:var(--ink-mute);font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cat-h-n{color:var(--ink-mute);font-weight:600;font-size:14px;margin-left:4px}
 /* One wide search field (pill). Live-filters as you type / on Enter. */
 .cat-q{width:100%;box-sizing:border-box;padding:12px 16px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:15px;background:var(--panel);color:var(--ink)}

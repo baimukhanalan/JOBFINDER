@@ -641,8 +641,8 @@ def unfinished_index():
            ".unf-rerun:hover{background:var(--ok-hover)}.unf-rerun:active{transform:translateY(1px) scale(.985)}"
            ".unf-rerun:disabled{opacity:.7;cursor:default}"
            ".unf-head .unf-links{font-size:13px;font-weight:600;margin-left:auto;display:flex;gap:14px}"
-           ".unf-head a{color:var(--accent);text-decoration:none;transition:opacity .15s}"
-           ".unf-head a:hover{text-decoration:underline;opacity:.8}"
+           ".unf-head .unf-links a{color:var(--accent);text-decoration:none;transition:opacity .15s}"
+           ".unf-head .unf-links a:hover{text-decoration:underline;opacity:.8}"
            ".unf-list{display:flex;flex-direction:column;gap:11px}"
            ".unf-card{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);"
            "border-radius:var(--r-sm);padding:14px 16px 14px 19px;"
@@ -734,9 +734,10 @@ def unfinished_index():
           "</script>")
     rerun_btn = (f'<button class="unf-rerun" onclick="unfRerunAll(this)">'
                  f'↻ Докрутить всё ({n_rerun})</button>') if n_rerun else ""
-    head = (f'<div class="unf-head">Незавершённые заявки — <b>{n}</b>{rerun_btn}'
+    head = (f'<div class="unf-head">'
+            f'{mailcrm_ui.vacancies_seg("unfinished", {"unfinished": n})}{rerun_btn}'
             '<span class="unf-links"><a href="/catalog/fill_all_log" download>скачать лог</a>'
-            '<a href="/catalog">← каталог</a></span></div>')
+            '</span></div>')
     body = css + head + f'<div class="unf-list">{list_html}</div>' + js
     return HTMLResponse(mailcrm_ui._page("unfinished", body))
 

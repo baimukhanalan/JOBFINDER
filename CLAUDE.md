@@ -450,6 +450,16 @@ Assessment question-bank harvester (see the harvester section):
     --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (19). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»
     creator, `#bulkName` and the `name` Form params of `catalog_fill`/`catalog_fill_all` are gone (the
     internal `name`/`email`/`pid` kwargs stay — the cron pins the persona through them).
+  - **Каталог cards carry NO per-card action (owner, late 2026-09-09: «убрать М/Ж и Заполнить —
+    вручную ничего не будет»)** — the М/Ж toggle and the one-click «Заполнить» are gone from the card
+    (the `/catalog/{id}/fill` route stays for «Незавершённые → Докрутить»; `pickSex` stays for the
+    campaign sheet's own М/Ж). A phone card is ~159px: top row (company · workplace · round checkbox),
+    title, meta, comp, then «Описание · Вопросы». **«Выбрать все»** (a round checkbox row above the
+    list, `#catSelAll` → `toggleSelAll`) puts EVERY job of the CURRENT search into the selection —
+    not just the rendered page: `GET /catalog/ids?q=&region=&company=` → `catalog_db.list_job_ids`
+    (same `_list_where` filters/order as `list_jobs`, only id/company/title, capped 3000) → ids +
+    meta into `catSel`; a new live search unticks the box (the selection itself persists); «Снять»
+    / unticking clears. E.g. «Kazakhstan» → «Выбрано 243 · Снять · Кампания» → a 243-job campaign.
   - **Каталог is LIGHT now: 813 KB → ~284 KB per page.** `description_html` is no longer inlined —
     each «Описание» `<details data-desc="/catalog/<id>/desc">` lazy-loads ONCE on open
     (`catLoadDesc`, route `GET /catalog/{id}/desc` → `catalog_ui.desc_html`, the same formatter;

@@ -902,6 +902,21 @@ def catalog_page(company: str = "", q: str = "", region: str = "", company_name:
                             status_code=502)
 
 
+@app.get("/catalog/ids")
+def catalog_ids(company: str = "", q: str = "", region: str = ""):
+    """Every job of the current /catalog search (same filters/order as the list, capped) as
+    light rows — the «Выбрать все» control puts them all into the campaign selection."""
+    from backend.tools import catalog_db
+    try:
+        rows = catalog_db.list_job_ids(company=company or None, q=q or None,
+                                       region=region or None, limit=3000)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200], "jobs": []}, status_code=502)
+    return JSONResponse({"n": len(rows), "capped": len(rows) >= 3000,
+                         "jobs": [{"id": int(r["id"]), "company": r.get("company") or "",
+                                   "title": r.get("title") or ""} for r in rows]})
+
+
 @app.get("/catalog/more", response_class=HTMLResponse)
 def catalog_more(company: str = "", q: str = "", offset: int = 0, region: str = ""):
     """Pagination fragment for the /catalog infinite scroll."""

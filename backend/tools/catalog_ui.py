@@ -142,21 +142,14 @@ def _card(j: dict) -> str:
     else:
         title_html = f'<div class="cat-title" title="{title}">{title}</div>'
 
-    # ONE primary action per card ("Заполнить") + a compact М/Ж sex toggle (no emoji).
-    # The persona NAME is no longer per card — a custom name belongs to a CAMPAIGN (the
-    # selection sheet), the one-click fill always auto-picks one.
+    # No per-card action any more (owner 2026-09-09: «убрать М/Ж и Заполнить — вручную ничего не
+    # будет»): a job is applied to through a CAMPAIGN (select cards → «Кампания» sheet, which has
+    # its own gender). The row keeps only the «Описание · Вопросы» toggles; an opened <details>
+    # takes the full width (.cat-dets:has(details[open])). The one-click /catalog/{id}/fill route
+    # still exists for «Незавершённые → Докрутить».
     if jid:
         fill_row = (
             '<div class="cat-fill-row">'
-            '<div class="cat-sex" role="group" aria-label="Пол персоны">'
-            '<button type="button" class="cat-sex-b on" data-gender="male" '
-            'onclick="pickSex(this)" aria-pressed="true">М</button>'
-            '<button type="button" class="cat-sex-b" data-gender="female" '
-            'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
-            f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
-            '<span class="cat-fill-res"></span>'
-            # «Описание · Вопросы» sit ON the action row (one line per card on a phone); an opened
-            # <details> takes the full width below the buttons (.cat-dets:has(details[open])).
             f'<div class="cat-dets">{desc_det}{qblock}</div></div>')
         # Selection control (round checkbox, 44px tap target) — ticked cards feed the
         # bottom «Выбрано N · Настроить кампанию» bar. State lives in sessionStorage
@@ -456,6 +449,10 @@ def render_page(company: str = "", q: str = "", region: str = "",
     list_html = cards or '<div class="empty">Вакансий не найдено</div>'
     body = (
         _CAT_CSS + head + settings + camp_sheet + selbar + toast
+        + '<div class="cat-selall"><label class="cat-selall-l">'
+          '<span class="cat-pick cat-pick-all"><input type="checkbox" id="catSelAll" '
+          'onchange="toggleSelAll(this)" aria-label="Выбрать все"><span></span></span>'
+          '<span>Выбрать все</span></label><span class="cat-selall-n" id="catSelAllN"></span></div>'
         + f'<div class="cat-list" id="catlist">{list_html}</div>'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _CAT_JS)
@@ -609,7 +606,12 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
 .cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 /* Описание · Вопросы toggles share the action row; an open one drops below at full width */
-.cat-dets{display:flex;align-items:center;flex-wrap:wrap;gap:0 14px;margin-left:auto}
+.cat-dets{display:flex;align-items:center;flex-wrap:wrap;gap:0 16px}
+/* «Выбрать все» — the current search's whole result set into the selection (ids fetched on tap) */
+.cat-selall{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;font-size:13px;color:var(--ink-soft)}
+.cat-selall-l{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;color:var(--ink);min-height:32px;-webkit-tap-highlight-color:transparent}
+.cat-selall-l .cat-pick{display:inline-flex;margin:-9px 0 -9px -9px}   /* the cards' round checkbox */
+.cat-selall-n{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute)}
 .cat-dets .cat-det{margin-top:0}
 .cat-dets:has(details[open]){flex:1 1 100%;margin-left:0;flex-direction:column;align-items:stretch}
 .cat-dets:has(details[open]) .cat-det{width:100%}
@@ -730,30 +732,25 @@ window.pickSex = function(b){
     var on=(x===b); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on?'true':'false');
   });
 };
-// One-click: start the fill (the server first points the co-pilot at THIS job, then
-// generates + fills in the background) and go straight to noVNC to WATCH that job fill.
-// Redirect the SAME tab — window.open('_blank') is popup-blocked on mobile (that was the
-// "have to tap Open noVNC again" step), and the co-pilot is already on the right job so
-// noVNC never shows a stale one. Global (used by cards added via infinite scroll too).
-window.fillJob = async function(btn){
-  if(btn.disabled) return;
-  var id=btn.dataset.id,
-      row=btn.closest('.cat-fill-row'),
-      sel=row?row.querySelector('.cat-sex-b.on'):null,
-      gender=sel?(sel.dataset.gender||''):'',
-      res=row?row.querySelector('.cat-fill-res'):null,
-      label=btn.textContent;
-  var NOVNC='/vnc/vnc_lite.html?path=vnc/websockify&scale=true';
-  btn.disabled=true; btn.textContent='⏳…'; if(res) res.textContent='';
+// «Выбрать все»: put EVERY job of the current search (not just the rendered page) into the
+// selection — ids come from /catalog/ids with the live query; unticking clears the selection.
+window.toggleSelAll = async function(cb){
+  var nEl=document.getElementById('catSelAllN');
+  if(!cb.checked){ clearPicks(); if(nEl) nEl.textContent=''; return; }
+  var qp=(window.catQuery?window.catQuery():{}), sp=new URLSearchParams();
+  if(qp.q) sp.set('q', qp.q); if(qp.region) sp.set('region', qp.region); if(qp.company) sp.set('company', qp.company);
+  cb.disabled=true; if(nEl) nEl.textContent='считаю…';
+  var gen=window.__jfGen;
   try{
-    var body='gender='+encodeURIComponent(gender);
-    var j=await (await fetch('/catalog/'+id+'/fill',{method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body})).json();
-    window.location.href = j.novnc || NOVNC;   // watch THIS job fill live, same tab
-  }catch(e){
-    btn.disabled=false; btn.textContent=label;
-    if(res) res.innerHTML=' <a href="'+NOVNC+'" target="_blank" rel="noopener">Открыть noVNC ↗</a>';
-  }
+    var r=await fetch('/catalog/ids?'+sp.toString()), j=r.ok?await r.json():{jobs:[]};
+    if(gen!==window.__jfGen) return;
+    var S=window.catSel;
+    (j.jobs||[]).forEach(function(x){ var id=parseInt(x.id,10); if(!(id>0)) return;
+      S.ids.add(id); S.meta[id]={co:String(x.company||''), t:String(x.title||'')}; });
+    catSaveSel(); syncPicks();
+    if(nEl) nEl.textContent=(j.jobs||[]).length+(j.capped?'+':'')+' '+catPlural((j.jobs||[]).length,'вакансия','вакансии','вакансий');
+  }catch(e){ cb.checked=false; if(nEl) nEl.textContent='не удалось'; }
+  finally{ cb.disabled=false; }
 };
 // ---- card selection -> campaign ---------------------------------------------------
 // Selected ids (+ company/title for the sheet's list) persist in sessionStorage so a
@@ -789,6 +786,7 @@ window.pickJob = function(cb){
 window.syncPicks = function(root){
   var S=window.catSel;
   (root||document).querySelectorAll('.cat-pick input[type=checkbox]').forEach(function(cb){
+    if(!cb.dataset.id) return;                      // the «Выбрать все» box has no job id
     var on=S.ids.has(parseInt(cb.dataset.id,10)); cb.checked=on;
     var card=cb.closest('.cat-card'); if(card) card.classList.toggle('sel', on);
   });
@@ -796,6 +794,8 @@ window.syncPicks = function(root){
 };
 window.clearPicks = function(){
   var S=window.catSel; S.ids.clear(); S.meta={}; catSaveSel(); syncPicks();
+  var sa=document.getElementById('catSelAll'); if(sa) sa.checked=false;
+  var nEl=document.getElementById('catSelAllN'); if(nEl) nEl.textContent='';
 };
 window.renderSelBar = function(){
   var n=window.catSel.ids.size, bar=document.getElementById('catSelBar'),
@@ -1037,6 +1037,8 @@ pxRefresh();   // show pool summary on load
   var qp=new URLSearchParams(location.search);
   var region=qp.get('region')||'', company=(qp.get('company')||'').trim(),
       curQ=(qp.get('q')||'').trim();
+  // the live query, for «Выбрать все» (reads the closure vars, so it follows the live search)
+  window.catQuery=function(){ return {q:curQ, region:region, company:company}; };
   var loading=false, PAGE=30, seq=0, sig=catSig();
   // the shell's mobile top-pill funnel shows the active region filter as an "on" state
   var tune=document.querySelector('.gm-tune'); if(tune) tune.classList.toggle('on', !!region);
@@ -1058,6 +1060,7 @@ pxRefresh();   // show pool summary on load
       var added=(txt.match(/class="cat-card"/g)||[]).length;
       if(more){ more.dataset.offset=String(added); more.dataset.more=(added>=PAGE)?'1':'0'; }
       window.scrollTo(0,0);
+      var sa=document.getElementById('catSelAll'); if(sa) sa.checked=false;   // a new query = a new "all"
       // mirror the live query into the URL (replace, not push) so the shell's tab switch brings the
       // user back to this search and Back/reload restore it
       try{ var u=new URL(location.href); if(curQ) u.searchParams.set('q',curQ); else u.searchParams.delete('q');

@@ -214,6 +214,27 @@ _LIST_COLS = ("id", "ats", "company_key", "company", "title", "location", "depar
 
 def list_jobs(company: str | None = None, q: str | None = None, remote_only: bool = True,
               limit: int = 30, offset: int = 0, region: str | None = None) -> list:
+    w, args = _list_where(company, q, remote_only, region)
+    with _cur() as cur:
+        cur.execute("SELECT " + ",".join(_LIST_COLS) + " FROM job_catalog WHERE " + w +
+                    " ORDER BY (q_count > 0) DESC, company ASC, title ASC LIMIT %s OFFSET %s",
+                    tuple(args) + (limit, offset))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_job_ids(company: str | None = None, q: str | None = None, remote_only: bool = True,
+                 region: str | None = None, limit: int = 3000) -> list:
+    """The SAME result set as list_jobs (same filters/order) but only id/company/title, capped —
+    feeds the catalog's «Выбрать все» (select every job of the current search into a campaign)."""
+    w, args = _list_where(company, q, remote_only, region)
+    with _cur() as cur:
+        cur.execute("SELECT id, company, title FROM job_catalog WHERE " + w +
+                    " ORDER BY (q_count > 0) DESC, company ASC, title ASC LIMIT %s",
+                    tuple(args) + (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def _list_where(company, q, remote_only, region):
     where, args = ["NOT COALESCE(dead, FALSE)"], []
     if remote_only:
         where.append("is_remote=TRUE")
@@ -243,12 +264,7 @@ def list_jobs(company: str | None = None, q: str | None = None, remote_only: boo
             where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
                          "||' '||coalesce(description,'')) @@ plainto_tsquery('simple', %s)")
             args.append(q)
-    w = " AND ".join(where)
-    with _cur() as cur:
-        cur.execute("SELECT " + ",".join(_LIST_COLS) + " FROM job_catalog WHERE " + w +
-                    " ORDER BY (q_count > 0) DESC, company ASC, title ASC LIMIT %s OFFSET %s",
-                    tuple(args) + (limit, offset))
-        return [dict(r) for r in cur.fetchall()]
+    return " AND ".join(where), args
 
 
 def companies(remote_only: bool = True) -> list:

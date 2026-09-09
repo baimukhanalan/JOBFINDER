@@ -466,7 +466,31 @@ Assessment question-bank harvester (see the harvester section):
     only real submits spend the daily budget. **Reality check:** Salmon is Ashby, and Ashby flags
     the datacenter IP as spam on a risk-scored share of submits (after_submit.png: «flagged as
     possible spam») — a KZ campaign over Salmon will lose many submits to that ceiling; the only
-    cure is a residential egress (Bright Data zone `alibaba_res`) — owner's call. To run a campaign
+    cure is a residential egress. **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP
+    over Tailscale = «Мобильный прокси»** (`backend/tools/mobile_proxy.py`, settings
+    `backend/data/mobile_proxy.json` gitignored: `enabled`, `server` e.g. `socks5://100.x.y.z:1080`,
+    optional `username/password` for an http proxy — Chromium can NOT authenticate socks5, so a
+    socks5 endpoint must be auth-less, which is fine inside the tailnet). It plugs into the EXISTING
+    residential preference: `proxy_pool.residential_slots()` appends `mobile_proxy.live_servers()`
+    (TCP-alive over the tailnet) to the chisel loopback slots, so `next_proxy()` → `_do_fill`
+    (campaign cron + single fills) and the bulk lane under `PARA_RESIDENTIAL=1` go out through the
+    phone whenever it answers, and fall back the moment it doesn't. `status()` (cached 60s) also
+    fetches the IP-echo THROUGH the proxy (httpx + `socksio`, installed `--user`) — a SOCKS that
+    answers TCP but can't route counts as down. Surfaces: Health row «Мобильный прокси (телефон)»
+    (info/warn/ok), the /catalog Фильтры → Прокси block («Мобильный прокси»: status · on/off ·
+    endpoint, `GET/POST /proxies/mobile`), CLI `mobile_proxy --check` (alive · egress · ASN via
+    ipinfo) / `--set socks5://100.x.y.z:1080 --on`. `_do_fill` logs `fill job N via residential …/
+    proxy …/DIRECT`. **Tailscale on the server was ALREADY up** (node `jauynger-build`,
+    100.79.101.77, tailnet `tail6a50e6.ts.net`, login `AlikhanZhomartov@github`, not an exit node,
+    no UFW change) — the phone must join THAT tailnet (same account, or an invite from its admin
+    console) and run a SOCKS server (iOS: Tailscale app + iSH `apk add microsocks; microsocks -i
+    0.0.0.0 -p 1080` — foreground-only, iOS suspends iSH in the background → a manual-run tool, not
+    cron-grade; cron-grade = a tethered Mac with `ssh -N -D 0.0.0.0:1080 localhost` or a spare
+    Android with Termux + microsocks + wake-lock). Then paste `socks5://<phone tailnet ip>:1080`
+    into the /catalog control and run `mobile_proxy --check` (expect a carrier ASN). Tests:
+    `test_mobile_proxy.py` (settings, TCP-alive on a local listener, status cache/states, the
+    residential-slot merge, the `_do_fill` payload with httpx.post captured, Health row states).
+    The Bright Data residential zone (`alibaba_res`) remains the paid alternative. To run a campaign
     NOW instead of waiting for the `8 1,7,13,19` cron: the crontab line verbatim under `sg mail` +
     `DISPLAY=:98`; per-job results in `logs/apply_campaigns.log` (`-> done submit=clicked|no_form|…`),
     artifacts in `uploads/prefill/<pid>/<jobid>/` (persona.json, resume.pdf, after_submit.png). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»

@@ -60,6 +60,13 @@ def residential_slots() -> list[str]:
             live.append(f"socks5://{_RES_HOST}:{port}")
         except Exception:
             pass
+    # + the owner's PHONE over the Tailscale tailnet (backend/tools/mobile_proxy.py): the same
+    # residential preference, no chisel binary needed. Only when enabled + answering TCP.
+    try:
+        from backend.tools import mobile_proxy
+        live.extend(s for s in mobile_proxy.live_servers() if s not in live)
+    except Exception:
+        pass
     _res_cache.update(ts=now, slots=live)
     return live
 

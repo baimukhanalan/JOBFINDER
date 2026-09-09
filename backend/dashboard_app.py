@@ -1065,6 +1065,13 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
         if px.get("username"):
             load_data["proxy_username"] = px["username"]
             load_data["proxy_password"] = px.get("password") or ""
+    # which egress this application goes out from: a residential slot (the owner's laptop
+    # chisel tunnel or the phone over Tailscale — next_proxy() prefers them), the datacenter
+    # pool, or direct. Ashby only accepts the residential kind.
+    logging.getLogger(__name__).info(
+        "fill job %s via %s", job_id,
+        ("residential " + px["server"]) if px and px.get("server", "").startswith("socks5://")
+        else (("proxy " + px["server"]) if px and px.get("server") else "DIRECT (datacenter IP)"))
     try:
         httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
         # the inline watch holds up to WAIT_SUBMIT_MAX (300s) for the emailed code on top of the fill
@@ -1795,6 +1802,29 @@ def proxies_list():
         return JSONResponse(proxy_pool.summary())
     except Exception as exc:
         return JSONResponse({"count": 0, "ips": [], "error": str(exc)[:200]})
+
+
+@app.get("/proxies/mobile")
+def proxies_mobile_status(force: str = ""):
+    """The owner's phone as a residential egress over Tailscale (backend/tools/mobile_proxy.py):
+    configured/enabled/alive + egress IP (cached 60s; ?force=1 re-probes)."""
+    from backend.tools import mobile_proxy
+    try:
+        return JSONResponse(mobile_proxy.status(force=str(force) in ("1", "true")))
+    except Exception as exc:
+        return JSONResponse({"configured": False, "alive": False, "error": str(exc)[:200]})
+
+
+@app.post("/proxies/mobile")
+def proxies_mobile_set(enabled: str = Form(""), server: str = Form(None), note: str = Form(None)):
+    """Toggle / set the phone endpoint («socks5://100.x.y.z:1080» — its Tailscale IP)."""
+    from backend.tools import mobile_proxy
+    en = None if enabled == "" else (str(enabled).strip().lower() in ("1", "true", "on", "yes"))
+    try:
+        mobile_proxy.update(enabled=en, server=server, note=note)
+        return JSONResponse(mobile_proxy.status(force=True))
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)[:200]}, status_code=400)
 
 
 @app.post("/proxies/clear")

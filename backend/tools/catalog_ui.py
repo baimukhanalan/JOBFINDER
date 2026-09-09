@@ -356,6 +356,20 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="px-toggle" id="pxToggle" onclick="pxToggleList()" hidden>показать</button>'
         '</div>'
         '<div class="cat-proxy-list" id="pxList" hidden></div>'
+        # the owner's phone as a residential egress over Tailscale (mobile_proxy.py): status line +
+        # on/off + the phone's tailnet address. When it is online every fill goes out through it.
+        '<div class="px-mobile" id="pxMobile">'
+        '<div class="px-mobile-row"><span class="px-dot" id="pxMobDot"></span>'
+        '<b>Мобильный прокси</b> <span class="px-mobile-st" id="pxMobSt">—</span>'
+        '<label class="px-mobile-sw"><input type="checkbox" id="pxMobOn" onchange="pxMobileSave(this)">'
+        '<span>вкл</span></label></div>'
+        '<div class="px-mobile-row"><input type="text" class="px-mobile-in" id="pxMobSrv" '
+        'placeholder="socks5://100.x.y.z:1080" autocomplete="off" spellcheck="false">'
+        '<button type="button" class="px-toggle" onclick="pxMobileSave()">сохранить</button>'
+        '<button type="button" class="px-toggle" onclick="pxMobileRefresh(true)">проверить</button></div>'
+        '<div class="cat-proxy-hint">Телефон в сети Tailscale с запущенным SOCKS-прокси: его адрес 100.x.y.z '
+        'из Tailscale. Пока он онлайн, все подачи идут с мобильного IP (это снимает спам-отказы Ashby); '
+        'выключен телефон — откат на пул/напрямую.</div></div>'
         '<details class="px-add">'
         '<summary>Добавить прокси</summary>'
         '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
@@ -657,6 +671,14 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-proxy-body{max-width:640px}
 .cat-proxy-body textarea{width:100%;min-height:110px;box-sizing:border-box;font-family:var(--ff-mono);font-size:12.5px;line-height:1.5;border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:10px;resize:vertical;background:var(--bg-app);color:var(--ink)}
 .cat-proxy-hint{font-size:11.5px;line-height:1.45;color:var(--ink-mute);margin:6px 0 10px}
+.px-mobile{margin:10px 0 6px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel)}
+.px-mobile-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:13px}
+.px-mobile-row:first-child{margin-top:0}
+.px-mobile-st{color:var(--ink-soft)}
+.px-mobile-sw{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-soft);cursor:pointer}
+.px-mobile-sw input{width:18px;height:18px;margin:0}
+.px-mobile-in{flex:1 1 180px;min-width:0;height:36px;border:1px solid var(--line-strong);border-radius:var(--r-full);padding:0 12px;font-size:14px;font-family:var(--ff-mono);background:var(--panel);color:var(--ink)}
+.px-mobile .px-dot{background:var(--ink-mute);box-shadow:none}.px-mobile .px-dot.px-ok{background:var(--ok);box-shadow:0 0 0 3px rgba(11,128,67,.18)}.px-mobile .px-dot.px-bad{background:var(--danger)}
 .cs-camp-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .cs-camp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
 .cs-camp-row button{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-sm);padding:3px 9px;font-size:12px;cursor:pointer}
@@ -938,7 +960,7 @@ window.toggleFilters=function(){
   var s=document.getElementById('catSettings'), b=document.getElementById('fltBtn');
   if(!s) return;
   var willOpen=s.hasAttribute('hidden');
-  if(willOpen){ s.removeAttribute('hidden'); document.body.style.overflow='hidden'; pxRefresh(); bulkPoll(); bulkReport(); loadCampaigns(); }
+  if(willOpen){ s.removeAttribute('hidden'); document.body.style.overflow='hidden'; pxRefresh(); pxMobileRefresh(); bulkPoll(); bulkReport(); loadCampaigns(); }
   else{ s.setAttribute('hidden',''); document.body.style.overflow=''; }
   if(b) b.setAttribute('aria-expanded', willOpen?'true':'false');
 };
@@ -997,6 +1019,30 @@ async function pxRefresh(){
     if(list && !list.hidden) pxRenderList(s.ips);
   }catch(e){}
 }
+// «Мобильный прокси» (the phone over Tailscale): status + on/off + endpoint. Re-entrant, gen-guarded.
+window.pxMobileRefresh=async function(force){
+  var st=document.getElementById('pxMobSt'), dot=document.getElementById('pxMobDot'),
+      on=document.getElementById('pxMobOn'), srv=document.getElementById('pxMobSrv');
+  if(!st) return;
+  var gen=window.__jfGen; if(force && st) st.textContent='проверяю…';
+  try{
+    var j=await (await fetch('/proxies/mobile'+(force?'?force=1':''))).json();
+    if(gen!==window.__jfGen) return;
+    if(on) on.checked=!!j.enabled;
+    if(srv && document.activeElement!==srv) srv.value=j.server||'';
+    var txt = !j.configured ? 'не настроен' : (!j.enabled ? 'выключен' : (j.alive ? ('онлайн · IP '+(j.egress||'?')) : 'не отвечает (телефон офлайн?)'));
+    st.textContent=txt;
+    if(dot){ dot.className='px-dot'+(j.configured&&j.enabled ? (j.alive?' px-ok':' px-bad') : ''); }
+  }catch(e){ st.textContent='ошибка'; }
+};
+window.pxMobileSave=async function(cb){
+  var on=document.getElementById('pxMobOn'), srv=document.getElementById('pxMobSrv'), st=document.getElementById('pxMobSt');
+  var fd=new FormData(); fd.append('enabled', on&&on.checked?'1':'0');
+  if(srv && srv.value.trim()) fd.append('server', srv.value.trim());
+  if(st) st.textContent='сохраняю…';
+  try{ await fetch('/proxies/mobile',{method:'POST',body:fd}); }catch(e){}
+  pxMobileRefresh(true);
+};
 window.pxToggleList=async function(){
   var list=document.getElementById('pxList'), tog=document.getElementById('pxToggle');
   if(!list) return;

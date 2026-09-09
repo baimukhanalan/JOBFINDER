@@ -770,6 +770,26 @@ def proxy_rows() -> list[dict]:
         rows.append(_row("Пул прокси", st, f"{cnt} живых · проверка {lc_s}", hint))
     except Exception as exc:
         rows.append(_row("Пул прокси", "warn", f"n/a: {str(exc)[:70]}", hint))
+    # the owner's phone as a residential egress over Tailscale (backend/tools/mobile_proxy.py)
+    mhint = ("Телефон владельца в сети Tailscale отдаёт SOCKS-прокси (мобильный IP) — единственный egress, "
+             "который Ashby не помечает как спам (с датацентрового IP отбивает все подачи). Когда телефон "
+             "онлайн, ко-пилот сам идёт через него; выключен телефон — откат на пул/напрямую. Настройка: "
+             "Каталог → Фильтры → Прокси → «Мобильный прокси», проверка: `mobile_proxy --check`.")
+    try:
+        from backend.tools import mobile_proxy
+        ms = mobile_proxy.status()
+        if not ms.get("configured"):
+            rows.append(_row("Мобильный прокси (телефон)", "info", "не настроен", mhint))
+        elif not ms.get("enabled"):
+            rows.append(_row("Мобильный прокси (телефон)", "info", f"выключен · {ms.get('server')}", mhint))
+        elif ms.get("alive"):
+            rows.append(_row("Мобильный прокси (телефон)", "ok",
+                             f"онлайн · egress {ms.get('egress')} · {ms.get('server')}", mhint))
+        else:
+            rows.append(_row("Мобильный прокси (телефон)", "warn",
+                             f"настроен, но не отвечает · {ms.get('server')} (телефон офлайн / прокси не запущен)", mhint))
+    except Exception as exc:
+        rows.append(_row("Мобильный прокси (телефон)", "warn", f"n/a: {str(exc)[:70]}", mhint))
     try:
         from backend.config import settings
         zone = settings.brightdata_zone or "—"

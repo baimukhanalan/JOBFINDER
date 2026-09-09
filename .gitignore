@@ -120,3 +120,4 @@ logs/crontab.bak-*
 
 # never commit the secrets bundle (was public on GitHub 2026-08-19..09-05)
 jobfinder-secrets.tar.gz
+backend/data/mobile_proxy.json

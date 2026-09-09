@@ -870,9 +870,10 @@ def unfinished_rerun(gender: str = Form("")):
                          "novnc": _NOVNC_URL})
 
 
-@app.get("/health")
-def health():
-    return {"ok": True}
+# NB: a legacy `@app.get("/health") -> {"ok": True}` stub used to sit HERE, registered before the
+# real HTML route further down — Starlette takes the first match, so the Health tab rendered a
+# literal {"ok":true} for weeks (owner: «показывает "всё исправно"»). Removed 2026-09-09; the JSON
+# probe lives at /health.json. Never add a route with the same path twice.
 
 
 @app.get("/catalog", response_class=HTMLResponse)

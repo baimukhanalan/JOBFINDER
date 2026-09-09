@@ -364,6 +364,33 @@ Assessment question-bank harvester (see the harvester section):
     ~114px of the first phone screen) and its collapsed summary is one line on a phone; `.mh-wrap` has no
     side padding on phones (cards as wide as on the other tabs). `POST /mass-hiring/collect` still exists
     as an unused manual trigger.
+  - **Health tab = the FULL deployment map (2026-09-09 evening; owner: «покажи все сервисы, кроны,
+    хрупкие системы»).** ROOT CAUSE of «показывает просто всё исправно»: a legacy stub
+    `@app.get("/health") -> {"ok": True}` in `dashboard_app.py` was registered BEFORE the HTML route,
+    and Starlette takes the first match — the tab had literally never rendered. Stub removed (the
+    JSON probe is `/health.json`; never register one path twice). `health.gather()` now runs 19
+    probes in a `ThreadPoolExecutor` under a 3s deadline (a hung probe shows «нет ответа за 3 с» as
+    warn) across 6 groups — **Сервисы (pm2)** (status/uptime/restarts/RSS; RED if not online, if
+    `pm_cwd` isn't the live checkout, or ≥2 restarts/h via `logs/health_pm2_state.json`; 1 restart/h
+    = warn), **Кроны** (every `_CRONS` lane PLUS every `crontab -l` line that touches the repo, parsed
+    at runtime by `parse_crontab` — schedule → RU words via `cron_human`, cadence via
+    `cron_cadence_hours`; an untracked line shows «(не в списке)», a tracked lane with no crontab
+    line → warn), **Данные** (Postgres row counts + idle-in-tx >5 min / lock waiters / active ALTER →
+    RED, `idle_in_transaction_session_timeout` check, newest inbound mail age from `mail_index` and
+    the Maildir mtime — RED >12h, the MX incident; MySQL amasmail mailbox count; disks; the runtime
+    JSON stores; the question bank), **Внешние зависимости** (local model `/models` + configured id,
+    proxy pool + Bright Data log, captcha key presence, Telegram `getMe`, Postfix/Dovecot, DNS MX→A,
+    Xvfb/x11vnc/noVNC, co-pilot `/state`, nginx + `https://jobs.systeam.kz/login`), **Система**
+    (load/RAM/swap/uptime/top-RSS/OUR chromium count/tmp) and **Инциденты** (a static list from this
+    file, `info`, not counted). `check_and_alert` alerts on every RED row of every group. UI
+    (`health_ui.py`): `_page_head` meta «N сбоев · M предупреждений · K ok», group anchor chips, one
+    `<details>` per row with a «почему хрупко / что делать» hint, 60s auto-refresh while nothing is
+    expanded. Tests: `test_health.py` (14, hermetic — `_crontab_text` is monkeypatched). NB
+    `mail_sink --poll` (the dead-end feature) actually `cd`s into the LOWERCASE repo and writes
+    `logs/mailpoll.log` every 2 min — the Cron section's claim that it still points at the husk is
+    stale; it shows as «(не в списке)» on the tab. Also surfaced: `LLM_MODEL` in `.env`
+    (`gpt-5.6-luna`) is not listed by the local server's `/models` (it still routes, but a 1-token
+    call took ~10s) — worth checking the model alias.
   - **Label budget on a phone (owner: «кнопки с длинными названиями нужно сократить», same day).**
     A 14-module audit shortened 63 user-visible strings: a 40px pill fits ~14-18 chars, a 32px chip
     ~10, a bottom-nav label ~8, the FAB ~18. Notable renames: «Докрутить всё (N)» → «Докрутить (N)»,

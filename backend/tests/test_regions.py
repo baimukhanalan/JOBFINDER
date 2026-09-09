@@ -157,3 +157,47 @@ def test_query_eligibility_regions_none_for_non_country():
     # role/company/multi-word/empty queries must NOT be treated as a country -> keep text search
     for t in ("customer support", "engineer", "japan support", "", "  ", "openai", "sales rep"):
         assert regions.query_eligibility_regions(t) is None, repr(t)
+
+
+# ---- open_anywhere: finer than OTHER (a Kazakhstani can't take a "Remote - India" posting) ------
+def _oa(location, description=""):
+    return regions.open_anywhere({"location": location, "description": description})
+
+
+def test_open_anywhere_bare_remote_and_worldwide():
+    for loc in ("Remote", "Fully Remote", "remote - remote", "Anywhere", "Worldwide", "Global - Remote",
+                "Remote (Worldwide)", "Work from home"):
+        assert _oa(loc), loc
+
+
+def test_open_anywhere_broad_regions_including_central_asia():
+    for loc in ("Asia", "Remote - EMEA", "Remote-EMEA", "APAC", "Central Asia", "CIS", "Kazakhstan"):
+        # Kazakhstan itself is a named country -> pinned (False); the query's alias match covers it
+        assert _oa(loc) == (loc != "Kazakhstan"), loc
+
+
+def test_open_anywhere_pinned_country_or_city_is_closed():
+    for loc in ("Remote - India", "Germany", "Hong Kong", "Amsterdam, Netherlands; Remote - Europe",
+                "Remote - Europe", "European Union", "Remote Poland", "MEXICO", "Remote - Mexico",
+                "South Africa - Cape Town", "Singapore", "Remote-Australia", "Taiwan, Taipei",
+                "Remote - LATAM", "United States", "London, United Kingdom", "Toronto, Canada"):
+        assert not _oa(loc), loc
+
+
+def test_open_anywhere_empty_location_needs_an_anywhere_phrase():
+    assert not _oa("", "Great remote role. Our users are worldwide.")
+    assert _oa("", "This role is remote — you can work from anywhere in the world.")
+    assert _oa("", "We hire from anywhere; open to candidates globally.")
+
+
+def test_query_country_aliases():
+    for q in ("Kazakhstan", "Казахстан", "KZ", "казахстанец"):
+        al = regions.query_country_aliases(q)
+        assert "%kazakhstan%" in al and "%казахстан%" in al and "%central asia%" in al, q
+    assert regions.query_country_aliases("Uzbekistan") == ["%uzbekistan%"]
+
+
+def test_open_anywhere_subregions_that_exclude_central_asia_are_pinned():
+    for loc in ("South East Asia", "Remote - Southeast Asia", "East Asia", "Remote (ANZ)", "MENA", "Nordics"):
+        assert not regions.open_anywhere({"location": loc}), loc
+    assert regions.open_anywhere({"location": "Remote - Asia"})

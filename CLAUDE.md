@@ -227,9 +227,23 @@ Assessment question-bank harvester (see the harvester section):
   The top-of-file "nav is 6 tabs" line is stale — it's 5 entries, one merging 3 surfaces.
 - **Catalog search by COUNTRY = eligibility, not text** (`regions.query_eligibility_regions` +
   `catalog_db.list_jobs`). Typing «Казахстан»/«Kazakhstan»/«KZ» (or any non-US/CA/UK country) →
-  `regions && ARRAY['OTHER']` (a Kazakhstani's eligible pool incl. remote-anywhere: 2 literal → 2440
-  live); US/CA/UK map to their code; a non-country query keeps full-text search. Coarse by design
-  (OTHER includes country-pinned foreign roles). Ambiguous ISO-2 (ca/in/de/no/or…) excluded.
+  `regions && ARRAY['OTHER']`; US/CA/UK map to their code; a non-country query keeps full-text
+  search. Ambiguous ISO-2 (ca/in/de/no/or…) excluded. **REFINED 2026-09-09 evening (owner: «реально
+  ли на них может податься любой казахстанец?» — it was NOT: OTHER alone returned 2439 jobs, most
+  PINNED to one foreign country — Remote-India 47, Germany 38, Hong Kong 44, Mexico 43…).** A
+  `job_catalog.open_anywhere BOOLEAN` (in `_EXTRA_COLS`) is computed deterministically by
+  `applier/regions.open_anywhere(job)`: TRUE for a bare «Remote»-style location, a worldwide word, a
+  broad region that INCLUDES Central Asia (Asia/EMEA/APAC/CIS/Eurasia/Global), or an empty location
+  whose text matches the strict `_WORLDWIDE_RE`; FALSE for any NAMED country/US state/city, for
+  «Europe»/«European Union» (EU residence), for sub-regions that exclude Central Asia
+  (`_LOC_SUBREGION_PIN_RE`: South-East/East/South Asia, ANZ, MENA, Nordics, DACH…), and for an
+  unrecognised location (precision over recall). A country query for the OTHER bucket now ANDs
+  `(open_anywhere OR location ILIKE ANY(aliases))` where `query_country_aliases` gives the asked
+  country's names (a curated set for Kazakhstan: kazakhstan/казахстан/almaty/astana/central asia/
+  cis/снг/eurasia; any other term matches itself). Live: 2439 → 347 jobs / 26 companies (156 of them
+  binance «Asia»). Set at collect time (`catalog_collector.collect_board`, upsert new-first) +
+  one-shot `catalog_collector --backfill-open [--all]` (seconds, no network). Tests:
+  `test_regions.py` (open_anywhere / aliases / sub-regions).
 - **Custom persona NAME (#4A)** — a «Имя» field on each card's «Заполнить» and in the Фильтры bulk bar
   overrides the auto-generated name. `synth_persona(job, gender, name=, email=, pid=)` uses it verbatim
   (not history-avoided); email/pid pin a stable identity (used by campaigns). Threaded through

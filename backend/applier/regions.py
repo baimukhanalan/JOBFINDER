@@ -243,6 +243,69 @@ def _norm_country_term(q: str) -> str:
     return re.sub(r"\s+", " ", t)
 
 
+# ---- "open to an applicant living ANYWHERE" (finer than the 4 region codes) -----------------------
+# The OTHER code answers "not US/CA/UK" — but that bucket also holds postings PINNED to one foreign
+# country ("Remote - India", "Germany", "Hong Kong") that a person in Kazakhstan can't take. A
+# Sonnet audit of the «Kazakhstan» search (120 postings, 2026-09-09) found most of it pinned.
+# open_anywhere(): the location names NO specific country/city — a bare "Remote"-style phrase, a
+# worldwide word, or a broad region that INCLUDES Central Asia — or the text says "work from
+# anywhere". Conservative: an unrecognised location, or an empty one without an anywhere-phrase,
+# is NOT open (precision over recall — the owner asked for "really can apply").
+_LOC_BROAD_INCL_RE = re.compile(
+    r"\bemea\b|\basia\b|\bapac\b|\basia[- ]pacific\b|\beurasia\b|\bcentral asia\b|\bcis\b"
+    r"|\bснг\b|\bglobal\b|\binternational\b|\bworldwide\b|\banywhere\b|\beverywhere\b")
+_LOC_SUBREGION_PIN_RE = re.compile(
+    r"\bsouth[- ]?east asia\b|\bse asia\b|\beast asia\b|\bsouth asia\b|\bnorth asia\b|\bwest asia\b"
+    r"|\bgreater china\b|\banz\b|\boceania\b|\bmena\b|\bnordics?\b|\bbenelux\b|\bdach\b|\biberia\b")
+_LOC_REMOTE_ONLY_RE = re.compile(
+    r"^[\s\-–—,/()·]*(?:(?:fully|100%|fully-|entirely)\s*)?"
+    r"(?:remote|virtual|distributed|home[- ]?based|home office|work from home|wfh|telecommute|telework)"
+    r"(?:[\s\-–—,/()·]*(?:remote|first|ok|only|friendly|position|role|job|work|anywhere|worldwide|global))*"
+    r"[\s\-–—,/()·]*$")
+
+
+def open_anywhere(job: dict) -> bool:
+    """True when the posting is open to a remote applicant regardless of country (see above)."""
+    loc = re.sub(r"[_\s]+", " ", (job.get("location") or "").strip().lower())
+    desc = (job.get("description") or "")[:6000].lower()
+    if not loc:
+        return bool(_WORLDWIDE_RE.search(desc))
+    if _LOC_REMOTE_ONLY_RE.match(loc):
+        return True
+    # a SUB-region that excludes Central Asia is a pin, even though it contains "asia"
+    if _LOC_SUBREGION_PIN_RE.search(loc):
+        return False
+    # a NAMED place (country/US state/city) pins the posting — checked with the broad-region
+    # tokens removed so "Remote - EMEA" isn't mistaken for a country
+    stripped = _LOC_BROAD_INCL_RE.sub(" ", loc)
+    named = (_OTHER_RE.search(stripped) or _NA_RE.search(stripped) or _US_STRONG_RE.search(stripped)
+             or _US_LOC_RE.search(stripped) or _US_STATE_RE.search(stripped) or _US_CITY_RE.search(stripped)
+             or _CA_RE.search(stripped) or _UK_STRONG_RE.search(stripped) or _UK_LOC_RE.search(stripped)
+             or re.search(r"\bgeorgia\b", stripped))
+    if named:
+        return False
+    if _LOC_BROAD_INCL_RE.search(loc) or _LOC_WORLDWIDE_RE.search(loc) or _WORLDWIDE_RE.search(loc):
+        return True
+    return bool(_WORLDWIDE_RE.search(desc))
+
+
+# Location aliases per queried country/region: a posting that NAMES the asked country is eligible
+# even when it isn't open-anywhere. Only Kazakhstan has a curated set (the owner's team); any other
+# term matches itself.
+_COUNTRY_ALIASES = {
+    "kazakhstan": ["kazakhstan", "казахстан", "almaty", "алматы", "astana", "астана", "central asia",
+                   "центральная азия", "cis", "снг", "eurasia", "евразия"],
+}
+
+
+def query_country_aliases(q: str) -> list[str]:
+    """ILIKE patterns for the location column matching the queried country (for `list_jobs`)."""
+    t = _norm_country_term(q) or (q or "").strip().lower()
+    key = "kazakhstan" if t in _ELIG_OTHER and ("kazakh" in t or "казах" in t or t == "kz") else t
+    words = _COUNTRY_ALIASES.get(key, [t] if t else [])
+    return [f"%{w}%" for w in words]
+
+
 def query_eligibility_regions(q: str) -> list[str] | None:
     """If the search query is a COUNTRY / nationality term, return the region codes that country's
     people are eligible for (a single-item list of 'US'|'CA'|'UK'|'OTHER'); else None so the caller

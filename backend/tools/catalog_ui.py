@@ -154,7 +154,10 @@ def _card(j: dict) -> str:
             '<button type="button" class="cat-sex-b" data-gender="female" '
             'onclick="pickSex(this)" aria-pressed="false">Ж</button></div>'
             f'<button class="cat-fill" data-id="{jid}" onclick="fillJob(this)">Заполнить</button>'
-            '<span class="cat-fill-res"></span></div>')
+            '<span class="cat-fill-res"></span>'
+            # «Описание · Вопросы» sit ON the action row (one line per card on a phone); an opened
+            # <details> takes the full width below the buttons (.cat-dets:has(details[open])).
+            f'<div class="cat-dets">{desc_det}{qblock}</div></div>')
         # Selection control (round checkbox, 44px tap target) — ticked cards feed the
         # bottom «Выбрано N · Настроить кампанию» bar. State lives in sessionStorage
         # (survives search / pagination / tab switches); syncPicks() re-checks after
@@ -167,12 +170,14 @@ def _card(j: dict) -> str:
         fill_row = ""
         pick = ""
 
+    # a card without a fill row (no id) still shows its details below the comp line
+    tail = fill_row if fill_row else f'<div class="cat-dets">{desc_det}{qblock}</div>'
     return (
         f'<article class="cat-card" data-id="{jid or ""}">'
         f'<div class="cat-top"><span class="cat-co">{cname}</span>'
         f'<span class="cat-wp {wt_cls}">{esc(wt)}</span>{pick}</div>'
         f'{title_html}{meta}{comp_row}'
-        f'{fill_row}{desc_det}{qblock}'
+        f'{tail}'
         "</article>")
 
 
@@ -602,7 +607,22 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-qlist b{color:var(--danger);font-weight:700;margin-left:3px}
 .cat-qlist i{flex:0 0 auto;margin-top:1px;font-style:normal;font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 7px;white-space:nowrap}
 .empty{color:var(--ink-mute);text-align:center;padding:44px 0}
-.cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+/* Описание · Вопросы toggles share the action row; an open one drops below at full width */
+.cat-dets{display:flex;align-items:center;flex-wrap:wrap;gap:0 14px;margin-left:auto}
+.cat-dets .cat-det{margin-top:0}
+.cat-dets:has(details[open]){flex:1 1 100%;margin-left:0;flex-direction:column;align-items:stretch}
+.cat-dets:has(details[open]) .cat-det{width:100%}
+/* COMPACT phone card (owner: «карточки всё ещё большие» — was ~380px, one control per line) */
+@media(max-width:760px){
+  .cat-card{padding:10px 12px}
+  .cat-top{margin-bottom:2px}
+  .cat-title{font-size:14.5px;min-height:0;margin-bottom:3px;line-height:1.28}
+  .cat-meta{margin-bottom:3px;font-size:12px}
+  .cat-comp{margin:0 0 4px;font-size:12.5px;gap:3px 6px}
+  .cat-fill-row{margin-top:7px;padding-top:8px;gap:8px}
+  .cat-det>summary{padding:6px 0;font-size:12.5px}
+}
 /* Sex is a compact segmented toggle, not two big buttons — one modifier for the single
    primary action below. */
 .cat-sex{display:inline-flex;align-items:center;height:var(--ctl-h);background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);padding:3px}

@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 
 from backend.applier import ats_boards
-from backend.applier.regions import classify_with_source
+from backend.applier.regions import classify_with_source, open_anywhere
 from backend.applier.role_category import classify_role
 from backend.applier.comp_extract import extract_comp
 from backend.tools import catalog_db
@@ -97,6 +97,9 @@ def collect_board(ats: str, slug: str, company: str, remote_only: bool) -> list[
             # A deterministic rule hit on re-collect is authoritative and may narrow a
             # prior LLM multi-region set (e.g. LLM US+CA -> rule US) — by design, not a bug.
             row["regions"], row["region_source"] = regs, src
+        # open-to-anywhere (finer than OTHER): deterministic from the current location/text,
+        # refreshed on every collect (the upsert takes the new value first).
+        row["open_anywhere"] = open_anywhere(row)
         # role: only attach a CONFIDENT deterministic hit (else leave NULL for the
         # backfill/LLM residue). comp: always attach (an 'unknown' marks the row as
         # checked so the comp backfill skips it). The upsert PRESERVES an existing
@@ -317,6 +320,16 @@ def backfill_est_comp(limit: int = 0) -> dict:
     return {"rows_processed": len(rows), "inherited": inherited, "estimated": estimated}
 
 
+def backfill_open(limit: int = 0, all_rows: bool = False) -> dict:
+    """Compute open_anywhere for rows that lack it (or ALL rows with all_rows=True — after a rule
+    change). Deterministic, no network; ~8.7k rows in seconds."""
+    catalog_db.ensure_schema()
+    rows = catalog_db.rows_for_open(limit, only_null=not all_rows)
+    pairs = [(r["id"], open_anywhere(r)) for r in rows]
+    n = catalog_db.set_open_anywhere(pairs)
+    return {"rows_processed": len(rows), "written": n, "open": sum(1 for _, v in pairs if v)}
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--all", action="store_true", help="include non-remote jobs too")
@@ -335,6 +348,9 @@ if __name__ == "__main__":
     ap.add_argument("--backfill-est-comp", action="store_true",
                     help="fill estimated comp (base+total) for rows whose est_comp_source "
                          "IS NULL — inherit a sibling combo, else deterministic median")
+    ap.add_argument("--backfill-open", action="store_true",
+                    help="compute open_anywhere (open to a remote applicant from any country) for "
+                         "rows lacking it; with --all recompute EVERY row (after a rule change)")
     ap.add_argument("--no-llm", action="store_true",
                     help="with --backfill-regions, skip the LLM fallback (deterministic only)")
     ap.add_argument("--limit", type=int, default=0,
@@ -355,6 +371,8 @@ if __name__ == "__main__":
         print(backfill_comp(limit=args.limit), flush=True)
     elif args.backfill_est_comp:
         print(backfill_est_comp(limit=args.limit), flush=True)
+    elif args.backfill_open:
+        print(backfill_open(limit=args.limit, all_rows=args.all), flush=True)
     else:
         run(remote_only=not args.all, with_questions=not args.no_questions,
             ats_filter=args.ats, limit=args.limit)

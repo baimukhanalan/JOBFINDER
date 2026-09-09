@@ -100,6 +100,12 @@ _EXTRA_COLS = (
     # Kept as a reversible blacklist marker (not deleted) — hidden from the catalog
     # browse + the draft work-list so a human never opens an apply page that 404s.
     ("dead", "BOOLEAN DEFAULT FALSE"), ("dead_reason", "TEXT"),
+    # open_anywhere: deterministic (applier/regions.open_anywhere) — the location names NO specific
+    # country/city (a bare "Remote", "worldwide", a broad region incl. Central Asia) or the text says
+    # "work from anywhere". Finer than the OTHER region code, which also covers postings PINNED to
+    # one foreign country ("Remote - India"); a country query (Казахстан) requires it. Recomputed on
+    # every collect (new-first) + one-shot `catalog_collector --backfill-open`.
+    ("open_anywhere", "BOOLEAN"),
 )
 
 
@@ -151,7 +157,7 @@ _UP_COLS = ("ats", "company_key", "company", "external_id", "title", "location",
             "description_html", "questions", "q_count", "regions", "region_source",
             "role_category", "role_source", "comp_min", "comp_max", "comp_currency",
             "comp_source", "est_base_min", "est_base_max", "est_total_min",
-            "est_total_max", "est_comp_currency", "est_comp_source")
+            "est_total_max", "est_comp_currency", "est_comp_source", "open_anywhere")
 _QI = _UP_COLS.index("questions")
 
 
@@ -191,6 +197,8 @@ def upsert_jobs(rows: list[dict]) -> int:
            "est_total_max=COALESCE(job_catalog.est_total_max, EXCLUDED.est_total_max), "
            "est_comp_currency=COALESCE(job_catalog.est_comp_currency, EXCLUDED.est_comp_currency), "
            "est_comp_source=COALESCE(job_catalog.est_comp_source, EXCLUDED.est_comp_source), "
+           # deterministic from the CURRENT location/text -> new-first (a re-collect refreshes it)
+           "open_anywhere=COALESCE(EXCLUDED.open_anywhere, job_catalog.open_anywhere), "
            "last_seen=now()")
     with _cur(False) as cur:
         cur.executemany(sql, vals)
@@ -219,11 +227,18 @@ def list_jobs(company: str | None = None, q: str | None = None, remote_only: boo
         # A pure COUNTRY/nationality term ("Kazakhstan"/"Казахстан"/"KZ") means "jobs I'm eligible
         # for", so translate it to a region-eligibility overlap (uses the GIN index on regions);
         # anything else stays full-text search over title/company/description.
-        from backend.applier.regions import query_eligibility_regions
+        from backend.applier.regions import query_country_aliases, query_eligibility_regions
         elig = query_eligibility_regions(q)
         if elig is not None:
             where.append("regions && %s::text[]")
             args.append(elig)
+            if elig == ["OTHER"]:
+                # OTHER alone also holds postings PINNED to one foreign country ("Remote - India",
+                # "Germany") that a Kazakhstani can't take (a 120-job audit: most of the bucket).
+                # Keep only postings open to anywhere OR ones that name the asked country/region.
+                aliases = query_country_aliases(q)
+                where.append("(open_anywhere = TRUE OR location ILIKE ANY(%s::text[]))")
+                args.append(aliases)
         else:
             where.append("to_tsvector('simple', coalesce(title,'')||' '||coalesce(company,'')"
                          "||' '||coalesce(description,'')) @@ plainto_tsquery('simple', %s)")
@@ -468,6 +483,28 @@ def get_job(job_id: int) -> dict | None:
                     (job_id,))
         r = cur.fetchone()
         return dict(r) if r else None
+
+
+def rows_for_open(limit: int = 0, only_null: bool = True) -> list:
+    """(id, location, description) work-list for the open_anywhere backfill."""
+    sql = "SELECT id, location, description FROM job_catalog"
+    if only_null:
+        sql += " WHERE open_anywhere IS NULL"
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    with _cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def set_open_anywhere(pairs) -> int:
+    """Batch-write open_anywhere for [(id, bool), ...]."""
+    pairs = [(bool(v), int(i)) for i, v in pairs]
+    if not pairs:
+        return 0
+    with _cur(False) as cur:
+        cur.executemany("UPDATE job_catalog SET open_anywhere=%s WHERE id=%s", pairs)
+        return len(pairs)
 
 
 def jobs_by_ids(ids) -> dict:

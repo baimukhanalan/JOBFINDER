@@ -389,7 +389,10 @@ if __name__ == "__main__":
     _KNOWN = ("ashby", "lever", "workable")
     ap = argparse.ArgumentParser(
         description="Scrape ATS apply-form questions into job_catalog.questions.")
-    ap.add_argument("ats", nargs="*", choices=_KNOWN, default=list(_KNOWN),
+    # default=[] (NOT list(_KNOWN)): with nargs="*" + choices, argparse validates a non-empty
+    # list default as a single choice and rejects it ("invalid choice: ['ashby','lever','workable']"),
+    # which broke every no-arg cron run (bpo-9625). Empty default -> run() expands it to all three.
+    ap.add_argument("ats", nargs="*", choices=_KNOWN, default=[],
                      help="ATS(es) to scrape (default: all three)")
     ap.add_argument("--limit", type=int, default=0,
                      help="cap rows scraped per ATS (bounded/cron runs). Default 0 = "

@@ -33,18 +33,25 @@ def _age_str(secs: float) -> str:
     return f"{secs // 86400}d ago"
 
 
-def _tail_line(path: str, maxlen: int = 160) -> str:
-    """Last non-empty line of a log (best-effort, reads only the tail)."""
+def _tail_lines(path: str, n: int = 12, maxlen: int = 200) -> list[str]:
+    """The last `n` non-empty lines of a log (best-effort, reads only an 8 KB tail). Scanning a block
+    — not just the final line — catches a run that crashed but printed a benign-looking last line."""
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
             f.seek(max(0, size - 8192))
             chunk = f.read().decode("utf-8", "replace")
-        lines = [ln.strip() for ln in chunk.splitlines() if ln.strip()]
-        return (lines[-1] if lines else "")[:maxlen]
+        lines = [ln.strip()[:maxlen] for ln in chunk.splitlines() if ln.strip()]
+        return lines[-n:]
     except Exception:
-        return ""
+        return []
+
+
+def _tail_line(path: str, maxlen: int = 160) -> str:
+    """Last non-empty line of a log (best-effort)."""
+    lines = _tail_lines(path, n=1, maxlen=maxlen)
+    return lines[-1] if lines else ""
 
 
 # ---- pm2 -----------------------------------------------------------------------------------------
@@ -98,7 +105,15 @@ _CRONS = [
     ("Apply: Workday/Centene", "workday_apply.log", 8),
     ("Харвестер вопросов (hourly)", "harvest_cron.log", 3),
 ]
-_ERR_RE = re.compile(r"\b(error|traceback|exception|failed|no fresh|ne500|state_transition)\b", re.I)
+# Error signal in a log tail. `\w*error` matches bare "error" AND CamelCase endings
+# (ModuleNotFoundError / KeyError / TimeoutError / …); "no module named" catches the import failure
+# whose CamelCase word `\berror\b` used to miss (the harvest-cron incident, 2026-09-09).
+_ERR_RE = re.compile(
+    r"(?:\w*error|traceback|exception|failed|no fresh|no module named|"
+    r"ne500|state_transition|modulenotfound)", re.I)
+# Benign phrases that CONTAIN an error word but mean success — apply lanes end with a summary like
+# "…errors=0" / "0 errors", and a "still going — exiting" flock-skip is normal. Don't flag those.
+_BENIGN_RE = re.compile(r"errors?\s*[=:]\s*0\b|\b0\s+errors?\b|still going\s*[—-]\s*exiting", re.I)
 
 
 def cron_lanes() -> list[dict]:
@@ -112,11 +127,17 @@ def cron_lanes() -> list[dict]:
             age = time.time() - os.path.getmtime(path)
         except Exception:
             age = 0
-        last = _tail_line(path)
+        tail = _tail_lines(path)
+        last = tail[-1] if tail else ""
         stale = age > max_h * 3600
-        err = bool(_ERR_RE.search(last))
-        status = "warn" if (stale or err) else "ok"
-        note = "STALE · " if stale else ""
+        # A FAILED run ends on its error; a run that hit a transient and RECOVERED ends on a success
+        # line — so scan only the last few lines, and never count a benign "errors=0" success summary
+        # or a normal flock "still going — exiting" skip as a failure.
+        err = any(_ERR_RE.search(ln) and not _BENIGN_RE.search(ln) for ln in tail[-4:])
+        # An ERRORED lane is RED (down) so it drives the overall badge red and can't hide among the
+        # benign yellow "stale-between-runs" lanes; a merely-stale (but not errored) lane stays warn.
+        status = "down" if err else ("warn" if stale else "ok")
+        note = "ОШИБКА · " if err else ("STALE · " if stale else "")
         rows.append({"name": label, "status": status,
                      "detail": f"{note}last run {_age_str(age)} · {last or '—'}"})
     return rows
@@ -235,3 +256,79 @@ def safe_one(fn) -> dict:
         return fn()
     except Exception as exc:
         return {"name": fn.__name__, "status": "warn", "detail": f"check failed: {str(exc)[:80]}"}
+
+
+# ---- auto-alert (push, so nobody has to open /health to notice a failure) -----------------------
+# Own throttle state (kept separate from mail_health's so its recovery-key logic isn't disturbed).
+_ALERT_STATE = os.path.join(_LOGS, "health_alert_state.json")
+
+
+def _tg(text: str) -> bool:
+    try:
+        import httpx
+
+        from backend.config import settings
+        tok, chat = settings.telegram_bot_token, settings.telegram_chat_id
+        if not tok or not chat:
+            return False
+        r = httpx.post(f"https://api.telegram.org/bot{tok}/sendMessage", timeout=15,
+                       data={"chat_id": chat, "text": text, "parse_mode": "HTML",
+                             "disable_web_page_preview": "true"})
+        return r.status_code < 300
+    except Exception:
+        return False
+
+
+def check_and_alert(cooldown: int = 14400) -> dict:
+    """Run gather(); Telegram the owner when anything is DOWN (throttled per `cooldown`), and send ONE
+    recovery note when it clears. This is the PUSH the pull-only /health tab lacked — a failing service
+    or cron now pings the owner within a cron tick instead of waiting to be noticed. Never raises."""
+    snap = gather()
+    down = [f"{r.get('name')}: {r.get('detail', '')}"
+            for sec in snap["sections"] for r in sec["rows"] if r.get("status") == "down"]
+    try:
+        st = json.loads(open(_ALERT_STATE, encoding="utf-8").read())
+    except Exception:
+        st = {}
+    now = int(time.time())
+
+    def _save(s: dict) -> None:
+        try:
+            os.makedirs(_LOGS, exist_ok=True)
+            with open(_ALERT_STATE, "w", encoding="utf-8") as f:
+                json.dump(s, f)
+        except Exception:
+            pass
+
+    if down:
+        if now - int(st.get("last", 0)) >= cooldown:
+            body = (f"🔴 <b>JobFinder health</b> — {len(down)} проблем ({snap['ts']})\n\n"
+                    + "\n".join("• " + d for d in down[:12]))
+            _tg(body)
+            print(f"[health] ALERT: {len(down)} down: {down}", flush=True)
+        _save({"last": now if now - int(st.get("last", 0)) >= cooldown else st.get("last", 0),
+               "active": True})
+    else:
+        if st.get("active"):
+            _tg(f"🟢 <b>JobFinder health</b> — всё восстановилось ({snap['ts']})")
+            print("[health] RECOVERED", flush=True)
+        _save({"last": st.get("last", 0), "active": False})
+    return {"overall": snap["overall"], "down": down}
+
+
+def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description="Health snapshot + optional Telegram alert.")
+    ap.add_argument("--alert", action="store_true",
+                    help="check and Telegram the owner if anything is DOWN (cron entry point)")
+    ap.add_argument("--cooldown", type=int, default=14400, help="alert throttle seconds (default 1800)")
+    args = ap.parse_args()
+    if args.alert:
+        res = check_and_alert(cooldown=args.cooldown)
+        print(json.dumps(res, ensure_ascii=False))
+    else:
+        print(json.dumps(gather(), ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

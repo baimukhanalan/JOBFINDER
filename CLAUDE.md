@@ -458,7 +458,8 @@ Assessment question-bank harvester (see the harvester section):
     the cron: the single co-pilot's background email-code watch is cancelled by the very next
     `/load`, so a sequential caller left every GH/Ashby application unconfirmed — the cron now
     finishes the code INLINE (httpx timeout 600s). (3) **honest accounting:** `fill_counts_as_done`
-    = state done AND `submit_result.clicked/confirmed`; a `no_form` fill (`fill_is_dead_posting`)
+    = state done AND `submit_result.confirmed` (a pressed-but-unconfirmed or `blocked` submit is
+    NOT an application — run #2: 3 pressed, 0 accepted); a `no_form` fill (`fill_is_dead_posting`)
     marks the posting dead in the catalog (`catalog_db.mark_dead`) — the first run hit a Salmon
     posting gone from the Ashby board that the catalog still listed; `note_run(..., attempted=)`
     moves the cursor past the last ATTEMPTED job (a dead/failed one never pins the rotation) while

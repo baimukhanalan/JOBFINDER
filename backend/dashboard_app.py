@@ -524,12 +524,12 @@ def _render(profile: str) -> str:
         f"<div class='stat'><b>{len(jobs) - n_skip}</b><span>в очереди</span></div>"
         f"<div class='stat'><b>{n_ready}</b><span>готово</span></div>"
         f"<div class='stat'><b>{n_sub}</b><span>отправлено</span></div>"
-        f"<div class='stat'><b>{n_intv}</b><span>собеседования</span></div>"
+        f"<div class='stat'><b>{n_intv}</b><span>Собес</span></div>"
         f"<div class='stat'><b>{n_rej}</b><span>отказы</span></div>"
         f"<div class='stat'><b>{n_skip}</b><span>без формы</span></div>"
         f"<div class='stat{rev_alert}'><b>{rev_txt}</b><span>проверено</span></div>"
         "</div>"
-        "<a class='extbar' href='/extension'>Установить расширение Apply Assist для заполнения форм</a>"
+        "<a class='extbar' href='/extension'>Установить расширение Apply Assist</a>"
         f"{_inbox_html(profile)}"
         f"{body}"
         f"<script>const PROFILE={json.dumps(profile)};{_JS}</script>"
@@ -550,10 +550,10 @@ def queue(profile: str = "michael"):
 _UNF_REASONS = {
     "incomplete": "Не заполнены обязательные поля",
     "needs_review": "Требует ручной проверки",
-    "page_drift": "Страница ушла на другую вакансию",
+    "page_drift": "Открылась другая вакансия",
     "preempted": "Перехвачено другим прогоном",
-    "click_failed": "Submit не нажался (капча / кнопка)",
-    "clicked": "Отправлено, но подтверждения не было",
+    "click_failed": "Submit не нажался (капча)",
+    "clicked": "Ждём подтверждения",
     "": "Не подтверждено",
 }
 
@@ -562,7 +562,7 @@ def _unf_reason(it: dict) -> str:
     if it.get("error"):
         return "Ошибка: " + str(it["error"])[:160]
     if it.get("blocked"):
-        return "Submit заблокирован (капча / anti-bot)"
+        return "Submit заблокирован (капча)"
     r = it.get("submit_reason") or ""
     if r in _UNF_REASONS and not (r in ("clicked", "") and it.get("unfilled")):
         return _UNF_REASONS[r]
@@ -612,7 +612,7 @@ def unfinished_index():
         if ufl:
             meta_bits.append("поля: " + esc(", ".join(str(x) for x in ufl[:5])))
         open_link = (f'<a class="unf-open" href="{esc(aurl)}" target="_blank" '
-                     f'rel="noopener">Открыть вакансию ↗</a>') if aurl else ""
+                     f'rel="noopener">Вакансия ↗</a>') if aurl else ""
         ats_badge = f'<span class="unf-ats">{esc(ats)}</span>' if ats else ""
         cards.append(
             f'<article class="{scls}" style="--i:{min(i, 14)}" data-id="{esc(str(jid))}">'
@@ -749,15 +749,14 @@ def unfinished_index():
           "setTimeout(function(){unfPoll(btn,gen,0);},3000);}"
           "else{unfLbl(btn,'Готово · обновляю');setTimeout(function(){if(gen!==window.__jfGen)return;"
           "if(window.jfSwap&&location.pathname==='/unfinished')window.jfSwap(location.pathname+location.search,{force:true});else location.reload();},900);}}"
-          "catch(e){if(fails<5)setTimeout(function(){unfPoll(btn,gen,fails+1);},5000);else{btn.disabled=false;unfLbl(btn,'Нет связи — обнови страницу');}}}"
+          "catch(e){if(fails<5)setTimeout(function(){unfPoll(btn,gen,fails+1);},5000);else{btn.disabled=false;unfLbl(btn,'Нет связи · обнови');}}}"
           "async function unfRerunAll(btn){"
-          "if(!confirm('Докрутить все заявки, которые можно доделать автоматически? "
-          "Это займёт время — прогресс будет на кнопке.'))return;"
+          "if(!confirm('Докрутить все возможные заявки? Прогресс будет на кнопке.'))return;"
           "btn.disabled=true;var o=(btn.querySelector('span')||btn).textContent,gen=window.__jfGen;unfLbl(btn,'Запускаю…');"
           "try{var j=await (await fetch('/unfinished/rerun',{method:'POST',"
           "headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'gender='})).json();"
           "if(j.started||j.reason==='already_running'){unfLbl(btn,j.started?('Пошло: '+j.total):'Уже идёт прогон');unfPoll(btn,gen,0);}"
-          "else{unfLbl(btn,j.reason==='nothing_to_rerun'?'Нечего докручивать':'Ошибка');"
+          "else{unfLbl(btn,j.reason==='nothing_to_rerun'?'Нет заявок':'Ошибка');"
           "setTimeout(function(){btn.disabled=false;unfLbl(btn,o);},2500);}}"
           "catch(e){btn.disabled=false;unfLbl(btn,o);}}"
           "</script>")
@@ -770,7 +769,7 @@ def unfinished_index():
                   '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>')
     head = mailcrm_ui._page_head(
         "Незавершённые",
-        primary=({"label": f"Докрутить всё ({n_rerun})", "onclick": "unfRerunAll(this)",
+        primary=({"label": f"Докрутить ({n_rerun})", "onclick": "unfRerunAll(this)",
                   "svg": _rerun_svg} if n_rerun else None),
         seg_html=mailcrm_ui.vacancies_seg("unfinished", {"unfinished": n}))
     body = css + head + f'<div class="unf-list">{list_html}</div>' + js

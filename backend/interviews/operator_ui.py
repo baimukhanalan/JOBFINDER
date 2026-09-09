@@ -301,7 +301,7 @@ _IV_SCRIPT = """<script>
       +'&thread='+encodeURIComponent(window._ivState.thread||'');
     fetch(url).then(function(r){return r.json();}).then(function(j){
       if(j && j.assigned){
-        if(title) title.textContent='Изменить назначение';
+        if(title) title.textContent='Изменить собес';
         var txt=el('ivCurrentText');
         if(txt) txt.textContent='Назначено: '+(j.responsible||'—')+(j.start_ts? ' · '+ivFmtLocal(j.start_ts) : '');
         if(cur) cur.removeAttribute('hidden');
@@ -315,7 +315,7 @@ _IV_SCRIPT = """<script>
   }
   window.ivCancel=function(){
     if(!window._ivState.mailbox) return;
-    if(!confirm('Отменить назначение собеседования?')) return;
+    if(!confirm('Отменить собес?')) return;
     var fd=new FormData();
     fd.append('mailbox', window._ivState.mailbox||'');
     fd.append('thread_key', window._ivState.thread||'');
@@ -383,12 +383,12 @@ def modal_shell() -> str:
         '<div class="iv-modal" id="ivModal" hidden>'
         '<div class="iv-modal-backdrop" onclick="closeSobes()"></div>'
         '<div class="iv-modal-panel" role="dialog" aria-modal="true" aria-label="Назначить собеседование">'
-        '<div class="iv-modal-head"><span class="iv-modal-title" id="ivModalTitle">Назначить собеседование</span>'
+        '<div class="iv-modal-head"><span class="iv-modal-title" id="ivModalTitle">Назначить собес</span>'
         '<button type="button" class="iv-modal-x" onclick="closeSobes()" aria-label="Закрыть">&#10005;</button></div>'
         '<div class="iv-modal-body">'
         '<div class="iv-current" id="ivCurrent" hidden>'
         '<span class="iv-current-text" id="ivCurrentText"></span>'
-        '<button type="button" class="iv-cancel-btn" id="ivCancelBtn" onclick="ivCancel()">Отменить назначение</button>'
+        '<button type="button" class="iv-cancel-btn" id="ivCancelBtn" onclick="ivCancel()">Отменить</button>'
         '</div>'
         '<div id="ivGrid"><div class="iv-loading">Загрузка…</div></div>'
         '<div class="iv-assign" id="ivAssign" hidden>'

@@ -160,7 +160,7 @@ class ReplyUiTests(unittest.TestCase):
         page = mailcrm_ui.render_keyword_settings(mailcrm.DEFAULT_KEYWORDS)
         for kind in ("interview", "offer", "rejection", "ack"):
             self.assertIn(f'name="{kind}"', page)
-        self.assertIn("Сохранить и пересчитать письма", page)
+        self.assertIn("Сохранить и пересчитать", page)
 
 
 class DeleteThreadTests(unittest.TestCase):

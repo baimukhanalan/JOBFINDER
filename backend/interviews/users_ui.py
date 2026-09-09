@@ -287,13 +287,13 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
             "<p class='u-chint'>Полностью удаляет учётную запись и её доступность. "
             "Действие необратимо.</p>"
             f"<form method='post' action='/users/{rid}/delete' "
-            "onsubmit=\"return confirm('Удалить пользователя безвозвратно?');\">"
+            "onsubmit=\"return confirm('Удалить безвозвратно?');\">"
             "<button class='hbtn danger' type='submit'>Удалить</button></form></div>")
 
     body = (
         _CSS +
         "<div class='u-wrap'>"
-        "<a class='u-back' href='/users'>← Все пользователи</a>"
+        "<a class='u-back' href='/users'>← Пользователи</a>"
         "<div class='u-card'>"
         f"<div class='u-eh'><h2>{escape(u.get('name') or '—')}</h2>"
         f"{_role_tag(role)}{_status_tag(active)}</div>"
@@ -304,7 +304,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
 
         # availability — full width, its own card
         "<div class='u-card'>"
-        f"<h3>Доступность ({escape(slots.tz_label(u.get('tz')))}) — когда его можно назначить</h3>"
+        f"<h3>Доступность ({escape(slots.tz_label(u.get('tz')))})</h3>"
         f"<p class='u-chint'>Время местное, по его поясу (<b>{escape(slots.tz_label(u.get('tz')))}</b>). "
         "Определяется автоматически, когда он заходит в кабинет со своего устройства.</p>"
         f"<style>{avail_editor.CSS}</style>"
@@ -340,7 +340,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         "<div class='u-rolebtns'>"
         f"<form method='post' action='/users/{rid}/role'>"
         f"<input type='hidden' name='role' value='{role_other}'>"
-        f"<button class='hbtn' type='submit'>Сделать: {role_other_lbl}</button></form>"
+        f"<button class='hbtn' type='submit'>→ {role_other_lbl}</button></form>"
         f"<form method='post' action='/users/{rid}/active'>"
         f"<input type='hidden' name='active' value='{toggle_val}'>"
         f"<button class='{toggle_cls}' type='submit'>{toggle_lbl}</button></form>"

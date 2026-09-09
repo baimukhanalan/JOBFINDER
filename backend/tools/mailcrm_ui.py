@@ -1063,7 +1063,7 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     sc = stage_counts or {}
     _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
                ("action_needed", "⚠️ Действие"), ("assessment_done", "🤖 Тест пройден"),
-               ("interview", "📞 Собеседование"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ"),
+               ("interview", "📞 Собес"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ"),
                ("code", "🔑 Коды"), ("other", "📁 Прочее")]
     def _href(key: str) -> str:
         params = {}
@@ -1160,9 +1160,9 @@ def render_keyword_settings(rules: dict[str, list[str]], saved: bool = False,
         'собеседование → заявка принята.</p>'
         '<form method="post" action="/mail/keywords"><div class="keyword-grid">'
         + "".join(cards) + '</div><div class="keyword-actions">'
-        '<button class="primary" type="submit">Сохранить и пересчитать письма</button></div></form>'
+        '<button class="primary" type="submit">Сохранить и пересчитать</button></div></form>'
         '<form method="post" action="/mail/keywords/reset" class="keyword-actions">'
-        '<button class="ghost" type="submit">Вернуть стандартные слова</button>'
+        '<button class="ghost" type="submit">Стандартные слова</button>'
         '<a class="ghost" href="/mail">Назад в инбокс</a></form>')
     return _page("inbox", body)
 
@@ -1369,7 +1369,7 @@ def render_candidate_apps(cand: dict, apps: list[dict],
     name = escape(cand.get("name") or cand.get("id") or "")
     email = escape(cand.get("email") or "")
     cid = escape(cand.get("id") or "")
-    inbox = (f'<a class="hbtn" href="/mail?mailbox={email}">Ящик кандидата</a>'
+    inbox = (f'<a class="hbtn" href="/mail?mailbox={email}">Почта</a>'
              if email else "")
     base_btn = (f'<a class="hbtn" href="/candidates/{cid}/resume.pdf" target="_blank" '
                 f'rel="noopener">📄 Резюме</a>' if has_base_resume else "")
@@ -1440,7 +1440,7 @@ function forward(from,subj,bodyText){var f=document.getElementById('composeForm'
 document.querySelectorAll('.fwd-action').forEach(function(b){b.addEventListener('click',function(){forward(b.dataset.from,b.dataset.subject,b.dataset.body);});});
 async function deleteThread(b){
   var id=b.dataset.id;if(!id)return;
-  if(!confirm('Переместить всю цепочку в корзину? При необходимости её можно восстановить на сервере.'))return;
+  if(!confirm('Удалить всю переписку? Её можно восстановить на сервере.'))return;
   b.disabled=true;var old=b.textContent;b.textContent='Удаление…';
   try{
     var r=await fetch('/mail/delete',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({id:id})});

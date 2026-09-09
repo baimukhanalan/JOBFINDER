@@ -106,7 +106,7 @@ def _doc(body: str, title: str = "Кабинет") -> str:
 
 def _topbar(responsible: dict, active: str) -> str:
     name = escape(responsible.get("name") or responsible.get("login") or "")
-    nav = (f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Мои собеседования</a>'
+    nav = (f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Собесы</a>'
            f'<a class="{"active" if active=="availability" else ""}" href="/cabinet/availability">Расписание</a>'
            f'<a class="{"active" if active=="inbox" else ""}" href="/cabinet/inbox">Почта</a>'
            f'<a href="/logout">Выход</a>')
@@ -149,7 +149,7 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
         company = escape(iv.get("company") or "")
         when = escape(_fmt_local(iv.get("start_ts"), rtz))
         h = iv.get("source_message_hash")
-        link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Открыть переписку</a>'
+        link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Переписка</a>'
                 if h else '<a href="/cabinet/inbox">Почта</a>')
         meta = mailbox + (f' · <b>{company}</b>' if company else "")
         li_open = '<li style="opacity:.62;">' if past else '<li>'
@@ -188,7 +188,7 @@ def _tg_card(responsible: dict) -> str:
         sub = "Напоминания о собеседованиях приходят в ваш личный Telegram."
     else:
         inner = ('<form method="post" action="/cabinet/tg/connect" style="margin:0;">'
-                 '<button class="primary" type="submit">Подключить Telegram</button></form>')
+                 '<button class="primary" type="submit">Привязать TG</button></form>')
         sub = ("Нажмите — откроется бот, нажмите в нём «Старт». После этого за час и за 5 минут "
                "до собеседования сюда придёт напоминание со ссылкой на созвон, вакансией, "
                "профилем кандидата и его резюме.")
@@ -221,7 +221,7 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
             + avail_editor.render_days(rows) +
             '<div class="avd-actions">'
             '<button class="primary" type="submit">Сохранить</button>'
-            '<button class="ghost" type="button" onclick="avdCopyMon()">Скопировать Пн на все дни</button>'
+            '<button class="ghost" type="button" onclick="avdCopyMon()">Скопировать Пн</button>'
             '</div></form>' + avail_editor.JS + tz_js)
     return _doc(body, "Расписание")
 
@@ -289,8 +289,8 @@ def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, link
         reply_form = (
             '<form method="post" action="/cabinet/reply" class="cab-reply">'
             f'<input type="hidden" name="hash" value="{escape(hash, quote=True)}">'
-            '<div class="cab-reply-h">Ответить рекрутёру (от имени профиля)</div>'
-            '<textarea name="body" rows="4" placeholder="Текст ответа…" required></textarea>'
+            '<div class="cab-reply-h">Ответить рекрутёру</div>'
+            '<textarea name="body" rows="4" placeholder="Ваш ответ…" required></textarea>'
             '<button class="primary" type="submit">Отправить ответ</button>'
             '</form>')
 

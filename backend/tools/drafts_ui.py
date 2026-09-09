@@ -167,7 +167,7 @@ def render_detail(job_id: int) -> str | None:
 
     head = (
         '<div class="dhdr">'
-        f'<a class="dback" href="/drafts">← Все черновики</a>'
+        f'<a class="dback" href="/drafts">← Черновики</a>'
         f'<div class="cat-h-title">{esc(job.get("title") or "")}</div>'
         f'<div class="dsub">{esc(job.get("company") or "")} · '
         f'{esc(job.get("ats") or "")} · {" ".join(esc(r) for r in (job.get("regions") or []))}</div>'

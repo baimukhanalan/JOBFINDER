@@ -49,7 +49,7 @@ def render_days(availability: list[dict]) -> str:
             f'<div class="avd-head"><b class="avd-dow">{_WEEKDAYS[d]}</b>'
             f'<button type="button" class="avd-add" onclick="avdAdd({d})">+ промежуток</button></div>'
             f'<div class="avd-wins" id="avd-wins-{d}">{rows}</div>'
-            f'<div class="avd-empty"{empty_hidden}>выходной — промежутков нет</div>'
+            f'<div class="avd-empty"{empty_hidden}>выходной</div>'
             '</div>')
     return f'<div class="avd-days">{"".join(days)}</div>'
 

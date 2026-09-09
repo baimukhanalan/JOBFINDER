@@ -209,10 +209,10 @@ def _role_section(b: dict) -> str:
     roles = b.get("roles", [])
     inv = [(r["role"], r["invited"], r["applied"]) for r in roles if r["invited"] > 0][:10]
     bar = (_hbars(inv, _C["interview"], unit=" подано") if inv
-           else '<div class="st-mute">пока никого не приглашали на собеседование</div>')
+           else '<div class="st-mute">пока никого не звали на собес</div>')
     return (
         '<div class="st-h-row"><h2 class="st-h">По ролям</h2>'
-        '<span class="st-mute">на какие роли приглашали больше всего · клик по заголовку — сортировка</span></div>'
+        '<span class="st-mute">топ ролей по приглашениям · клик — сортировка</span></div>'
         f'<div class="st-role-bar">{bar}</div>'
         f'<div class="st-tbl-wrap" style="margin-top:14px">{_role_table(roles)}</div>'
         '<p class="st-note">«Приглашали» — заявки, дошедшие до собеседования или оффера. '
@@ -236,11 +236,11 @@ def _focus_lists(companies: list[dict]) -> str:
     wst = "".join(li(c, f'<b style="color:{_C["rejection"]}">{c["reply_rate"]:.0f}% ответов</b>') for c in waste)
     return (
         '<div class="st-focus">'
-        f'<div class="st-focus-card st-focus-good"><div class="st-focus-h">✅ Куда вкладываться '
-        '<span class="st-mute">(лучшая конверсия в собеседование)</span></div>'
+        f'<div class="st-focus-card st-focus-good"><div class="st-focus-h">✅ Куда вложиться '
+        '<span class="st-mute">(лучшая конверсия)</span></div>'
         f'{inv or "<div class=st-mute>нет данных</div>"}</div>'
-        f'<div class="st-focus-card st-focus-bad"><div class="st-focus-h">🚫 Куда льём объём впустую '
-        '<span class="st-mute">(много подано, почти нет ответов)</span></div>'
+        f'<div class="st-focus-card st-focus-bad"><div class="st-focus-h">🚫 Куда льём впустую '
+        '<span class="st-mute">(много подано — мало ответов)</span></div>'
         f'{wst or "<div class=st-mute>нет данных</div>"}</div>'
         '</div>')
 
@@ -256,7 +256,7 @@ def _trend(trend: list[dict]) -> str:
         '<div class="st-trend">'
         f'<div class="st-trend-row"><span class="st-trend-l">Все ответы</span>'
         f'{_sparkbars(totals, _C["ack"], labs)}<span class="st-trend-mx">макс {max(totals)}</span></div>'
-        f'<div class="st-trend-row"><span class="st-trend-l">Собеседования</span>'
+        f'<div class="st-trend-row"><span class="st-trend-l">Собесы</span>'
         f'{_sparkbars(inters, _C["interview"], labs)}<span class="st-trend-mx">макс {max(inters)}</span></div>'
         f'<div class="st-trend-row"><span class="st-trend-l">Отказы</span>'
         f'{_sparkbars(rejs, _C["rejection"], labs)}<span class="st-trend-mx">макс {max(rejs)}</span></div>'
@@ -320,7 +320,7 @@ def render_page(force: bool = False) -> str:
 <section class="st-card">{_focus_lists(b['companies'])}</section>
 
 <section class="st-card"><div class="st-h-row"><h2 class="st-h">По компаниям</h2>
-<span class="st-mute">клик по заголовку — сортировка · сейчас по числу собеседований (кликните «% собес.» для конверсии)</span></div>
+<span class="st-mute">клик — сортировка · сейчас: Собес.</span></div>
 <div class="st-tbl-wrap">{_company_table(b['companies'])}</div></section>
 
 <section class="st-card">{_role_section(b)}</section>

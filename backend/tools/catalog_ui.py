@@ -355,7 +355,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<div class="px-status" id="pxStatus">'
         '<span class="px-dot"></span>'
         '<span class="px-summary" id="pxSummary">—</span>'
-        '<button class="px-toggle" id="pxToggle" onclick="pxToggleList()" hidden>показать список</button>'
+        '<button class="px-toggle" id="pxToggle" onclick="pxToggleList()" hidden>показать</button>'
         '</div>'
         '<div class="cat-proxy-list" id="pxList" hidden></div>'
         '<details class="px-add">'
@@ -366,7 +366,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
         'socks5 — только доступность, в браузере socks5 работает лишь без логина/пароля. '
         'Мёртвые удаляются автоматически.</div>'
         '<div class="cat-proxy-row">'
-        '<button class="cat-proxy-go" onclick="pxUpload()">Загрузить и проверить</button>'
+        '<button class="cat-proxy-go" onclick="pxUpload()">Проверить</button>'
         '<button class="cat-proxy-clr" onclick="pxClear()">Очистить пул</button>'
         '<span class="cat-proxy-msg" id="pxMsg"></span></div>'
         '</details>')
@@ -402,7 +402,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<span class="cat-selbar-n" id="catSelN">Выбрано 0</span>'
         '<button type="button" class="ghost cat-selbar-clear" onclick="clearPicks()">Снять</button>'
         '<button type="button" class="primary cat-selbar-go" onclick="openCampSheet()">'
-        'Настроить кампанию</button></div>')
+        'Кампания</button></div>')
     camp_sheet = (
         '<div class="cat-modal" id="campSheet" hidden>'
         '<div class="cat-modal-backdrop" onclick="closeCampSheet()"></div>'
@@ -983,7 +983,7 @@ window.pxToggleList=async function(){
   if(list.hidden){
     if(tog) tog.textContent='загрузка…';
     try{ var s=await (await fetch('/proxies')).json(); pxRenderList(s.ips); }catch(e){ pxRenderList([]); }
-    list.hidden=false; if(tog) tog.textContent='скрыть список';
+    list.hidden=false; if(tog) tog.textContent='скрыть';
   }else{
     list.hidden=true; if(tog) tog.textContent='показать список';
   }

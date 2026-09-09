@@ -15,9 +15,9 @@ _SRC_LABEL = {"conduent": "Conduent", "alorica": "Alorica", "concentrix": "Conce
               "remoteok": "RemoteOK"}
 
 # Neutral RU labels for the employer-segment heuristic (no stack disclosure).
-_SEG_LABEL = {"staffing": "Кадровые / аутсорсинг", "government": "Госсектор",
-              "education": "Образование", "healthcare": "Здравоохранение",
-              "nonprofit": "НКО", "general": "Крупный работодатель"}
+_SEG_LABEL = {"staffing": "Кадровые", "government": "Госсектор",
+              "education": "Образование", "healthcare": "Медицина",
+              "nonprofit": "НКО", "general": "Работодатель"}
 
 
 _JS = """
@@ -29,7 +29,7 @@ async function mhFill(id, btn){
     const r = await fetch('/mass-hiring/' + id + '/fill', {method:'POST'});
     const j = await r.json();
     if(j.novnc) window.open(j.novnc, '_blank', 'noopener');
-    btn.textContent = 'Заполняется — смотри в окне';
+    btn.textContent = 'Заполняю…';
     mhPoll(id, btn, window.__jfGen, 0);
   }catch(e){ btn.textContent = 'Ошибка'; btn.disabled = false; }
 }
@@ -41,7 +41,7 @@ async function mhPoll(id, btn, gen, fails){
     const r = await fetch('/mass-hiring/' + id + '/fill_status');
     const j = await r.json();
     if(gen !== window.__jfGen) return;
-    if(j.state === 'done'){ btn.textContent = j.dry_run ? 'Заполнено (тест) ✓' : 'Подано ✓'; return; }
+    if(j.state === 'done'){ btn.textContent = j.dry_run ? 'Тест ✓' : 'Подано ✓'; return; }
     if(j.state === 'error'){ btn.textContent = 'Ошибка: ' + (j.error || ''); btn.disabled = false; return; }
     setTimeout(function(){ mhPoll(id, btn, gen, 0); }, 3000);
   }catch(e){ if((fails||0) < 5) setTimeout(function(){ mhPoll(id, btn, gen, (fails||0) + 1); }, 5000); }
@@ -208,7 +208,7 @@ def _job_row(j: dict) -> str:
     fill = ""
     if "avature.net" in (j.get("apply_url") or "").lower():
         fill = (f'<button class="mh-fill" type="button" onclick="mhFill({int(j.get("id") or 0)},this)" '
-                f'title="Заполнить форму автоматически (тест — ничего не отправляется)">Заполнить (тест)</button>')
+                f'title="Заполнить форму автоматически (тест — ничего не отправляется)">Заполнить</button>')
     return (f'<div class="mh-job">{star}<a class="mh-jtitle" href="{url}" target="_blank" '
             f'rel="noopener">{title}</a><span class="mh-jloc">{loc}</span>{_lang_badge(j)}{_pay_html(j)}'
             f'{_status_badge(j)}'
@@ -271,7 +271,7 @@ def _everify_panel(limit: int = 40) -> str:
                  'stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>')
         return (
             f'<details class="mh-emp"><summary class="mh-emp-sum">'
-            f'<span class="mh-emp-t">Крупные работодатели США (10 000+ сотрудников)</span>'
+            f'<span class="mh-emp-t">Крупные работодатели США</span>'
             f'<span class="mh-emp-c">{total} компаний · по числу площадок найма</span>{caret}</summary>'
             f'<div class="mh-emp-list">{"".join(rows)}</div>'
             f'<div class="mh-emp-note">Справочный список крупнейших работодателей США — '
@@ -332,11 +332,11 @@ def _run_modal() -> str:
         f'<div class="mhm-lanes">{lanes}</div>'
         f'<label class="mhm-check"><input type="checkbox" id="mhSpanish" {show_sp} onchange="mhSaveSpanish(this)">'
         ' Показывать испанские вакансии</label>'
-        '<label>Частота автозапуска (расписание)</label>'
+        '<label>Расписание запуска</label>'
         f'<select id="mhFreq"><option value="">— не менять —</option>{freq}</select>'
         '<div class="mhm-status" id="mhStatus"></div>'
         '<div class="mhm-foot">'
-        '<button class="mhm-go" type="button" onclick="mhStartRun()">▶ Запустить сейчас</button>'
+        '<button class="mhm-go" type="button" onclick="mhStartRun()">▶ Запустить</button>'
         '<button class="mhm-stop" type="button" onclick="mhStopRun()">■ Стоп</button>'
         '<button class="mhm-x" type="button" onclick="mhCloseRun()">Закрыть</button>'
         '</div></div>')

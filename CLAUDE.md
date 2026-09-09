@@ -364,7 +364,15 @@ Assessment question-bank harvester (see the harvester section):
     ~114px of the first phone screen) and its collapsed summary is one line on a phone; `.mh-wrap` has no
     side padding on phones (cards as wide as on the other tabs). `POST /mass-hiring/collect` still exists
     as an unused manual trigger.
-  - **Каталог: SELECT vacancies → «Настроить кампанию» (replaces the per-card name input, #4A).**
+  - **Label budget on a phone (owner: «кнопки с длинными названиями нужно сократить», same day).**
+    A 14-module audit shortened 63 user-visible strings: a 40px pill fits ~14-18 chars, a 32px chip
+    ~10, a bottom-nav label ~8, the FAB ~18. Notable renames: «Докрутить всё (N)» → «Докрутить (N)»,
+    «Настроить кампанию» → «Кампания», «Открыть вакансию ↗» → «Вакансия ↗», «Отменить назначение»
+    → «Отменить», «Мои собеседования» → «Собесы», «Подключить Telegram» → «Привязать TG», the Mass
+    Hiring segment labels (Кадровые/Медицина/Работодатель), the co-pilot page's English status
+    strings → Russian, «Ящик кандидата» → «Почта». When adding a label, size it to the control it
+    sits in — and keep tests that assert labels in sync (`test_mailcrm_inbox` did).
+  - **Каталог: SELECT vacancies → «Кампания» bottom action (replaces the per-card name input, #4A).**
     Each card has a round `.cat-pick` checkbox (44px tap target, right of `.cat-top`); ticked cards get
     `.sel`, the selection lives in `sessionStorage['cat_sel']` (+ `cat_sel_meta`) so it survives search,
     pagination and tab switches; `syncPicks()` re-checks after every list re-render. A fixed

@@ -589,7 +589,7 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
         _S["owner"] = None
     if not can_load(_S["owner"], _S["loaded_at"], profile, time.time()):
         return JSONResponse(
-            {"error": f"co-pilot busy: {_S['owner']} is reviewing — try later or POST /release"},
+            {"error": f"занято: {_S['owner']} сейчас смотрит — попробуйте позже"},
             status_code=423)
     d = PREFILL_ROOT / profile / jobid
     rep_file = d / "report.json"
@@ -639,7 +639,7 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
             pj = d / "persona.json"
             if not pj.exists():
                 return JSONResponse(
-                    {"error": "demo persona not saved — re-generate the fill"}, status_code=404)
+                    {"error": "анкета не сохранена — заполните заново"}, status_code=404)
             persona = json.loads(pj.read_text(encoding="utf-8"))
             from backend.profiles.store import Profile
             prof = Profile.from_dict(persona.get("profile") or {})
@@ -754,8 +754,8 @@ async function loadJob(jid){
       body:'jobid='+encodeURIComponent(jid)+'&profile='+encodeURIComponent(PROFILE)});
     const j=await r.json();
     if(j.error){if(r.status===423){alert(j.error);}s.textContent='Error: '+j.error;return;}
-    var sr=j.submit_result||{}; var msg=sr.clicked?('Submit pressed'+(sr.confirmed?' — confirmed':(sr.blocked?' — blocked: '+sr.blocked:' — awaiting confirmation'))):('not submitted ('+(sr.reason||'?')+') — review above');
-    s.textContent='✓ Filled '+(j.company||'')+' — '+msg+'. (filled '+j.filled+', left '+j.unfilled+')';
+    var sr=j.submit_result||{}; var msg=sr.clicked?('Отправлено'+(sr.confirmed?' — подтверждено':(sr.blocked?' — ошибка: '+sr.blocked:' — в процессе'))):('не отправлено ('+(sr.reason||'?')+') — проверьте');
+    s.textContent='✓ Заполнено '+(j.company||'')+' — '+msg+'. (заполнено '+j.filled+', осталось '+j.unfilled+')';
     document.getElementById('vnc').contentWindow.location.reload();
   }catch(e){s.textContent='Error: '+e;}
 }
@@ -767,7 +767,7 @@ async function markSubmitted(jid,btn){
     const j=await r.json();
     if(j.error){s.textContent='Error: '+j.error;return;}
     if(btn){btn.textContent='✓ submitted';btn.className='done';btn.disabled=true;}
-    s.textContent='✓ Marked submitted — it will leave the queue on reload.';
+    s.textContent='✓ Отмечено — исчезнет из очереди.';
   }catch(e){s.textContent='Error: '+e;}
 }
 """
@@ -788,16 +788,16 @@ async def home(profile: str = "michael"):
             "</div>"
             "<div class='btns'>"
             f"<button class='load' onclick=\"loadJob('{escape(j['_id'])}')\">Fill →</button>"
-            f"<button class='mark' onclick=\"markSubmitted('{escape(j['_id'])}',this)\">✓ mark submitted</button>"
+            f"<button class='mark' onclick=\"markSubmitted('{escape(j['_id'])}',this)\">✓ Подано</button>"
             "</div>"
             "</div>")
-    body = "".join(rows) or "<div class='hint'>No open jobs in the queue.</div>"
+    body = "".join(rows) or "<div class='hint'>Очередь пуста.</div>"
     novnc = "/vnc/vnc_lite.html?path=vnc/websockify&autoconnect=1&resize=scale&reconnect=1"
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Co-pilot — {escape(profile)}</title><style>{_CSS}</style></head><body>"
-        f"<div class='bar'><b>Co-pilot</b> — tap <b>Fill →</b>; the form is filled and Submit is pressed automatically (watch above).</div>"
+        f"<div class='bar'><b>Co-pilot</b> — форма и отправка происходят автоматически (смотрите выше).</div>"
         f"<iframe id='vnc' src='{novnc}'></iframe>"
         "<div id='status'></div>"
         f"<div class='jobs'>{body}</div>"

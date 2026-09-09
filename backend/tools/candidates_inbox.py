@@ -324,7 +324,7 @@ def render_message_fragment(message) -> str:
     try:
         return _msg_card(message)
     except Exception:
-        return '<div class="cg-msg-err">Не удалось показать письмо.</div>'
+        return '<div class="cg-msg-err">Не удалось открыть письмо</div>'
 
 
 # ------------------------------------------------------------------- full page
@@ -419,7 +419,7 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
                + _search(tab, stage, q) + '</div></div>')
     funnel = _funnel(tab, stage, q, stage_counts)
 
-    empty = '' if groups else '<div class="cg-empty">Кандидатов пока нет</div>'
+    empty = '' if groups else '<div class="cg-empty">Кандидатов нет</div>'
     # The sentinel keeps the paging state the infinite-scroll JS reads. It is inert (hidden)
     # when there is no next page; when there IS one it stays observable (1px, empty).
     next_off = offset + len(groups)
@@ -634,7 +634,7 @@ _CG_JS = """
       fetch('/mail/candidates/thread?mailbox=' + encodeURIComponent(card.dataset.mailbox || ''))
         .then(function(r){ return r.text(); })
         .then(function(h){ body.innerHTML = h; })
-        .catch(function(){ body.innerHTML = '<div class="cg-load">Не удалось загрузить письма.</div>'; card.dataset.loaded = '0'; });
+        .catch(function(){ body.innerHTML = '<div class="cg-load">Не удалось загрузить</div>'; card.dataset.loaded = '0'; });
     }
   };
 
@@ -650,7 +650,7 @@ _CG_JS = """
       fetch('/mail/candidates/message?id=' + encodeURIComponent(row.dataset.id || ''))
         .then(function(r){ return r.text(); })
         .then(function(h){ body.innerHTML = h; cgWireReply(body); })
-        .catch(function(){ body.innerHTML = '<div class="cg-msg-err">Не удалось загрузить письмо.</div>'; row.dataset.loaded = ''; });
+        .catch(function(){ body.innerHTML = '<div class="cg-msg-err">Не удалось загрузить</div>'; row.dataset.loaded = ''; });
     }
   };
 

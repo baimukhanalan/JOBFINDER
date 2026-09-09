@@ -1052,33 +1052,43 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
                           "generated": generated, "profile": pid}
     # Assign this application its own egress IP from the proxy pool (round-robin). The
     # co-pilot builds a fresh browser context for it. Empty pool -> no proxy -> direct.
-    load_data = {"jobid": jid, "profile": pid}
-    if wait_submit:
-        load_data["wait_submit"] = "1"
+    # Ordered egress candidates: the live phones FIRST (a different one per attempt — Ashby only
+    # accepts a residential/mobile IP), then the datacenter pool, then direct. On a co-pilot
+    # TRANSPORT failure (a dead/slow proxy makes the load raise) we move to the NEXT candidate; a
+    # 200 (even a blocked/incomplete fill) is a real result and stops the loop.
     try:
         from backend.tools import proxy_pool
-        px = proxy_pool.next_proxy()
+        candidates = proxy_pool.egress_candidates()
     except Exception:
-        px = None
-    if px and px.get("server"):
-        load_data["proxy_server"] = px["server"]
-        if px.get("username"):
-            load_data["proxy_username"] = px["username"]
-            load_data["proxy_password"] = px.get("password") or ""
-    # which egress this application goes out from: a residential slot (the owner's laptop
-    # chisel tunnel or the phone over Tailscale — next_proxy() prefers them), the datacenter
-    # pool, or direct. Ashby only accepts the residential kind.
-    logging.getLogger(__name__).info(
-        "fill job %s via %s", job_id,
-        ("residential " + px["server"]) if px and px.get("server", "").startswith("socks5://")
-        else (("proxy " + px["server"]) if px and px.get("server") else "DIRECT (datacenter IP)"))
-    try:
-        httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
-        # the inline watch holds up to WAIT_SUBMIT_MAX (300s) for the emailed code on top of the fill
-        r = httpx.post("http://127.0.0.1:8102/load", data=load_data, timeout=(600 if wait_submit else 240))
-        res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
-    except Exception as exc:
-        _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {exc}"[:200],
+        candidates = [None]
+    log = logging.getLogger(__name__)
+    last_exc = None
+    for attempt, px in enumerate(candidates):
+        load_data = {"jobid": jid, "profile": pid}
+        if wait_submit:
+            load_data["wait_submit"] = "1"
+        if px and px.get("server"):
+            load_data["proxy_server"] = px["server"]
+            if px.get("username"):
+                load_data["proxy_username"] = px["username"]
+                load_data["proxy_password"] = px.get("password") or ""
+        srv = (px or {}).get("server", "")
+        log.info("fill job %s via %s%s", job_id,
+                 ("mobile " + srv) if srv.startswith("socks5://")
+                 else (("proxy " + srv) if srv else "DIRECT (datacenter IP)"),
+                 f" (retry {attempt})" if attempt else "")
+        try:
+            httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
+            # the inline watch holds up to WAIT_SUBMIT_MAX (300s) for the emailed code on top of the fill
+            r = httpx.post("http://127.0.0.1:8102/load", data=load_data,
+                           timeout=(600 if wait_submit else 240))
+            res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+        except Exception as exc:
+            last_exc = exc
+            continue          # a transport failure -> try the next egress
+        break
+    else:
+        _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {last_exc}"[:200],
                               "novnc": _NOVNC_URL}
         return
     if r.status_code != 200:
@@ -1806,22 +1816,24 @@ def proxies_list():
 
 @app.get("/proxies/mobile")
 def proxies_mobile_status(force: str = ""):
-    """The owner's phone as a residential egress over Tailscale (backend/tools/mobile_proxy.py):
-    configured/enabled/alive + egress IP (cached 60s; ?force=1 re-probes)."""
+    """The pool of phones (their mobile IPs) on the Tailscale tailnet (backend/tools/mobile_proxy.py):
+    n_online/n_configured + per-endpoint alive+egress (cached 60s; ?force=1 re-probes + re-discovers)."""
     from backend.tools import mobile_proxy
     try:
         return JSONResponse(mobile_proxy.status(force=str(force) in ("1", "true")))
     except Exception as exc:
-        return JSONResponse({"configured": False, "alive": False, "error": str(exc)[:200]})
+        return JSONResponse({"configured": False, "enabled": False, "n_online": 0, "error": str(exc)[:200]})
 
 
 @app.post("/proxies/mobile")
-def proxies_mobile_set(enabled: str = Form(""), server: str = Form(None), note: str = Form(None)):
-    """Toggle / set the phone endpoint («socks5://100.x.y.z:1080» — its Tailscale IP)."""
+def proxies_mobile_set(enabled: str = Form(""), add: str = Form(None), remove: str = Form(None),
+                       server: str = Form(None), note: str = Form(None), match: str = Form(None)):
+    """Master on/off, add/remove a phone endpoint (its Tailscale IP «socks5://100.x.y.z:1080»),
+    or set the discovery hostname filter. `server` is a back-compat alias of `add`."""
     from backend.tools import mobile_proxy
     en = None if enabled == "" else (str(enabled).strip().lower() in ("1", "true", "on", "yes"))
     try:
-        mobile_proxy.update(enabled=en, server=server, note=note)
+        mobile_proxy.update(enabled=en, add=(add or server), remove=remove, note=note, match=match)
         return JSONResponse(mobile_proxy.status(force=True))
     except Exception as exc:
         return JSONResponse({"error": str(exc)[:200]}, status_code=400)

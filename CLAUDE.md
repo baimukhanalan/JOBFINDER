@@ -496,6 +496,35 @@ Assessment question-bank harvester (see the harvester section):
     artifacts in `uploads/prefill/<pid>/<jobid>/` (persona.json, resume.pdf, after_submit.png). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»
     creator, `#bulkName` and the `name` Form params of `catalog_fill`/`catalog_fill_all` are gone (the
     internal `name`/`email`/`pid` kwargs stay — the cron pins the persona through them).
+  - **«Мобильный прокси» → a POOL «Мобильные прокси (телефоны)» (owner, 2026-09-09 night: «чисто
+    для этого проекта нужен свой тейлскейл; будет много телефонов, в основном iPhone, фоллбэк
+    Android»).** `mobile_proxy.json` is now `{enabled, port(1080), discover:{enabled, match},
+    manual:[{server,note}], username, password, cursor}` (an old single-`server` file is migrated to
+    `manual:[…]` on load). `discover_endpoints()` runs `tailscale status --json` (4s, guarded, cached
+    30s) and builds `socks5://<peer 100.x ip>:<port>` for every ONLINE peer whose hostname matches
+    `discover.match` (""=all); `all_endpoints()` = manual ∪ discovered (deduped by host:port);
+    `live_servers()` (the hot path proxy_pool calls per fill, TCP-only, cached 15s) returns every one
+    answering now; `next_mobile()` round-robins the live set (persisted cursor). Because
+    `proxy_pool.residential_slots()` already appends `live_servers()` and `residential_proxy()`
+    round-robins across ALL slots, each fill goes out through a DIFFERENT phone. `_do_fill` now walks
+    `proxy_pool.egress_candidates()` (live phones first, rotated · then a datacenter-pool pick · then
+    None=direct) and on a co-pilot TRANSPORT failure moves to the next candidate — a dead phone never
+    blocks a fill. Surfaces: Health row «Мобильные прокси (телефоны)» (info/warn/ok · «N онлайн из M»
+    + sample egress IPs + tailnet name); the /catalog Фильтры → Прокси block lists every endpoint
+    (авто/вручную · online/egress) with add/remove + a «найти · проверить» discover button
+    (`GET/POST /proxies/mobile` — `add`/`remove`/`enabled`/`match`, `server` kept as an `add` alias);
+    CLI `mobile_proxy --check | --discover | --add | --rm | --on/--off | --tailnet-status`.
+    **Dedicated tailnet (owner-run — the fork does NOT touch accounts/keys):** create a project-only
+    tailnet, mint a REUSABLE, pre-authorized, tagged (`tag:jf-phone`) auth key, then on the server
+    `python -m backend.tools.mobile_proxy --join-tailnet <KEY> --yes` (dry-run without `--yes`; the key
+    is NEVER stored/logged — `join_argv()` is pure, the CLI masks it to `--authkey=***`); switching
+    tailnets drops the current personal one (this node is project-only, fine). Each phone joins with
+    the same key/tag and runs a SOCKS server on the shared port. **iOS reality:** pure-iPhone (iSH
+    microsocks) is FOREGROUND-only — for cron-grade, tether the iPhone (Personal Hotspot) to a cheap
+    always-on box (old Android/RPi) on the tailnet running microsocks → a durable iPhone mobile IP.
+    Tests: `test_mobile_proxy.py` (11: settings+migration, discovery-from-fixture+match, dedup, live
+    filter, next_mobile round-robin, egress_candidates order, join-argv masking, the `_do_fill`
+    phone-rotation/fallback, Health states). BLOCKED on the owner: the auth key + phones online.
   - **Каталог cards carry NO per-card action (owner, late 2026-09-09: «убрать М/Ж и Заполнить —
     вручную ничего не будет»)** — the М/Ж toggle and the one-click «Заполнить» are gone from the card
     (the `/catalog/{id}/fill` route stays for «Незавершённые → Докрутить»; `pickSex` stays for the

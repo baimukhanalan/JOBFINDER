@@ -348,6 +348,48 @@ def replace_pool(proxies: list[dict]) -> dict:
     return {"count": len(data["proxies"])}
 
 
+def egress_candidates(max_residential: int = 3) -> list:
+    """Ordered egress choices for ONE fill that wants to retry on a dead proxy: every live
+    residential slot (phones + laptop tunnels) FIRST — distinct, rotated so different fills start
+    on different phones — then one datacenter-pool pick, then None (direct). A caller tries them
+    in order until the co-pilot load succeeds. Always ends with None so a fill is never blocked."""
+    global _res_cursor
+    out, seen = [], set()
+    slots = residential_slots()
+    if slots:
+        with _LOCK:
+            start = _res_cursor
+            _res_cursor += 1
+        for k in range(len(slots)):
+            srv = slots[(start + k) % len(slots)]
+            if srv not in seen:
+                seen.add(srv)
+                out.append({"server": srv, "username": None, "password": None})
+            if len(out) >= max_residential:
+                break
+    pool = _pool_pick()
+    if pool:
+        out.append(pool)
+    out.append(None)
+    return out
+
+
+def _pool_pick() -> dict | None:
+    """One datacenter Bright Data pick (the healthiest tier), or None if the pool is empty."""
+    with _LOCK:
+        data = _load()
+        ps = data.get("proxies") or []
+        if not ps:
+            return None
+        min_fails = min(int(p.get("fails", 0)) for p in ps)
+        pool = [p for p in ps if int(p.get("fails", 0)) <= min_fails] or ps
+        i = int(data.get("cursor", 0)) % len(pool)
+        data["cursor"] = (i + 1) % len(pool)
+        _save(data)
+        p = pool[i]
+    return {"server": p.get("server"), "username": p.get("username"), "password": p.get("password")}
+
+
 def next_proxy() -> dict | None:
     """Round-robin the pool (advances + persists the cursor). Returns
     {server, username, password} or None when the pool is empty.

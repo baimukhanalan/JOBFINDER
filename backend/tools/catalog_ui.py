@@ -356,20 +356,23 @@ def render_page(company: str = "", q: str = "", region: str = "",
         '<button class="px-toggle" id="pxToggle" onclick="pxToggleList()" hidden>показать</button>'
         '</div>'
         '<div class="cat-proxy-list" id="pxList" hidden></div>'
-        # the owner's phone as a residential egress over Tailscale (mobile_proxy.py): status line +
-        # on/off + the phone's tailnet address. When it is online every fill goes out through it.
+        # the POOL of phones (their mobile IPs) on the Tailscale tailnet (mobile_proxy.py): an
+        # aggregate status line + master on/off + a discovered/manual endpoint list + add-by-IP.
+        # While any phone is online every fill round-robins across them.
         '<div class="px-mobile" id="pxMobile">'
         '<div class="px-mobile-row"><span class="px-dot" id="pxMobDot"></span>'
-        '<b>Мобильный прокси</b> <span class="px-mobile-st" id="pxMobSt">—</span>'
+        '<b>Мобильные прокси</b> <span class="px-mobile-st" id="pxMobSt">—</span>'
         '<label class="px-mobile-sw"><input type="checkbox" id="pxMobOn" onchange="pxMobileSave(this)">'
         '<span>вкл</span></label></div>'
+        '<div class="px-mobile-list" id="pxMobList"></div>'
         '<div class="px-mobile-row"><input type="text" class="px-mobile-in" id="pxMobSrv" '
         'placeholder="socks5://100.x.y.z:1080" autocomplete="off" spellcheck="false">'
-        '<button type="button" class="px-toggle" onclick="pxMobileSave()">сохранить</button>'
-        '<button type="button" class="px-toggle" onclick="pxMobileRefresh(true)">проверить</button></div>'
-        '<div class="cat-proxy-hint">Телефон в сети Tailscale с запущенным SOCKS-прокси: его адрес 100.x.y.z '
-        'из Tailscale. Пока он онлайн, все подачи идут с мобильного IP (это снимает спам-отказы Ashby); '
-        'выключен телефон — откат на пул/напрямую.</div></div>'
+        '<button type="button" class="px-toggle" onclick="pxMobileAdd()">добавить</button>'
+        '<button type="button" class="px-toggle" onclick="pxMobileRefresh(true)">найти · проверить</button></div>'
+        '<div class="cat-proxy-hint">Телефоны в сети Tailscale с запущенным SOCKS-прокси (в основном '
+        'iPhone). Онлайн-телефоны находятся сами; можно добавить адрес 100.x.y.z вручную. Пока хоть один '
+        'онлайн — подачи идут с мобильных IP по кругу (снимает спам-отказы Ashby); ни одного — откат на '
+        'пул/напрямую.</div></div>'
         '<details class="px-add">'
         '<summary>Добавить прокси</summary>'
         '<textarea id="pxText" placeholder="host:port:user:pass&#10;'
@@ -679,6 +682,13 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .px-mobile-sw input{width:18px;height:18px;margin:0}
 .px-mobile-in{flex:1 1 180px;min-width:0;height:36px;border:1px solid var(--line-strong);border-radius:var(--r-full);padding:0 12px;font-size:14px;font-family:var(--ff-mono);background:var(--panel);color:var(--ink)}
 .px-mobile .px-dot{background:var(--ink-mute);box-shadow:none}.px-mobile .px-dot.px-ok{background:var(--ok);box-shadow:0 0 0 3px rgba(11,128,67,.18)}.px-mobile .px-dot.px-bad{background:var(--danger)}
+.px-mobile-list{margin:6px 0 0;display:flex;flex-direction:column;gap:4px}
+.px-mob-ep{display:flex;align-items:center;gap:7px;font-size:12.5px;flex-wrap:wrap}
+.px-mob-srv{font-family:var(--ff-mono);color:var(--ink)}
+.px-mob-tag{font-size:11px;color:var(--ink-soft);border:1px solid var(--line);border-radius:999px;padding:0 7px}
+.px-mob-ip{color:var(--ink-soft);margin-left:auto;font-family:var(--ff-mono);font-size:11.5px}
+.px-mob-x{border:0;background:none;color:var(--ink-mute);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+.px-mob-x:hover{color:var(--danger)}
 .cs-camp-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .cs-camp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
 .cs-camp-row button{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-sm);padding:3px 9px;font-size:12px;cursor:pointer}
@@ -1019,27 +1029,53 @@ async function pxRefresh(){
     if(list && !list.hidden) pxRenderList(s.ips);
   }catch(e){}
 }
-// «Мобильный прокси» (the phone over Tailscale): status + on/off + endpoint. Re-entrant, gen-guarded.
+// «Мобильные прокси» (a pool of phones over Tailscale): aggregate status + on/off + endpoint list
+// + add/remove. Re-entrant, gen-guarded.
 window.pxMobileRefresh=async function(force){
   var st=document.getElementById('pxMobSt'), dot=document.getElementById('pxMobDot'),
-      on=document.getElementById('pxMobOn'), srv=document.getElementById('pxMobSrv');
+      on=document.getElementById('pxMobOn'), list=document.getElementById('pxMobList');
   if(!st) return;
-  var gen=window.__jfGen; if(force && st) st.textContent='проверяю…';
+  var gen=window.__jfGen; if(force && st) st.textContent='ищу телефоны…';
   try{
     var j=await (await fetch('/proxies/mobile'+(force?'?force=1':''))).json();
     if(gen!==window.__jfGen) return;
     if(on) on.checked=!!j.enabled;
-    if(srv && document.activeElement!==srv) srv.value=j.server||'';
-    var txt = !j.configured ? 'не настроен' : (!j.enabled ? 'выключен' : (j.alive ? ('онлайн · IP '+(j.egress||'?')) : 'не отвечает (телефон офлайн?)'));
-    st.textContent=txt;
-    if(dot){ dot.className='px-dot'+(j.configured&&j.enabled ? (j.alive?' px-ok':' px-bad') : ''); }
+    var n=j.n_online||0, m=j.n_configured||0, tn=j.tailnet?(' · '+j.tailnet):'';
+    st.textContent = !j.configured ? ('нет телефонов'+tn)
+      : (!j.enabled ? (m+' настроено · выключено'+tn) : (n+' онлайн из '+m+tn));
+    if(dot){ dot.className='px-dot'+(j.configured&&j.enabled ? (n>0?' px-ok':' px-bad') : ''); }
+    if(list){
+      var eps=j.endpoints||[];
+      list.innerHTML = eps.length ? eps.map(function(e){
+        var cls=e.alive?'px-ok':'px-bad', tag=e.source==='discovered'?'авто':'вручную';
+        return '<div class="px-mob-ep"><span class="px-dot '+cls+'"></span>'
+          +'<span class="px-mob-srv">'+(e.server||'').replace('socks5://','')+'</span>'
+          +'<span class="px-mob-tag">'+tag+'</span>'
+          +'<span class="px-mob-ip">'+(e.alive?('IP '+(e.egress||'?')):'офлайн')+'</span>'
+          +(e.source==='manual'?'<button type="button" class="px-mob-x" data-rm="'+catEsc(e.server||'')+'" onclick="pxMobileRemove(this)" title="убрать">✕</button>':'')
+          +'</div>';
+      }).join('') : '<div class="cat-proxy-hint" style="margin:0">Телефоны не найдены. Подключи телефон к tailnet, запусти на нём SOCKS на порту 1080, затем «найти».</div>';
+    }
   }catch(e){ st.textContent='ошибка'; }
 };
 window.pxMobileSave=async function(cb){
-  var on=document.getElementById('pxMobOn'), srv=document.getElementById('pxMobSrv'), st=document.getElementById('pxMobSt');
+  var on=document.getElementById('pxMobOn'), st=document.getElementById('pxMobSt');
   var fd=new FormData(); fd.append('enabled', on&&on.checked?'1':'0');
-  if(srv && srv.value.trim()) fd.append('server', srv.value.trim());
   if(st) st.textContent='сохраняю…';
+  try{ await fetch('/proxies/mobile',{method:'POST',body:fd}); }catch(e){}
+  pxMobileRefresh(true);
+};
+window.pxMobileAdd=async function(){
+  var srv=document.getElementById('pxMobSrv'), st=document.getElementById('pxMobSt');
+  if(!srv || !srv.value.trim()) return;
+  var fd=new FormData(); fd.append('add', srv.value.trim());
+  if(st) st.textContent='добавляю…';
+  try{ await fetch('/proxies/mobile',{method:'POST',body:fd}); srv.value=''; }catch(e){}
+  pxMobileRefresh(true);
+};
+window.pxMobileRemove=async function(el){
+  var server=(el&&el.dataset&&el.dataset.rm)||el; if(!server) return;
+  var fd=new FormData(); fd.append('remove', server);
   try{ await fetch('/proxies/mobile',{method:'POST',body:fd}); }catch(e){}
   pxMobileRefresh(true);
 };

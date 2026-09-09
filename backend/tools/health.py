@@ -770,26 +770,29 @@ def proxy_rows() -> list[dict]:
         rows.append(_row("Пул прокси", st, f"{cnt} живых · проверка {lc_s}", hint))
     except Exception as exc:
         rows.append(_row("Пул прокси", "warn", f"n/a: {str(exc)[:70]}", hint))
-    # the owner's phone as a residential egress over Tailscale (backend/tools/mobile_proxy.py)
-    mhint = ("Телефон владельца в сети Tailscale отдаёт SOCKS-прокси (мобильный IP) — единственный egress, "
-             "который Ashby не помечает как спам (с датацентрового IP отбивает все подачи). Когда телефон "
-             "онлайн, ко-пилот сам идёт через него; выключен телефон — откат на пул/напрямую. Настройка: "
-             "Каталог → Фильтры → Прокси → «Мобильный прокси», проверка: `mobile_proxy --check`.")
+    # the pool of phones (their mobile IPs) on the project Tailscale tailnet (mobile_proxy.py)
+    mname = "Мобильные прокси (телефоны)"
+    mhint = ("Телефоны в сети Tailscale отдают SOCKS-прокси (мобильные IP) — единственный egress, "
+             "который Ashby не помечает как спам (с датацентрового IP отбивает все подачи). Пул находит "
+             "все онлайн-телефоны сам и раскидывает подачи по кругу; ни одного онлайн — откат на пул/напрямую. "
+             "Настройка: Каталог → Фильтры → Прокси → «Мобильные прокси», проверка: `mobile_proxy --check`.")
     try:
         from backend.tools import mobile_proxy
         ms = mobile_proxy.status()
+        tn = ms.get("tailnet") or "?"
+        n_on, n_cfg = int(ms.get("n_online") or 0), int(ms.get("n_configured") or 0)
         if not ms.get("configured"):
-            rows.append(_row("Мобильный прокси (телефон)", "info", "не настроен", mhint))
+            rows.append(_row(mname, "info", f"не настроен · tailnet {tn}", mhint))
         elif not ms.get("enabled"):
-            rows.append(_row("Мобильный прокси (телефон)", "info", f"выключен · {ms.get('server')}", mhint))
-        elif ms.get("alive"):
-            rows.append(_row("Мобильный прокси (телефон)", "ok",
-                             f"онлайн · egress {ms.get('egress')} · {ms.get('server')}", mhint))
+            rows.append(_row(mname, "info", f"выключен · {n_cfg} эндпоинтов · tailnet {tn}", mhint))
+        elif n_on:
+            ips = ", ".join(ms.get("egress_samples") or []) or "—"
+            rows.append(_row(mname, "ok", f"{n_on} онлайн из {n_cfg} · IP {ips} · tailnet {tn}", mhint))
         else:
-            rows.append(_row("Мобильный прокси (телефон)", "warn",
-                             f"настроен, но не отвечает · {ms.get('server')} (телефон офлайн / прокси не запущен)", mhint))
+            rows.append(_row(mname, "warn",
+                             f"настроено {n_cfg}, но ни один телефон не онлайн · tailnet {tn}", mhint))
     except Exception as exc:
-        rows.append(_row("Мобильный прокси (телефон)", "warn", f"n/a: {str(exc)[:70]}", mhint))
+        rows.append(_row(mname, "warn", f"n/a: {str(exc)[:70]}", mhint))
     try:
         from backend.config import settings
         zone = settings.brightdata_zone or "—"

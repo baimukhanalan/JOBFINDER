@@ -74,24 +74,41 @@ def main() -> None:
             log.info("campaign %s (%s): nothing to apply today (per_day=%s runs_today=%s)",
                      c.get("id"), c.get("name"), c.get("per_day"), c.get("runs_today"))
             continue
-        done = []
+        done, attempted = [], []
         for jid in targets:
             try:
-                _do_fill(int(jid), c.get("gender") or None, c.get("name"),
-                         c.get("email"), c.get("pid"))
+                # a fresh mailbox + persona id per application (same name), unless the campaign
+                # is pinned to one mailbox; wait_submit so the emailed code is finished inline
+                email, pid = apply_campaigns.next_identity(c.get("id"))
+                log.info("campaign %s job %s as %s <%s>", c.get("id"), jid, c.get("name"), email)
+                _do_fill(int(jid), c.get("gender") or None, c.get("name"), email, pid,
+                         wait_submit=True)
+                attempted.append(int(jid))
                 st = _FILL_JOBS.get(int(jid), {}) or {}
+                sub = st.get("submit") or {}
                 log.info("campaign %s job %s -> %s%s", c.get("id"), jid, st.get("state"),
-                         (" submit=" + str((st.get("submit") or {}).get("reason") or
-                                           (st.get("submit") or {}).get("confirmed"))) if st.get("submit") else "")
-                # _do_fill never raises — a failed fill is state 'error'. Only a fill that ran counts
-                # against the daily budget / advances the rotation; a failure is retried next run.
+                         (" submit=" + str(sub.get("reason") or sub.get("confirmed"))) if sub else "")
+                # A posting the co-pilot found NO form for is gone at the ATS (the first live run
+                # hit one) — mark it dead so the rotation skips it from now on.
+                if apply_campaigns.fill_is_dead_posting(st):
+                    try:
+                        from backend.tools import catalog_db
+                        row = catalog_db.jobs_by_ids([int(jid)]).get(int(jid)) or {}
+                        if row.get("ats") and row.get("external_id"):
+                            catalog_db.mark_dead([(row["ats"], row.get("company_key"), row["external_id"])],
+                                                 "campaign: no form at the ATS (posting gone)")
+                            log.info("campaign %s job %s marked DEAD (no form)", c.get("id"), jid)
+                    except Exception as exc:
+                        log.info("campaign %s job %s mark_dead failed: %s", c.get("id"), jid, str(exc)[:120])
+                # Only a fill that really pressed Submit spends the daily budget; anything else is
+                # retried on a later lap (the cursor still moves past it).
                 if apply_campaigns.fill_counts_as_done(st):
                     done.append(int(jid))
                     total += 1
             except Exception as exc:
                 log.info("campaign %s job %s ERROR %s", c.get("id"), jid, str(exc)[:160])
-        if done:
-            apply_campaigns.note_run(c.get("id"), done, today)
+        if attempted:
+            apply_campaigns.note_run(c.get("id"), done, today, attempted=attempted)
     log.info("apply-campaigns done: %d applications across %d campaigns", total, len(active))
 
 

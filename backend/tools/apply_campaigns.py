@@ -29,6 +29,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import random
 import re
 import threading
 from contextlib import contextmanager
@@ -89,6 +90,45 @@ def _stable_email(name: str, cid: int) -> str:
         return f"campaign.c{cid}@takhet.com"
     local, _, dom = base.partition("@")
     return f"{local}.c{cid}@{dom or 'takhet.com'}"
+
+
+def next_identity(cid: int, exists=None) -> tuple[str, str]:
+    """Per-APPLICATION identity for a campaign (owner 2026-09-09: «пусть почта меняется на каждую
+    подачу»): the NAME stays the campaign's, every application gets a FRESH @takhet.com mailbox +
+    persona id — `first.last<N>@` like any synthetic persona, N from a per-campaign base counter,
+    skipping addresses the CRM already knows. `seq` is persisted BEFORE the fill so a crash never
+    reuses a mailbox. A campaign with `email_mode != 'per_apply'` keeps its one fixed mailbox."""
+    if exists is None:
+        def exists(email: str) -> bool:
+            try:
+                from backend.tools import mailcrm
+                return any((c.get("email") or "").lower() == email.lower() for c in mailcrm.candidates())
+            except Exception:
+                return False
+    with _LOCK, _file_lock():
+        rows = _load()
+        camp = next((r for r in rows if int(r.get("id", 0)) == int(cid)), None)
+        if camp is None:
+            raise KeyError(cid)
+        if camp.get("email_mode", "per_apply") != "per_apply":
+            return camp["email"], camp["pid"]
+        from backend.tools.catalog_drafts import derive_email
+        base = derive_email(camp.get("name") or "") or f"campaign.c{cid}@takhet.com"
+        local, _, dom = base.partition("@")
+        dom = dom or "takhet.com"
+        if not camp.get("seq_base"):
+            camp["seq_base"] = random.randint(120, 9000)
+        n = int(camp["seq_base"])
+        for _ in range(50):
+            camp["seq"] = int(camp.get("seq") or 0) + 1
+            n = int(camp["seq_base"]) + int(camp["seq"])
+            email = f"{local}{n}@{dom}"
+            if not exists(email):
+                break
+        slug = re.sub(r"[^a-z0-9]+", "", (camp.get("name") or "").lower())[:16] or "x"
+        pid = f"demo_camp{cid}_{slug}_{n}"
+        _save(rows)
+        return email, pid
 
 
 def list_campaigns() -> list:
@@ -171,6 +211,8 @@ def create(*, name: str, target_kind: str, job_id=None, job_ids=None, q: str = "
             "per_day": per_day,
             "email": _stable_email(name, cid),
             "pid": f"demo_camp{cid}_{re.sub(r'[^a-z0-9]+', '', name.lower())[:16] or 'x'}",
+            # owner 2026-09-09: a NEW mailbox per application (same name) — see next_identity()
+            "email_mode": "per_apply", "seq": 0, "seq_base": random.randint(120, 9000),
             "active": True, "applied_jobids": [], "runs_today": 0,
             "last_run_date": today or "", "created": today or "",
         }
@@ -297,12 +339,14 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     return out
 
 
-def note_run(cid: int, jobids, today: str) -> None:
-    """Record an executed run: append applied jobids + bump runs_today (rolling the counter on a
-    new day); a `jobs` campaign also advances its rotation `cursor` by the number of jobs actually
-    DONE (so a failed fill is retried next run, not skipped). Called by the cron after it fills
-    the resolved targets — pass ONLY the jobs that ran."""
+def note_run(cid: int, jobids, today: str, attempted=None) -> None:
+    """Record an executed run: `jobids` = the jobs that really APPLIED (spend the budget, join
+    applied_jobids); `attempted` = every job the run tried (default: the same list). A `jobs`
+    campaign moves its rotation `cursor` past the LAST ATTEMPTED job, so a job that failed today
+    (dead, incomplete, error) doesn't pin the rotation — it comes round again next lap, and a
+    dead one is skipped by then (the cron marks it dead)."""
     jobids = [int(j) for j in (jobids or [])]
+    attempted = [int(j) for j in (attempted if attempted is not None else jobids)]
     with _LOCK, _file_lock():
         rows = _load()
         for r in rows:
@@ -313,17 +357,32 @@ def note_run(cid: int, jobids, today: str) -> None:
                 r["applied_jobids"] = sorted(have)
                 r["runs_today"] = int(r.get("runs_today", 0)) + len(jobids)
                 r["last_run_date"] = today
-                if r.get("target_kind") == "jobs" and jobids:
-                    # the rotation resumes right AFTER the last job actually done — the same
-                    # position space resolve_targets walks (dead ids were skipped, not counted)
+                if r.get("target_kind") == "jobs" and attempted:
+                    # the rotation resumes right AFTER the last job attempted — the same position
+                    # space resolve_targets walks (dead ids were skipped, not counted)
                     sel = [int(x) for x in (r.get("job_ids") or [])]
-                    if sel and jobids[-1] in sel:
-                        r["cursor"] = (sel.index(jobids[-1]) + 1) % len(sel)
+                    if sel and attempted[-1] in sel:
+                        r["cursor"] = (sel.index(attempted[-1]) + 1) % len(sel)
         _save(rows)
 
 
 def fill_counts_as_done(fill_state: dict | None) -> bool:
     """Whether a `dashboard_app._do_fill` outcome (its `_FILL_JOBS[jid]` entry) counts as an
-    application that RAN — i.e. spends the day's budget and advances a `jobs` rotation. `_do_fill`
-    never raises: a failed fill is `state == 'error'`, which must be retried next run, not billed."""
-    return bool(fill_state) and (fill_state or {}).get("state") == "done"
+    APPLICATION — i.e. spends the day's budget. Only a fill that really pressed Submit (the
+    co-pilot's `submit_result.clicked`/`confirmed`) counts; a filled-but-not-submitted form
+    (`incomplete`/`needs_review`), a dead posting (`no_form`) or an `error` does not (the first
+    live campaign run billed a `no_form` on a posting gone from the ATS as one of its 3/day)."""
+    st = fill_state or {}
+    if st.get("state") != "done":
+        return False
+    sub = st.get("submit")
+    if sub is None:
+        return True          # a fill without a submit phase (dry-run style) — nothing to judge
+    return bool(sub.get("clicked") or sub.get("confirmed"))
+
+
+def fill_is_dead_posting(fill_state: dict | None) -> bool:
+    """The co-pilot found NO form (`submit_result.reason == 'no_form'`): the posting is gone at
+    the ATS (a 404/'job not found' page) — mark it dead so the rotation skips it."""
+    sub = ((fill_state or {}).get("submit") or {})
+    return sub.get("reason") == "no_form"

@@ -243,12 +243,29 @@ def test_jobs_cursor_walks_full_list_past_a_dead_gap(tmp_path, monkeypatch):
     assert ac.list_campaigns()[0]["cursor"] == 1
 
 
-def test_fill_counts_as_done_only_for_a_completed_fill():
+def test_fill_counts_as_done_only_for_a_real_submit():
     assert ac.fill_counts_as_done({"state": "done", "submit": {"confirmed": True}})
-    assert ac.fill_counts_as_done({"state": "done"})
+    assert ac.fill_counts_as_done({"state": "done", "submit": {"clicked": True, "confirmed": False}})
+    assert ac.fill_counts_as_done({"state": "done"})                       # no submit phase at all
+    # filled but never submitted, a dead posting, an error, still running -> not an application
+    assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": False, "reason": "incomplete"}})
+    assert not ac.fill_counts_as_done({"state": "done", "submit": {"clicked": False, "reason": "no_form"}})
     assert not ac.fill_counts_as_done({"state": "error", "error": "timeout"})
     assert not ac.fill_counts_as_done({"state": "running"})
     assert not ac.fill_counts_as_done({}) and not ac.fill_counts_as_done(None)
+    assert ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form"}})
+    assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "incomplete"}})
+
+
+def test_note_run_cursor_moves_past_the_last_attempted_not_only_done(tmp_path, monkeypatch):
+    # the first live run: job A dead (no_form), B and C attempted; only C submitted -> budget 1,
+    # cursor after C (a dead A doesn't pin the rotation; it is marked dead by the cron anyway)
+    _use_tmp(tmp_path, monkeypatch)
+    _jobs_campaign([1, 2, 3, 4], per_day=3)
+    ac.note_run(1, [3], "2026-09-09", attempted=[1, 2, 3])
+    c = ac.list_campaigns()[0]
+    assert c["runs_today"] == 1 and c["applied_jobids"] == [3] and c["cursor"] == 3
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=lambda ids: {i: {"id": i} for i in ids}) == [4, 1]
 
 
 def test_jobs_skips_dead_ids_without_advancing(tmp_path, monkeypatch):
@@ -294,3 +311,20 @@ def test_jobs_inactive_or_empty_selection_resolves_nothing(tmp_path, monkeypatch
     # a hand-edited row with no selection is skipped, not a crash (the cron just logs "nothing")
     c = dict(c, active=True, job_ids=[])
     assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive([])) == []
+
+
+def test_next_identity_fresh_mailbox_per_application(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    _jobs_campaign([1, 2], per_day=2, name="Dana Erlan")
+    c = ac.list_campaigns()[0]
+    assert c["email_mode"] == "per_apply" and c["seq"] == 0 and 120 <= c["seq_base"] <= 9000
+    taken = {f"dana.erlan{c['seq_base'] + 1}@takhet.com"}       # pretend the CRM already has it
+    e1, p1 = ac.next_identity(1, exists=lambda e: e in taken)
+    e2, p2 = ac.next_identity(1, exists=lambda e: e in taken)
+    assert e1.startswith("dana.erlan") and e1.endswith("@takhet.com") and e1 not in taken
+    assert e2 != e1 and p2 != p1 and p1.startswith("demo_camp1_danaerlan_")
+    assert ac.list_campaigns()[0]["seq"] == 3                   # 1 skipped (taken) + 2 issued
+    # a campaign pinned to one mailbox keeps it
+    ac.list_campaigns()  # noqa
+    rows = ac._load(); rows[0]["email_mode"] = "fixed"; ac._save(rows)
+    assert ac.next_identity(1, exists=lambda e: False) == (c["email"], c["pid"])

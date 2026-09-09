@@ -1034,7 +1034,11 @@ _FILL_JOBS: dict[int, dict] = {}
 
 
 def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
-             email: str | None = None, pid: str | None = None) -> None:
+             email: str | None = None, pid: str | None = None, *, wait_submit: bool = False) -> None:
+    """One fill on the single co-pilot. `wait_submit=True` (the SEQUENTIAL campaign cron) makes
+    the co-pilot finish the emailed-code confirmation INLINE before returning — the default
+    background watch is cancelled by the very next /load, so a sequential caller that moves on
+    to the next job would leave every GH/Ashby application unconfirmed (first live campaign run)."""
     import httpx
 
     from backend.tools import catalog_drafts
@@ -1049,6 +1053,8 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
     # Assign this application its own egress IP from the proxy pool (round-robin). The
     # co-pilot builds a fresh browser context for it. Empty pool -> no proxy -> direct.
     load_data = {"jobid": jid, "profile": pid}
+    if wait_submit:
+        load_data["wait_submit"] = "1"
     try:
         from backend.tools import proxy_pool
         px = proxy_pool.next_proxy()
@@ -1061,7 +1067,8 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
             load_data["proxy_password"] = px.get("password") or ""
     try:
         httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
-        r = httpx.post("http://127.0.0.1:8102/load", data=load_data, timeout=240)
+        # the inline watch holds up to WAIT_SUBMIT_MAX (300s) for the emailed code on top of the fill
+        r = httpx.post("http://127.0.0.1:8102/load", data=load_data, timeout=(600 if wait_submit else 240))
         res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
     except Exception as exc:
         _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {exc}"[:200],

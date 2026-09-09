@@ -447,7 +447,28 @@ Assessment question-bank harvester (see the harvester section):
     `_do_fill` never raises, so an `error` fill used to spend the daily budget. Mutations take an
     `fcntl` sidecar lock (`apply_campaigns.lock`) besides the RLock: the cron and the dashboard are
     different processes rewriting one JSON. Kinds `job`/`search` unchanged. `apply_campaign_cron
-    --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (19). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»
+    --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (21).
+    **FIRST LIVE RUN (owner's campaign «Dana Erlan», 243 Salmon/KZ jobs, 3/day, 2026-09-09 20:00)
+    taught three things, all fixed the same evening:** (1) **a fresh mailbox per application** —
+    owner: «пусть почта меняется на каждую подачу» — `apply_campaigns.next_identity(cid)` issues
+    `first.last<N>@takhet.com` + `demo_camp<cid>_<slug>_<N>` per fill (N = a per-campaign random
+    `seq_base` + a persisted `seq`, skipping addresses `mailcrm.candidates()` already knows; the
+    NAME stays); rows carry `email_mode='per_apply'` (a `fixed` row keeps its one mailbox). So one
+    campaign = many CRM cards with the same name. (2) **`_do_fill(..., wait_submit=True)`** from
+    the cron: the single co-pilot's background email-code watch is cancelled by the very next
+    `/load`, so a sequential caller left every GH/Ashby application unconfirmed — the cron now
+    finishes the code INLINE (httpx timeout 600s). (3) **honest accounting:** `fill_counts_as_done`
+    = state done AND `submit_result.clicked/confirmed`; a `no_form` fill (`fill_is_dead_posting`)
+    marks the posting dead in the catalog (`catalog_db.mark_dead`) — the first run hit a Salmon
+    posting gone from the Ashby board that the catalog still listed; `note_run(..., attempted=)`
+    moves the cursor past the last ATTEMPTED job (a dead/failed one never pins the rotation) while
+    only real submits spend the daily budget. **Reality check:** Salmon is Ashby, and Ashby flags
+    the datacenter IP as spam on a risk-scored share of submits (after_submit.png: «flagged as
+    possible spam») — a KZ campaign over Salmon will lose many submits to that ceiling; the only
+    cure is a residential egress (Bright Data zone `alibaba_res`) — owner's call. To run a campaign
+    NOW instead of waiting for the `8 1,7,13,19` cron: the crontab line verbatim under `sg mail` +
+    `DISPLAY=:98`; per-job results in `logs/apply_campaigns.log` (`-> done submit=clicked|no_form|…`),
+    artifacts in `uploads/prefill/<pid>/<jobid>/` (persona.json, resume.pdf, after_submit.png). The Фильтры sheet keeps only the campaigns LIST (pause/delete); its inline «Создать из поиска»
     creator, `#bulkName` and the `name` Form params of `catalog_fill`/`catalog_fill_all` are gone (the
     internal `name`/`email`/`pid` kwargs stay — the cron pins the persona through them).
   - **Каталог cards carry NO per-card action (owner, late 2026-09-09: «убрать М/Ж и Заполнить —

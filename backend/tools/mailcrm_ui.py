@@ -495,7 +495,10 @@ button.primary:hover{background:var(--accent-deep);}
   .head-actions{gap:6px;}
   /* top-pill already names the tab -> the in-body primary moves to the FAB slot, and the
      in-body title is hidden (only for the _page_head partial) to save the top inch. */
-  .hbtn-compose,.hbtn-kw,.ph-primary{display:none;}
+  /* `button.primary.ph-primary` (0,2,1) — plain `.ph-primary` (0,1,0) lost to the shell's
+     `button.primary{display:inline-flex}`, so the header primary was DUPLICATED on phones (header +
+     FAB). The contract: on a phone the primary lives ONLY in the .fab-compose thumb slot. */
+  .hbtn-compose,.hbtn-kw,.ph-primary,button.primary.ph-primary{display:none;}
   .page-head:has(.ph-titlewrap) .ph-title{display:none;}
   .page-head:has(.ph-titlewrap){flex-wrap:nowrap;align-items:center;}
   .page-head:has(.ph-titlewrap) .ph-left{flex:1;min-width:0;}
@@ -511,7 +514,8 @@ button.primary:hover{background:var(--accent-deep);}
     cursor:pointer;box-shadow:0 6px 18px -4px rgba(12,71,194,.55);overflow:hidden;
     transition:padding .26s cubic-bezier(.4,0,.2,1),gap .26s cubic-bezier(.4,0,.2,1),border-radius .26s cubic-bezier(.4,0,.2,1);}
   .fab-compose svg{width:22px;height:22px;flex:0 0 auto;}
-  .fab-compose span{white-space:nowrap;overflow:hidden;max-width:130px;transition:max-width .26s cubic-bezier(.4,0,.2,1),opacity .2s ease;}
+  /* 200px fits the longest page primary («Докрутить всё (56)») at 390px without clipping. */
+  .fab-compose span{white-space:nowrap;overflow:hidden;max-width:200px;transition:max-width .26s cubic-bezier(.4,0,.2,1),opacity .2s ease;}
   /* scrolling down collapses it to a round pen (Gmail); scrolling up expands it back.
      Width is left auto so it follows the animating label — no jump from an `auto` width. */
   .fab-compose.collapsed{padding:0 15px;gap:0;border-radius:50%;}

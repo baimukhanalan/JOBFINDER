@@ -670,15 +670,16 @@ def unfinished_index():
            ".unf-meta{margin-top:5px;font-size:11.5px;color:var(--ink-mute);font-family:var(--ff-mono)}"
            ".unf-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:13px}"
            ".unf-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:120px;"
-           "background:#0b8043;color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);"
-           "font-size:var(--ctl-fs);font-weight:700;cursor:pointer;box-shadow:0 1px 2px rgba(11,128,67,.3);"
+           "background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);"
+           "font-size:var(--ctl-fs);font-weight:700;cursor:pointer;box-shadow:0 1px 2px rgba(12,71,194,.3);"
            "transition:background .16s,transform .12s,box-shadow .16s}"
-           ".unf-go:hover{background:#0a7038;box-shadow:0 3px 10px rgba(11,128,67,.32)}"
+           ".unf-go:hover{background:var(--accent-deep);box-shadow:0 3px 10px rgba(12,71,194,.32)}"
            ".unf-go:active{transform:translateY(1px) scale(.985)}"
            ".unf-go:disabled{opacity:.75;cursor:default;box-shadow:none}"
            ".unf-spin{width:15px;height:15px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;"
            "border-radius:50%;animation:unf-spin .7s linear infinite}"
-           ".unf-open{display:inline-flex;align-items:center;height:var(--ctl-h);padding:0 var(--ctl-px);border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:var(--ctl-fs);font-weight:600;color:var(--accent);text-decoration:none;transition:opacity .15s}"
+           ".unf-open{display:inline-flex;align-items:center;height:var(--ctl-h);padding:0 var(--ctl-px);border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:var(--ctl-fs);font-weight:600;color:var(--ink-soft);text-decoration:none;transition:opacity .15s}"
+           "@media(max-width:760px){.unf-go{flex:1 1 100%}}"
            ".unf-open:hover{background:var(--panel-2);opacity:1}"
            ".unf-done{display:inline-flex;align-items:center;justify-content:center;background:transparent;color:var(--ink-soft);border:1px solid var(--line-strong);"
            "border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:600;cursor:pointer;"
@@ -713,7 +714,7 @@ def unfinished_index():
           "card.style.maxHeight=card.offsetHeight+'px';"
           "requestAnimationFrame(function(){requestAnimationFrame(function(){card.classList.add('removing');});});"
           "var done=false,fin=function(){if(done)return;done=true;card.remove();"
-          "var h=document.querySelector('.unf-head b');"
+          "var h=document.querySelector('.vac-seg a.active b');"
           "if(h){var n=parseInt((h.textContent||'').replace(/\\D/g,''),10);"
           "if(n>0)h.textContent=String(n-1);}"
           "var l=document.querySelector('.unf-list');"
@@ -733,12 +734,23 @@ def unfinished_index():
           "setTimeout(function(){btn.disabled=false;btn.textContent=o;},2500);}}"
           "catch(e){btn.disabled=false;btn.textContent=o;}}"
           "</script>")
-    rerun_btn = (f'<button class="unf-rerun" onclick="unfRerunAll(this)">'
-                 f'↻ Докрутить всё ({n_rerun})</button>') if n_rerun else ""
-    head = (f'<div class="unf-head">'
-            f'{mailcrm_ui.vacancies_seg("unfinished", {"unfinished": n})}{rerun_btn}'
-            '<span class="unf-links"><a href="/catalog/fill_all_log" download>скачать лог</a>'
-            '</span></div>')
+    # Canonical shell header (same structure/button scale as Каталог + Mass Hiring): the pill
+    # switcher, ONE blue primary «Докрутить всё» (→ the thumb-zone FAB on a phone), «скачать лог» as
+    # a secondary icon button.
+    _rerun_svg = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                  'stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/>'
+                  '<path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>')
+    _dl_icon = ('<a class="iconbtn" href="/catalog/fill_all_log" download title="Скачать лог" '
+                'aria-label="Скачать лог"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+                '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/>'
+                '<line x1="12" y1="15" x2="12" y2="3"/></svg></a>')
+    head = mailcrm_ui._page_head(
+        "Незавершённые",
+        primary=({"label": f"Докрутить всё ({n_rerun})", "onclick": "unfRerunAll(this)",
+                  "svg": _rerun_svg} if n_rerun else None),
+        icons=_dl_icon,
+        seg_html=mailcrm_ui.vacancies_seg("unfinished", {"unfinished": n}))
     body = css + head + f'<div class="unf-list">{list_html}</div>' + js
     return HTMLResponse(mailcrm_ui._page("unfinished", body))
 

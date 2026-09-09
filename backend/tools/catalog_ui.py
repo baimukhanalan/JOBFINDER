@@ -241,24 +241,24 @@ def render_page(company: str = "", q: str = "", region: str = "",
         f'<input id="catq" class="cat-q" type="search" value="{esc(q)}" '
         'placeholder="Должность, компания или страна…" autocomplete="off" '
         'aria-label="Поиск вакансий">')
-    # The «Вакансии» segmented control is the header (Каталог · Mass Hiring · Незавершённые);
-    # on a company drill-down keep the company name as a small caption beside it.
+    # Header = the canonical shell header (mailcrm_ui._page_head) hosting the «Вакансии» pill
+    # switcher, so Каталог / Mass Hiring / Незавершённые share ONE header structure + button scale.
+    # Owner-requested exception kept: the header's single control is «Фильтры» (the launch lives in
+    # that sheet's sticky footer — no duplicate top button). On a company drill-down the company name
+    # is the meta line. The wide search input sits in its own row right below the header.
     _seg = mailcrm_ui.vacancies_seg("catalog", ({} if company else {"catalog": n}))
-    _seg_cap = (f'<span class="cat-h-co">{title_txt}</span>' if company else "")
-    head = (
-        '<div class="cat-head">'
-        f'<div class="cat-h-row"><div class="cat-h-title">{_seg}{_seg_cap}</div>'
-        '<div class="cat-h-btns">'
-        # ONE control (owner-requested exception): «Фильтры» is the single entry to the settings
-        # sheet; «Запустить подачу» lives in that sheet's sticky footer (configure + launch in one
-        # place). No duplicate top button.
-        '<button class="cat-filters-btn" id="fltBtn" onclick="toggleFilters()" aria-expanded="false" '
-        'title="Фильтры и запуск подачи">'
+    _filters_btn = (
+        '<button class="hbtn cat-filters-btn" id="fltBtn" onclick="toggleFilters()" '
+        'aria-expanded="false" title="Фильтры и запуск подачи">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
         'stroke-linecap="round" stroke-linejoin="round">'
         '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>Фильтры'
         + (f'<span class="cat-filters-tag">{reg_tag}</span>' if reg_tag else '')
-        + f'</button></div></div>{search}</div>')
+        + '</button>')
+    head = (
+        mailcrm_ui._page_head("Каталог", icons=_filters_btn,
+                              meta=(title_txt if company else None), seg_html=_seg)
+        + f'<div class="cat-search-row">{search}</div>')
 
     # Everything secondary — country filter, mass-apply, proxy — lives in ONE collapsed
     # settings sheet, so the main view is just search + jobs.
@@ -386,6 +386,7 @@ _CAT_CSS = """<style>
 .cat-h-co{color:var(--ink-mute);font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cat-h-n{color:var(--ink-mute);font-weight:600;font-size:14px;margin-left:4px}
 /* One wide search field (pill). Live-filters as you type / on Enter. */
+.cat-search-row{margin:-6px 0 12px}
 .cat-q{width:100%;box-sizing:border-box;padding:12px 16px;border:1px solid var(--line-strong);border-radius:var(--r-full);font-size:15px;background:var(--panel);color:var(--ink)}
 .cat-q::placeholder{color:var(--ink-mute)}
 .cat-q:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgb(26 115 232/.15)}
@@ -395,8 +396,8 @@ _CAT_CSS = """<style>
 .cat-filters-btn svg{width:15px;height:15px;flex:0 0 auto}
 /* Sheet sticky footer: filters scroll above, the launch button is pinned at the bottom. */
 .cat-modal-foot{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--line);background:var(--panel)}
-.cat-launch{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#0b8043;color:#fff;border:0;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer;box-shadow:0 1px 2px rgba(11,128,67,.3)}
-.cat-launch:hover{background:#0a7038}
+.cat-launch{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--accent);color:#fff;border:0;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:700;cursor:pointer;box-shadow:0 1px 2px rgba(12,71,194,.3)}
+.cat-launch:hover{background:var(--accent-deep)}
 .cat-launch:active{transform:translateY(1px)}
 .cat-launch:disabled{opacity:.5;cursor:default;box-shadow:none}
 /* in the footer the progress text must not force a full-width wrap (it does in the old bar) */

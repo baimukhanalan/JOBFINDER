@@ -30,6 +30,7 @@ backend/tools/assessment_harvester/assets/*.wav
 backend/tools/assessment_harvester/assets/*.y4m
 backend/data/*stealth_profile*/
 backend/data/apply_campaigns.json
+backend/data/apply_campaign_events.json
 backend/data/mh_apply_cron.lock
 backend/data/*.lock
 backend/data/facts/*

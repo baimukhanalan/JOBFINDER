@@ -76,6 +76,7 @@ def main() -> None:
             continue
         done, attempted = [], []
         for jid in targets:
+            email = ""
             try:
                 # a fresh mailbox + persona id per application (same name), unless the campaign
                 # is pinned to one mailbox; wait_submit so the emailed code is finished inline
@@ -90,6 +91,22 @@ def main() -> None:
                          (" submit=" + str(sub.get("reason") or sub.get("clicked"))) if sub else "",
                          " CONFIRMED" if sub.get("confirmed") else "",
                          (" blocked=" + str(sub.get("blocked"))[:80]) if sub.get("blocked") else "")
+                # Journal this attempt (company/title from the fill, fallback to the catalog) so the
+                # dashboard's «Кампании» → «Журнал» shows successes/fails per application.
+                try:
+                    outcome, detail = apply_campaigns.outcome_from_fill_state(st)
+                    comp, ttl = st.get("company") or "", st.get("title") or ""
+                    if not comp or not ttl:
+                        from backend.tools import catalog_db
+                        crow = (catalog_db.jobs_by_ids([int(jid)]) or {}).get(int(jid)) or {}
+                        comp = comp or crow.get("company") or ""
+                        ttl = ttl or crow.get("title") or ""
+                    apply_campaigns.log_event(
+                        c.get("id"), int(jid), company=comp, title=ttl, mailbox=email,
+                        outcome=outcome, detail=detail, today=today,
+                        ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception as exc:
+                    log.info("campaign %s job %s event-log failed: %s", c.get("id"), jid, str(exc)[:120])
                 # A posting the co-pilot found NO form for is gone at the ATS (the first live run
                 # hit one) — mark it dead so the rotation skips it from now on.
                 if apply_campaigns.fill_is_dead_posting(st):
@@ -109,6 +126,13 @@ def main() -> None:
                     total += 1
             except Exception as exc:
                 log.info("campaign %s job %s ERROR %s", c.get("id"), jid, str(exc)[:160])
+                try:
+                    apply_campaigns.log_event(
+                        c.get("id"), int(jid), mailbox=email, outcome="error",
+                        detail=str(exc)[:200], today=today,
+                        ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                except Exception:
+                    pass
         if attempted:
             apply_campaigns.note_run(c.get("id"), done, today, attempted=attempted)
     log.info("apply-campaigns done: %d applications across %d campaigns", total, len(active))

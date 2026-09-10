@@ -6,6 +6,7 @@ from backend.tools import apply_campaigns as ac
 
 def _use_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "_PATH", tmp_path / "apply_campaigns.json")
+    monkeypatch.setattr(ac, "_EVENTS_PATH", tmp_path / "apply_campaign_events.json")
 
 
 def test_create_list_toggle_delete(tmp_path, monkeypatch):
@@ -331,3 +332,61 @@ def test_next_identity_fresh_mailbox_per_application(tmp_path, monkeypatch):
     ac.list_campaigns()  # noqa
     rows = ac._load(); rows[0]["email_mode"] = "fixed"; ac._save(rows)
     assert ac.next_identity(1, exists=lambda e: False) == (c["email"], c["pid"])
+
+
+# ---- per-application JOURNAL (events store + outcome derivation + log backfill) ------------------
+def test_outcome_from_fill_state():
+    assert ac.outcome_from_fill_state({"state": "done", "submit": {"confirmed": True}})[0] == "confirmed"
+    assert ac.outcome_from_fill_state({"state": "done", "submit": {"reason": "no_form"}})[0] == "dead"
+    assert ac.outcome_from_fill_state(
+        {"state": "done", "submit": {"clicked": True, "blocked": "couldn't submit — flagged as possible spam"}})[0] == "spam"
+    assert ac.outcome_from_fill_state(
+        {"state": "done", "submit": {"clicked": True, "blocked": "needs correction"}})[0] == "needs_correction"
+    assert ac.outcome_from_fill_state({"state": "done", "submit": {"clicked": True}})[0] == "clicked"
+    assert ac.outcome_from_fill_state({"state": "error", "error": "boom"})[0] == "error"
+
+
+def test_log_event_append_cap_and_summary(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(ac, "_EVENTS_CAP", 5)
+    for i in range(8):
+        ac.log_event(1, 1000 + i, company="Acme", title="T", mailbox="a@b.com",
+                     outcome="confirmed" if i % 2 == 0 else "spam", ts=f"2026-09-10 07:0{i}:00")
+    evs = ac.list_events(1)
+    assert len(evs) == 5                       # capped at 5, newest first
+    assert evs[0]["job_id"] == 1007 and evs[-1]["job_id"] == 1003
+    s = ac.event_summary(1)
+    assert s["total"] == 5 and s["confirmed"] + s["spam"] == 5
+
+
+def test_list_events_filters_by_cid(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    ac.log_event(1, 10, outcome="confirmed", ts="2026-09-10 01:00:00")
+    ac.log_event(2, 20, outcome="dead", ts="2026-09-10 02:00:00")
+    assert [e["job_id"] for e in ac.list_events(1)] == [10]
+    assert [e["job_id"] for e in ac.list_events(2)] == [20]
+    assert len(ac.list_events()) == 2          # cid=None → all
+
+
+_SAMPLE_LOG = """\
+2026-09-10 07:08:02,233 campaign 1 job 20437 as Dana Erlan <dana.erlan628@takhet.com>
+2026-09-10 07:09:46,869 campaign 1 job 20437 -> done submit=clicked CONFIRMED
+2026-09-10 07:09:46,992 campaign 1 job 20442 as Dana Erlan <dana.erlan629@takhet.com>
+2026-09-10 07:11:24,756 campaign 1 job 20442 -> done submit=no_form
+2026-09-10 01:10:03,097 campaign 1 job 20039 -> done submit=clicked blocked=couldn't submit your
+2026-09-10 13:09:41,487 campaign 1 job 20451 -> done submit=clicked blocked=needs correction
+"""
+
+
+def test_backfill_events_from_log_and_dedup(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    jbi = lambda ids: {20437: {"company": "Supabase", "title": "Eng"}}
+    added = ac.backfill_events_from_log(text=_SAMPLE_LOG, jobs_by_ids=jbi)
+    assert added == 4
+    outs = {(e["job_id"]): e["outcome"] for e in ac.list_events(1)}
+    assert outs == {20437: "confirmed", 20442: "dead", 20039: "spam", 20451: "needs_correction"}
+    ev = next(e for e in ac.list_events(1) if e["job_id"] == 20437)
+    assert ev["company"] == "Supabase" and ev["mailbox"] == "dana.erlan628@takhet.com"
+    # idempotent: a second run adds nothing (dedup on ts+cid+job)
+    assert ac.backfill_events_from_log(text=_SAMPLE_LOG, jobs_by_ids=jbi) == 0
+    assert len(ac.list_events(1)) == 4

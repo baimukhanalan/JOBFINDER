@@ -37,6 +37,11 @@ from pathlib import Path
 
 _PATH = Path(__file__).resolve().parent.parent / "data" / "apply_campaigns.json"
 _LOCK = threading.RLock()
+# Per-application JOURNAL: one row per apply attempt with its outcome, so the dashboard can show a
+# campaign's successes/fails (owner: «где посмотреть журнал успехов/фейлов»). Written by the cron.
+_EVENTS_PATH = Path(__file__).resolve().parent.parent / "data" / "apply_campaign_events.json"
+_EVENTS_CAP = 1000
+_OUTCOMES = ("confirmed", "spam", "needs_correction", "dead", "clicked", "error", "skipped")
 
 
 @contextmanager
@@ -392,3 +397,183 @@ def fill_is_dead_posting(fill_state: dict | None) -> bool:
     the ATS (a 404/'job not found' page) — mark it dead so the rotation skips it."""
     sub = ((fill_state or {}).get("submit") or {})
     return sub.get("reason") == "no_form"
+
+
+# ---- per-application JOURNAL (successes / fails, shown in the dashboard) --------------------------
+def outcome_from_fill_state(fill_state: dict | None) -> tuple[str, str]:
+    """Map a `_FILL_JOBS[jid]` outcome to a (journal outcome, detail) pair. PURE (no DB). Outcome ∈
+    `_OUTCOMES`: confirmed (a real accepted submit) · dead (posting gone, no form) · spam (ATS
+    'flagged as spam / couldn't submit') · needs_correction (missing-required rejection) · clicked
+    (Submit pressed, no confirmation) · error (the fill crashed or refused to submit)."""
+    st = fill_state or {}
+    if fill_counts_as_done(st):
+        return ("confirmed", "")
+    if fill_is_dead_posting(st):
+        return ("dead", "")
+    sub = st.get("submit") or {}
+    blocked = str(sub.get("blocked") or "")
+    if blocked:
+        b = blocked.lower()
+        if "spam" in b or "couldn't submit" in b or "could not submit" in b or "couldnt submit" in b:
+            return ("spam", blocked[:200])
+        if "correction" in b or "missing entry" in b:
+            return ("needs_correction", blocked[:200])
+        return ("clicked", blocked[:200])
+    if st.get("state") == "error":
+        return ("error", str(st.get("error") or "")[:200])
+    if sub.get("clicked"):
+        return ("clicked", "")
+    return ("error", "не отправлено")
+
+
+def _events_load() -> list:
+    try:
+        d = json.loads(_EVENTS_PATH.read_text())
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def _events_save(rows: list) -> None:
+    _EVENTS_PATH.parent.mkdir(exist_ok=True)
+    tmp = _EVENTS_PATH.with_suffix(f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(rows[-_EVENTS_CAP:], ensure_ascii=False))
+    os.replace(tmp, _EVENTS_PATH)
+
+
+def log_event(cid, job_id, *, company: str = "", title: str = "", mailbox: str = "",
+              outcome: str = "clicked", detail: str = "", today: str = "", ts: str = "") -> dict:
+    """Append one journal row (kept to the most-recent `_EVENTS_CAP`). ts/today are passed in so the
+    store never calls the clock (unit-testable). Shares the cross-process `_file_lock()`."""
+    ev = {"ts": ts or today or "", "cid": int(cid), "job_id": int(job_id),
+          "company": company or "", "title": title or "", "mailbox": mailbox or "",
+          "outcome": outcome if outcome in _OUTCOMES else "clicked", "detail": detail or ""}
+    with _LOCK, _file_lock():
+        rows = _events_load()
+        rows.append(ev)
+        _events_save(rows)
+    return ev
+
+
+def list_events(cid=None, limit: int = 200) -> list:
+    """Journal rows NEWEST-first (optionally for one campaign)."""
+    with _LOCK:
+        rows = _events_load()
+    if cid is not None:
+        rows = [e for e in rows if int(e.get("cid", 0)) == int(cid)]
+    rows = list(reversed(rows))
+    return rows[: max(0, int(limit))] if limit else rows
+
+
+def event_summary(cid=None) -> dict:
+    """Per-outcome tally (for one campaign or all) + `total`."""
+    with _LOCK:
+        rows = _events_load()
+    if cid is not None:
+        rows = [e for e in rows if int(e.get("cid", 0)) == int(cid)]
+    out = {k: 0 for k in _OUTCOMES}
+    for e in rows:
+        o = e.get("outcome")
+        if o in out:
+            out[o] += 1
+    out["total"] = len(rows)
+    return out
+
+
+_LOG_AS_RE = re.compile(r"campaign (\d+) job (\d+) as .*?<([^>]+)>")
+_LOG_RES_RE = re.compile(r"campaign (\d+) job (\d+) -> (.*)$")
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)")
+
+
+def _outcome_from_log(rest: str) -> tuple[str, str]:
+    r = rest.lower()
+    if "confirmed" in r:
+        return ("confirmed", "")
+    if "no_form" in r:
+        return ("dead", "")
+    if "blocked=" in rest:
+        detail = rest.split("blocked=", 1)[1].strip()
+        b = detail.lower()
+        if "spam" in b or "couldn't submit" in b or "could not submit" in b:
+            return ("spam", detail[:200])
+        if "correction" in b or "missing entry" in b:
+            return ("needs_correction", detail[:200])
+        return ("clicked", detail[:200])
+    if "error" in r and "submit=" not in r:
+        return ("error", "")
+    return ("clicked", "")
+
+
+def backfill_events_from_log(path: str = "logs/apply_campaigns.log", *, text: str | None = None,
+                             jobs_by_ids=None) -> int:
+    """Parse the cron's text log into the structured journal (idempotent — dedup by (ts,cid,job)).
+    Pairs each `... job J as <name> <email>` line with the following `... job J -> ...` result.
+    `text` (a fixture string) and `jobs_by_ids` are injectable for tests."""
+    if text is None:
+        p = Path(path)
+        if not p.is_absolute():
+            p = _PATH.parent.parent.parent / path      # repo root / logs/...
+        try:
+            text = p.read_text(errors="replace")
+        except Exception:
+            return 0
+    parsed: list = []       # (ts, cid, job, mailbox, outcome, detail)
+    pending: dict = {}
+    for line in text.splitlines():
+        m = _LOG_AS_RE.search(line)
+        if m:
+            pending[(int(m.group(1)), int(m.group(2)))] = m.group(3).strip()
+            continue
+        m = _LOG_RES_RE.search(line)
+        if not m:
+            continue
+        cid, job = int(m.group(1)), int(m.group(2))
+        tsm = _LOG_TS_RE.match(line)
+        ts = tsm.group(1) if tsm else ""
+        outcome, detail = _outcome_from_log(m.group(3))
+        parsed.append((ts, cid, job, pending.get((cid, job), ""), outcome, detail))
+    if not parsed:
+        return 0
+    ids = sorted({j for _, _, j, _, _, _ in parsed})
+    if jobs_by_ids is None:
+        try:
+            from backend.tools.catalog_db import jobs_by_ids as _jbi
+            jobs = _jbi(ids) or {}
+        except Exception:
+            jobs = {}
+    else:
+        try:
+            jobs = jobs_by_ids(ids) or {}
+        except Exception:
+            jobs = {}
+    with _LOCK, _file_lock():
+        rows = _events_load()
+        seen = {(e.get("ts"), int(e.get("cid", 0)), int(e.get("job_id", 0))) for e in rows}
+        added = 0
+        for ts, cid, job, mailbox, outcome, detail in parsed:
+            key = (ts, cid, job)
+            if key in seen:
+                continue
+            seen.add(key)
+            row = jobs.get(job) or jobs.get(str(job)) or {}
+            rows.append({"ts": ts, "cid": cid, "job_id": job,
+                         "company": row.get("company") or "", "title": row.get("title") or "",
+                         "mailbox": mailbox, "outcome": outcome, "detail": detail})
+            added += 1
+        if added:
+            _events_save(rows)
+    return added
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description="apply-campaigns store maintenance")
+    ap.add_argument("--backfill-log", action="store_true",
+                    help="parse logs/apply_campaigns.log into the events journal (idempotent)")
+    args = ap.parse_args()
+    if args.backfill_log:
+        n = backfill_events_from_log()
+        print(f"backfilled {n} events; journal total = {len(_events_load())}")
+    else:
+        ap.print_help()

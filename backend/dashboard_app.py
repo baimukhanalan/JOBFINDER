@@ -1749,7 +1749,23 @@ def catalog_fill_all_log():
 @app.get("/catalog/campaigns")
 def catalog_campaigns_list():
     from backend.tools import apply_campaigns
-    return JSONResponse({"campaigns": apply_campaigns.list_campaigns()})
+    out = []
+    for c in apply_campaigns.list_campaigns():
+        row = dict(c)
+        try:
+            row["summary"] = apply_campaigns.event_summary(c.get("id"))
+        except Exception:
+            row["summary"] = {}
+        out.append(row)
+    return JSONResponse({"campaigns": out})
+
+
+@app.get("/catalog/campaigns/{cid}/events")
+def catalog_campaign_events(cid: int):
+    """The per-application journal for one campaign (newest first) + its outcome tally."""
+    from backend.tools import apply_campaigns
+    return JSONResponse({"summary": apply_campaigns.event_summary(cid),
+                         "events": apply_campaigns.list_events(cid, limit=200)})
 
 
 @app.post("/catalog/campaigns")

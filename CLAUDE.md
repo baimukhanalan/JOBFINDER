@@ -463,7 +463,22 @@ Assessment question-bank harvester (see the harvester section):
     marks the posting dead in the catalog (`catalog_db.mark_dead`) — the first run hit a Salmon
     posting gone from the Ashby board that the catalog still listed; `note_run(..., attempted=)`
     moves the cursor past the last ATTEMPTED job (a dead/failed one never pins the rotation) while
-    only real submits spend the daily budget. **Reality check:** Salmon is Ashby, and Ashby flags
+    only real submits spend the daily budget.
+    - **Per-application JOURNAL in the UI (owner: «где посмотреть журнал успехов/фейлов кампании», 2026-09-10).**
+      Per-attempt outcomes used to live only in `logs/apply_campaigns.log`; now they persist to a
+      gitignored `backend/data/apply_campaign_events.json` and show in the dashboard. `apply_campaigns`
+      gained `log_event(cid, job_id, *, company, title, mailbox, outcome, detail, ts, today)` (cap
+      1000, shares `_file_lock()`), `list_events(cid, limit)` (newest first), `event_summary(cid)`
+      (per-outcome tally + total), the PURE `outcome_from_fill_state(st) -> (outcome, detail)` (outcome
+      ∈ confirmed·spam·needs_correction·dead·clicked·error·skipped), and `backfill_events_from_log()`
+      (parse the text log → journal, idempotent dedup by (ts,cid,job); CLI
+      `python -m backend.tools.apply_campaigns --backfill-log`, already run once → cid 1 = 2✅/1⛔/1⚠/3☠/6◷).
+      The cron `log_event`s each attempt. Routes: `GET /catalog/campaigns` now adds each row's
+      `summary`; `GET /catalog/campaigns/{cid}/events` → `{summary, events}`. UI: the Фильтры →
+      «Кампании» row shows a «✅ N · ⛔ N · ☠ N» tally + a «журнал» toggle that expands the per-apply
+      list inline (date · Компания · Вакансия · outcome badge · mailbox). Reserved names `.camp-jrnl*`,
+      `.camp-tally`, `.camp-badge*`, JS `toggleCampLog`/`campBadge`. Tests in `test_apply_campaigns.py`.
+    **Reality check:** Salmon is Ashby, and Ashby flags
     the datacenter IP as spam on a risk-scored share of submits (after_submit.png: «flagged as
     possible spam») — a KZ campaign over Salmon will lose many submits to that ceiling; the only
     cure is a residential egress. **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP

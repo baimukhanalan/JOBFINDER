@@ -693,6 +693,17 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cs-camp-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--line)}
 .cs-camp-row button{border:1px solid var(--line-strong);background:var(--panel);color:var(--ink-soft);border-radius:var(--r-sm);padding:3px 9px;font-size:12px;cursor:pointer}
 .cs-camp-row button:hover{background:var(--panel-2)}
+.camp-tally{font-family:var(--ff-mono);font-size:11.5px;color:var(--ink-mute);white-space:nowrap}
+.camp-jrnl{margin:2px 0 8px;padding:6px 0 2px;display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line)}
+.camp-jrnl-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;line-height:1.35}
+.camp-when{font-family:var(--ff-mono);font-size:10.5px;color:var(--ink-mute);white-space:nowrap}
+.camp-what{flex:1 1 150px;min-width:0;color:var(--ink)}
+.camp-who{font-family:var(--ff-mono);font-size:10px;color:var(--ink-mute);width:100%;word-break:break-all}
+.camp-badge{flex:0 0 auto;font-size:11px;font-weight:700;border-radius:var(--r-sm);padding:1px 7px;white-space:nowrap}
+.camp-badge-ok{background:#e6f4ea;color:var(--ok)}
+.camp-badge-bad{background:#fce8e6;color:var(--danger)}
+.camp-badge-warn{background:var(--warn-soft);color:var(--warn)}
+.camp-badge-mute{background:var(--panel-2);color:var(--ink-soft)}
 .cc-dot.cc-on{color:var(--ok)}.cc-dot.cc-off{color:var(--ink-mute)}
 .cat-proxy-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cat-proxy-go{display:inline-flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;border:none;border-radius:var(--r-full);height:var(--ctl-h);padding:0 var(--ctl-px);font-size:var(--ctl-fs);font-weight:600;cursor:pointer}
@@ -1225,11 +1236,16 @@ window.loadCampaigns = async function(){
             :c.target_kind==='jobs'?('вакансий: '+((c.job_ids||[]).length))
             :('поиск: '+catEsc((c.q||'').trim()||'все')+(c.region?(' · '+catEsc(c.region)):''));
       var id=parseInt(c.id,10)||0;
+      var s=c.summary||{};
+      var okN=s.confirmed||0, badN=(s.spam||0)+(s.needs_correction||0), deadN=s.dead||0;
+      var tally='<span class="camp-tally">✅ '+okN+' · ⛔ '+badN+' · ☠ '+deadN+'</span>';
       return '<div class="cs-camp-row"><span class="cc-dot '+(c.active?'cc-on':'cc-off')+'">●</span> '
-        +'<b>'+catEsc(c.name||'')+'</b> · '+tgt+' · '+per
+        +'<b>'+catEsc(c.name||'')+'</b> · '+tgt+' · '+per+' '+tally
+        +' <button type="button" onclick="toggleCampLog('+id+')">журнал</button>'
         +' <button type="button" onclick="toggleCampaign('+id+','+(c.active?'0':'1')+')">'
         +(c.active?'пауза':'вкл')+'</button>'
-        +' <button type="button" onclick="delCampaign('+id+')">удалить</button></div>';
+        +' <button type="button" onclick="delCampaign('+id+')">удалить</button></div>'
+        +'<div class="camp-jrnl" id="campjrnl-'+id+'" hidden></div>';
     }).join('');
   }catch(e){ if(gen===window.__jfGen) box.textContent='—'; }
 };
@@ -1242,5 +1258,34 @@ window.delCampaign = async function(id){
   if(!confirm('Удалить кампанию?')) return;
   try{ await fetch('/catalog/campaigns/'+id+'/delete',{method:'POST'}); }catch(e){}
   loadCampaigns();
+};
+function campBadge(o){
+  var m={confirmed:['✅ Подтверждено','ok'],spam:['⛔ Спам','bad'],
+    needs_correction:['⚠ Правка формы','warn'],dead:['☠ Вакансия снята','mute'],
+    clicked:['◷ Нажато','mute'],error:['✕ Ошибка','bad'],skipped:['— Пропущено','mute']};
+  var v=m[o]||['—','mute'];
+  return '<span class="camp-badge camp-badge-'+v[1]+'">'+v[0]+'</span>';
+}
+window.toggleCampLog = async function(id){
+  var box=document.getElementById('campjrnl-'+id); if(!box) return;
+  if(!box.hasAttribute('hidden')){ box.setAttribute('hidden',''); return; }
+  box.removeAttribute('hidden'); box.textContent='Загружаю…';
+  var gen=window.__jfGen;
+  try{
+    var j=await (await fetch('/catalog/campaigns/'+id+'/events')).json();
+    if(gen!==window.__jfGen) return;
+    var evs=j.events||[];
+    if(!evs.length){ box.textContent='Пока нет подач'; return; }
+    box.innerHTML=evs.map(function(e){
+      var co=catEsc(e.company||''), ti=catEsc(e.title||'');
+      var what=(co?('<b>'+co+'</b>'):'')+(co&&ti?' · ':'')+ti;
+      return '<div class="camp-jrnl-row">'
+        +'<span class="camp-when">'+catEsc((e.ts||'').slice(0,16))+'</span>'
+        +'<span class="camp-what">'+(what||('#'+ (parseInt(e.job_id,10)||0)))+'</span>'
+        +campBadge(e.outcome)
+        +(e.mailbox?('<span class="camp-who">'+catEsc(e.mailbox)+'</span>'):'')
+        +'</div>';
+    }).join('');
+  }catch(e){ if(gen===window.__jfGen) box.textContent='—'; }
 };
 </script>"""

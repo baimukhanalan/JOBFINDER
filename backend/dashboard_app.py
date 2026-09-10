@@ -1033,29 +1033,15 @@ _NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
 _FILL_JOBS: dict[int, dict] = {}
 
 
-def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
-             email: str | None = None, pid: str | None = None, *, wait_submit: bool = False) -> None:
-    """One fill on the single co-pilot. `wait_submit=True` (the SEQUENTIAL campaign cron) makes
-    the co-pilot finish the emailed-code confirmation INLINE before returning — the default
-    background watch is cancelled by the very next /load, so a sequential caller that moves on
-    to the next job would leave every GH/Ashby application unconfirmed (first live campaign run)."""
+def _fill_via(base_url: str, jid, pid: str, *, wait_submit: bool = False) -> dict:
+    """POST /release + /load to a co-pilot at `base_url` and shape its result into a fill-state
+    dict (`state`/`submit`/`company`/`title`/…). Rotates egress candidates on a TRANSPORT failure
+    (a dead/slow proxy makes the load raise) — the live phones first (Ashby only accepts a
+    residential/mobile IP), then the datacenter pool, then direct; a 200 (even a blocked/incomplete
+    fill) is a real result and stops the loop. Shared by the single co-pilot (`_do_fill`, base
+    8102) and each headless campaign worker (`_fill_campaign_targets`, base 811x)."""
     import httpx
 
-    from backend.tools import catalog_drafts
-    try:
-        pid, jid, generated = catalog_drafts.ensure_and_wire(
-            job_id, gender=gender, name=name, email=email, pid=pid)
-    except Exception as exc:
-        _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
-        return
-    _FILL_JOBS[job_id] = {"state": "running", "phase": "filling",
-                          "generated": generated, "profile": pid}
-    # Assign this application its own egress IP from the proxy pool (round-robin). The
-    # co-pilot builds a fresh browser context for it. Empty pool -> no proxy -> direct.
-    # Ordered egress candidates: the live phones FIRST (a different one per attempt — Ashby only
-    # accepts a residential/mobile IP), then the datacenter pool, then direct. On a co-pilot
-    # TRANSPORT failure (a dead/slow proxy makes the load raise) we move to the NEXT candidate; a
-    # 200 (even a blocked/incomplete fill) is a real result and stops the loop.
     try:
         from backend.tools import proxy_pool
         candidates = proxy_pool.egress_candidates()
@@ -1063,6 +1049,8 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
         candidates = [None]
     log = logging.getLogger(__name__)
     last_exc = None
+    r = None
+    res: dict = {}
     for attempt, px in enumerate(candidates):
         load_data = {"jobid": jid, "profile": pid}
         if wait_submit:
@@ -1073,14 +1061,14 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
                 load_data["proxy_username"] = px["username"]
                 load_data["proxy_password"] = px.get("password") or ""
         srv = (px or {}).get("server", "")
-        log.info("fill job %s via %s%s", job_id,
+        log.info("fill job %s on %s via %s%s", jid, base_url,
                  ("mobile " + srv) if srv.startswith("socks5://")
                  else (("proxy " + srv) if srv else "DIRECT (datacenter IP)"),
                  f" (retry {attempt})" if attempt else "")
         try:
-            httpx.post("http://127.0.0.1:8102/release", data={"profile": pid}, timeout=10)
-            # the inline watch holds up to WAIT_SUBMIT_MAX (300s) for the emailed code on top of the fill
-            r = httpx.post("http://127.0.0.1:8102/load", data=load_data,
+            httpx.post(f"{base_url}/release", data={"profile": pid}, timeout=10)
+            # the inline watch holds up to WAIT_SUBMIT_MAX for the emailed code on top of the fill
+            r = httpx.post(f"{base_url}/load", data=load_data,
                            timeout=(600 if wait_submit else 240))
             res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
         except Exception as exc:
@@ -1088,19 +1076,131 @@ def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
             continue          # a transport failure -> try the next egress
         break
     else:
-        _FILL_JOBS[job_id] = {"state": "error", "error": f"co-pilot: {last_exc}"[:200],
-                              "novnc": _NOVNC_URL}
-        return
+        return {"state": "error", "error": f"co-pilot: {last_exc}"[:200], "novnc": _NOVNC_URL}
     if r.status_code != 200:
-        _FILL_JOBS[job_id] = {"state": "error",
-                              "error": res.get("error", "co-pilot load failed"),
-                              "novnc": _NOVNC_URL}
+        return {"state": "error", "error": res.get("error", "co-pilot load failed"),
+                "novnc": _NOVNC_URL}
+    return {"state": "done", "novnc": _NOVNC_URL,
+            "filled": res.get("filled"), "unfilled": res.get("unfilled"),
+            "unfilled_list": res.get("unfilled_list"),
+            "submit": res.get("submit_result"),
+            "company": res.get("company"), "title": res.get("title")}
+
+
+def _do_fill(job_id: int, gender: str | None = None, name: str | None = None,
+             email: str | None = None, pid: str | None = None, *, wait_submit: bool = False) -> None:
+    """One fill on the single co-pilot (8102). `wait_submit=True` (the campaign cron) makes the
+    co-pilot finish the emailed-code confirmation INLINE before returning — the default background
+    watch is cancelled by the very next /load, so a sequential caller that moves on to the next job
+    would leave every GH/Ashby application unconfirmed (first live campaign run)."""
+    from backend.tools import catalog_drafts
+    try:
+        pid, jid, generated = catalog_drafts.ensure_and_wire(
+            job_id, gender=gender, name=name, email=email, pid=pid)
+    except Exception as exc:
+        _FILL_JOBS[job_id] = {"state": "error", "error": str(exc)[:200]}
         return
-    _FILL_JOBS[job_id] = {"state": "done", "generated": generated, "novnc": _NOVNC_URL,
-                          "filled": res.get("filled"), "unfilled": res.get("unfilled"),
-                          "unfilled_list": res.get("unfilled_list"),
-                          "submit": res.get("submit_result"),
-                          "company": res.get("company"), "title": res.get("title")}
+    _FILL_JOBS[job_id] = {"state": "running", "phase": "filling",
+                          "generated": generated, "profile": pid}
+    st = _fill_via("http://127.0.0.1:8102", jid, pid, wait_submit=wait_submit)
+    if st.get("state") == "done":
+        st["generated"] = generated
+    _FILL_JOBS[job_id] = st
+
+
+# The recurring apply-campaign lane fills its per-day targets CONCURRENTLY across headless
+# bulk_pool workers (owner: «а че многопоток не делаем?»). DEFAULT 8, HARD CEILING 12 — set from a
+# LIVE measurement of the local LLM (gpt-5.6-luna @127.0.0.1:8080): 32/32 concurrent requests, ZERO
+# errors; ~10s/req at N=1, ~11s at N=8 (near-free), ~16s at N=16, ~28s at N=32 (degrades, never
+# fails); box is 12 cores / ~34G free. So 8 is comfortably in the near-free zone with headroom.
+# (NB the older bulk _ADAPT_MAX=6 predates this measurement; the campaign lane is metered per-day so
+# it bursts fewer jobs than the open-ended bulk drain.)
+try:
+    CAMPAIGN_WORKERS = max(1, min(int(os.getenv("CAMPAIGN_WORKERS", "8") or 8), 12))
+except (TypeError, ValueError):
+    CAMPAIGN_WORKERS = 8
+
+
+def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, workers=CAMPAIGN_WORKERS):
+    """Fill a campaign's per-day `targets` CONCURRENTLY across headless bulk_pool workers, each
+    application under the campaign's fixed `name` + a FRESH (email, pid) from `identity_for(jid)`
+    (so one campaign = many CRM cards, same name, distinct mailboxes). Returns {jid: fill_state}
+    in the SAME shape `_FILL_JOBS` holds (+ a `mailbox` key), so the cron does its existing
+    per-job bookkeeping (journal / mark_dead / count). Falls back to the single co-pilot (8102)
+    SEQUENTIALLY when workers<=1 or the pool won't start — a worker-spawn failure never drops the
+    run. Parallelize WITHIN one campaign only; the cron stays sequential across campaigns so two
+    campaigns together can't blow the LLM ceiling."""
+    import queue as _queue
+
+    from backend.tools import bulk_pool, catalog_drafts
+    log = logging.getLogger(__name__)
+    results: dict[int, dict] = {}
+    rlock = threading.Lock()
+    targets = [int(j) for j in targets]
+    n = max(1, min(int(workers), len(targets), 12))
+
+    def _one(base_url: str, jid: int) -> dict:
+        try:
+            email, pid = identity_for(jid)
+        except Exception as exc:
+            return {"state": "error", "error": f"identity: {exc}"[:200], "mailbox": ""}
+        try:
+            pid2, jjid, _gen = catalog_drafts.ensure_and_wire(
+                jid, gender=gender, name=name, email=email, pid=pid)
+        except Exception as exc:
+            return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email}
+        st = _fill_via(base_url, jjid, pid2, wait_submit=True)
+        st["mailbox"] = email
+        return st
+
+    if n <= 1:
+        for jid in targets:
+            results[jid] = _one("http://127.0.0.1:8102", jid)
+        return results
+
+    ports: list[int] = []
+    try:
+        ports = bulk_pool.start_workers(n)
+    except Exception:
+        log.warning("campaign parallel: start_workers raised", exc_info=True)
+        ports = []
+    if not ports:
+        log.warning("campaign parallel: no workers came up — falling back to the single co-pilot")
+        for jid in targets:
+            results[jid] = _one("http://127.0.0.1:8102", jid)
+        return results
+
+    log.info("campaign parallel: %d workers on %s for %d targets", len(ports), ports, len(targets))
+    try:
+        q: _queue.Queue = _queue.Queue()
+        for jid in targets:
+            q.put(jid)
+
+        def _worker(port: int):
+            base = f"http://127.0.0.1:{port}"
+            while True:
+                try:
+                    jid = q.get_nowait()
+                except _queue.Empty:
+                    return
+                try:
+                    st = _one(base, jid)
+                except Exception as exc:               # one job never sinks the others
+                    st = {"state": "error", "error": f"{type(exc).__name__}: {exc}"[:200], "mailbox": ""}
+                with rlock:
+                    results[jid] = st
+
+        threads = [threading.Thread(target=_worker, args=(p,), daemon=True) for p in ports]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        try:
+            bulk_pool.stop_workers()
+        except Exception:
+            pass
+    return results
 
 
 @app.post("/catalog/{job_id}/fill")

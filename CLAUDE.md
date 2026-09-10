@@ -447,7 +447,33 @@ Assessment question-bank harvester (see the harvester section):
     `_do_fill` never raises, so an `error` fill used to spend the daily budget. Mutations take an
     `fcntl` sidecar lock (`apply_campaigns.lock`) besides the RLock: the cron and the dashboard are
     different processes rewriting one JSON. Kinds `job`/`search` unchanged. `apply_campaign_cron
-    --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (21).
+    --list` prints `jobs=N cursor=k`. Tests: `test_apply_campaigns.py` (27) + `test_campaign_parallel.py` (3).
+    **PARALLEL lane (2026-09-10, owner: «а че многопоток не делаем?»).** The cron no longer fills a
+    campaign's per-day targets one-at-a-time through the single co-pilot — `dashboard_app.
+    _fill_campaign_targets(targets, *, gender, name, identity_for, workers)` fans them out across
+    `bulk_pool` headless workers (8110+), each application wired to the campaign's FIXED name + a
+    FRESH `(email,pid)` minted INSIDE the worker via `identity_for=lambda jid: next_identity(cid)`
+    (concurrency-safe: `next_identity` holds the fcntl `_file_lock`), returns `{jid: fill_state}`
+    (+`mailbox`) so the cron keeps its journal/mark_dead/count bookkeeping, and the cursor advances
+    past the last TARGET (in selection order). Falls back to the single co-pilot sequentially when
+    `workers<=1` or the pool won't start; one worker's error never sinks the batch; parallel WITHIN
+    one campaign, SEQUENTIAL across campaigns (the whole batch returns before the next campaign) so
+    two campaigns can't stack the LLM. **`CAMPAIGN_WORKERS` default 8, hard max 12** (env override) —
+    set from a LIVE gpt-5.6-luna measurement (32/32 concurrent OK, ~11s/req at 8, ~28s at 32, never
+    fails; box 12 cores/~34G) — deliberately higher than the older bulk `_ADAPT_MAX=6`, which predates
+    it. The `_do_fill`/worker fill+result-shaping is shared via `_fill_via(base_url, jid, pid, *,
+    wait_submit)` (egress-candidate rotation + result dict). Refactor is behavior-identical for the
+    single-co-pilot `/catalog/{id}/fill` path.
+    **Selection spread by company (`interleave_by_company`).** A `jobs` selection off `/catalog` is
+    company-ASC sorted, so at a low per_day it marched one company for weeks (Dana's 243 = 10
+    companies, binance 163 → all Salmon, then 15 Supabase, …). `create()` now round-robins the pick
+    across companies (binance·nogigiddy·Supabase·Salmon·… then repeat) so each day's budget hits
+    varied companies; a DB miss degrades to the given order. **VELOCITY CAVEAT:** bursting many fresh
+    accounts at ONE company (or a high per_day) raises the Ashby datacenter-IP spam flag — spreading
+    by company + a residential egress mitigate it, but the cap is NOT lowered for it (owner's call).
+    `apply_campaign_cron` picks up the code fresh each run (own process); the live dashboard restarts
+    only for the shared `_do_fill`/`_fill_via` refactor. Live-smoke 2026-09-10: 3 targets filled
+    concurrently on ports 8110/8111/8112 (~2s apart), all journaled.
     **FIRST LIVE RUN (owner's campaign «Dana Erlan», 243 Salmon/KZ jobs, 3/day, 2026-09-09 20:00)
     taught three things, all fixed the same evening:** (1) **a fresh mailbox per application** —
     owner: «пусть почта меняется на каждую подачу» — `apply_campaigns.next_identity(cid)` issues

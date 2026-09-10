@@ -156,6 +156,38 @@ def _parse_job_ids(job_ids) -> list[int]:
         raise ValueError("job_ids must be integers") from None
 
 
+def interleave_by_company(job_ids, jobs_by_ids=None) -> list[int]:
+    """Re-order a `jobs` selection so the daily budget spans DIFFERENT companies instead of
+    marching through one company's jobs for days (the /catalog list is sorted company-ASC, so a
+    243-job pick starting with 14 Salmon then 15 Supabase … would take weeks per company at a low
+    per_day). Groups by company (first-seen order, within-group order preserved) then round-robins
+    across the groups: binance, nogigiddy, Supabase, Salmon, binance, … `jobs_by_ids` is injectable
+    for tests; a DB miss degrades to the original order (all ids fall in one '?' bucket)."""
+    ids = [int(x) for x in (job_ids or [])]
+    if not ids:
+        return []
+    if jobs_by_ids is None:
+        from backend.tools.catalog_db import jobs_by_ids as jobs_by_ids
+    try:
+        rows = jobs_by_ids(ids) or {}
+    except Exception:
+        rows = {}
+    groups: dict[str, list[int]] = {}
+    order: list[str] = []
+    for j in ids:
+        co = (((rows.get(j) or {}).get("company") or "?") or "?").strip() or "?"
+        if co not in groups:
+            groups[co] = []
+            order.append(co)
+        groups[co].append(j)
+    out: list[int] = []
+    while any(groups[co] for co in order):
+        for co in order:
+            if groups[co]:
+                out.append(groups[co].pop(0))
+    return out
+
+
 def _generated_name(job_ids: list[int], gender: str) -> str:
     """A fresh persona name for a `jobs` campaign the owner left unnamed: random from
     synth_persona's per-country banks, the country taken from the FIRST selected job's catalog row
@@ -222,7 +254,8 @@ def create(*, name: str, target_kind: str, job_id=None, job_ids=None, q: str = "
             "last_run_date": today or "", "created": today or "",
         }
         if target_kind == "jobs":
-            camp["job_ids"] = ids
+            # spread the selection across companies from day one (a DB miss keeps the given order)
+            camp["job_ids"] = interleave_by_company(ids)
             camp["cursor"] = 0
         rows.append(camp)
         _save(rows)

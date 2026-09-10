@@ -7,6 +7,10 @@ from backend.tools import apply_campaigns as ac
 def _use_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "_PATH", tmp_path / "apply_campaigns.json")
     monkeypatch.setattr(ac, "_EVENTS_PATH", tmp_path / "apply_campaign_events.json")
+    # keep create() DB-free + order-preserving: the cursor/resolve tests assert exact job_ids
+    # order and don't care about company interleave (unit-tested separately). Tests that DO
+    # exercise the interleave re-set this after calling _use_tmp.
+    monkeypatch.setattr(ac, "interleave_by_company", lambda ids, jobs_by_ids=None: list(ids))
 
 
 def test_create_list_toggle_delete(tmp_path, monkeypatch):
@@ -390,3 +394,30 @@ def test_backfill_events_from_log_and_dedup(tmp_path, monkeypatch):
     # idempotent: a second run adds nothing (dedup on ts+cid+job)
     assert ac.backfill_events_from_log(text=_SAMPLE_LOG, jobs_by_ids=jbi) == 0
     assert len(ac.list_events(1)) == 4
+
+
+# ---- parallel lane: interleave-by-company + create wiring -----------------------------------------
+def test_interleave_by_company_round_robins_and_keeps_all():
+    jbi = lambda ids: {1: {"company": "A"}, 2: {"company": "A"}, 3: {"company": "B"},
+                       4: {"company": "C"}, 5: {"company": "B"}, 6: {"company": "A"}}
+    got = ac.interleave_by_company([1, 2, 3, 4, 5, 6], jobs_by_ids=jbi)
+    assert got == [1, 3, 4, 2, 5, 6]                       # A,B,C · A,B · A
+    assert sorted(got) == [1, 2, 3, 4, 5, 6]               # keeps every id exactly once
+    assert ac.interleave_by_company([], jobs_by_ids=jbi) == []
+    # a DB miss degrades to the original order (all ids in one '?' bucket)
+    assert ac.interleave_by_company([3, 1, 2], jobs_by_ids=lambda ids: {}) == [3, 1, 2]
+    # stable: same input → same output
+    assert ac.interleave_by_company([1, 2, 3, 4, 5, 6], jobs_by_ids=jbi) == got
+
+
+def test_create_jobs_interleaves_by_company(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    calls = {}
+
+    def spy(job_ids, jobs_by_ids=None):
+        calls["ids"] = list(job_ids)
+        return [job_ids[-1]] + list(job_ids[:-1])          # a visible reordering
+    monkeypatch.setattr(ac, "interleave_by_company", spy)
+    c = _jobs_campaign([10, 11, 12], per_day=3)
+    assert calls["ids"] == [10, 11, 12]                    # create ran it on the parsed selection
+    assert c["job_ids"] == [12, 10, 11] and c["cursor"] == 0

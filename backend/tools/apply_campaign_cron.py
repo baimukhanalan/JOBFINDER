@@ -61,80 +61,72 @@ def main() -> None:
 
     log.info("apply-campaigns: %d active of %d", len(active), len(camps))
     # Import here (after the lock) so the dashboard's background threads only spin up for a real run.
-    from backend.dashboard_app import _do_fill, _FILL_JOBS
+    from backend.dashboard_app import CAMPAIGN_WORKERS, _fill_campaign_targets
 
     total = 0
     for c in active:
+        cid = c.get("id")
         try:
             targets = apply_campaigns.resolve_targets(c, today)
         except Exception as exc:
-            log.info("campaign %s resolve failed: %s", c.get("id"), exc)
+            log.info("campaign %s resolve failed: %s", cid, exc)
             continue
         if not targets:
             log.info("campaign %s (%s): nothing to apply today (per_day=%s runs_today=%s)",
-                     c.get("id"), c.get("name"), c.get("per_day"), c.get("runs_today"))
+                     cid, c.get("name"), c.get("per_day"), c.get("runs_today"))
             continue
-        done, attempted = [], []
-        for jid in targets:
-            email = ""
+        # Fill this campaign's per-day targets CONCURRENTLY (fixed name + a fresh mailbox/pid per
+        # job, minted INSIDE each worker via next_identity — concurrency-safe fcntl lock). Sequential
+        # ACROSS campaigns (this returns only when the whole batch is done) so the LLM ceiling holds.
+        log.info("campaign %s (%s): filling %d targets with up to %d workers",
+                 cid, c.get("name"), len(targets), CAMPAIGN_WORKERS)
+        results = _fill_campaign_targets(
+            targets, gender=c.get("gender") or None, name=c.get("name"),
+            identity_for=lambda jid, _cid=cid: apply_campaigns.next_identity(_cid),
+            workers=CAMPAIGN_WORKERS)
+        done = []
+        for jid in targets:                     # TARGET order → the cursor advances past the last one
+            jid = int(jid)
+            st = results.get(jid) or {"state": "error", "error": "no result", "mailbox": ""}
+            email = st.get("mailbox") or ""
+            sub = st.get("submit") or {}
+            log.info("campaign %s job %s -> %s%s%s%s", cid, jid, st.get("state"),
+                     (" submit=" + str(sub.get("reason") or sub.get("clicked"))) if sub else "",
+                     " CONFIRMED" if sub.get("confirmed") else "",
+                     (" blocked=" + str(sub.get("blocked"))[:80]) if sub.get("blocked") else "")
+            # Journal this attempt so «Кампании» → «Журнал» shows successes/fails per application.
             try:
-                # a fresh mailbox + persona id per application (same name), unless the campaign
-                # is pinned to one mailbox; wait_submit so the emailed code is finished inline
-                email, pid = apply_campaigns.next_identity(c.get("id"))
-                log.info("campaign %s job %s as %s <%s>", c.get("id"), jid, c.get("name"), email)
-                _do_fill(int(jid), c.get("gender") or None, c.get("name"), email, pid,
-                         wait_submit=True)
-                attempted.append(int(jid))
-                st = _FILL_JOBS.get(int(jid), {}) or {}
-                sub = st.get("submit") or {}
-                log.info("campaign %s job %s -> %s%s%s%s", c.get("id"), jid, st.get("state"),
-                         (" submit=" + str(sub.get("reason") or sub.get("clicked"))) if sub else "",
-                         " CONFIRMED" if sub.get("confirmed") else "",
-                         (" blocked=" + str(sub.get("blocked"))[:80]) if sub.get("blocked") else "")
-                # Journal this attempt (company/title from the fill, fallback to the catalog) so the
-                # dashboard's «Кампании» → «Журнал» shows successes/fails per application.
-                try:
-                    outcome, detail = apply_campaigns.outcome_from_fill_state(st)
-                    comp, ttl = st.get("company") or "", st.get("title") or ""
-                    if not comp or not ttl:
-                        from backend.tools import catalog_db
-                        crow = (catalog_db.jobs_by_ids([int(jid)]) or {}).get(int(jid)) or {}
-                        comp = comp or crow.get("company") or ""
-                        ttl = ttl or crow.get("title") or ""
-                    apply_campaigns.log_event(
-                        c.get("id"), int(jid), company=comp, title=ttl, mailbox=email,
-                        outcome=outcome, detail=detail, today=today,
-                        ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                except Exception as exc:
-                    log.info("campaign %s job %s event-log failed: %s", c.get("id"), jid, str(exc)[:120])
-                # A posting the co-pilot found NO form for is gone at the ATS (the first live run
-                # hit one) — mark it dead so the rotation skips it from now on.
-                if apply_campaigns.fill_is_dead_posting(st):
-                    try:
-                        from backend.tools import catalog_db
-                        row = catalog_db.jobs_by_ids([int(jid)]).get(int(jid)) or {}
-                        if row.get("ats") and row.get("external_id"):
-                            catalog_db.mark_dead([(row["ats"], row.get("company_key"), row["external_id"])],
-                                                 "campaign: no form at the ATS (posting gone)")
-                            log.info("campaign %s job %s marked DEAD (no form)", c.get("id"), jid)
-                    except Exception as exc:
-                        log.info("campaign %s job %s mark_dead failed: %s", c.get("id"), jid, str(exc)[:120])
-                # Only a fill that really pressed Submit spends the daily budget; anything else is
-                # retried on a later lap (the cursor still moves past it).
-                if apply_campaigns.fill_counts_as_done(st):
-                    done.append(int(jid))
-                    total += 1
+                outcome, detail = apply_campaigns.outcome_from_fill_state(st)
+                comp, ttl = st.get("company") or "", st.get("title") or ""
+                if not comp or not ttl:
+                    from backend.tools import catalog_db
+                    crow = (catalog_db.jobs_by_ids([jid]) or {}).get(jid) or {}
+                    comp = comp or crow.get("company") or ""
+                    ttl = ttl or crow.get("title") or ""
+                apply_campaigns.log_event(
+                    cid, jid, company=comp, title=ttl, mailbox=email,
+                    outcome=outcome, detail=detail, today=today,
+                    ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
             except Exception as exc:
-                log.info("campaign %s job %s ERROR %s", c.get("id"), jid, str(exc)[:160])
+                log.info("campaign %s job %s event-log failed: %s", cid, jid, str(exc)[:120])
+            # A posting the co-pilot found NO form for is gone at the ATS — mark it dead so the
+            # rotation skips it from now on.
+            if apply_campaigns.fill_is_dead_posting(st):
                 try:
-                    apply_campaigns.log_event(
-                        c.get("id"), int(jid), mailbox=email, outcome="error",
-                        detail=str(exc)[:200], today=today,
-                        ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                except Exception:
-                    pass
-        if attempted:
-            apply_campaigns.note_run(c.get("id"), done, today, attempted=attempted)
+                    from backend.tools import catalog_db
+                    row = catalog_db.jobs_by_ids([jid]).get(jid) or {}
+                    if row.get("ats") and row.get("external_id"):
+                        catalog_db.mark_dead([(row["ats"], row.get("company_key"), row["external_id"])],
+                                             "campaign: no form at the ATS (posting gone)")
+                        log.info("campaign %s job %s marked DEAD (no form)", cid, jid)
+                except Exception as exc:
+                    log.info("campaign %s job %s mark_dead failed: %s", cid, jid, str(exc)[:120])
+            # Only a fill that really pressed Submit spends the daily budget; anything else is
+            # retried on a later lap (the cursor still moves past it).
+            if apply_campaigns.fill_counts_as_done(st):
+                done.append(jid)
+                total += 1
+        apply_campaigns.note_run(cid, done, today, attempted=[int(j) for j in targets])
     log.info("apply-campaigns done: %d applications across %d campaigns", total, len(active))
 
 

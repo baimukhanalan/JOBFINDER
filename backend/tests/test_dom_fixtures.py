@@ -986,3 +986,104 @@ def test_ashby_autofill_noop_without_autofill_input(tmp_path):
 
     ok = asyncio.run(_with_inline_page("<form><input type='file' id='r' accept='.pdf'></form>", coro))
     assert ok is False, "no autofill input -> must be a no-op returning False"
+
+
+# Workable custom radio (nogigiddy 'Daily Drop' marketing opt-in). The exact live shape:
+# the prompt <span id=..._label> lives OUTSIDE the <fieldset role=radiogroup> (referenced by
+# aria-labelledby); each option is a <label role=presentation> holding a <div role=radio>
+# wrapping an aria-hidden native <input type=radio required> + an inline <svg><desc>SVGs not
+# supported...</desc></svg>, and a separate <span id=radio_label_*> option text.
+def _workable_marketing_radio(prompt: str) -> str:
+    return """
+<form>
+  <div class="q">
+    <span><span><strong>*</strong></span>
+      <span><span id="Q_LABEL"><strong>%s</strong></span></span></span>
+    <fieldset role="radiogroup" aria-labelledby="Q_LABEL" data-ui="CA_50509">
+      <label role="presentation">
+        <div id="wrap_yes" role="radio" aria-checked="false" aria-required="true" tabindex="0"
+             aria-labelledby="Q_LABEL radio_label_yes">
+          <input aria-required="true" required id="in_yes" tabindex="-1" aria-hidden="true"
+                 type="radio" name="CA_50509" value="527643">
+          <svg viewBox="0 0 16 16"><desc><p>SVGs not supported by this browser.</p></desc></svg>
+        </div>
+        <span id="radio_label_yes">Yes</span>
+      </label>
+      <label role="presentation">
+        <div id="wrap_no" role="radio" aria-checked="false" aria-required="true" tabindex="-1"
+             aria-labelledby="Q_LABEL radio_label_no">
+          <input aria-required="true" required id="in_no" tabindex="-1" aria-hidden="true"
+                 type="radio" name="CA_50509" value="527644">
+          <svg viewBox="0 0 16 16"><desc><p>SVGs not supported by this browser.</p></desc></svg>
+        </div>
+        <span id="radio_label_no">No</span>
+      </label>
+    </fieldset>
+  </div>
+</form>
+""" % prompt
+
+
+_DAILY_DROP_PROMPT = (
+    "Still job hunting while you wait to hear back? The Daily Drop sends 10 vetted remote jobs "
+    "straight to your inbox every morning at 9 AM — real pay rates, real companies, no "
+    "'competitive salary' nonsense. Over 12,000 listings screened nightly so you don't have to. "
+    "By selecting 'Yes', you'll get the best remote jobs delivered free, every day. One-click "
+    "unsubscribe anytime.")
+
+
+def test_workable_marketing_radio_harvested_and_declined():
+    """Regression: the nogigiddy 'Daily Drop' REQUIRED marketing radio must be harvested with the
+    REAL question (not the SVG '<desc>' garbage), required=True, clean Yes/No options, answered
+    'No' via marketing_optin_pick, and the click must land on the interactive [role=radio] wrapper
+    so the underlying native input becomes checked. (Before the fix the descendant querySelector
+    grabbed the option label 'SVGs not supported by this browser.Yes' as the question, so the
+    marketing regex missed and the field was left blank -> Workable silently rejected Submit.)"""
+    from backend.applier.dropdowns import (
+        _HARVEST_MARKETING_RADIO_JS, marketing_optin_pick)
+
+    async def coro(page):
+        groups = await page.evaluate(_HARVEST_MARKETING_RADIO_JS)
+        clicked_checked = None
+        picked = None
+        if len(groups) == 1:
+            g = groups[0]
+            picked = marketing_optin_pick(g["question"], g["options"])
+            if picked is not None:
+                await page.locator(g["selectors"][picked]).first.click(timeout=3000)
+                clicked_checked = await page.eval_on_selector("#in_no", "el=>el.checked")
+        return groups, picked, clicked_checked
+
+    groups, picked, clicked_checked = asyncio.run(
+        _with_inline_page(_workable_marketing_radio(_DAILY_DROP_PROMPT), coro))
+    assert len(groups) == 1, f"expected exactly one radio group, got {len(groups)}: {groups}"
+    g = groups[0]
+    assert g["question"].startswith("Still job hunting"), \
+        f"question is the SVG garbage, not the real prompt: {g['question']!r}"
+    assert "SVGs not supported" not in g["question"], f"svg desc leaked into question: {g['question']!r}"
+    assert g["required"] is True, "the aria-required Workable radio must be flagged required"
+    assert g["options"] == ["Yes", "No"], f"option text polluted by svg desc: {g['options']!r}"
+    assert picked == 1, f"marketing_optin_pick should decline (idx 1 = No), got {picked}"
+    assert clicked_checked is True, "clicking the picked selector must check the underlying 'No' input"
+
+
+def test_workable_real_screener_not_force_declined():
+    """Guard: a genuine (non-marketing) REQUIRED Workable-shaped radio is harvested with a clean
+    question but marketing_optin_pick returns None, so fill_required_consent leaves it to the real
+    screener path — the marketing decline must not hijack real screeners."""
+    from backend.applier.dropdowns import (
+        _HARVEST_MARKETING_RADIO_JS, marketing_optin_pick)
+    prompt = "Are you legally authorized to work in the United States?"
+
+    async def coro(page):
+        groups = await page.evaluate(_HARVEST_MARKETING_RADIO_JS)
+        picked = None
+        if groups:
+            picked = marketing_optin_pick(groups[0]["question"], groups[0]["options"])
+        return groups, picked
+
+    groups, picked = asyncio.run(
+        _with_inline_page(_workable_marketing_radio(prompt), coro))
+    assert len(groups) == 1, f"expected one group, got {len(groups)}"
+    assert groups[0]["question"] == prompt, f"clean question expected, got {groups[0]['question']!r}"
+    assert picked is None, "a real work-auth screener must NOT be treated as a marketing opt-in"

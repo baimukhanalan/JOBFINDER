@@ -545,8 +545,10 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   PRESENTED (TP/iCIMS). **binance-Lever uses an INVISIBLE enterprise hCaptcha that risk-DENIES both our datacenter IP AND a
   BD-residential proxy** (no challenge to solve) → only a real mobile-CARRIER IP beats it. Fill-gaps (`dropdowns.py`): a
   Workable marketing opt-in radio → decline via `marketing_optin_pick` (tight `_MARKETING_OPTIN_RE`, NOT the broad
-  `_CONSENT_SKIP_RE` — its 'job opportunit' token false-positived a real 'relocate for this job?' screener). NopeCHA-into-
-  campaign wiring is NOT done (deferred until a phone is online).
+  `_CONSENT_SKIP_RE`). **`_HARVEST_MARKETING_RADIO_JS` fixed 2026-09-11** for nogigiddy's required 'Daily Drop' radio (was
+  leaving 35 Workable jobs silently un-submitted): resolve the question via `aria-labelledby` (the prompt `<span>` sits OUTSIDE
+  the `<fieldset>`) + `stripText` the inline-SVG `<desc>` pollution ('SVGs not supported…'), else the harvested question is
+  garbage → regex misses → radio blank → Workable silently rejects submit. NopeCHA-into-campaign wiring NOT done (needs a phone online).
 - **takhet.com MX/DNS:** if persona acks stop landing across ALL lanes at once, check DNS first — inbound mail dies if the
   `mail.orta.study` A record (takhet's MX target) is dropped (fix = owner adds A `mail.takhet.com`→173.249.18.153 + MX
   `takhet.com`→`mail.takhet.com`; not a bot bug).

@@ -713,6 +713,32 @@ _HARVEST_MARKETING_RADIO_JS = r"""
 () => {
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   window.__aaMkrSeq = window.__aaMkrSeq || 0;
+  // textContent minus decorative SVG/desc/style/script — a Workable custom radio wraps an
+  // inline <svg><desc>SVGs not supported by this browser.</desc></svg> inside each option
+  // <label>, so a raw .textContent yields 'SVGs not supported by this browser.Yes'.
+  const stripText = el => {
+    if (!el) return '';
+    const c = el.cloneNode(true);
+    if (c.querySelectorAll) c.querySelectorAll('svg,desc,style,script').forEach(e => e.remove());
+    return clean(c.textContent);
+  };
+  // Resolve the group's question via aria-labelledby (Workable radiogroups reference the prompt
+  // by id — the prompt <span> lives OUTSIDE the <fieldset>, whose only descendants are the option
+  // <label>s, so a plain descendant querySelector grabs 'Yes' instead of the real question).
+  const labelledbyText = start => {
+    let n = start;
+    for (let d = 0; d < 6 && n; d++) {
+      const lb = n.getAttribute ? n.getAttribute('aria-labelledby') : null;
+      if (lb) {
+        for (const id of lb.split(/\s+/)) {          // first token is the prompt; option-label
+          const t = stripText(document.getElementById(id));  // ids ('Yes'/'No') are short → skipped
+          if (t.length > 8) return t;
+        }
+      }
+      n = n.parentElement;
+    }
+    return '';
+  };
   const isReq = start => {
     let n = start;
     for (let d = 0; d < 6 && n; d++) {
@@ -746,36 +772,39 @@ _HARVEST_MARKETING_RADIO_JS = r"""
       r.getAttribute('aria-checked') === 'true' ||
       r.getAttribute('aria-selected') === 'true');
     if (answered) continue;
-    let q = '';
-    let scan = members[0].closest(
-      'fieldset,[role=radiogroup],[role=group],li,.field,[class*="field"],[class*="question"]')
-      || members[0].parentElement;
-    for (let d = 0; d < 6 && scan && !q; d++) {
-      const lab = scan.querySelector
-        ? scan.querySelector('legend,[id$="_label"],label,[class*="question"],[class*="label"]')
-        : null;
-      if (lab) { const t = clean(lab.textContent); if (t.length > 8) q = t; }
-      if (!q) {
-        let sib = scan.previousElementSibling;
-        while (sib && !q) {
-          const t = clean(sib.textContent);
-          if (t.length > 8 && t.length < 240) q = t;
-          sib = sib.previousElementSibling;
+    let q = labelledbyText(members[0]);   // Workable aria-labelledby prompt (outside the fieldset)
+    if (!q) {
+      let scan = members[0].closest(
+        'fieldset,[role=radiogroup],[role=group],li,.field,[class*="field"],[class*="question"]')
+        || members[0].parentElement;
+      for (let d = 0; d < 6 && scan && !q; d++) {
+        const lab = scan.querySelector
+          ? scan.querySelector('legend,[id$="_label"],label,[class*="question"],[class*="label"]')
+          : null;
+        if (lab) { const t = stripText(lab); if (t.length > 8) q = t; }
+        if (!q) {
+          let sib = scan.previousElementSibling;
+          while (sib && !q) {
+            const t = clean(sib.textContent);
+            if (t.length > 8 && t.length < 240) q = t;
+            sib = sib.previousElementSibling;
+          }
         }
+        scan = scan.parentElement;
       }
-      scan = scan.parentElement;
     }
     if (!q) continue;
     const required = isReq(members[0]) || /\*/.test(q);
     const opts = [], sels = [];
     for (const r of members) {
-      const target = (r.tagName === 'INPUT') ? (r.closest('label') || r) : r;
+      const isInput = (r.tagName === 'INPUT');
+      // The interactive element for a Workable custom radio is the [role=radio] wrapper around
+      // the aria-hidden native input; fall back to the wrapping <label>, then the control itself.
+      const target = isInput ? (r.closest('[role=radio]') || r.closest('label') || r) : r;
       const i = window.__aaMkrSeq++;
       target.setAttribute('data-aa-mkr', String(i));
-      const ot = (r.tagName === 'INPUT')
-        ? clean((r.closest('label') && r.closest('label').textContent)
-                || r.value || r.getAttribute('aria-label') || '')
-        : clean(r.textContent);
+      let ot = isInput ? stripText(r.closest('label')) : stripText(r);
+      if (!ot) ot = clean((isInput ? (r.value || r.getAttribute('aria-label')) : '') || '');
       opts.push(ot);
       sels.push('[data-aa-mkr="' + i + '"]');
     }

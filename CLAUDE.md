@@ -118,9 +118,11 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   for Kazakhstan/CIS/Central-Asia + worldwide-without-a-pin; FALSE for any named country/US-state/Europe/EMEA/APAC + timezone/
   relocation/on-site pins). Set at collect time; re-run `catalog_collector --backfill-open --all` after a rule change. Tests:
   `test_regions.py`.
-- **Card actions:** cards carry NO per-card М/Ж or «Заполнить» (owner: manual apply off). A round `.cat-pick` checkbox + «Выбрать
-  все» (whole search via `GET /catalog/ids` → `list_job_ids`) build a selection in `sessionStorage['cat_sel']`; the fixed
-  `#catSelBar` opens the campaign sheet.
+- **Card actions:** cards carry NO per-card М/Ж or «Заполнить» (owner: manual apply off). A round `.cat-pick` checkbox builds a
+  selection in `sessionStorage['cat_sel']`; ticking one reveals the fixed bottom bar `#catSelBar` = «Выбрано N · Все · Снять ·
+  Кампания». **«Все»** (`selectAll(btn)`, `.cat-selbar-all`) puts the WHOLE current search into the selection (`GET /catalog/ids`
+  → `list_job_ids`); «Снять» = `clearPicks`; «Кампания» opens the sheet. (The old top `#catSelAll`/`toggleSelAll` checkbox row
+  was removed 2026-09-11 — select-all now lives IN the bar.)
 - **Recurring apply CAMPAIGNS** (`tools/apply_campaigns.py`, `data/apply_campaigns.json`) + `apply_campaign_cron.py`. Applies
   daily under a fixed persona name, N/day, fresh résumé each. Kinds: `search` (N NEW jobs/day, only `_AUTO_ATS` greenhouse/
   ashby, excludes applied+submitted), `job` (N/day one job), `jobs` (a `/catalog` selection: `job_ids` + a persisted `cursor`

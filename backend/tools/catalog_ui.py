@@ -415,6 +415,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
     selbar = (
         '<div class="cat-selbar" id="catSelBar" role="region" aria-label="Выбранные вакансии">'
         '<span class="cat-selbar-n" id="catSelN">Выбрано 0</span>'
+        '<button type="button" class="ghost cat-selbar-all" onclick="selectAll(this)">Все</button>'
         '<button type="button" class="ghost cat-selbar-clear" onclick="clearPicks()">Снять</button>'
         '<button type="button" class="primary cat-selbar-go" onclick="openCampSheet()">'
         'Кампания</button></div>')
@@ -466,10 +467,6 @@ def render_page(company: str = "", q: str = "", region: str = "",
     list_html = cards or '<div class="empty">Вакансий не найдено</div>'
     body = (
         _CAT_CSS + head + settings + camp_sheet + selbar + toast
-        + '<div class="cat-selall"><label class="cat-selall-l">'
-          '<span class="cat-pick cat-pick-all"><input type="checkbox" id="catSelAll" '
-          'onchange="toggleSelAll(this)" aria-label="Выбрать все"><span></span></span>'
-          '<span>Выбрать все</span></label><span class="cat-selall-n" id="catSelAllN"></span></div>'
         + f'<div class="cat-list" id="catlist">{list_html}</div>'
         + f'<div id="catmore" data-more="{has_more}" data-offset="{PAGE}" style="height:1px"></div>'
         + _CAT_JS)
@@ -570,6 +567,7 @@ _CAT_CSS = """<style>
 .cat-selbar.on{opacity:1;visibility:visible;transform:none;transition:opacity .2s ease,transform .22s cubic-bezier(.22,.61,.36,1)}
 .cat-selbar-n{font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap}
 .cat-selbar-n b{font-family:var(--ff-mono);font-weight:600;color:var(--accent)}
+.cat-selbar .cat-selbar-all{flex:0 0 auto}
 .cat-selbar .cat-selbar-clear{flex:0 0 auto}
 .cat-selbar .cat-selbar-go{flex:0 0 auto;white-space:nowrap}
 /* Campaign sheet controls */
@@ -624,11 +622,6 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
 .cat-fill-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
 /* Описание · Вопросы toggles share the action row; an open one drops below at full width */
 .cat-dets{display:flex;align-items:center;flex-wrap:wrap;gap:0 16px}
-/* «Выбрать все» — the current search's whole result set into the selection (ids fetched on tap) */
-.cat-selall{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 10px;font-size:13px;color:var(--ink-soft)}
-.cat-selall-l{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;color:var(--ink);min-height:32px;-webkit-tap-highlight-color:transparent}
-.cat-selall-l .cat-pick{display:inline-flex;margin:-9px 0 -9px -9px}   /* the cards' round checkbox */
-.cat-selall-n{font-family:var(--ff-mono);font-size:12px;color:var(--ink-mute)}
 .cat-dets .cat-det{margin-top:0}
 .cat-dets:has(details[open]){flex:1 1 100%;margin-left:0;flex-direction:column;align-items:stretch}
 .cat-dets:has(details[open]) .cat-det{width:100%}
@@ -735,9 +728,10 @@ a.cat-title:hover{color:var(--accent);text-decoration:underline}
   .cat-filters-btn{display:none}
   .cat-search-row{display:none}
   /* selection bar: full width minus margins, above the shell's fixed bottom tab bar */
-  .cat-selbar{left:12px;right:12px;width:auto;max-width:none;margin:0;bottom:calc(var(--jf-tabbar,0px) + env(safe-area-inset-bottom) + 10px);padding:8px 8px 8px 16px;gap:8px}
+  .cat-selbar{left:12px;right:12px;width:auto;max-width:none;margin:0;bottom:calc(var(--jf-tabbar,0px) + env(safe-area-inset-bottom) + 10px);padding:8px 8px 8px 14px;gap:6px}
   .cat-selbar-n{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .cat-selbar .cat-selbar-clear,.cat-selbar .cat-selbar-go{padding:0 14px}
+  .cat-selbar .cat-selbar-all,.cat-selbar .cat-selbar-clear{padding:0 11px}
+  .cat-selbar .cat-selbar-go{padding:0 14px}
   .cat-list.selon{padding-bottom:calc(var(--jf-tabbar,0px) + 84px)}
   .cat-head{gap:6px;margin-bottom:2px}
   .cat-h-title{font-size:17px}
@@ -775,14 +769,13 @@ window.pickSex = function(b){
     var on=(x===b); x.classList.toggle('on', on); x.setAttribute('aria-pressed', on?'true':'false');
   });
 };
-// «Выбрать все»: put EVERY job of the current search (not just the rendered page) into the
-// selection — ids come from /catalog/ids with the live query; unticking clears the selection.
-window.toggleSelAll = async function(cb){
-  var nEl=document.getElementById('catSelAllN');
-  if(!cb.checked){ clearPicks(); if(nEl) nEl.textContent=''; return; }
+// «Все»: put EVERY job of the current search (not just the rendered page) into the selection —
+// ids come from /catalog/ids with the live query. Lives in the bottom selection bar (which is
+// only visible once ≥1 card is picked); «Снять» clears. The bar's «Выбрано N» reflects the count.
+window.selectAll = async function(btn){
   var qp=(window.catQuery?window.catQuery():{}), sp=new URLSearchParams();
   if(qp.q) sp.set('q', qp.q); if(qp.region) sp.set('region', qp.region); if(qp.company) sp.set('company', qp.company);
-  cb.disabled=true; if(nEl) nEl.textContent='считаю…';
+  var old=btn.textContent; btn.disabled=true; btn.textContent='…';
   var gen=window.__jfGen;
   try{
     var r=await fetch('/catalog/ids?'+sp.toString()), j=r.ok?await r.json():{jobs:[]};
@@ -791,9 +784,8 @@ window.toggleSelAll = async function(cb){
     (j.jobs||[]).forEach(function(x){ var id=parseInt(x.id,10); if(!(id>0)) return;
       S.ids.add(id); S.meta[id]={co:String(x.company||''), t:String(x.title||'')}; });
     catSaveSel(); syncPicks();
-    if(nEl) nEl.textContent=(j.jobs||[]).length+(j.capped?'+':'')+' '+catPlural((j.jobs||[]).length,'вакансия','вакансии','вакансий');
-  }catch(e){ cb.checked=false; if(nEl) nEl.textContent='не удалось'; }
-  finally{ cb.disabled=false; }
+  }catch(e){}
+  finally{ btn.disabled=false; btn.textContent=old; }
 };
 // ---- card selection -> campaign ---------------------------------------------------
 // Selected ids (+ company/title for the sheet's list) persist in sessionStorage so a
@@ -829,7 +821,7 @@ window.pickJob = function(cb){
 window.syncPicks = function(root){
   var S=window.catSel;
   (root||document).querySelectorAll('.cat-pick input[type=checkbox]').forEach(function(cb){
-    if(!cb.dataset.id) return;                      // the «Выбрать все» box has no job id
+    if(!cb.dataset.id) return;                      // skip any checkbox without a job id
     var on=S.ids.has(parseInt(cb.dataset.id,10)); cb.checked=on;
     var card=cb.closest('.cat-card'); if(card) card.classList.toggle('sel', on);
   });
@@ -837,8 +829,6 @@ window.syncPicks = function(root){
 };
 window.clearPicks = function(){
   var S=window.catSel; S.ids.clear(); S.meta={}; catSaveSel(); syncPicks();
-  var sa=document.getElementById('catSelAll'); if(sa) sa.checked=false;
-  var nEl=document.getElementById('catSelAllN'); if(nEl) nEl.textContent='';
 };
 window.renderSelBar = function(){
   var n=window.catSel.ids.size, bar=document.getElementById('catSelBar'),
@@ -1130,7 +1120,7 @@ pxRefresh();   // show pool summary on load
   var qp=new URLSearchParams(location.search);
   var region=qp.get('region')||'', company=(qp.get('company')||'').trim(),
       curQ=(qp.get('q')||'').trim();
-  // the live query, for «Выбрать все» (reads the closure vars, so it follows the live search)
+  // the live query, for «Все» select-all (reads the closure vars, so it follows the live search)
   window.catQuery=function(){ return {q:curQ, region:region, company:company}; };
   var loading=false, PAGE=30, seq=0, sig=catSig();
   // the shell's mobile top-pill funnel shows the active region filter as an "on" state
@@ -1153,7 +1143,6 @@ pxRefresh();   // show pool summary on load
       var added=(txt.match(/class="cat-card"/g)||[]).length;
       if(more){ more.dataset.offset=String(added); more.dataset.more=(added>=PAGE)?'1':'0'; }
       window.scrollTo(0,0);
-      var sa=document.getElementById('catSelAll'); if(sa) sa.checked=false;   // a new query = a new "all"
       // mirror the live query into the URL (replace, not push) so the shell's tab switch brings the
       // user back to this search and Back/reload restore it
       try{ var u=new URL(location.href); if(curQ) u.searchParams.set('q',curQ); else u.searchParams.delete('q');

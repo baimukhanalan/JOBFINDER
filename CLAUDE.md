@@ -517,7 +517,31 @@ Assessment question-bank harvester (see the harvester section):
     low-velocity probes filled 12/12 & 13/13 — but the submit is silently quarantined, no ack).
     All 32 Salmon postings are on ONE board (no non-strict escape board). The cure is the
     documented one: LOW per-company velocity + a residential/mobile egress. Do NOT re-conclude
-    "strict-tier unbeatable" and do NOT abandon Salmon. **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP
+    "strict-tier unbeatable" and do NOT abandon Salmon.
+    **Campaign budget guards + captcha/egress (2026-09-11, live-proven, commit f9962e0/9cedd4d).**
+    The `jobs`-kind store (`apply_campaigns.py`) got three guards: (1) **confirmed-exclusion** —
+    `note_run` accumulates a per-campaign `confirmed_jobids` set and `resolve_targets` NEVER re-serves
+    a LANDED job (no weekly re-spam of accepted Supabase/railway); permanent + forward-only, and once
+    every pick is confirmed the campaign goes inert (no crash/loop). (2) **attempt-cap** — `per_day`
+    is a CONFIRMED cap, so a 0-yield day fired unlimited fills; `attempts_today` now caps daily fills
+    at `per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR` (4, env). (3) **conditional ATS filter** — the `jobs`
+    branch SKIPS captcha-walled ATSes (lever/workable) by DEFAULT so the budget concentrates on
+    submittable ashby/greenhouse; set **`CAMPAIGN_SOLVE_CAPTCHA=1`** to attempt everything once a
+    solver + clean egress are live. **Captcha path (`COPILOT_NOPECHA=1`):** `copilot.py` can load the
+    vendored NopeCHA ext (paid `NOPECHA_KEY`) via a persistent context (default off → live co-pilot
+    byte-identical), with an optional `COPILOT_PROXY` launch-time egress + `ignore_https_errors`;
+    `tools/campaign_captcha_probe.py` drives one fill through it. **LIVE FINDING (binance Lever, 2
+    runs):** NopeCHA only helps where a captcha is PRESENTED (proven on TP/iCIMS) — binance-Lever uses
+    an **INVISIBLE enterprise hCaptcha that risk-DENIES both our datacenter IP AND a BD-residential
+    proxy** (no challenge to solve; "There was an error verifying your application"), so NopeCHA +
+    purchased proxies do NOT beat it — only a real mobile-CARRIER IP (the `mobile_proxy.py` phone pool,
+    needs phones online) does. Salmon (Ashby) is a softer velocity-drop, NOT this hard invisible-captcha
+    wall. **Fill-gaps (`dropdowns.py`):** a REQUIRED Workable marketing opt-in radio (nogigiddy 'Daily
+    Drop') is answered decline/No via `marketing_optin_pick` (tight `_MARKETING_OPTIN_RE` ONLY — NOT the
+    broad `_CONSENT_SKIP_RE`, whose 'job opportunit' token false-positived on a real 'relocate for this
+    job opportunity?' screener); the pronoun/gender demographic answer honors persona sex
+    (word-boundaried `\bhe\b`/`\bshe\b`, never contradicts). NopeCHA-into-campaign wiring is NOT yet done
+    (deferred until a phone is online to live-verify — building it blind is pointless without a clean IP). **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP
     over Tailscale = «Мобильный прокси»** (`backend/tools/mobile_proxy.py`, settings
     `backend/data/mobile_proxy.json` gitignored: `enabled`, `server` e.g. `socks5://100.x.y.z:1080`,
     optional `username/password` for an http proxy — Chromium can NOT authenticate socks5, so a

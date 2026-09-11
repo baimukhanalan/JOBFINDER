@@ -46,6 +46,16 @@ HEADLESS = os.environ.get("COPILOT_HEADLESS") == "1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 
+# COPILOT_NOPECHA=1 loads the vendored NopeCHA captcha-solver extension (auto-solves
+# hCaptcha / reCAPTCHA / Cloudflare Turnstile IN-PAGE). Loading an extension REQUIRES a
+# persistent context, so this flag also switches the launch to launch_persistent_context.
+# Default off => the live co-pilot launch is byte-identical. COPILOT_PROXY sets a
+# launch-time egress (Ashby/Salmon need a residential/mobile IP; captcha ATSes are direct).
+NOPECHA_ON = os.environ.get("COPILOT_NOPECHA") == "1"
+NOPECHA_EXT = str(PROJECT_ROOT / "backend" / "vendor" / "nopecha_ext")
+NOPECHA_PROFILE = os.environ.get("COPILOT_NOPECHA_PROFILE", "/tmp/copilot_nopecha_profile")
+LAUNCH_PROXY = os.environ.get("COPILOT_PROXY", "").strip()
+
 # One shared headful browser = one reviewer at a time. A second profile loading a job
 # would clobber the first person's mid-review form, so /load is owner-gated.
 BUSY_TTL = 15 * 60  # seconds before an abandoned session stops blocking others
@@ -174,6 +184,47 @@ async def _ensure_browser():
         _launch_args = ["--no-sandbox", "--disable-dev-shm-usage"]
         if not HEADLESS:
             _launch_args.insert(0, "--start-maximized")
+        if NOPECHA_ON:
+            # An extension can only load through a persistent context. Launch one with the
+            # NopeCHA ext, optionally through a fixed launch-time proxy (COPILOT_PROXY), then
+            # arm NopeCHA via its setup URL. The persistent CONTEXT doubles as the "browser"
+            # handle here (it has .close()); _use_proxy_context is not used in this mode
+            # (the launch-time proxy is the egress), so /load must not pass proxy_server.
+            ext_args = ([f"--disable-extensions-except={NOPECHA_EXT}",
+                         f"--load-extension={NOPECHA_EXT}"] if os.path.isdir(NOPECHA_EXT) else [])
+            lk = dict(headless=False, no_viewport=True, args=_launch_args + ext_args,
+                      ignore_https_errors=True,
+                      env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
+            if LAUNCH_PROXY:
+                pc = {"server": LAUNCH_PROXY}
+                _pu = os.environ.get("COPILOT_PROXY_USER", "").strip()
+                if _pu:
+                    pc["username"] = _pu
+                    pc["password"] = os.environ.get("COPILOT_PROXY_PASS", "")
+                lk["proxy"] = pc
+            os.makedirs(NOPECHA_PROFILE, exist_ok=True)
+            ctx = await _S["pw"].chromium.launch_persistent_context(NOPECHA_PROFILE, **lk)
+            _S["browser"], _S["ctx"], _S["proxy_server"] = ctx, ctx, LAUNCH_PROXY
+            _S["page"] = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            _S["page"].on("filechooser", _on_filechooser)
+            if ext_args:
+                try:
+                    _key = os.environ.get("NOPECHA_KEY", "").strip()
+                    _cfg = ("input_method=javascript|hcaptcha_auto_open=true|hcaptcha_auto_solve=true|"
+                            "recaptcha_auto_solve=true|turnstile_auto_solve=true|"
+                            "hcaptcha_solve_delay_time=200|enabled=true"
+                            + (f"|key={_key}" if _key else ""))
+                    sp = await ctx.new_page()
+                    await sp.goto("https://nopecha.com/setup#" + _cfg,
+                                  wait_until="domcontentloaded", timeout=45000)
+                    await sp.wait_for_timeout(3500)
+                    await sp.close()
+                    logger.info("NopeCHA armed (%s, proxy=%s)",
+                                "key" if _key else "free tier", LAUNCH_PROXY or "direct")
+                except Exception:
+                    logger.warning("NopeCHA arm failed", exc_info=True)
+            await _S["page"].goto("about:blank")
+            return _S["page"]
         _S["browser"] = await _S["pw"].chromium.launch(
             headless=HEADLESS, args=_launch_args,
             env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})

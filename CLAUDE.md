@@ -504,10 +504,20 @@ Assessment question-bank harvester (see the harvester section):
       «Кампании» row shows a «✅ N · ⛔ N · ☠ N» tally + a «журнал» toggle that expands the per-apply
       list inline (date · Компания · Вакансия · outcome badge · mailbox). Reserved names `.camp-jrnl*`,
       `.camp-tally`, `.camp-badge*`, JS `toggleCampLog`/`campBadge`. Tests in `test_apply_campaigns.py`.
-    **Reality check:** Salmon is Ashby, and Ashby flags
-    the datacenter IP as spam on a risk-scored share of submits (after_submit.png: «flagged as
-    possible spam») — a KZ campaign over Salmon will lose many submits to that ceiling; the only
-    cure is a residential egress. **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP
+    **Reality check (CORRECTED 2026-09-11 — supersedes the earlier "Salmon = strict-tier,
+    unbeatable" verdict, which was WRONG).** Salmon (Ashby `salmon-group`) is a genuinely
+    ACCEPTING tenant: `mail_index` holds 49 real Salmon inbound across 34 personas — 8 acks
+    («We've Received Your Application | Salmon Group», Aug 21–23), 7 interview invites from REAL
+    human recruiters (k.menkova@salmon.group …), 33 rejections; synthetic personas were taken
+    multiple interview rounds deep. The FIRST acks (Aug 21) PREDATE the proxy pool (Aug 23) /
+    Bright Data (Aug 25), so they came from the SAME datacenter-direct IP the campaign uses now.
+    So the Sept silence is NOT a tier setting and NOT the IP per se — it is accumulated
+    submission VELOCITY: weeks of high-volume submits raised Ashby's spam risk on our IP range
+    into a SOFT drop (the click is accepted, NO banner shows — `blocked=null` on fresh
+    low-velocity probes filled 12/12 & 13/13 — but the submit is silently quarantined, no ack).
+    All 32 Salmon postings are on ONE board (no non-strict escape board). The cure is the
+    documented one: LOW per-company velocity + a residential/mobile egress. Do NOT re-conclude
+    "strict-tier unbeatable" and do NOT abandon Salmon. **Owner's pick (2026-09-09 night): his iPhone's mobile-data IP
     over Tailscale = «Мобильный прокси»** (`backend/tools/mobile_proxy.py`, settings
     `backend/data/mobile_proxy.json` gitignored: `enabled`, `server` e.g. `socks5://100.x.y.z:1080`,
     optional `username/password` for an http proxy — Chromium can NOT authenticate socks5, so a

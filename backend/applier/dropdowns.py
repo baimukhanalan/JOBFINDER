@@ -388,11 +388,33 @@ def _demo_fallback_re_src(context: str, sex: str) -> str | None:
             return r"\bmale\b|\bman\b"
         return None
     if "pronoun" in c:
+        # WORD-boundaried on purpose: the old `he[ /,]` matched the substring "he/" INSIDE
+        # "She/her", so a he/him pattern could pick a she/her option (and vice-versa on some
+        # option orderings). \bhe\b|\bhim\b never matches "She/her"; \bshe\b|\bher\b never
+        # matches "He/him" — so the pronoun answer can NEVER contradict the persona's sex.
         if sex == "female":
-            return r"\bshe\b|she[ /,]"
+            return r"\bshe\b|\bher\b|\bhers\b"
         if sex == "male":
-            return r"\bhe\b|he[ /,]"
-        return r"no preference|they"
+            return r"\bhe\b|\bhim\b|\bhis\b"
+        return r"\bthey\b|\bthem\b|no preference|not to (?:say|answer|disclose)"
+    return None
+
+
+def demographic_answer_index(option_texts: list[str], context: str,
+                             sex: str = "") -> int | None:
+    """Pure decision core for the OWNER-policy demographic fallback (a field with NO decline
+    option): the index of the FIRST option matching the policy answer for `context`, honoring
+    the persona's `sex` for gender/pronoun (female -> She/her, male -> He/him) and NEVER
+    contradicting it. Returns None when nothing safe matches (leave the field blank rather than
+    claim a characteristic or the wrong gender). Mirrors what fill_demographic_answers applies
+    live, extracted so the gendered pick is unit-testable without a browser."""
+    src = _demo_fallback_re_src(context, sex)
+    if not src:
+        return None
+    rx = re.compile(src, re.I)
+    for i, o in enumerate(option_texts):
+        if rx.search(o or ""):
+            return i
     return None
 
 
@@ -532,6 +554,55 @@ async def fill_demographic_answers(page, sex: str = "") -> dict:
                 filled.append((grp or "")[:40])
         except Exception:
             continue
+    # 5) Ashby/Workable input[role=combobox] demographic (e.g. 'What are your preferred
+    #    pronouns?') with NO decline option — fill_demographics_decline's combobox pass left it
+    #    blank (decline is preferred and runs first), so honor the persona's sex HERE: female ->
+    #    She/her, male -> He/him, NEVER the opposite gender. Without this pass the pronoun/gender
+    #    combobox stayed blank (or, on some forms, was mis-set to the wrong gender). Only fires on
+    #    a still-empty demographic combobox that resolves to a gender/pronoun sub-type with a
+    #    persona sex; a real skill/availability combobox already carries a value -> skipped.
+    try:
+        combos = await page.query_selector_all(_COMBO_SEL)
+    except Exception:
+        combos = []
+    for box in combos:
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(120)
+            try:
+                await page.evaluate(
+                    "() => document.querySelectorAll('[data-ui=\"backdrop\"]')"
+                    ".forEach(e => e.remove())")
+            except Exception:
+                pass
+            if (await box.evaluate("el=>el.value") or "").strip():
+                continue  # already answered (declined earlier, or a non-demographic combobox)
+            label = _clean_text(await _combo_label(box)).strip(" *").lower()
+            if not _DEMOGRAPHIC.search(label):
+                continue
+            pat = _pat(label)
+            if not pat:
+                continue  # no policy answer for this sub-type / unknown sex -> leave blank
+            await box.click()
+            await page.wait_for_timeout(300)
+            picked = None
+            for o in await page.query_selector_all("[role='option']"):
+                if pat.search((await o.inner_text()) or ""):
+                    picked = o
+                    break
+            if picked:
+                await picked.click()
+                await page.wait_for_timeout(200)
+                if (await box.evaluate("el=>el.value") or "").strip():
+                    filled.append(label[:40])
+                    continue
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(120)
+        except Exception:
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
     if filled:
         logger.info("demographic answers filled (%d): %s", len(filled), filled)
     return {"filled": len(filled), "handled": filled}
@@ -594,11 +665,134 @@ _DEMOGRAPHIC_CONSENT_RE = re.compile(
     r"(?i)consent[\w\s,'\.\-]{0,120}(?:demographic|diversity)[\w\s]{0,30}(?:data|survey|question|response)")
 
 
+# A MARKETING opt-in prompt (newsletter / job-alert subscription). Distinct from _CONSENT_SKIP_RE
+# in that it also catches the nogigiddy "Daily Drop" job-digest phrasings. An OPTIONAL marketing
+# checkbox stays UNticked (fill_required_consent skips it), but a REQUIRED marketing RADIO must be
+# answered or the form blocks — see marketing_optin_pick.
+_MARKETING_OPTIN_RE = re.compile(
+    r"(?i)job.?hunting|daily drop|newsletter|mailing list|talent (?:community|network|pool)"
+    r"|job (?:alerts?|matches|recommendations|listings|digest)"
+    r"|sends?\b[\w\s,\d’'\-]{0,40}\bjobs?\b|vetted\b[\w\s,\d]{0,20}\bjobs?\b"
+    r"|\d+\s+(?:vetted|remote|new|curated)\b[\w\s]{0,25}\bjobs?\b"
+    r"|receive\b[\w\s,]{0,30}\b(?:jobs?|opportunities|roles|openings)\b"
+    r"|contact you\b[\w\s,]{0,30}\b(?:jobs?|opportunit|openings|roles)\b")
+
+
+def marketing_optin_pick(label: str, option_texts: list[str]) -> int | None:
+    """The least-committal option index for a MARKETING opt-in question (Workable's nogigiddy
+    'Still job hunting…? The Daily Drop sends 10 vetted remote jobs…' Yes/No, a 'contact you about
+    job opportunities' radio, a newsletter subscribe, …). A REQUIRED field must be answered even
+    when it is marketing, so pick the DECLINE / 'prefer not' option if present, else the negative
+    ('No' / 'Not now') option. Returns None when the question is NOT a marketing opt-in (leave it
+    to the normal screener/consent path) OR offers no non-committal option — we NEVER opt INTO
+    marketing. Pure/testable; the caller only applies it to a REQUIRED radio (optional marketing
+    stays blank)."""
+    joined = " ".join([label or ""] + [o or "" for o in option_texts]).lower()
+    # Trigger ONLY on the tight marketing lexicon — NOT the broad _CONSENT_SKIP_RE, whose
+    # "job opportunit"/"contact you" tokens false-positive on real screeners like "Will you
+    # relocate for this job opportunity?" (which _MARKETING_OPTIN_RE's "contact you … opportunit"
+    # clause deliberately does NOT match — a screener has no "contact you").
+    if not _MARKETING_OPTIN_RE.search(joined):
+        return None
+    for i, o in enumerate(option_texts):        # 1) an explicit decline / 'prefer not'
+        if _DECLINE_RE.search(o or ""):
+            return i
+    for i, o in enumerate(option_texts):        # 2) else the negative ('No' / 'Not now')
+        if re.match(r"(?i)\s*(?:no|nope|not|never)\b", (o or "").strip()):
+            return i
+    return None
+
+
+# Harvest candidate radio groups (native input[type=radio] grouped by name + Workable-style
+# [role=radio] grouped by parent) with their question label, options, click selectors, a
+# `required` flag (aria-required / required attr / '*' in the label) and whether they're already
+# answered. Read-only apart from stamping data-aa-mkr on each option. Used ONLY to answer a
+# REQUIRED marketing opt-in radio (see fill_required_consent) — real screeners are answered by
+# fill_role_radio_known / the analyzer loops and are skipped (marketing_optin_pick returns None).
+_HARVEST_MARKETING_RADIO_JS = r"""
+() => {
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  window.__aaMkrSeq = window.__aaMkrSeq || 0;
+  const isReq = start => {
+    let n = start;
+    for (let d = 0; d < 6 && n; d++) {
+      if (n.getAttribute) {
+        if (n.getAttribute('aria-required') === 'true') return true;
+        if (n.hasAttribute && n.hasAttribute('required')) return true;
+      }
+      n = n.parentElement;
+    }
+    return false;
+  };
+  const groups = [];
+  const byName = new Map();
+  for (const r of document.querySelectorAll('input[type=radio]')) {
+    if (!r.name) continue;
+    if (!byName.has(r.name)) byName.set(r.name, []);
+    byName.get(r.name).push(r);
+  }
+  for (const [, m] of byName) if (m.length >= 2 && m.length <= 5) groups.push(m);
+  const byPar = new Map();
+  for (const r of document.querySelectorAll('[role=radio]')) {
+    const p = r.parentElement; if (!p) continue;
+    if (!byPar.has(p)) byPar.set(p, []);
+    byPar.get(p).push(r);
+  }
+  for (const [, m] of byPar) if (m.length >= 2 && m.length <= 5) groups.push(m);
+  const out = [];
+  for (const members of groups) {
+    const answered = members.some(r =>
+      (r.tagName === 'INPUT' && r.checked) ||
+      r.getAttribute('aria-checked') === 'true' ||
+      r.getAttribute('aria-selected') === 'true');
+    if (answered) continue;
+    let q = '';
+    let scan = members[0].closest(
+      'fieldset,[role=radiogroup],[role=group],li,.field,[class*="field"],[class*="question"]')
+      || members[0].parentElement;
+    for (let d = 0; d < 6 && scan && !q; d++) {
+      const lab = scan.querySelector
+        ? scan.querySelector('legend,[id$="_label"],label,[class*="question"],[class*="label"]')
+        : null;
+      if (lab) { const t = clean(lab.textContent); if (t.length > 8) q = t; }
+      if (!q) {
+        let sib = scan.previousElementSibling;
+        while (sib && !q) {
+          const t = clean(sib.textContent);
+          if (t.length > 8 && t.length < 240) q = t;
+          sib = sib.previousElementSibling;
+        }
+      }
+      scan = scan.parentElement;
+    }
+    if (!q) continue;
+    const required = isReq(members[0]) || /\*/.test(q);
+    const opts = [], sels = [];
+    for (const r of members) {
+      const target = (r.tagName === 'INPUT') ? (r.closest('label') || r) : r;
+      const i = window.__aaMkrSeq++;
+      target.setAttribute('data-aa-mkr', String(i));
+      const ot = (r.tagName === 'INPUT')
+        ? clean((r.closest('label') && r.closest('label').textContent)
+                || r.value || r.getAttribute('aria-label') || '')
+        : clean(r.textContent);
+      opts.push(ot);
+      sels.push('[data-aa-mkr="' + i + '"]');
+    }
+    out.push({question: q, required: required, options: opts, selectors: sels});
+  }
+  return out;
+}
+"""
+
+
 async def fill_required_consent(page) -> dict:
     """Tick a REQUIRED legal/privacy consent checkbox — you can't submit without agreeing to the
     recruiting privacy notice / data processing (e.g. 1Password's bottom 'I agree'). Skips
     optional MARKETING opt-ins ('contact you about job opportunities', newsletters) and anything
-    demographic. Additive."""
+    demographic. ALSO answers a REQUIRED marketing opt-in RADIO (Workable nogigiddy's 'Daily Drop'
+    Yes/No) with the least-committal option so the form isn't blocked — optional marketing radios
+    stay blank. Additive."""
     filled: list[str] = []
     try:
         boxes = await page.query_selector_all("input[type=checkbox]")
@@ -620,6 +814,32 @@ async def fill_required_consent(page) -> dict:
             except Exception:
                 await cb.evaluate("el=>{const w=el.closest('label,[role=checkbox]'); (w||el).click();}")
             filled.append(lab[:50])
+        except Exception:
+            continue
+    # REQUIRED marketing opt-in RADIO (Workable nogigiddy 'Still job hunting…? The Daily Drop sends
+    # 10 vetted remote jobs…' Yes/No). The _CONSENT_SKIP_RE marketing skip leaves it blank, but a
+    # REQUIRED radio then blocks the submit ('Please select one of these options'). Answer it with
+    # the least-committal option (decline / 'No'); OPTIONAL marketing radios (no required flag)
+    # stay blank. marketing_optin_pick returns None for real screeners, so this never touches them.
+    try:
+        groups = await page.evaluate(_HARVEST_MARKETING_RADIO_JS)
+    except Exception as e:
+        logger.debug("marketing-radio harvest failed: %s", e)
+        groups = []
+    for g in groups or []:
+        try:
+            if not g.get("required"):
+                continue
+            q = g.get("question") or ""
+            if _DEMOGRAPHIC.search(_clean_text(q).lower()):
+                continue  # demographics are declined by fill_demographics_decline, not here
+            idx = marketing_optin_pick(q, g.get("options") or [])
+            sels = g.get("selectors") or []
+            if idx is None or idx >= len(sels):
+                continue
+            await page.locator(sels[idx]).first.click(timeout=3000)
+            await page.wait_for_timeout(150)
+            filled.append(("marketing: " + q)[:50])
         except Exception:
             continue
     if filled:

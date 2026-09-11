@@ -12,14 +12,19 @@ SEMANTICS (owner-approved 2026-09-09):
     fresh résumé each). NB the campaign's ONE stable mailbox means an ATS usually dedupes the repeats,
     so the ATS — not us — decides how many actually land; the UI warns about this.
   * JOBS campaign (a checkbox selection on /catalog): `job_ids` is the owner's ordered pick, walked
-    ROUND-ROBIN by a persisted `cursor` — `per_day` ids per day starting at the cursor, the same job
-    repeating only after every selected one was hit (per_day > len(job_ids) may repeat within a day;
-    the ATS dedupes on the one mailbox). The cursor advances ONLY by the jobs a run actually DID, so a
-    failed fill is retried next run instead of skipped. Ids whose catalog row is missing or `dead` are
-    skipped for THAT run (not removed — a posting can come back), and the applied/submitted exclusions
-    of the search kind do NOT apply (the owner chose these jobs; a cycle must revisit them). The name
-    may be left EMPTY — one is then generated for the first selected job's country (see
-    `_generated_name`) and pinned like a typed one.
+    ROUND-ROBIN by a persisted `cursor` — up to `remaining_today` ids per run starting at the cursor,
+    the same UN-LANDED job repeating only after every eligible one was hit (per_day > eligible count
+    may repeat within a day; the ATS dedupes on the one mailbox). The cursor advances by the last job
+    ATTEMPTED, so a failed fill is retried next run instead of skipped. Ids whose catalog row is
+    missing or `dead` are skipped for THAT run (not removed — a posting can come back), and the
+    applied/submitted exclusions of the search kind do NOT apply (the owner chose these jobs; a cycle
+    revisits the UN-LANDED ones). Three guards keep the daily budget honest: (1) a job the campaign
+    already LANDED (confirmed submit, in `confirmed_jobids`) is NEVER re-served — no weekly re-spam of
+    an accepted posting; (2) a per-day ATTEMPT ceiling (per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR) so a
+    0-yield day can't sweep unlimited full fills; (3) by default only the auto-submittable ATSes
+    (greenhouse/ashby) are attempted — the captcha-walled ones (lever/workable) are skipped unless a
+    solver + clean egress is live (CAMPAIGN_SOLVE_CAPTCHA=1). The name may be left EMPTY — one is then
+    generated for the first selected job's country (see `_generated_name`) and pinned like a typed one.
   * ONE stable mailbox per campaign (`email`/`pid` pinned at create) so all of a campaign's replies
     land in a single inbox and the applications read as one coherent person.
 Pure/offline helpers are unit-tested in backend/tests/test_apply_campaigns.py (no DB/network).
@@ -66,6 +71,25 @@ def _file_lock():
 # Only these ATSes auto-submit end-to-end from the datacenter IP (emailed code, not a live captcha),
 # so a SEARCH campaign only targets them — else the budget is spent on jobs that can't complete.
 _AUTO_ATS = {"greenhouse", "ashby"}
+
+# A `jobs` campaign caps the DAILY ATTEMPTS (every fill tried, not just the landings) at
+# per_day × this factor, so a 0-yield day can't sweep unlimited full fills — per_day alone is a
+# CONFIRMED-submit cap (note_run bumps runs_today only by the landings). Env-overridable.
+CAMPAIGN_MAX_ATTEMPTS_FACTOR = int(os.environ.get("CAMPAIGN_MAX_ATTEMPTS_FACTOR") or 4)
+
+
+def _solve_captcha_on() -> bool:
+    """Whether a captcha solver + a clean (residential/phone) egress is available — the 'attempt
+    everything once phones + NopeCHA are live' switch (env CAMPAIGN_SOLVE_CAPTCHA=1). When OFF
+    (the default) a `jobs` campaign skips the captcha-walled ATSes (lever/workable) so its budget
+    concentrates on the submittable greenhouse/ashby jobs."""
+    return (os.environ.get("CAMPAIGN_SOLVE_CAPTCHA") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _max_attempts_today(camp: dict) -> int:
+    """The per-day ATTEMPT ceiling for a campaign = per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR (the
+    factor is read at call time so tests may monkeypatch it)."""
+    return max(1, int(camp.get("per_day", 1) or 1)) * int(CAMPAIGN_MAX_ATTEMPTS_FACTOR)
 
 
 def _load() -> list:
@@ -250,13 +274,14 @@ def create(*, name: str, target_kind: str, job_id=None, job_ids=None, q: str = "
             "pid": f"demo_camp{cid}_{re.sub(r'[^a-z0-9]+', '', name.lower())[:16] or 'x'}",
             # owner 2026-09-09: a NEW mailbox per application (same name) — see next_identity()
             "email_mode": "per_apply", "seq": 0, "seq_base": random.randint(120, 9000),
-            "active": True, "applied_jobids": [], "runs_today": 0,
+            "active": True, "applied_jobids": [], "runs_today": 0, "attempts_today": 0,
             "last_run_date": today or "", "created": today or "",
         }
         if target_kind == "jobs":
             # spread the selection across companies from day one (a DB miss keeps the given order)
             camp["job_ids"] = interleave_by_company(ids)
             camp["cursor"] = 0
+            camp["confirmed_jobids"] = []      # jobs this campaign has LANDED — never re-served
         rows.append(camp)
         _save(rows)
         return camp
@@ -286,29 +311,48 @@ def set_active(cid: int, active: bool) -> bool:
 
 
 def _roll_day(camp: dict, today: str) -> None:
-    """Reset the per-day counter when the date changed (mutates camp in place; caller persists)."""
+    """Reset the per-day counters when the date changed (mutates camp in place; caller persists)."""
     if camp.get("last_run_date") != today:
         camp["runs_today"] = 0
+        camp["attempts_today"] = 0
         camp["last_run_date"] = today
 
 
 def remaining_today(camp: dict, today: str) -> int:
-    """How many more applications this campaign may make today (0 if inactive)."""
+    """How many more applications this campaign may make today (0 if inactive). TWO ceilings, both
+    reset daily: the CONFIRMED cap `per_day` (runs_today counts the landings) AND a per-day ATTEMPT
+    cap `per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR` (attempts_today counts every fill tried) — so an
+    infeasible, 0-yield day can't sweep unlimited full fills. The smaller headroom wins."""
     if not camp.get("active"):
         return 0
-    runs = camp.get("runs_today", 0) if camp.get("last_run_date") == today else 0
-    return max(0, int(camp.get("per_day", 1)) - int(runs))
+    same_day = camp.get("last_run_date") == today
+    runs = int(camp.get("runs_today", 0)) if same_day else 0
+    attempts = int(camp.get("attempts_today", 0)) if same_day else 0
+    by_confirmed = int(camp.get("per_day", 1)) - runs
+    by_attempts = _max_attempts_today(camp) - attempts
+    return max(0, min(by_confirmed, by_attempts))
 
 
-def _alive_ids(ids: list[int], jobs_by_ids) -> list[int]:
-    """The selection minus ids whose catalog row is missing or `dead` (a posting gone at the ATS —
-    `catalog_db.mark_dead`). Order preserved. A lookup failure (DB down) treats every id as alive
-    rather than starving the campaign — the fill itself then reports a dead page."""
+def _jobs_rows(ids: list[int], jobs_by_ids) -> tuple[dict, bool]:
+    """Fetch {id: row} for the selection ONCE. Returns (rows, have_rows); a lookup failure (DB down)
+    yields ({}, False) so callers treat every id as alive/eligible rather than starving the campaign
+    — the fill itself then reports a dead/uncompletable page. `jobs_by_ids` is injectable for tests."""
     if jobs_by_ids is None:
         from backend.tools.catalog_db import jobs_by_ids
     try:
-        rows = jobs_by_ids(ids) or {}
+        return (jobs_by_ids(ids) or {}), True
     except Exception:
+        return {}, False
+
+
+def _alive_ids(ids: list[int], jobs_by_ids, *, rows=None, have_rows=None) -> list[int]:
+    """The selection minus ids whose catalog row is missing or `dead` (a posting gone at the ATS —
+    `catalog_db.mark_dead`). Order preserved. A lookup failure (DB down) treats every id as alive
+    rather than starving the campaign — the fill itself then reports a dead page. `rows`/`have_rows`
+    may be pre-fetched by the caller (via `_jobs_rows`) to avoid a second DB round-trip."""
+    if rows is None:
+        rows, have_rows = _jobs_rows(ids, jobs_by_ids)
+    if not have_rows:
         return list(ids)
     return [j for j in ids if j in rows and not (rows[j] or {}).get("dead")]
 
@@ -317,8 +361,9 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
                     jobs_by_ids=None) -> list[int]:
     """The job ids to apply to on THIS run, honoring the per-day budget. Single-job → [job_id]
     × remaining. Jobs (a /catalog selection) → the next `remaining_today` ids round-robin from
-    the persisted `cursor`, skipping missing/dead rows for this run only. Search → up to
-    `remaining_today` NEW jobs from list_jobs(q, region) that this campaign hasn't already applied
+    the persisted `cursor`, skipping (for this run only) rows that are missing/dead, already-LANDED
+    (`confirmed_jobids`), or — unless CAMPAIGN_SOLVE_CAPTCHA=1 — on a captcha-walled ATS. Search → up
+    to `remaining_today` NEW jobs from list_jobs(q, region) that this campaign hasn't already applied
     to and that aren't globally submitted. `list_jobs`/`submitted`/`jobs_by_ids` are injectable
     for testing; default to the live catalog_db/bulk_log."""
     n = remaining_today(camp, today)
@@ -333,20 +378,38 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         jid = camp.get("job_id")
         return [int(jid)] * n if jid else []
     if kind == "jobs":
-        # owner-picked set: round-robin from the cursor; NO applied/submitted exclusion (a cycle
-        # must revisit every chosen job). The cursor is a position in the FULL selection: walk it
-        # from there, SKIPPING ids whose row is missing/dead for this run (never dropped — a posting
-        # can come back), wrapping until `n` targets are collected. note_run then places the cursor
-        # right after the last job actually done, so both sides index the same list.
+        # owner-picked set: round-robin from the cursor. The applied/`submitted` exclusions of the
+        # search kind do NOT apply (the owner chose these jobs), BUT a job this campaign already
+        # LANDED (a confirmed submit, in `confirmed_jobids`) is NEVER re-served — else an accepted
+        # posting gets re-spammed every week. The cursor is a position in the FULL selection: walk it
+        # from there, SKIPPING ids that are missing/dead for this run (never dropped — a posting can
+        # come back), already-confirmed, OR (by default) on a captcha-walled ATS the datacenter IP
+        # can't auto-submit (lever/workable) — unless CAMPAIGN_SOLVE_CAPTCHA=1 says a solver + clean
+        # egress is live. Wrap until `n` targets are collected. note_run then places the cursor right
+        # after the last job ATTEMPTED, so both sides index the same list.
         ids = [int(x) for x in (camp.get("job_ids") or [])]
-        alive = set(_alive_ids(ids, jobs_by_ids)) if ids else set()
-        if not alive:
+        if not ids:
+            return []
+        rows, have_rows = _jobs_rows(ids, jobs_by_ids)
+        alive = set(_alive_ids(ids, jobs_by_ids, rows=rows, have_rows=have_rows))
+        confirmed = set(int(x) for x in (camp.get("confirmed_jobids") or []))
+        solve = _solve_captcha_on()
+
+        def _eligible(j: int) -> bool:
+            if j not in alive or j in confirmed:
+                return False
+            # captcha-walled ATS skip: only when we actually know the ATS (have_rows) and no solver
+            if not solve and have_rows and (rows.get(j) or {}).get("ats") not in _AUTO_ATS:
+                return False
+            return True
+
+        if not any(_eligible(j) for j in ids):
             return []
         out, pos = [], int(camp.get("cursor") or 0) % len(ids)
         for _ in range(n * len(ids) + len(ids)):      # bounded: at most n full laps
             j = ids[pos % len(ids)]
             pos += 1
-            if j in alive:
+            if _eligible(j):
                 out.append(j)
                 if len(out) >= n:
                     break
@@ -378,11 +441,14 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
 
 
 def note_run(cid: int, jobids, today: str, attempted=None) -> None:
-    """Record an executed run: `jobids` = the jobs that really APPLIED (spend the budget, join
-    applied_jobids); `attempted` = every job the run tried (default: the same list). A `jobs`
-    campaign moves its rotation `cursor` past the LAST ATTEMPTED job, so a job that failed today
-    (dead, incomplete, error) doesn't pin the rotation — it comes round again next lap, and a
-    dead one is skipped by then (the cron marks it dead)."""
+    """Record an executed run: `jobids` = the jobs that really LANDED (a CONFIRMED submit per
+    `fill_counts_as_done` — they spend the day's per_day budget and join applied_jobids); `attempted`
+    = every job the run tried (default: the same list). All attempted jobs count toward the per-day
+    ATTEMPT ceiling (`attempts_today`). A `jobs` campaign additionally: (a) records the landings in
+    `confirmed_jobids` so resolve_targets never re-serves an accepted posting, and (b) moves its
+    rotation `cursor` past the LAST ATTEMPTED job, so a job that failed today (dead, incomplete,
+    error) doesn't pin the rotation — it comes round again next lap, and a dead one is skipped by
+    then (the cron marks it dead)."""
     jobids = [int(j) for j in (jobids or [])]
     attempted = [int(j) for j in (attempted if attempted is not None else jobids)]
     with _LOCK, _file_lock():
@@ -394,13 +460,21 @@ def note_run(cid: int, jobids, today: str, attempted=None) -> None:
                 have.update(jobids)
                 r["applied_jobids"] = sorted(have)
                 r["runs_today"] = int(r.get("runs_today", 0)) + len(jobids)
+                # every fill TRIED (landed or not) counts toward the per-day ATTEMPT ceiling
+                r["attempts_today"] = int(r.get("attempts_today", 0)) + len(attempted)
                 r["last_run_date"] = today
-                if r.get("target_kind") == "jobs" and attempted:
-                    # the rotation resumes right AFTER the last job attempted — the same position
-                    # space resolve_targets walks (dead ids were skipped, not counted)
-                    sel = [int(x) for x in (r.get("job_ids") or [])]
-                    if sel and attempted[-1] in sel:
-                        r["cursor"] = (sel.index(attempted[-1]) + 1) % len(sel)
+                if r.get("target_kind") == "jobs":
+                    # a jobs campaign never re-applies a job it LANDED (`jobids` is confirmed-only,
+                    # per fill_counts_as_done) — resolve_targets skips these from now on.
+                    conf = set(int(x) for x in (r.get("confirmed_jobids") or []))
+                    conf.update(jobids)
+                    r["confirmed_jobids"] = sorted(conf)
+                    if attempted:
+                        # the rotation resumes right AFTER the last job attempted — the same position
+                        # space resolve_targets walks (dead ids were skipped, not counted)
+                        sel = [int(x) for x in (r.get("job_ids") or [])]
+                        if sel and attempted[-1] in sel:
+                            r["cursor"] = (sel.index(attempted[-1]) + 1) % len(sel)
         _save(rows)
 
 

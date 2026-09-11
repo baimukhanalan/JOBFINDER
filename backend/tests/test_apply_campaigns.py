@@ -7,6 +7,8 @@ from backend.tools import apply_campaigns as ac
 def _use_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "_PATH", tmp_path / "apply_campaigns.json")
     monkeypatch.setattr(ac, "_EVENTS_PATH", tmp_path / "apply_campaign_events.json")
+    # captcha-solver switch OFF by default (a leaked env must not flip the captcha-ATS filter)
+    monkeypatch.delenv("CAMPAIGN_SOLVE_CAPTCHA", raising=False)
     # keep create() DB-free + order-preserving: the cursor/resolve tests assert exact job_ids
     # order and don't care about company interleave (unit-tested separately). Tests that DO
     # exercise the interleave re-set this after calling _use_tmp.
@@ -85,8 +87,20 @@ def test_inactive_campaign_resolves_nothing(tmp_path, monkeypatch):
 # ---- `jobs` kind: an owner-picked SET of catalog ids walked round-robin by a cursor -------------
 
 def _alive(rows):
-    """A jobs_by_ids stub: {id: row} from a list of rows (rows may carry dead=True)."""
-    return lambda ids: {int(r["id"]): r for r in rows if int(r["id"]) in set(int(i) for i in ids)}
+    """A jobs_by_ids stub: {id: row} from a list of rows (rows may carry dead=True or an explicit
+    `ats`). A row WITHOUT `ats` defaults to a submittable one (greenhouse) so the cursor-mechanics
+    tests aren't filtered out by the captcha-walled-ATS skip; the ATS-filter test sets `ats` itself."""
+    keep = lambda ids: set(int(i) for i in ids)
+
+    def stub(ids):
+        out = {}
+        for r in rows:
+            if int(r["id"]) in keep(ids):
+                row = dict(r)
+                row.setdefault("ats", "greenhouse")
+                out[int(r["id"])] = row
+        return out
+    return stub
 
 
 def _jobs_campaign(job_ids, per_day, today="2026-09-09", name="J Set"):
@@ -185,22 +199,24 @@ def test_generated_name_falls_back_to_us_without_db(monkeypatch):
 
 
 def test_resolve_jobs_cycles_with_cursor(tmp_path, monkeypatch):
+    # the cursor round-robins the FULL selection across runs. Here nothing LANDS (attempted, 0
+    # confirmed), so no job drops out of the rotation and it is a clean cycle; a landing then drops.
     _use_tmp(tmp_path, monkeypatch)
     _jobs_campaign([1, 2, 3], per_day=2)
     rows = [{"id": 1}, {"id": 2}, {"id": 3}]
     c = ac.list_campaigns()[0]
     got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
     assert got == [1, 2]                       # run 1: from cursor 0
-    ac.note_run(1, got, "2026-09-09")
+    ac.note_run(1, [], "2026-09-09", attempted=got)   # attempted; nothing landed → budget intact
     c = ac.list_campaigns()[0]
-    assert c["cursor"] == 2 and c["runs_today"] == 2
-    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == []   # budget spent
-    got2 = ac.resolve_targets(c, "2026-09-10", jobs_by_ids=_alive(rows))
-    assert got2 == [3, 1]                      # run 2: wraps round-robin
-    ac.note_run(1, got2, "2026-09-10")
+    assert c["cursor"] == 2 and c["runs_today"] == 0
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == [3, 1]   # wraps round-robin
+    # a LANDED job (confirmed submit) drops out of the rotation from now on
+    ac.note_run(1, [3], "2026-09-10", attempted=[3])
     c = ac.list_campaigns()[0]
-    assert c["cursor"] == 1                    # (2 + 2) % 3
-    assert ac.resolve_targets(c, "2026-09-11", jobs_by_ids=_alive(rows)) == [2, 3]
+    assert c["confirmed_jobids"] == [3]
+    out = ac.resolve_targets(c, "2026-09-10", jobs_by_ids=_alive(rows))
+    assert 3 not in out and set(out) <= {1, 2}   # only the un-landed jobs keep rotating
 
 
 def test_resolve_jobs_per_day_over_selection_repeats_within_day(tmp_path, monkeypatch):
@@ -228,24 +244,26 @@ def test_jobs_cursor_advances_only_by_done(tmp_path, monkeypatch):
 
 
 def test_jobs_cursor_walks_full_list_past_a_dead_gap(tmp_path, monkeypatch):
-    # resolve and note_run must index the SAME list: with job 2 dead the rotation is 1,3,1,3 —
+    # resolve and note_run must index the SAME list: with job 2 dead the rotation walks 1,3,1,3 —
     # never a repeat of 1 while 3 starves (the old dead-filtered index vs full-list modulo bug).
+    # Nothing LANDS here (attempted, 0 confirmed) so no job drops out of the rotation.
     _use_tmp(tmp_path, monkeypatch)
-    _jobs_campaign([1, 2, 3], per_day=2)
+    _jobs_campaign([1, 2, 3], per_day=1)
     rows = [{"id": 1}, {"id": 2, "dead": True}, {"id": 3}]
     c = ac.list_campaigns()[0]
-    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == [1, 3]
-    ac.note_run(1, [1, 3], "2026-09-09")
-    assert ac.list_campaigns()[0]["cursor"] == 0          # after job 3 (position 2) → wraps to 0
-    c = ac.list_campaigns()[0]
-    assert ac.resolve_targets(c, "2026-09-10", jobs_by_ids=_alive(rows)) == [1, 3]
-    ac.note_run(1, [1], "2026-09-10")                      # job 3 failed → cursor sits after job 1
-    c = ac.list_campaigns()[0]
-    assert c["cursor"] == 1
-    assert ac.resolve_targets(c, "2026-09-10", jobs_by_ids=_alive(rows)) == [3]   # 2 is dead → 3
-    # a done job that is no longer in the selection leaves the cursor alone
-    ac.note_run(1, [999], "2026-09-10")
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == [1]   # cursor 0 → job 1
+    ac.note_run(1, [], "2026-09-09", attempted=[1])       # attempted 1 (not landed) → cursor after 1
     assert ac.list_campaigns()[0]["cursor"] == 1
+    c = ac.list_campaigns()[0]
+    # next run skips the dead 2 and lands on 3 (not a repeat of 1)
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == [3]
+    ac.note_run(1, [], "2026-09-09", attempted=[3])       # cursor after job 3 (position 2) → wraps to 0
+    assert ac.list_campaigns()[0]["cursor"] == 0
+    c = ac.list_campaigns()[0]
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == [1]   # back round to 1
+    # an attempted job that is no longer in the selection leaves the cursor alone
+    ac.note_run(1, [], "2026-09-09", attempted=[999])
+    assert ac.list_campaigns()[0]["cursor"] == 0
 
 
 def test_fill_counts_as_done_only_for_a_real_submit():
@@ -273,7 +291,9 @@ def test_note_run_cursor_moves_past_the_last_attempted_not_only_done(tmp_path, m
     ac.note_run(1, [3], "2026-09-09", attempted=[1, 2, 3])
     c = ac.list_campaigns()[0]
     assert c["runs_today"] == 1 and c["applied_jobids"] == [3] and c["cursor"] == 3
-    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=lambda ids: {i: {"id": i} for i in ids}) == [4, 1]
+    assert c["confirmed_jobids"] == [3]        # job 3 landed → excluded, but it's already behind the cursor
+    got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=lambda ids: {i: {"id": i, "ats": "ashby"} for i in ids})
+    assert got == [4, 1]
 
 
 def test_jobs_skips_dead_ids_without_advancing(tmp_path, monkeypatch):
@@ -297,17 +317,23 @@ def test_jobs_skips_dead_ids_without_advancing(tmp_path, monkeypatch):
     assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive([{"id": 1}, {"id": 2}, {"id": 3}])) == [1, 2]
 
 
-def test_jobs_ignores_applied_exclusion(tmp_path, monkeypatch):
+def test_jobs_ignores_search_exclusions_but_honors_confirmed(tmp_path, monkeypatch):
     _use_tmp(tmp_path, monkeypatch)
     _jobs_campaign([1, 2], per_day=2)
     rows = [{"id": 1}, {"id": 2}]
-    ac.note_run(1, [1, 2], "2026-09-08")       # already applied to both on an earlier day
     c = ac.list_campaigns()[0]
-    assert sorted(c["applied_jobids"]) == [1, 2]
-    # search-kind exclusions (applied / globally submitted) do NOT apply — the cycle revisits them
+    # the search-kind exclusions (a GLOBAL `submitted` set, `list_jobs`) do NOT apply to a jobs pick
+    # — a job the owner chose is attempted even if some OTHER campaign submitted it globally.
     got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows), submitted={1, 2},
                              list_jobs=lambda **k: [])
     assert got == [1, 2]
+    # but THIS campaign's own LANDED jobs (confirmed_jobids) ARE excluded from the rotation
+    ac.note_run(1, [1], "2026-09-09", attempted=[1, 2])   # job 1 landed for this campaign
+    c = ac.list_campaigns()[0]
+    assert c["confirmed_jobids"] == [1]
+    got2 = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows), submitted={1, 2},
+                              list_jobs=lambda **k: [])
+    assert 1 not in got2 and got2 == [2]
 
 
 def test_jobs_inactive_or_empty_selection_resolves_nothing(tmp_path, monkeypatch):
@@ -319,6 +345,68 @@ def test_jobs_inactive_or_empty_selection_resolves_nothing(tmp_path, monkeypatch
     # a hand-edited row with no selection is skipped, not a crash (the cron just logs "nothing")
     c = dict(c, active=True, job_ids=[])
     assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive([])) == []
+
+
+# ---- (1) confirmed-exclusion · (2) attempt cap · (3) captcha-ATS filter (for `jobs` kind) --------
+
+def test_confirmed_job_is_not_reserved(tmp_path, monkeypatch):
+    # (1) a job the campaign already LANDED (a confirmed submit note_run's first arg carries) is
+    # never re-served, while the un-landed selected jobs keep rotating.
+    _use_tmp(tmp_path, monkeypatch)
+    _jobs_campaign([1, 2, 3], per_day=2)
+    rows = [{"id": 1}, {"id": 2}, {"id": 3}]
+    c = ac.list_campaigns()[0]
+    ac.note_run(1, [2], "2026-09-09", attempted=[1, 2])   # job 2 landed; 1 attempted-not-landed
+    c = ac.list_campaigns()[0]
+    assert c["confirmed_jobids"] == [2]
+    out = ac.resolve_targets(c, "2026-09-10", jobs_by_ids=_alive(rows))
+    assert 2 not in out and set(out) <= {1, 3}            # 2 confirmed → skipped; 1 & 3 still rotate
+    # once ALL selected jobs are landed, nothing resolves even though the daily budget is available
+    saved = ac._load(); saved[0]["confirmed_jobids"] = [1, 2, 3]; ac._save(saved)
+    c = ac.list_campaigns()[0]
+    assert ac.remaining_today(c, "2026-09-12") == 2       # budget IS free on a fresh day
+    assert ac.resolve_targets(c, "2026-09-12", jobs_by_ids=_alive(rows)) == []   # but all landed
+
+
+def test_attempt_cap_stops_a_zero_confirm_day(tmp_path, monkeypatch):
+    # (2) per_day is a CONFIRMED cap; a 0-yield day would otherwise fire unlimited fills. The
+    # per-day ATTEMPT ceiling (per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR) stops it.
+    _use_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(ac, "CAMPAIGN_MAX_ATTEMPTS_FACTOR", 2)     # cap = per_day × 2
+    _jobs_campaign([1, 2, 3, 4, 5, 6], per_day=3)                  # attempt ceiling = 3 × 2 = 6
+    rows = [{"id": i} for i in range(1, 7)]
+    c = ac.list_campaigns()[0]
+    assert ac.remaining_today(c, "2026-09-09") == 3               # min(3 - 0, 6 - 0)
+    ac.note_run(1, [], "2026-09-09", attempted=[1, 2, 3])         # 3 attempts, 0 confirmed
+    c = ac.list_campaigns()[0]
+    assert c["attempts_today"] == 3 and c["runs_today"] == 0
+    assert ac.remaining_today(c, "2026-09-09") == 3               # min(3, 6 - 3) — attempts now bind
+    ac.note_run(1, [], "2026-09-09", attempted=[4, 5, 6])         # 6 attempts total, still 0 confirmed
+    c = ac.list_campaigns()[0]
+    assert c["attempts_today"] == 6
+    assert ac.remaining_today(c, "2026-09-09") == 0              # min(3, 6 - 6) = 0 — the cap stops the day
+    assert ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows)) == []
+    assert ac.remaining_today(c, "2026-09-10") == 3             # a new day clears the attempt ledger
+
+
+def test_resolve_jobs_skips_captcha_ats_unless_solver(tmp_path, monkeypatch):
+    # (3) by default only the auto-submittable ATSes (greenhouse/ashby) are targeted; the
+    # captcha-walled lever/workable are attempted only with CAMPAIGN_SOLVE_CAPTCHA=1.
+    _use_tmp(tmp_path, monkeypatch)
+    _jobs_campaign([1, 2, 3], per_day=3)
+    rows = [{"id": 1, "ats": "greenhouse"}, {"id": 2, "ats": "lever"}, {"id": 3, "ats": "ashby"}]
+    c = ac.list_campaigns()[0]
+    got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+    assert 2 not in got and set(got) == {1, 3}               # lever (captcha-walled) skipped by default
+    # flip the switch on (a solver + clean egress live) → every selected ATS is attempted
+    monkeypatch.setenv("CAMPAIGN_SOLVE_CAPTCHA", "1")
+    got2 = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+    assert got2 == [1, 2, 3]
+    # the helper mirrors the env (also honours the module-level default when unset)
+    monkeypatch.delenv("CAMPAIGN_SOLVE_CAPTCHA", raising=False)
+    assert ac._solve_captcha_on() is False
+    monkeypatch.setenv("CAMPAIGN_SOLVE_CAPTCHA", "yes")
+    assert ac._solve_captcha_on() is True
 
 
 def test_next_identity_fresh_mailbox_per_application(tmp_path, monkeypatch):

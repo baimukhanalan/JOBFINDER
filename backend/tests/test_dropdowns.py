@@ -134,3 +134,93 @@ def test_demographic_data_consent_ticks_but_selfid_does_not():
     for selfid in ("I am a person with a disability", "I identify as a protected veteran",
                    "Which of the following describes your gender identity? Prefer not to answer"):
         assert not should_tick(selfid), selfid
+
+
+# ---------------------------------------------------------------------------
+# Task 1: a REQUIRED marketing opt-in RADIO must be answered (least-committal),
+# not left blank (nogigiddy Workable 'Daily Drop' Yes/No blocked the submit).
+# ---------------------------------------------------------------------------
+
+def test_marketing_optin_radio_picks_no_or_decline():
+    from backend.applier.dropdowns import marketing_optin_pick
+    # nogigiddy 'Daily Drop' job-digest marketing radio (Yes/No) -> pick 'No'
+    label = ("Still job hunting while you wait to hear back? The Daily Drop sends 10 vetted "
+             "remote jobs to your inbox every morning.")
+    assert marketing_optin_pick(label, ["Yes", "No"]) == 1
+    # a decline / 'prefer not' option is preferred over a bare 'No'
+    assert marketing_optin_pick(label, ["Yes", "No", "Prefer not to say"]) == 2
+    # 'Not right now' counts as the negative pick
+    assert marketing_optin_pick(label, ["Sign me up", "Not right now"]) == 1
+    # other marketing phrasings
+    assert marketing_optin_pick("May we contact you about job opportunities?", ["Yes", "No"]) == 1
+    assert marketing_optin_pick("Subscribe to our newsletter for updates about future roles",
+                                ["Yes", "No"]) == 1
+    assert marketing_optin_pick("Join our talent community for job alerts",
+                                ["Yes", "No"]) == 1
+
+
+def test_marketing_optin_pick_ignores_real_screeners():
+    """marketing_optin_pick must return None for genuine screeners (so the normal choice/consent
+    path answers them) — it only fires on marketing opt-in prompts."""
+    from backend.applier.dropdowns import marketing_optin_pick
+    for label in ("Are you legally authorized to work in the United States?",
+                  "Do you require visa sponsorship now or in the future?",
+                  "How did you hear about us?",
+                  "Have you applied to other jobs at our company before?",
+                  "Are you at least 18 years of age?",
+                  # reproduced mis-fire: the broad _CONSENT_SKIP_RE token "job opportunit" used to
+                  # clobber these real screeners with a wrong "No" — must stay None now.
+                  "Will you relocate for this job opportunity?",
+                  "Are you willing to work on-site for this job opportunity?",
+                  "May we contact your references?"):
+        assert marketing_optin_pick(label, ["Yes", "No"]) is None, label
+
+
+def test_marketing_optin_pick_never_opts_in():
+    """A marketing radio offering ONLY affirmative-style options -> None (never commit to
+    marketing); a required-radio caller then leaves it for a human rather than opting in."""
+    from backend.applier.dropdowns import marketing_optin_pick
+    assert marketing_optin_pick("Join the Daily Drop newsletter",
+                                ["Sign me up", "Absolutely"]) is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: pronoun/gender demographic answer must honor the persona's gender and
+# NEVER contradict it (everai set 'He/him' on a female persona).
+# ---------------------------------------------------------------------------
+
+def test_pronoun_answer_honors_persona_gender():
+    from backend.applier.dropdowns import demographic_answer_index
+    ctx = "What are your preferred pronouns?"
+    opts = ["He/Him", "She/Her", "They/Them"]
+    assert demographic_answer_index(opts, ctx, "female") == 1   # She/Her
+    assert demographic_answer_index(opts, ctx, "male") == 0      # He/Him
+    # reversed option order: the persona gender is still honored (no substring 'he/' in
+    # "She/Her" fooling the he/him pattern — the everai bug class)
+    ropts = ["She/Her", "He/Him", "They/Them"]
+    assert demographic_answer_index(ropts, ctx, "male") == 1     # He/Him, NOT the leading She/Her
+    assert demographic_answer_index(ropts, ctx, "female") == 0   # She/Her
+    # unknown sex -> neutral they/them, never a gendered claim
+    assert demographic_answer_index(opts, ctx, "") == 2
+
+
+def test_pronoun_pattern_never_matches_opposite_gender():
+    """The core regressions: the male pronoun pattern must NOT match a she/her option (the old
+    `he[ /,]` matched the substring 'he/' inside 'She/her'), and vice-versa."""
+    import re as _re
+    from backend.applier.dropdowns import _demo_fallback_re_src
+    male = _re.compile(_demo_fallback_re_src("preferred pronouns", "male"), _re.I)
+    female = _re.compile(_demo_fallback_re_src("preferred pronouns", "female"), _re.I)
+    assert male.search("He/Him") and not male.search("She/Her")
+    assert female.search("She/Her") and not female.search("He/Him")
+    assert not male.search("They/Them") and not female.search("They/Them")
+
+
+def test_gender_answer_honors_persona_sex():
+    from backend.applier.dropdowns import demographic_answer_index
+    ctx = "What is your gender identity?"
+    opts = ["Male", "Female", "Non-binary"]
+    assert demographic_answer_index(opts, ctx, "female") == 1
+    assert demographic_answer_index(opts, ctx, "male") == 0
+    # unknown sex -> no forced gender claim (leave blank)
+    assert demographic_answer_index(opts, ctx, "") is None

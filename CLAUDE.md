@@ -126,6 +126,9 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   ashby, excludes applied+submitted), `job` (N/day one job), `jobs` (a `/catalog` selection: `job_ids` + a persisted `cursor`
   = a position in the FULL list on both sides; `create()` round-robins across companies via `interleave_by_company`; `fcntl`
   lock). Budget guards: **confirmed-exclusion** (`note_run` accumulates `confirmed_jobids`, never re-serves a landed job),
+  **quarantine-exclusion** (`quarantine_jobids` — jobs un-landable from the current egress: a hard captcha wall (binance-
+  Lever) or a velocity/spam-quarantining tenant; skipped UNCONDITIONALLY by `_eligible`, even under `CAMPAIGN_SOLVE_CAPTCHA=1`,
+  so enabling the solver for one ATS can't re-hammer a parked wall; reversible via `quarantine_jobs(cid, ids, on=)`),
   **attempt-cap** (≤ `per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR`=4), **conditional ATS filter** (`jobs` SKIPS lever/workable by
   default; `CAMPAIGN_SOLVE_CAPTCHA=1` to attempt all). A fill counts done only when `fill_counts_as_done` (state done AND
   confirmed); a `no_form` fill marks the posting dead. **Parallel lane:** the cron fans per-day targets across `bulk_pool`

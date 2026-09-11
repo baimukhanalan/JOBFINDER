@@ -509,3 +509,34 @@ def test_create_jobs_interleaves_by_company(tmp_path, monkeypatch):
     c = _jobs_campaign([10, 11, 12], per_day=3)
     assert calls["ids"] == [10, 11, 12]                    # create ran it on the parsed selection
     assert c["job_ids"] == [12, 10, 11] and c["cursor"] == 0
+
+
+def test_quarantine_jobs_are_never_served(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    rows = [{"id": 1}, {"id": 2}, {"id": 3}]               # all alive, submittable (ats defaults gh)
+    c = _jobs_campaign([1, 2, 3], per_day=3)
+    # quarantine job 2: resolve_targets must skip it and serve only the others
+    assert ac.quarantine_jobs(c["id"], [2]) == 1
+    c = next(r for r in ac.list_campaigns() if r["id"] == c["id"])
+    assert c["quarantine_jobids"] == [2]
+    assert 2 not in ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+    got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+    assert set(got) <= {1, 3} and 2 not in got
+    # releasing it makes it eligible again
+    assert ac.quarantine_jobs(c["id"], [2], on=False) == 1
+    c = next(r for r in ac.list_campaigns() if r["id"] == c["id"])
+    assert c["quarantine_jobids"] == []
+    assert 2 in ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+
+
+def test_quarantine_skipped_even_with_solver_on(tmp_path, monkeypatch):
+    """A quarantined id stays parked even when CAMPAIGN_SOLVE_CAPTCHA=1 un-skips its captcha ATS —
+    so enabling the solver for one ATS can't re-hammer a wall we deliberately quarantined."""
+    _use_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(ac, "_solve_captcha_on", lambda: True)
+    rows = [{"id": 1, "ats": "lever"}, {"id": 2, "ats": "ashby"}]   # lever normally captcha-skipped
+    c = _jobs_campaign([1, 2], per_day=2)
+    ac.quarantine_jobs(c["id"], [1])                       # park the lever job explicitly
+    c = next(r for r in ac.list_campaigns() if r["id"] == c["id"])
+    got = ac.resolve_targets(c, "2026-09-09", jobs_by_ids=_alive(rows))
+    assert 1 not in got and 2 in got                       # solver on, but quarantine still wins

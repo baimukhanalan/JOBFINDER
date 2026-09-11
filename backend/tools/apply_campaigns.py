@@ -310,6 +310,32 @@ def set_active(cid: int, active: bool) -> bool:
         return hit
 
 
+def quarantine_jobs(cid: int, jobids, on: bool = True) -> int:
+    """Hold aside (on=True) or release (on=False) job ids in a 'jobs' campaign's quarantine set,
+    so resolve_targets never serves them (see _eligible). Use for postings un-landable from the
+    current egress — a hard captcha wall (binance-Lever) or a velocity/spam-quarantining tenant —
+    so the daily budget isn't burned re-attempting them and we don't worsen the ATS's velocity
+    flag by re-spamming. Fully reversible (call with on=False once a clean mobile/residential IP is
+    live). Returns the number of ids actually added/removed. Locked read-mutate-save like note_run."""
+    want = {int(x) for x in (jobids or [])}
+    if not want:
+        return 0
+    changed = 0
+    with _LOCK, _file_lock():
+        rows = _load()
+        for r in rows:
+            if int(r.get("id", 0)) != int(cid):
+                continue
+            have = {int(x) for x in (r.get("quarantine_jobids") or [])}
+            new = (have | want) if on else (have - want)
+            if new != have:
+                changed = len(new ^ have)
+                r["quarantine_jobids"] = sorted(new)
+        if changed:
+            _save(rows)
+    return changed
+
+
 def _roll_day(camp: dict, today: str) -> None:
     """Reset the per-day counters when the date changed (mutates camp in place; caller persists)."""
     if camp.get("last_run_date") != today:
@@ -393,10 +419,16 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         rows, have_rows = _jobs_rows(ids, jobs_by_ids)
         alive = set(_alive_ids(ids, jobs_by_ids, rows=rows, have_rows=have_rows))
         confirmed = set(int(x) for x in (camp.get("confirmed_jobids") or []))
+        # Quarantined jobs are held aside as un-landable from the current egress (e.g. a hard
+        # invisible-captcha wall like binance-Lever, or a company that velocity/spam-quarantines
+        # our datacenter IP). Skipped UNCONDITIONALLY — unlike the captcha-ATS skip below, a
+        # quarantined id is never served even when CAMPAIGN_SOLVE_CAPTCHA=1, so enabling the solver
+        # for one ATS can't re-hammer a wall we've deliberately parked. Reversible via quarantine_jobs.
+        quarantined = set(int(x) for x in (camp.get("quarantine_jobids") or []))
         solve = _solve_captcha_on()
 
         def _eligible(j: int) -> bool:
-            if j not in alive or j in confirmed:
+            if j not in alive or j in confirmed or j in quarantined:
                 return False
             # captcha-walled ATS skip: only when we actually know the ATS (have_rows) and no solver
             if not solve and have_rows and (rows.get(j) or {}).get("ats") not in _AUTO_ATS:

@@ -137,9 +137,12 @@ def render_join_page(user_agent: str = "", error: str = "") -> str:
   <div class="step"><div class="n">1</div><div><h3>Установи Tailscale</h3>
     <p>Бесплатное приложение.</p></div></div>
   {install_btn}
-  <div class="step"><div class="n">2</div><div><h3>Войди по кнопке</h3>
-    <p>Нажми ниже — откроется вход в Tailscale. Войди своим Google/Apple. Готово — ты в сети.</p></div></div>
+  <div class="step"><div class="n">2</div><div><h3>Войди — один тап</h3>
+    <p>Нажми кнопку ниже. Откроется вход Tailscale — жми <b>«Continue with Google»</b> (или Apple).
+    Если ты уже вошёл в Google на телефоне — это буквально один тап, аккаунт создастся сам.
+    Вход нужен один раз, чтобы твой телефон появился в сети (иначе никак).</p></div></div>
   <a class="btn primary" href="/join/go">Стать донором →</a>
+  <p class="small" style="margin-top:8px">На следующем экране будет вход через Google/Apple — это нормально и безопасно.</p>
   <div class="step"><div class="n">3</div><div><h3>Включи «Exit Node»</h3>
     <p>{toggle}</p></div></div>
   <div class="tip">Безопасно: ты отдаёшь только интернет-выход. Ты <b>не видишь</b> чужие устройства

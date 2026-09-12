@@ -551,8 +551,20 @@ with a fake mic/camera (`core._launch_args`). Package: `core.py` (harvest loop),
 amcat}.py`. CLI `harvest_runner.py --platform amcat --limit 1` or `--url --mailbox`. Bank/media gitignored.
 - **Reachability:** the rich surface is **AMCAT/TP** (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com`, single-use
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
-  → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Sutherland-SHL** is webcam-proctored (`WCI200` — do NOT fake
-  a face). **Maximus SHL-OPQ** is the one passable assessment (etalon-automated).
+  → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment
+  (etalon-automated).
+- **Sutherland = SHL front-door → AMCAT, walled by WCI200 (CONFIRMED 2026-09-12; `sutherland_assessment.py` + `sutherland_runner.py`
+  + `adapters/shl.py::ShlAdapter.wall`; do NOT re-conclude the opposite).** The "Your Sutherland assessment invitation"
+  (`talentcentral@shl.com`) autologins to `talentcentral.us1.shl.com`, walks a short SHL intro (cookies → Welcome →
+  **About-You[Submit]** → an SHL webcam check a DIM fake feed passes), then REDIRECTS to the AMCAT player
+  (`amcatglobal.aspiringminds.com`) whose continuous proctor issues **"Error Code WCI200: unable to detect a camera on your
+  device … logged out"**. WCI200 rejects Chromium's SYNTHETIC camera regardless of feed brightness (black/dim/lit), egress
+  (direct/phone), or driving AMCAT's diagnostic (the `AmcatAdapter` that passes TP-AMCAT's webcam with the SAME fake camera STILL
+  hits WCI200 here). It is **NOT a face demand** (no face asked) — it hard-requires a REAL camera DEVICE. This host has none and
+  CANNOT synth one (v4l2loopback needs `videodev`, ABSENT from this kernel → `modprobe` fails "Unknown symbol
+  v4l2_device_register"). ⇒ Sutherland is **un-completable on this server**; the owner's "a dark camera passes" holds only for a
+  REAL physical unlit webcam. `sutherland_runner --persona X` drives the SHL front-door + reports `blocked_proctor_camera`. (The
+  underlying AMCAT battery is COGNITIVE → even with a real camera it's needs_human under the etalon boundary, minus AMPI personality.)
 - **GOTCHAS:** (1) the diagnostic SUBMIT `#submit1` is REUSED by SVAR modals — click it EXACTLY ONCE (`_diag_submitted`); rapid
   double-clicks → "logged out"; NEVER click TRY LATER (→ `MIC200` logout). (2) `handle_speaking`: speak ONCE per record window
   then go SILENT (continuous audio keeps SUBMIT disabled); Section D free-speech feeds a continuous passage, never SUBMITs

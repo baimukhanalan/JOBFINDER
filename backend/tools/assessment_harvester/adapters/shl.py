@@ -196,10 +196,22 @@ class ShlAdapter(Adapter):
         return False
 
     async def wall(self, page) -> str | None:
-        """SHL Sutherland gates the scored assessment behind WEBCAM PROCTORING (SHL smart-proctor on
-        a dedicated player host). Even with a working fake camera in the SHL frame, the proctor's own
-        check fails and issues 'Error Code WCI200 ... you have been logged out' — terminal. That is
-        the genuine wall (a synthetic camera the proctor rejects)."""
+        """SHL Sutherland gates the scored assessment behind WEBCAM PROCTORING. The SHL intro
+        (cookies -> Welcome -> About-You[Submit] -> an SHL webcam check a dim fake feed passes) then
+        REDIRECTS to the AMCAT / Aspiring Minds player (`amcatglobal.aspiringminds.com`) whose
+        continuous proctor issues 'Error Code WCI200 ... unable to detect a camera on your device ...
+        you have been logged out' — terminal.
+
+        CONFIRMED 2026-09-12 (see `backend/tools/sutherland_assessment.py` for the full write-up; do
+        NOT re-conclude the opposite): the WCI200 proctor rejects Chromium's synthetic camera
+        REGARDLESS of feed brightness (black/dim/lit), egress (direct or phone slot), or driving
+        AMCAT's own diagnostic correctly — driving the Sutherland->AMCAT handoff with THIS package's
+        `AmcatAdapter.enter()` (which PASSES the TP-AMCAT webcam check with the same fake camera) STILL
+        hits WCI200. It is NOT a face requirement (no face is asked for) — it hard-requires a REAL
+        camera DEVICE. This host has none and cannot synthesize one (v4l2loopback's `videodev`
+        dependency is absent from the kernel), so Chromium can only offer its fake device => Sutherland
+        is UN-completable here. The owner's "a dark camera passes" holds only for a REAL physical
+        (unlit) webcam."""
         try:
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:

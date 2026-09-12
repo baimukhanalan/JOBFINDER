@@ -342,6 +342,18 @@ async def _watch_submit(page, profile: str, jid: str,
                 status_store.mark(profile, jid, "submitted")
                 logger.info("submit detected for %s/%s — marked submitted", profile, jid)
                 return True
+            # A block / anti-spam banner can render SECONDS after the click — Ashby's "flagged as
+            # possible spam" / "we couldn't submit your application" appears ~10-15s LATER, so the
+            # +1.5s _submit_evidence check misses it and the job wrongly reads confirmed=false.
+            # Detect it here during the watch so a spam-flagged submit is reported BLOCKED. Guard
+            # against a false-positive on a code/confirm page (same carve-out as _submit_evidence).
+            if not code_done and not _CODE_STEP_RE.search(text or ""):
+                _bm = _SUBMIT_BLOCK_RE.search(text or "")
+                if _bm:
+                    reason = _bm.group(0)[:60]
+                    status_store.mark(profile, jid, "blocked")
+                    logger.info("submit BLOCKED for %s/%s — %s", profile, jid, reason)
+                    return ("blocked", reason)
             if (applicant_email and not code_done and _CODE_STEP_RE.search(text)):
                 sel_str = ",".join(_CODE_FIELD_SELECTORS)
                 state = await page.evaluate(
@@ -432,28 +444,44 @@ _SUBMIT_BLOCK_RE = re.compile(
     r"please accept|accept the terms)", re.I)
 
 
-async def _submit_evidence(page, shot_dir) -> dict:
-    """Snapshot the page right after the submit click: url, a full-page screenshot, whether
-    a confirmation OR a block/validation banner is visible. Best-effort, never raises."""
+async def _submit_evidence(page, shot_dir, *, poll_secs: float = 20.0) -> dict:
+    """Snapshot the page after the submit click: url, a full-page screenshot, whether a confirmation
+    OR a block/validation banner is visible. Best-effort, never raises. POLLS for up to `poll_secs`:
+    Ashby's anti-spam banner ("flagged as possible spam") AND its Thank-you page both render ASYNC
+    ~10-15s AFTER the click — a single read at +1.5s missed them and reported a MISLEADING
+    blocked=None/confirmed=False on a submit that was actually spam-REJECTED (proven live 2026-09-12:
+    Salmon + a fresh masabi both showed the spam banner ~14s post-click the early read never saw)."""
     ev = {"post_url": None, "confirmed": None, "blocked": None, "screenshot": None}
     try:
         ev["post_url"] = page.url
     except Exception:
         pass
-    try:
-        txt = await page.inner_text("body", timeout=4000)
-        ev["confirmed"] = bool(looks_submitted(txt, ev.get("post_url") or ""))
-        m = _SUBMIT_BLOCK_RE.search(txt or "")
-        ev["blocked"] = m.group(0)[:60] if m else None
-        # A page that already CONFIRMED or reached the emailed-security-code step has PROGRESSED
-        # — the submit was accepted. Never let a stray block-phrase match on the filled form
-        # (a field hint / privacy "please" text) flag it as blocked, which would SKIP the
-        # code-fill watch (gated on `not blocked`) and kill an application that was completing.
-        if ev["blocked"] and (ev["confirmed"] or _CODE_STEP_RE.search(txt or "") or re.search(
-                r"(?i)confirm you'?re a human|code (?:was |has been )?sent", txt or "")):
-            ev["blocked"] = None
-    except Exception:
-        pass
+    deadline = time.time() + poll_secs
+    while True:
+        try:
+            txt = await page.inner_text("body", timeout=4000)
+            try:
+                ev["post_url"] = page.url
+            except Exception:
+                pass
+            conf = bool(looks_submitted(txt, ev.get("post_url") or ""))
+            m = _SUBMIT_BLOCK_RE.search(txt or "")
+            blk = m.group(0)[:60] if m else None
+            # A CONFIRMED / emailed-code page has PROGRESSED — never let a stray block-phrase on it
+            # (a field hint / privacy "please") flag it blocked (that would skip the code-fill watch).
+            if blk and (conf or _CODE_STEP_RE.search(txt or "") or re.search(
+                    r"(?i)confirm you'?re a human|code (?:was |has been )?sent", txt or "")):
+                blk = None
+            ev["confirmed"], ev["blocked"] = conf, blk
+            if conf or blk or time.time() >= deadline:
+                break
+        except Exception:
+            if time.time() >= deadline:
+                break
+        try:
+            await page.wait_for_timeout(2000)
+        except Exception:
+            break
     try:
         if shot_dir is not None:
             path = str(Path(shot_dir) / "after_submit.png")
@@ -528,6 +556,7 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
             return {"clicked": False, "reason": "page_drift", "actual": page.url, "expected": expected_url}
         clicked = await filler.click_submit(page, {"submit_selector": sel})
         await page.wait_for_timeout(1500)
+        # _submit_evidence now POLLS ~20s for Ashby's async spam-banner / confirmation.
         ev = await _submit_evidence(page, shot_dir)
         logger.info("auto-submit: clicked=%s sel=%s post=%s confirmed=%s blocked=%s",
                     clicked, sel, ev.get("post_url"), ev.get("confirmed"), ev.get("blocked"))
@@ -757,7 +786,12 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
                         ok = await asyncio.wait_for(
                             _watch_submit(page, profile, jobid, _email, time.time()),
                             timeout=WAIT_SUBMIT_MAX)
-                        submit_result["confirmed"] = bool(ok)
+                        if isinstance(ok, tuple) and ok and ok[0] == "blocked":
+                            # a delayed anti-spam / "couldn't submit" banner — report it BLOCKED
+                            submit_result["blocked"] = ok[1]
+                            submit_result["confirmed"] = False
+                        else:
+                            submit_result["confirmed"] = bool(ok)
                     except asyncio.TimeoutError:
                         submit_result.setdefault("confirmed", False)
                     except Exception:

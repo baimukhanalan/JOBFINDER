@@ -1057,6 +1057,17 @@ _NOVNC_URL = "/vnc/vnc_lite.html?path=vnc/websockify&scale=true"
 _FILL_JOBS: dict[int, dict] = {}
 
 
+def _is_copilot_crash(msg) -> bool:
+    """True when a /load error is a browser/page/context crash (the headful Chromium was killed
+    mid-fill, typically under box load) — a transient, retryable failure, NOT a form/logic error."""
+    m = str(msg or "").lower()
+    return any(s in m for s in (
+        "targetclosed", "target page, context or browser has been closed",
+        "browser has been closed", "context or browser has been closed",
+        "session closed", "page crashed", "has crashed", "connection closed",
+        "browser closed", "target closed"))
+
+
 def _fill_via(base_url: str, jid, pid: str, *, wait_submit: bool = False) -> dict:
     """POST /release + /load to a co-pilot at `base_url` and shape its result into a fill-state
     dict (`state`/`submit`/`company`/`title`/…). Rotates egress candidates on a TRANSPORT failure
@@ -1095,6 +1106,17 @@ def _fill_via(base_url: str, jid, pid: str, *, wait_submit: bool = False) -> dic
             r = httpx.post(f"{base_url}/load", data=load_data,
                            timeout=(600 if wait_submit else 240))
             res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+            # CRASH-RESILIENCE: under box load the headful browser can be KILLED mid-fill
+            # (TargetClosedError) — the fill never reaches Submit. The co-pilot self-heals on
+            # the NEXT /load (its page-ping relaunches the dead browser), so retry the SAME
+            # egress ONCE before giving up. Bounded (one extra try) so a persistently-crashing
+            # box can't loop. A transport-level crash is already handled by the outer except.
+            if r.status_code != 200 and _is_copilot_crash(res.get("error", "")):
+                log.warning("fill job %s: co-pilot browser crashed mid-fill — relaunch + retry once", jid)
+                httpx.post(f"{base_url}/release", data={"profile": pid}, timeout=10)
+                r = httpx.post(f"{base_url}/load", data=load_data,
+                               timeout=(600 if wait_submit else 240))
+                res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
         except Exception as exc:
             last_exc = exc
             continue          # a transport failure -> try the next egress

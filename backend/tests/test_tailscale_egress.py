@@ -48,14 +48,23 @@ def test_settings_roundtrip_and_slot_key_coercion(tmp_path, monkeypatch):
 
 def test_exit_node_peers_only_online_advertised(tmp_path, monkeypatch):
     _use_tmp(tmp_path, monkeypatch)
-    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0: _TS)
+    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: _TS)
     peers = te.exit_node_peers()
     ips = {p["ip"] for p in peers}
     assert ips == {"100.100.0.1", "100.100.0.2"}          # non-exit + offline excluded
     assert all(p["online"] for p in peers)
     # a failure yields [] not a raise
-    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0: {})
+    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: {})
     assert te.exit_node_peers() == []
+
+
+def test_exit_node_peers_threads_the_discovery_socket(tmp_path, monkeypatch):
+    _use_tmp(tmp_path, monkeypatch)
+    seen = {}
+    monkeypatch.setattr(te, "_tailscale_status_json",
+                        lambda timeout=4.0, socket_path=None: seen.update(sock=socket_path) or _TS)
+    te.exit_node_peers(socket_path="/sd/0/tailscaled.sock")
+    assert seen["sock"] == "/sd/0/tailscaled.sock"        # discovery reads the key's-tailnet node
 
 
 def test_pure_argv_builders_and_key_masking(tmp_path):
@@ -153,11 +162,34 @@ def test_up_failure_tears_down_the_half_started_slot(tmp_path, monkeypatch):
     assert pk and pk[0][2].endswith("/0/tailscaled.sock")
 
 
+def test_parse_exit_peers_from_a_clean_probe_status(tmp_path, monkeypatch):
+    # a no-exit probe's status: both exit-node phones show ExitNodeOption=true (not ExitNode)
+    assert {p["ip"] for p in te._parse_exit_peers(_TS)} == {"100.100.0.1", "100.100.0.2"}
+
+
+def test_sync_skips_reaping_when_discovery_fails(tmp_path, monkeypatch):
+    """A failed discovery (no probe socket) must reap NOTHING — a network blip can't nuke live slots."""
+    _use_tmp(tmp_path, monkeypatch)
+    d = te.load()
+    d["slots"][0] = {"port": 10800, "exit_ip": "100.122.4.92", "hostname": "jf-egress-0", "note": ""}
+    te.save(d)
+    downs = []
+    monkeypatch.setattr(te, "_discovery_socket", lambda key: (None, None))    # discovery failed
+    monkeypatch.setattr(te, "down", lambda slot: downs.append(slot) or True)
+    summary = te.sync("tskey-auth-SECRET123")
+    assert downs == [] and summary["errors"] == 1           # slot 0 left intact
+    assert te.load()["slots"][0]["exit_ip"] == "100.122.4.92"
+    # a probe that comes up but yields an EMPTY netmap also reaps nothing
+    monkeypatch.setattr(te, "_discovery_socket", lambda key: ("/probe/sock", None))
+    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: {})
+    assert te.sync("tskey-auth-SECRET123")["reaped"] == [] and downs == []
+
+
 def test_sync_brings_up_desired_and_reaps_stale(tmp_path, monkeypatch):
     _use_tmp(tmp_path, monkeypatch)
-    monkeypatch.setattr(te, "exit_node_peers",
-                        lambda: [{"ip": "100.100.0.1", "name": "iphone-dana", "os": "iOS", "online": True},
-                                 {"ip": "100.100.0.2", "name": "android", "os": "android", "online": True}])
+    # discovery: a healthy probe on the key's tailnet, status = the clean 2-exit-peer fixture
+    monkeypatch.setattr(te, "_discovery_socket", lambda key: ("/probe/tailscaled.sock", None))
+    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: _TS)
     # pre-seed: slot 0 pins .1 (still desired -> kept), slot 5 pins .9 (gone -> reaped)
     d = te.load()
     d["slots"][0] = {"port": 10800, "exit_ip": "100.100.0.1", "hostname": "jf-egress-0", "note": ""}

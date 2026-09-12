@@ -217,9 +217,17 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   `-socks5-server=127.0.0.1:<base_port+slot>` (base 10800, loopback ONLY), auth'd with a REUSABLE key and PINNED
   `--exit-node=<phone_ip>` → that local SOCKS egresses via the phone's carrier IP. Runs one per phone CONCURRENTLY without a
   global `tailscale up --exit-node` (never hijacks the host's routing). `proxy_pool.residential_slots()` merges `live_socks()`
-  (running slots, TCP-alive) beside `mobile_proxy.live_servers()` — same guarded/additive hot path. `sync(authkey)` reconciles
-  one slot per online `ExitNodeOption` peer (brings up missing, reaps stale); `up`/`down`/`down_all`/`running_slots`/`check`
-  (egress+ASN per slot). Owner go-live: phone → toggle «Use as exit node» + APPROVE in the admin console; mint a REUSABLE
+  (running slots, TCP-alive) beside `mobile_proxy.live_servers()` — same guarded/additive hot path. **The phones live on the
+  KEY'S tailnet, NOT the host's main node's** (proven 2026-09-12: server on `alikhanzhomartov.github`, phones+key on
+  `baimukhanalan1@gmail.com`) — so `sync(authkey)` discovers via a CLEAN transient no-exit probe joined with the key (a
+  pinned egress slot is a corrupt vantage: its ACTIVE exit node reports `ExitNode=true`/`ExitNodeOption=false` and hides
+  itself — do NOT discover through a slot). The host's main node is NOT moved. `sync` is **REAP-SAFE**: a failed/empty/partial
+  netmap (`Peer` empty) reaps NOTHING (a blip must not nuke live slots). `up`/`down`/`down_all`/`running_slots`/`check`
+  (egress+ASN per slot; `check` retries once — the first hop through a cold exit node is slow). **LIVE-PROVEN end-to-end
+  2026-09-12** (iPhone slot egressed `2.133.170.183` = AS9198 Kazakhtelecom), BUT phones-as-exit-node are FLAKY: the iPhone
+  dropped offline in ~15min (iOS backgrounds the app) → the always-on ANDROID on a charger is the reliable anchor; keep iOS
+  exit-nodes foregrounded. A dead exit node's LOCAL SOCKS stays TCP-alive (advertised live but egress-dead) — a periodic
+  `--sync` reaps it. No boot/cron persistence yet (owner must decide on storing the reusable key on disk for cron). Owner go-live: phone → toggle «Use as exit node» + APPROVE in the admin console; mint a REUSABLE
   (ideally ephemeral) key; server `tailscale_egress --sync --authkey file:/path/key` then `--on`. The key is NEVER tracked or
   logged (masked everywhere, `file:PATH` accepted). Teardown matches the FULL socket path (a bare state-dir path prefix-
   matches sibling slots ≥10). Tests: `test_tailscale_egress.py`.

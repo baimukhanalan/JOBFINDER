@@ -127,9 +127,10 @@ def test_status_aggregate(tmp_path, monkeypatch):
 
 
 def test_residential_slots_include_the_phones(tmp_path, monkeypatch):
-    from backend.tools import proxy_pool
+    from backend.tools import proxy_pool, tailscale_egress
     _use_tmp(tmp_path, monkeypatch)
     monkeypatch.setattr(proxy_pool, "_RES_COUNT", 0)             # no chisel loopback slots
+    monkeypatch.setattr(tailscale_egress, "live_socks", lambda: [])   # isolate the exit-node bridge source
     proxy_pool._res_cache.update(ts=0.0, slots=[])
     monkeypatch.setattr(mp, "_tailscale_status_json", lambda timeout=4.0: _TS)
     mp.update(enabled=True)

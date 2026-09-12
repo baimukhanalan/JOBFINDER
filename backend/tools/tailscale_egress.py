@@ -192,10 +192,12 @@ def tcp_alive(server: str, timeout: float = 1.0) -> bool:
 
 
 # ---- tailscale peers ------------------------------------------------------------------------------
-def _tailscale_status_json(timeout: float = 4.0) -> dict:
+def _tailscale_status_json(timeout: float = 4.0, socket_path: str | None = None) -> dict:
+    """`tailscale status --json`. With `socket_path` it queries THAT userspace node (on the key's
+    tailnet) instead of the host's main node — the phones live on the key's tailnet, not the host's."""
     try:
-        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True,
-                             text=True, timeout=timeout)
+        args = ["tailscale"] + ([f"--socket={socket_path}"] if socket_path else []) + ["status", "--json"]
+        out = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         if out.returncode == 0 and out.stdout.strip():
             return json.loads(out.stdout)
     except Exception:
@@ -203,21 +205,29 @@ def _tailscale_status_json(timeout: float = 4.0) -> dict:
     return {}
 
 
-def exit_node_peers() -> list[dict]:
-    """Every ONLINE tailnet peer that ADVERTISES exit-node capability (`ExitNodeOption == True`, the
-    field tailscale sets for peers offering exit-node). Each: {name, ip, os, online}. [] on failure."""
+def _parse_exit_peers(st: dict) -> list[dict]:
+    """Online peers advertising exit-node capability (`ExitNodeOption == True`) from a status dict.
+    MUST be read from a node WITHOUT an exit-node pinned: a node whose ACTIVE exit node is a peer
+    reports that peer as `ExitNode=true`/`ExitNodeOption=false`, so a pinned egress slot is a
+    corrupt vantage — discovery uses a clean no-exit probe (see `_discovery_socket`)."""
+    out = []
+    for _k, p in (st.get("Peer") or {}).items():
+        if not p.get("ExitNodeOption") or not p.get("Online"):
+            continue
+        ip = next((a for a in (p.get("TailscaleIPs") or []) if _IPV4.match(a)), "")
+        if not ip:
+            continue
+        out.append({"name": (p.get("HostName") or p.get("DNSName") or "").split(".")[0],
+                    "ip": ip, "os": p.get("OS") or "", "online": True})
+    return out
+
+
+def exit_node_peers(socket_path: str | None = None) -> list[dict]:
+    """Every ONLINE tailnet peer that ADVERTISES exit-node capability. Each: {name, ip, os, online}.
+    [] on failure. Reads via `socket_path` (a node on the key's tailnet) when given — the host's main
+    node is on a DIFFERENT tailnet than the phones, so bare discovery there returns nothing."""
     try:
-        st = _tailscale_status_json()
-        out = []
-        for _k, p in (st.get("Peer") or {}).items():
-            if not p.get("ExitNodeOption") or not p.get("Online"):
-                continue
-            ip = next((a for a in (p.get("TailscaleIPs") or []) if _IPV4.match(a)), "")
-            if not ip:
-                continue
-            out.append({"name": (p.get("HostName") or p.get("DNSName") or "").split(".")[0],
-                        "ip": ip, "os": p.get("OS") or "", "online": True})
-        return out
+        return _parse_exit_peers(_tailscale_status_json(socket_path=socket_path))
     except Exception:
         return []
 
@@ -321,6 +331,10 @@ def down_all() -> dict:
                 n += 1
         except Exception:
             pass
+    try:
+        _kill_probe(_STATE_ROOT / _PROBE_DIR)               # also reap a leftover discovery probe
+    except Exception:
+        pass
     return {"down": n}
 
 
@@ -359,14 +373,79 @@ def live_socks() -> list[str]:
 
 
 # ---- reconcile / probe (owner-run) ----------------------------------------------------------------
-def sync(authkey: str) -> dict:
-    """Reconcile desired vs running: desired = one slot per ONLINE exit-node peer. Bring up the
-    missing ones, reap slots whose exit_ip is no longer an online exit-node peer. Guarded."""
-    summary = {"desired": [], "brought_up": [], "reaped": [], "kept": [], "errors": 0}
+_PROBE_DIR = "_probe"
+
+
+def _kill_probe(sd) -> None:
+    """Tear down the transient discovery node (logout so its ephemeral node deregisters, kill, rm)."""
+    sd = Path(sd)
+    sk = sd / "tailscaled.sock"
     try:
-        peers = exit_node_peers()
+        if sk.exists():
+            subprocess.run(["tailscale", f"--socket={sk}", "logout"], capture_output=True, timeout=30)
     except Exception:
+        pass
+    try:
+        subprocess.run(["pkill", "-f", f"{sd}/tailscaled.sock"], capture_output=True, timeout=10)
+    except Exception:
+        pass
+    shutil.rmtree(sd, ignore_errors=True)
+
+
+def _discovery_socket(authkey: str):
+    """Return (socket_path, transient_statedir|None) for a CLEAN discovery node on the key's tailnet:
+    a TRANSIENT userspace probe with NO exit-node pinned (so every exit-node-capable peer reports
+    `ExitNodeOption=true` — a pinned egress slot would report its active exit node as `ExitNode` and
+    hide it). The caller tears it down via `_kill_probe`. (None, None) on failure. Never raises."""
+    key = (authkey or "").strip()
+    if not key:
+        return None, None
+    sd = _STATE_ROOT / _PROBE_DIR
+    try:
+        _kill_probe(sd)                                      # clear any stale probe first
+        sd.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen(up_argv(sd, load()["base_port"] - 1), stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+        sk = sd / "tailscaled.sock"
+        deadline = time.time() + _SOCK_WAIT
+        while not sk.exists() and time.time() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError("probe tailscaled exited")
+            time.sleep(0.2)
+        if not sk.exists():
+            raise RuntimeError("probe socket never appeared")
+        argv = ["tailscale", f"--socket={sk}", "up", f"--authkey={key}",
+                "--hostname=jf-egress-probe", "--accept-routes=false", "--ssh=false"]
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_JOIN_TIMEOUT)
+        if r.returncode != 0:
+            raise RuntimeError(_scrub(r.stderr) or "probe up failed")
+        return str(sk), sd
+    except Exception:
+        _kill_probe(sd)
+        return None, None
+
+
+def sync(authkey: str) -> dict:
+    """Reconcile desired vs running: desired = one slot per ONLINE exit-node peer (discovered on the
+    KEY'S tailnet via a clean no-exit probe). Bring up the missing, reap slots whose exit_ip is no
+    longer an online exit-node peer. REAP-SAFE: a failed/unhealthy discovery reaps NOTHING (a
+    transient network blip must never nuke working slots). Guarded."""
+    summary = {"desired": [], "brought_up": [], "reaped": [], "kept": [], "errors": 0}
+    disc_sock, transient = _discovery_socket(authkey)
+    if not disc_sock:                                        # no discovery node -> touch nothing
+        summary["errors"] += 1
         return summary
+    try:
+        st = _tailscale_status_json(socket_path=disc_sock)
+    except Exception:
+        st = {}
+    finally:
+        if transient:
+            _kill_probe(transient)
+    if not st.get("Peer"):                                  # empty/partial netmap -> never reap
+        summary["errors"] += 1                              # (the tailnet always has peers; a probe
+        return summary                                      #  that shows none is not yet converged)
+    peers = _parse_exit_peers(st)
     desired_ips = {p["ip"] for p in peers if p.get("ip")}
     summary["desired"] = sorted(desired_ips)
     d = load()
@@ -419,7 +498,9 @@ def check(echo=None) -> list[dict]:
     owner can confirm each slot shows its phone's MOBILE IP. `echo` injectable for tests."""
     out = []
     for r in running_slots():
-        egress = _echo_through(r["server"], echo=echo)
+        egress = _echo_through(r["server"], timeout=15.0, echo=echo)   # first hop through a fresh
+        if egress is None:                                             # exit-node is cold — one retry
+            egress = _echo_through(r["server"], timeout=15.0, echo=echo)
         out.append({**r, "egress": egress, "asn": (asn_of(egress) if egress else "")})
     return out
 
@@ -481,7 +562,12 @@ def main() -> None:
                           "n_slots": len(d["slots"])}, ensure_ascii=False))
 
     if a.peers:
-        print(json.dumps(exit_node_peers(), ensure_ascii=False, indent=1))
+        disc, transient = _discovery_socket(_read_authkey(a.authkey)) if a.authkey else (None, None)
+        try:
+            print(json.dumps(exit_node_peers(socket_path=disc), ensure_ascii=False, indent=1))
+        finally:
+            if transient:
+                _kill_probe(transient)
         return
 
     if a.up:

@@ -705,7 +705,20 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
         _S["resume_pdf"] = resume_pdf  # used by the filechooser interceptor
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await page.wait_for_timeout(2000)
+            # A React ATS form (Ashby/Greenhouse) can render SECONDS after domcontentloaded —
+            # much slower through a residential/phone proxy. A fixed 2s wait intermittently saw
+            # 0 fields → a false `no_form` on a posting whose form was actually present (proven
+            # via live page inspection on Salmon/Ashby). POLL for a real form control (bounded);
+            # a truly dead/expired posting just times out and falls through to the genuine
+            # no_form path. Fast forms proceed the instant a field attaches, so nothing regresses.
+            try:
+                await page.wait_for_selector(
+                    "form input:not([type=hidden]), form textarea, form select, "
+                    "input[type=file], [role=combobox]",
+                    timeout=15000, state="attached")
+            except Exception:
+                pass
+            await page.wait_for_timeout(1500)
             strat = _pick_strategy(url)
             known = rep.get("drafted_answers") or {}  # backed picks + drafts replay instantly
             # draft=True always: the per-person answer cache makes re-drafting open

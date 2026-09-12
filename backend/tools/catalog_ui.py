@@ -415,7 +415,7 @@ def render_page(company: str = "", q: str = "", region: str = "",
     selbar = (
         '<div class="cat-selbar" id="catSelBar" role="region" aria-label="Выбранные вакансии">'
         '<span class="cat-selbar-n" id="catSelN">Выбрано 0</span>'
-        '<button type="button" class="ghost cat-selbar-all" onclick="selectAll(this)">Все</button>'
+        '<button type="button" class="ghost cat-selbar-all" onclick="catSelectAll(this)">Все</button>'
         '<button type="button" class="ghost cat-selbar-clear" onclick="clearPicks()">Снять</button>'
         '<button type="button" class="primary cat-selbar-go" onclick="openCampSheet()">'
         'Кампания</button></div>')
@@ -772,7 +772,10 @@ window.pickSex = function(b){
 // «Все»: put EVERY job of the current search (not just the rendered page) into the selection —
 // ids come from /catalog/ids with the live query. Lives in the bottom selection bar (which is
 // only visible once ≥1 card is picked); «Снять» clears. The bar's «Выбрано N» reflects the count.
-window.selectAll = async function(btn){
+// NB: named catSelectAll, NOT selectAll — the shell _JS (loaded AFTER this page's <main>) declares a
+// top-level `function selectAll(){…}` for the mail inbox, which hoists over any `window.selectAll=`
+// we set here and turned «Все» into a silent no-op (it selected `.maillist .mitem`, absent on /catalog).
+window.catSelectAll = async function(btn){
   var qp=(window.catQuery?window.catQuery():{}), sp=new URLSearchParams();
   if(qp.q) sp.set('q', qp.q); if(qp.region) sp.set('region', qp.region); if(qp.company) sp.set('company', qp.company);
   var old=btn.textContent; btn.disabled=true; btn.textContent='…';

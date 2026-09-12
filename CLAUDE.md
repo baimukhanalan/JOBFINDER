@@ -200,8 +200,17 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
 - **Mobile-proxy POOL** (`tools/mobile_proxy.py`, `data/mobile_proxy.json` gitignored): the owner's phones over a
   Tailscale tailnet as residential/mobile egress. `live_servers()` (TCP-alive) is appended by `proxy_pool.residential_
   slots()`, so `_do_fill` walks `egress_candidates()` (live phones · datacenter pool · direct) — a dead phone never
-  blocks a fill. CLI `mobile_proxy --check|--discover|--join-tailnet <KEY> --yes`. BLOCKED on the owner: a tagged
-  reusable auth key + phones online. Tests: `test_mobile_proxy.py`.
+  blocks a fill. CLI `mobile_proxy --check|--discover|--join-tailnet <KEY> --yes`. **Pipeline VERIFIED end-to-end
+  2026-09-12** (real local SOCKS5 stand-in: httpx routes through `socks5://`, ASN-detect works, `egress_candidates`
+  ranks phones first→pool→direct) and the pool is now `enabled:true` (armed; 0 phones → `live_servers()`=[] so current
+  fills are unaffected, Health row = benign `info`, and `check_and_alert` alerts only on `down` so no Telegram spam).
+  **Each phone must run a no-auth SOCKS5 *server* on the shared port (1080), reachable at its tailnet IP — Tailscale
+  alone is NOT enough.** ANDROID = the workhorse: **Every Proxy** (SOCKS5, port 1080) on a phone joined to the SAME
+  tailnet (`alikhanzhomartov.github`) → discovered + used automatically, CONCURRENT (per-fill rotation). **iPHONE CANNOT
+  serve SOCKS** (iOS sandbox has no reliable inbound-listener app) → an iPhone's carrier IP is reachable only as a
+  Tailscale EXIT NODE, which is a GLOBAL server route (one at a time, would hijack ALL server egress) — so iPhones do NOT
+  fit the concurrent SOCKS pool without a userspace-`tailscaled`-per-exit-node bridge (NOT built). Recommend Android-only.
+  Still BLOCKED on the owner: phones online (Tailscale + a SOCKS server app). Tests: `test_mobile_proxy.py`.
 
 **Mail / CRM**
 - **One live store, one dead.** LIVE: `mail_indexer` (inotify) → Postgres `mail_index` → `/mail` (`mailcrm.py` reads

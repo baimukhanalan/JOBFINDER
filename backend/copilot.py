@@ -443,6 +443,84 @@ async def _human_dwell(page, submit_selector: str) -> None:
         logger.debug("human dwell skipped", exc_info=True)
 
 
+async def _warm_session(page, company_key: str = "") -> None:
+    """Warm the browser session like a person arriving at the form: Google (consent + a search
+    typed at human speed) and the employer's careers root BEFORE the application page. reCAPTCHA v3
+    scores a cookie-less, history-less context low no matter the IP; a warmed session carries
+    Google cookies + a navigation trail. Best-effort, bounded, never raises."""
+    if not STEALTH_ON:
+        return
+    try:
+        import random
+        await page.goto("https://www.google.com/", wait_until="domcontentloaded", timeout=25000)
+        await page.wait_for_timeout(random.randint(1200, 2200))
+        for sel in ('button:has-text("Accept all")', 'button:has-text("I agree")',
+                    'button#L2AGLb', 'button:has-text("Reject all")'):
+            try:
+                b = page.locator(sel).first
+                if await b.count() and await b.is_visible(timeout=800):
+                    await b.click(timeout=2000)
+                    break
+            except Exception:
+                continue
+        q = f"{company_key or 'ashby'} careers".replace("-", " ")
+        try:
+            box = page.locator('textarea[name="q"], input[name="q"]').first
+            await box.click(timeout=3000)
+            await page.keyboard.type(q, delay=random.randint(70, 140))
+            await page.wait_for_timeout(random.randint(600, 1200))
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(random.randint(2500, 4000))
+            await page.mouse.wheel(0, random.randint(300, 900))
+            await page.wait_for_timeout(random.randint(800, 1600))
+        except Exception:
+            pass
+        if company_key:
+            try:
+                await page.goto(f"https://jobs.ashbyhq.com/{company_key}", wait_until="domcontentloaded",
+                                timeout=30000)
+                await page.wait_for_timeout(random.randint(2500, 4500))
+                await page.mouse.wheel(0, random.randint(300, 800))
+                await page.wait_for_timeout(random.randint(900, 1800))
+            except Exception:
+                pass
+        logger.info("session warmed (google + %s careers root)", company_key or "-")
+    except Exception:
+        logger.debug("session warm skipped", exc_info=True)
+
+
+def _attach_submit_capture(page, shot_dir) -> None:
+    """Record the server's answer to the application submit mutation (Ashby GraphQL
+    `ApiSubmitSingleApplicationFormAction`) into <shot_dir>/submit_response.json — the UI collapses
+    every rejection into one 'flagged as possible spam' banner, but the payload carries the real
+    code (e.g. RECAPTCHA_SCORE_BELOW_THRESHOLD)."""
+    import json as _json
+
+    async def _on_response(resp):
+        try:
+            u = resp.url
+            if "non-user-graphql" not in u or "SubmitSingleApplicationFormAction" not in u:
+                return
+            body = await resp.text()
+            data = {"url": u, "status": resp.status, "body": body[:20000]}
+            codes = sorted(set(re.findall(r'"(?:code|errorCode|__typename)"\s*:\s*"([A-Z_]{6,})"', body)))
+            data["codes"] = codes
+            try:
+                os.makedirs(shot_dir, exist_ok=True)
+                with open(os.path.join(str(shot_dir), "submit_response.json"), "w", encoding="utf-8") as f:
+                    _json.dump(data, f, ensure_ascii=False, indent=1)
+            except Exception:
+                pass
+            logger.info("submit mutation response: http=%s codes=%s", resp.status, codes)
+        except Exception:
+            pass
+
+    try:
+        page.on("response", lambda r: asyncio.create_task(_on_response(r)))
+    except Exception:
+        logger.debug("submit capture not attached", exc_info=True)
+
+
 @app.on_event("startup")
 async def _startup():
     try:
@@ -763,7 +841,8 @@ async def _click_code_confirm(page) -> bool:
 async def health():
     ok = _S["page"] is not None and not _S["page"].is_closed()
     return {"ok": True, "browser": ok, "novnc": await _novnc_up(),
-            "current": _S["current"], "owner": _S["owner"]}
+            "current": _S["current"], "owner": _S["owner"],
+            "stealth": STEALTH_ON, "fp_diversify": FP_DIVERSIFY}
 
 
 @app.post("/release")
@@ -893,6 +972,11 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
         resume_pdf = str(d / "resume.pdf")
         _S["resume_pdf"] = resume_pdf  # used by the filechooser interceptor
         try:
+            # Record the server's verdict on the submit mutation (real error code, not just the
+            # banner) and arrive at the form like a person (Google cookies + the careers root).
+            _attach_submit_capture(page, d)
+            _ck = re.search(r"ashbyhq\.com/([^/?#]+)", url or "")
+            await _warm_session(page, _ck.group(1) if _ck else "")
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             # A React ATS form (Ashby/Greenhouse) can render SECONDS after domcontentloaded —
             # much slower through a residential/phone proxy. A fixed 2s wait intermittently saw

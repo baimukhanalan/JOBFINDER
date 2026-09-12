@@ -125,3 +125,4 @@ backend/data/mobile_proxy.json
 # exit-node egress bridge: settings + per-slot state dirs (hold tailnet node keys) — never commit
 backend/data/ts_egress.json
 backend/data/ts-egress/
+backend/.ts_authkey

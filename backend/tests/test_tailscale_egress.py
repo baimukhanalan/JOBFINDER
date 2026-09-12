@@ -190,11 +190,13 @@ def test_sync_brings_up_desired_and_reaps_stale(tmp_path, monkeypatch):
     # discovery: a healthy probe on the key's tailnet, status = the clean 2-exit-peer fixture
     monkeypatch.setattr(te, "_discovery_socket", lambda key: ("/probe/tailscaled.sock", None))
     monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: _TS)
-    # pre-seed: slot 0 pins .1 (still desired -> kept), slot 5 pins .9 (gone -> reaped)
+    # pre-seed: slot 0 pins .1 (still desired + RUNNING -> kept), slot 5 pins .9 (gone -> reaped)
     d = te.load()
     d["slots"][0] = {"port": 10800, "exit_ip": "100.100.0.1", "hostname": "jf-egress-0", "note": ""}
     d["slots"][5] = {"port": 10805, "exit_ip": "100.100.0.9", "hostname": "jf-egress-5", "note": ""}
     te.save(d)
+    monkeypatch.setattr(te, "running_slots", lambda timeout=1.0: [
+        {"slot": 0, "server": "socks5://127.0.0.1:10800", "port": 10800, "exit_ip": "100.100.0.1"}])
     ups, downs = [], []
     monkeypatch.setattr(te, "up", lambda ip, key, note="": ups.append(ip) or {"slot": 1, "server": "x"})
     monkeypatch.setattr(te, "down", lambda slot: downs.append(slot) or True)
@@ -204,6 +206,26 @@ def test_sync_brings_up_desired_and_reaps_stale(tmp_path, monkeypatch):
     assert set(summary["desired"]) == {"100.100.0.1", "100.100.0.2"}
     assert summary["brought_up"] == ["100.100.0.2"] and summary["reaped"] == ["100.100.0.9"]
     assert summary["kept"] == ["100.100.0.1"]
+
+
+def test_sync_rebuilds_a_dead_slot(tmp_path, monkeypatch):
+    """A desired peer whose slot RECORD exists but whose daemon is dead (reboot/crash) is rebuilt,
+    not falsely 'kept' — else the pool advertises a slot with no daemon. Boot-safe."""
+    _use_tmp(tmp_path, monkeypatch)
+    only_one = {"Self": {"Online": True}, "Peer": {"k1": {"HostName": "iphone", "TailscaleIPs":
+                ["100.100.0.1"], "Online": True, "OS": "iOS", "ExitNodeOption": True}}}
+    monkeypatch.setattr(te, "_discovery_socket", lambda key: ("/probe/tailscaled.sock", None))
+    monkeypatch.setattr(te, "_tailscale_status_json", lambda timeout=4.0, socket_path=None: only_one)
+    d = te.load()
+    d["slots"][0] = {"port": 10800, "exit_ip": "100.100.0.1", "hostname": "jf-egress-0", "note": ""}
+    te.save(d)
+    monkeypatch.setattr(te, "running_slots", lambda timeout=1.0: [])   # daemon is DEAD (nothing running)
+    ups, downs = [], []
+    monkeypatch.setattr(te, "up", lambda ip, key, note="": ups.append(ip) or {"slot": 0, "server": "x"})
+    monkeypatch.setattr(te, "down", lambda slot: downs.append(slot) or True)
+    summary = te.sync("tskey-auth-SECRET123")
+    assert downs == [0] and ups == ["100.100.0.1"]          # stale record cleared, then rebuilt
+    assert summary["brought_up"] == ["100.100.0.1"] and summary["kept"] == []
 
 
 def test_check_reports_egress_per_slot(tmp_path, monkeypatch):

@@ -448,24 +448,32 @@ def sync(authkey: str) -> dict:
     peers = _parse_exit_peers(st)
     desired_ips = {p["ip"] for p in peers if p.get("ip")}
     summary["desired"] = sorted(desired_ips)
-    d = load()
-    current = {rec["exit_ip"]: slot for slot, rec in (d.get("slots") or {}).items() if rec.get("exit_ip")}
-    for ip, slot in list(current.items()):          # reap slots no longer backed by an online peer
-        if ip not in desired_ips:
-            try:
-                if down(slot):
-                    summary["reaped"].append(ip)
-            except Exception:
-                summary["errors"] += 1
-    for p in peers:                                 # bring up missing desired peers
-        ip = p.get("ip")
-        if not ip:
-            continue
-        if ip in current:
+    _RUN_CACHE.update(ts=0.0, slots=[])             # force a fresh liveness read (a daemon may have died)
+    slots_by_ip: dict = {}                          # exit_ip -> [slot record-keys]
+    for slot, rec in (load().get("slots") or {}).items():
+        if rec.get("exit_ip"):
+            slots_by_ip.setdefault(rec["exit_ip"], []).append(slot)
+    running_ips = {r["exit_ip"] for r in running_slots()}
+    for ip, slots in list(slots_by_ip.items()):     # reap slots whose exit_ip isn't a desired online peer
+        if ip not in desired_ips:                   # (an exit node that went offline is reaped even though
+            for slot in slots:                      #  its LOCAL socks is still tcp-alive = egress-dead)
+                try:
+                    if down(slot):
+                        summary["reaped"].append(ip)
+                except Exception:
+                    summary["errors"] += 1
+    for ip in sorted(desired_ips):                  # ensure ONE RUNNING slot per desired peer
+        if ip in running_ips:                       # (rebuild a dead/missing daemon — boot-safe + self-heal)
             summary["kept"].append(ip)
             continue
+        for slot in slots_by_ip.get(ip, []):        # clear a stale record whose daemon is gone
+            try:
+                down(slot)
+            except Exception:
+                pass
         try:
-            if up(ip, authkey, note=p.get("name") or ""):
+            note = next((p.get("name") for p in peers if p.get("ip") == ip), "") or ""
+            if up(ip, authkey, note=note):
                 summary["brought_up"].append(ip)
             else:
                 summary["errors"] += 1

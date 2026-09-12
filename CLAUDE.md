@@ -100,6 +100,10 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   fight the one virtual mic); don't enable `HARVEST_PROXY`. **MUST include `cd /home/projects/jobfinder` inside `sg mail -c`**
   (cron cwd is `$HOME`; `PYTHONPATH=.` alone → `No module named 'backend'`).
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
+- `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
+  `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
+  dead daemons, boot-safe). Reads the REUSABLE key from `backend/.ts_authkey` (chmod 600, gitignored; owner-approved on disk
+  for the cron — revoke in the Tailscale console to kill it). No `sg mail`/`DISPLAY` (userspace tailscaled, no TUN/mail/X).
 - `8 1,7,13,19` `apply_campaign_cron` — recurring apply-campaign driver. INERT until a campaign exists; `per_day` caps the
   daily total across the 4 runs. `cd` + `DISPLAY=:98` + `sg mail`.
 - **Mass-hiring apply lanes, all `0 1,6,11,15,20` (5×/day, `DISPLAY=:98`, `sg mail`, fcntl-locked, per-lane logs):**
@@ -226,8 +230,11 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   (egress+ASN per slot; `check` retries once — the first hop through a cold exit node is slow). **LIVE-PROVEN end-to-end
   2026-09-12** (iPhone slot egressed `2.133.170.183` = AS9198 Kazakhtelecom), BUT phones-as-exit-node are FLAKY: the iPhone
   dropped offline in ~15min (iOS backgrounds the app) → the always-on ANDROID on a charger is the reliable anchor; keep iOS
-  exit-nodes foregrounded. A dead exit node's LOCAL SOCKS stays TCP-alive (advertised live but egress-dead) — a periodic
-  `--sync` reaps it. No boot/cron persistence yet (owner must decide on storing the reusable key on disk for cron). Owner go-live: phone → toggle «Use as exit node» + APPROVE in the admin console; mint a REUSABLE
+  exit-nodes foregrounded. A dead exit node's LOCAL SOCKS stays TCP-alive (advertised live but egress-dead) — the `*/10`
+  `--sync` cron reaps it + rebuilds dead daemons (self-healing, boot-safe via `@reboot`). Key on disk at `backend/.ts_authkey`
+  (chmod 600, gitignored; owner-approved 2026-09-12). **IP-DIVERSITY CAVEAT: devices on the SAME WiFi share ONE public NAT IP**
+  (proven: iphone-13 + macbook both → `91.198.101.66` NLS-KZ) — for distinct egress IPs put phones on CELLULAR/mobile-data
+  (iphone-14 on cellular gave a different IP `2.133.170.183` Kazakhtelecom). Health row «Exit-node мост (телефоны)». Owner go-live: phone → toggle «Use as exit node» + APPROVE in the admin console; mint a REUSABLE
   (ideally ephemeral) key; server `tailscale_egress --sync --authkey file:/path/key` then `--on`. The key is NEVER tracked or
   logged (masked everywhere, `file:PATH` accepted). Teardown matches the FULL socket path (a bare state-dir path prefix-
   matches sibling slots ≥10). Tests: `test_tailscale_egress.py`.

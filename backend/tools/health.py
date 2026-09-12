@@ -793,6 +793,27 @@ def proxy_rows() -> list[dict]:
                              f"настроено {n_cfg}, но ни один телефон не онлайн · tailnet {tn}", mhint))
     except Exception as exc:
         rows.append(_row(mname, "warn", f"n/a: {str(exc)[:70]}", mhint))
+    # phones/laptops that are Tailscale EXIT NODES, bridged to local SOCKS (tailscale_egress.py)
+    ename = "Exit-node мост (телефоны)"
+    ehint = ("Телефоны-exit-node (в т.ч. iPhone, который SOCKS-сервер держать не может) через свой "
+             "userspace-tailscaled → локальный SOCKS → в тот же пул. Крон `*/10 tailscale_egress --sync` "
+             "поднимает/убирает слоты по мере появления телефонов. Проверка: `tailscale_egress --check`. "
+             "Устройства в ОДНОЙ WiFi дают ОДИН IP — для разнообразия держать телефоны на сотовой.")
+    try:
+        from backend.tools import tailscale_egress
+        es = tailscale_egress.status()
+        n_run, n_sl = int(es.get("n_running") or 0), int(es.get("n_slots") or 0)
+        exits = ", ".join(s.get("exit_ip") for s in (es.get("slots") or []) if s.get("running")) or "—"
+        if not es.get("enabled"):
+            rows.append(_row(ename, "info", f"выключен · {n_sl} слотов", ehint))
+        elif n_run:
+            rows.append(_row(ename, "ok", f"{n_run} слот(ов) активно · exit-узлы {exits}", ehint))
+        elif n_sl:
+            rows.append(_row(ename, "warn", f"{n_sl} слотов, но ни один демон не жив (телефон отвалился?)", ehint))
+        else:
+            rows.append(_row(ename, "info", "включён, телефонов-exit-node сейчас нет", ehint))
+    except Exception as exc:
+        rows.append(_row(ename, "warn", f"n/a: {str(exc)[:70]}", ehint))
     try:
         from backend.config import settings
         zone = settings.brightdata_zone or "—"

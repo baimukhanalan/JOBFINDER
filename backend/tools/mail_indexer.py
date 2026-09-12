@@ -96,7 +96,12 @@ def run_once():
 
 # ---- single-file index / prune (used by the watcher) -----------------------
 _SHL_RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shl_assess_runner.py")
-_SHL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "shl_assess.log")
+# repo-root logs/ (tools -> backend -> jobfinder): three dirnames. A missing third dirname sent the
+# hook's SHL runner output to backend/logs/shl_assess.log while the retired pm2 daemon (and all
+# monitoring / the Health tab) watched repo-root logs/shl_assess.log — which then looked "frozen"
+# since 2026-08-31 even though the hook kept completing invites (2026-09-12 diagnosis).
+_SHL_LOG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "shl_assess.log")
 
 
 def _maybe_trigger_shl(row, seen):

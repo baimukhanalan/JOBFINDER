@@ -106,9 +106,17 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   for the cron — revoke in the Tailscale console to kill it). No `sg mail`/`DISPLAY` (userspace tailscaled, no TUN/mail/X).
 - `8 1,7,13,19` `apply_campaign_cron` — recurring apply-campaign driver. INERT until a campaign exists; `per_day` caps the
   daily total across the 4 runs. `cd` + `DISPLAY=:98` + `sg mail`.
-- **Mass-hiring apply lanes, all `0 1,6,11,15,20` (5×/day, `DISPLAY=:98`, `sg mail`, fcntl-locked, per-lane logs):**
-  `mass_hiring_apply_cron` (Maximus), `..._tp_cron` (Teleperformance), `..._taleo_cron` (TTEC), `..._kelly_cron` (Kelly),
-  `..._sr_cron` (Sutherland), `..._workday_cron --tenant centene` (Centene).
+- **Mass-hiring apply lanes (5×/day, `DISPLAY=:98`, `sg mail`, fcntl-locked, per-lane logs) — HOUR-STAGGERED
+  2026-09-12** so they don't all pile headful Chromium onto the single `:98` at once (they used to ALL run
+  `1,6,11,15,20`; each runs for HOURS, so they overlapped → 46 chrome procs, load ~7-10, fills dying mid-run with
+  `TargetClosedError`). Now on distinct hour-phases (minutes unchanged): Maximus `0 0,5,10,15,20` · TP `12 1,6,11,16,21` ·
+  Kelly `24 2,7,12,17,22` · Taleo `54 2,8,13,19,23` · SR `36 3,8,13,18,23` · Workday `48 4,9,14,19,0` (≤2 lanes start any
+  hour, ≥6 min apart). **When editing a lane change ONLY the schedule; keep the staggering.** (Not git-tracked; the live
+  crontab is authoritative — back it up before editing.)
+- **`*/30` `chrome_reaper`** (`tools/chrome_reaper.py` → `logs/chrome_reaper.log`) — SIGKILLs ORPHANED (ppid==1) chromium
+  procs older than `--min-age` (default 3600s). A live fill's browser is a child of its co-pilot/worker (ppid≠1) so it is
+  NEVER touched at any age; only genuinely-leaked orphans (a crashed fill's browser reparented to init — 13 were 6.6 DAYS
+  old on 2026-09-12) are reaped. `--dry-run` prints without killing.
 - **No catalog-auto-apply batch cron** (the `/catalog` bulk drain is operator-triggered; `apply_cli` is manual).
 
 ## Vacancies (Каталог + Mass Hiring + Незавершённые)

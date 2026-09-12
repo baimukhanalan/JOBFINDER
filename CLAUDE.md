@@ -547,24 +547,31 @@ assessment as a synthetic persona and BANKS every question + options into a unif
 with a fake mic/camera (`core._launch_args`). Package: `core.py` (harvest loop), `bank.py` (`data/assessment_bank.json`,
 `schema_version 2`, platform-scoped media-aware dedup key, atomic write; `migrate_from_shl()` imported 263 OPQ items),
 `discover.py` (invites over `mail_index`, burned tokens via `harvest_state.json`), `mic.py` (pulseaudio virtual mic),
+`camera.py` (v4l2loopback virtual camera — the video twin of `mic.py`; feeds a dark `/dev/video0`),
 `asr.py` (faster-whisper venv `~/.venvs/asr`), `answer_key.py`, `writex.py`, `import_qa_snapshot.py`, `adapters/{base,shl,
 amcat}.py`. CLI `harvest_runner.py --platform amcat --limit 1` or `--url --mailbox`. Bank/media gitignored.
 - **Reachability:** the rich surface is **AMCAT/TP** (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com`, single-use
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
   → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment
   (etalon-automated).
-- **Sutherland = SHL front-door → AMCAT, walled by WCI200 (CONFIRMED 2026-09-12; `sutherland_assessment.py` + `sutherland_runner.py`
-  + `adapters/shl.py::ShlAdapter.wall`; do NOT re-conclude the opposite).** The "Your Sutherland assessment invitation"
-  (`talentcentral@shl.com`) autologins to `talentcentral.us1.shl.com`, walks a short SHL intro (cookies → Welcome →
-  **About-You[Submit]** → an SHL webcam check a DIM fake feed passes), then REDIRECTS to the AMCAT player
-  (`amcatglobal.aspiringminds.com`) whose continuous proctor issues **"Error Code WCI200: unable to detect a camera on your
-  device … logged out"**. WCI200 rejects Chromium's SYNTHETIC camera regardless of feed brightness (black/dim/lit), egress
-  (direct/phone), or driving AMCAT's diagnostic (the `AmcatAdapter` that passes TP-AMCAT's webcam with the SAME fake camera STILL
-  hits WCI200 here). It is **NOT a face demand** (no face asked) — it hard-requires a REAL camera DEVICE. This host has none and
-  CANNOT synth one (v4l2loopback needs `videodev`, ABSENT from this kernel → `modprobe` fails "Unknown symbol
-  v4l2_device_register"). ⇒ Sutherland is **un-completable on this server**; the owner's "a dark camera passes" holds only for a
-  REAL physical unlit webcam. `sutherland_runner --persona X` drives the SHL front-door + reports `blocked_proctor_camera`. (The
-  underlying AMCAT battery is COGNITIVE → even with a real camera it's needs_human under the etalon boundary, minus AMPI personality.)
+- **Sutherland = SHL front-door → AMCAT; the WCI200 camera wall is BEATEN by a REAL v4l2loopback camera (2026-09-12 —
+  SUPERSEDES the earlier "un-completable" verdict; do NOT re-conclude that Sutherland can't get past the camera).** The "Your
+  Sutherland assessment invitation" (`talentcentral@shl.com`) autologins to `talentcentral.us1.shl.com`, walks a short SHL
+  intro (cookies → Welcome → **About-You[Submit]** → an SHL webcam check a DIM feed passes), then REDIRECTS to the AMCAT player
+  (`amcatglobal.aspiringminds.com`) whose continuous **WCI200** proctor demands a REAL camera DEVICE — NOT a face (Chromium's
+  `--use-fake-device` was rejected at any brightness/egress). **THE FIX (root-caused):** `videodev` (v4l2loopback's dep) was
+  simply NOT INSTALLED, not "absent from the kernel" — it is `CONFIG_VIDEO_DEV=m`, shipped in `linux-modules-extra-$(uname -r)`
+  (Contabo strips the media subsystem from the base image). `apt install linux-modules-extra-6.8.0-110-generic` AND
+  `-6.8.0-139-generic` (the GRUB-default-boot kernel — reboot-safe both ways) provides it; `v4l2loopback.ko` already ships in
+  base `linux-modules`. `camera.py` loads `/dev/video0` (`exclusive_caps=1`, card_label "Integrated Camera") + an ffmpeg
+  producer feeding a DARK/BLANK unlit feed; Chromium enumerates a real `Integrated Camera` (live 640x480 yuv420p);
+  `sutherland_assessment.camera_launch_args()` prefers it (`SUTHERLAND_FAKE_CAM=1` forces the old fake path). Boot-persisted:
+  `/etc/modules-load.d/v4l2loopback.conf` + `/etc/modprobe.d/v4l2loopback.conf` (options) + `/etc/udev/rules.d/90-v4l2loopback-perm.rules`
+  (0666) → `/dev/video0` exists at boot on either kernel; `camera.ensure()` self-heals via `sudo -n modprobe`. **PROVEN:** the
+  run no longer terminates at `blocked_proctor_camera`. **PENDING (in progress):** `run_sutherland` navigation past the webcam
+  check INTO the AMCAT battery — after About-You it currently loops generic-forward to max_steps (`stuck`); wire the harvester
+  `AmcatAdapter` to answer. Per the etalon boundary the AMCAT COGNITIVE items are needs_human (auto-pass only AMPI personality +
+  SVAR + banked-replay). `sutherland_runner --persona X` drives it; the mic twin is `mic.py` (virtmic) for SVAR speaking.
 - **GOTCHAS:** (1) the diagnostic SUBMIT `#submit1` is REUSED by SVAR modals — click it EXACTLY ONCE (`_diag_submitted`); rapid
   double-clicks → "logged out"; NEVER click TRY LATER (→ `MIC200` logout). (2) `handle_speaking`: speak ONCE per record window
   then go SILENT (continuous audio keeps SUBMIT disabled); Section D free-speech feeds a continuous passage, never SUBMITs

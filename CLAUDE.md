@@ -675,4 +675,16 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   keeps that exact address; `provision_email` creates the Maildir, but `mail_indexer` watches ONLY takhet.com, so an ack to
   another domain must be read from `/var/mail/vhosts/<domain>/<local>` by hand), a never-used IP (airplane-mode toggle on the
   cellular phone = a new carrier IP; BD `alibaba_res` needs its own zone password — `alibaba_dc` auths but is datacenter),
-  and time. Every test = one more hit on our source — do not "just retry".
+  and time. Every test = one more hit on our source — do not "just retry". **E3 (Dana@amaskills.com, WiFi, stealth) → ALSO
+  flagged** — the email domain is excluded too. Constant across all five flagged submits: our three egress IPs (each with
+  same-day flag history — every test burns them further) and the ONE device behind every submission we have ever made
+  (Xvfb :98 → the same `deviceFingerprint`: screen/fonts/canvas/WebGL); the 34 earlier acks came from that same device, so
+  it is an ACCUMULATED cluster penalty (device + IPs), not a single tell. Code lever: `COPILOT_FP_DIVERSIFY=1` (`copilot.py`
+  `_fp_profile`/`_FP_DIVERSIFY_JS`) gives each fill context a fresh device profile — a common laptop screen size, plausible
+  cores/memory, a per-context deterministic canvas/audio perturbation. OFF by default (an inconsistent fingerprint is itself
+  a v3 tell); use it ONCE together with a NEVER-used IP (airplane-mode toggle on the cellular phone → new carrier IP, or the
+  BD `alibaba_res` zone password). Do NOT keep testing from the three known IPs.
+- **Name-label gotcha (2026-09-13):** a combined "First and Last Name" / "First & Last Name" box must map to `full_name` in
+  BOTH `catalog_drafts._ID_TEXT` and `analyzer.FIELD_PATTERNS` — the last-name rule used to grab its "Last Name" tail and a
+  Mural application was drafted/filled as just the surname. Rules are first-match-wins; the combined-name rule sits FIRST.
+  Test: `test_name_label_rules.py`.

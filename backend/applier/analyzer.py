@@ -19,7 +19,10 @@ FIELD_PATTERNS = [
     # display-text cleanup -> candidate name left empty on every Ashby run. Anchored
     # at the start so "Company name"/"Manager name" stay out, and "Name of ..."
     # (referrer/employer) is excluded explicitly.
-    (r"(?i)(full.?name|your.?name|^name\b(?![\s_-]+of\b)|applicant.?name|candidate.?name|legal.?name|_systemfield_name\b)", "full_name", "fill"),
+    # "First and Last Name" / "First & Last Name" is ONE full-name box: it must resolve to
+    # full_name BEFORE the last-name rule below can grab it ("...Last Name" matched last.?name
+    # and a Mural application went out as just the surname, 2026-09-13).
+    (r"(?i)(first[\s_-]*(?:and|&|\+|/)[\s_-]*last[\s_-]*name|first[\s_-]*name[\s_-]*(?:and|&)[\s_-]*last|full.?name|your.?name|^name\b(?![\s_-]+of\b)|applicant.?name|candidate.?name|legal.?name|_systemfield_name\b)", "full_name", "fill"),
     (r"(?i)(first.?name|given.?name|fname)", "_first_name", "fill"),
     (r"(?i)(last.?name|family.?name|surname|lname)", "_last_name", "fill"),
 

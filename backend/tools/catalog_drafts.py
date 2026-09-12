@@ -100,6 +100,10 @@ def _is_demographic(label: str, options: list[str]) -> bool:
 
 # identity / contact free-text fields filled straight from the profile
 _ID_TEXT = [
+    # A combined "First and Last Name" / "First & Last Name" box wants the FULL name — checked
+    # first, because the last-name rule below otherwise matches its "Last Name" tail (a Mural
+    # application was drafted as just "Erlan", 2026-09-13).
+    (re.compile(r"(?i)first\s*(?:and|&|\+|/)\s*last\s*name|first\s*name\s*(?:and|&)\s*last|^full\s*name"), "full_name"),
     (re.compile(r"(?i)^(?:first|given|preferred) name|first[_ ]?name"), "first_name"),
     (re.compile(r"(?i)^(?:last|family|sur)\s*name|last[_ ]?name|surname"), "last_name"),
     (re.compile(r"(?i)^full name$|^name$|legal name|your name"), "full_name"),

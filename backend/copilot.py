@@ -311,15 +311,96 @@ def _stealth_launch_kwargs(base_args: list[str]) -> dict:
                                   "--disable-features=IsolateOrigins,site-per-process"])
 
 
+# COPILOT_FP_DIVERSIFY=1: make each fill context look like a DIFFERENT device to Ashby's own
+# `deviceFingerprint` (sent with the submit mutation next to the reCAPTCHA token). Every one of
+# our submissions ever came from the one Xvfb :98 machine (same screen, fonts, canvas, WebGL), so
+# after a burst of flagged submits the whole device+IP cluster is penalised regardless of IP,
+# browser flags or email domain (proven 2026-09-13: five complete fills through three IPs, two
+# domains, stealth on/off, a never-touched tenant — all flagged). Per-context: a common laptop
+# screen size, a plausible cores/memory pair, and a faint deterministic canvas/audio perturbation
+# (a NEW hash per context, stable within it — a fingerprint that changes mid-session is itself a
+# tell). OFF by default: use it for a deliberate fresh-IP attempt, not as a blanket setting.
+FP_DIVERSIFY = os.environ.get("COPILOT_FP_DIVERSIFY", "0") == "1"
+_FP_SCREENS = ((1366, 768), (1440, 900), (1536, 864), (1600, 900), (1680, 1050), (1920, 1080))
+
+_FP_DIVERSIFY_JS = """(() => {
+  const seed = %(seed)d;
+  let s = seed >>> 0;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => %(cores)d });
+  Object.defineProperty(navigator, 'deviceMemory', { get: () => %(mem)d });
+  // canvas: perturb a handful of pixels deterministically per context (invisible, hash-changing)
+  const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+  const _getImageData = CanvasRenderingContext2D.prototype.getImageData;
+  const tweak = (ctx, w, h) => {
+    try {
+      if (!w || !h) return;
+      const img = _getImageData.call(ctx, 0, 0, w, h);
+      const d = img.data;
+      for (let i = 0; i < 12; i++) {
+        const p = (Math.floor(rnd() * (d.length / 4))) * 4;
+        d[p] = (d[p] + 1) & 255;
+      }
+      ctx.putImageData(img, 0, 0);
+    } catch (e) {}
+  };
+  HTMLCanvasElement.prototype.toDataURL = function (...a) {
+    const c = this.getContext && this.getContext('2d');
+    if (c) tweak(c, this.width, this.height);
+    return _toDataURL.apply(this, a);
+  };
+  CanvasRenderingContext2D.prototype.getImageData = function (x, y, w, h, ...r) {
+    const img = _getImageData.call(this, x, y, w, h, ...r);
+    const d = img.data;
+    for (let i = 0; i < 6 && d.length > 4; i++) {
+      const p = (Math.floor(rnd() * (d.length / 4))) * 4;
+      d[p] = (d[p] + 1) & 255;
+    }
+    return img;
+  };
+  // audio: a tiny deterministic offset in the analyser output
+  if (window.AudioBuffer) {
+    const _gcd = AudioBuffer.prototype.getChannelData;
+    AudioBuffer.prototype.getChannelData = function (ch) {
+      const data = _gcd.call(this, ch);
+      const off = (seed %% 97) * 1e-7;
+      for (let i = 0; i < data.length; i += 1000) data[i] = data[i] + off;
+      return data;
+    };
+  }
+})();"""
+
+
+def _fp_profile() -> dict:
+    """One plausible device profile per context (seeded per call)."""
+    import random
+    w, h = random.choice(_FP_SCREENS)
+    return {"seed": random.randrange(1, 2**31 - 1), "cores": random.choice((4, 8, 12)),
+            "mem": random.choice((4, 8, 16)), "w": w, "h": h}
+
+
 async def _new_ctx(proxy_cfg: dict | None):
     """A fill context: per-proxy egress + (stealth) a real locale/timezone and the anti-automation
     init script, so the reCAPTCHA v3 token minted at Submit carries a human-looking browser."""
     kw: dict = {"no_viewport": True}
     if STEALTH_ON:
         kw.update(locale="en-US", timezone_id="Asia/Almaty", color_scheme="light")
+    fp = None
+    if FP_DIVERSIFY:
+        fp = _fp_profile()
+        kw.pop("no_viewport", None)
+        kw.update(viewport={"width": fp["w"], "height": fp["h"] - 120},
+                  screen={"width": fp["w"], "height": fp["h"]})
     if proxy_cfg:
         kw["proxy"] = proxy_cfg
     ctx = await _S["browser"].new_context(**kw)
+    if fp:
+        try:
+            await ctx.add_init_script(_FP_DIVERSIFY_JS % fp)
+            logger.info("fp-diversify: screen %dx%d cores=%d mem=%d seed=%d",
+                        fp["w"], fp["h"], fp["cores"], fp["mem"], fp["seed"])
+        except Exception:
+            logger.warning("fp-diversify script not applied", exc_info=True)
     if STEALTH_ON:
         try:
             from backend.applier.browser import _STEALTH

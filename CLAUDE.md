@@ -214,7 +214,12 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   reclassifies. `_normalise_phrase` maps smart punctuation to ASCII BEFORE casefold (curly `’`→`'`). A `code` kind (LAST in
   `KEYWORD_KINDS`, «🔑 Код») captures ATS "Security code" mail so `other` = genuinely unclassified. Defaults require explicit
   interview invitations (no broad "next steps"/"screening"). Changing the classifier needs BOTH dash + indexer restart, then
-  `reclassify_existing()`; bump `CLASSIFIER_VERSION`.
+  `reclassify_existing()`; bump `CLASSIFIER_VERSION`. **GOTCHA: `keyword_rules()` caps each kind at `raw[:100]` phrases** —
+  edit the lists via `save_keyword_rules(dict)` (normalises + caps + updates the mtime-keyed cache), NOT a raw `json.dump`; a
+  raw edit that pushes a list past 100 SILENTLY drops the overflow (a phrase appended at #101 never fires). `classify` reads
+  subject+body only (not the DB snippet), so a phrase present only in the snippet won't match. `reclassify_existing()`
+  re-reads all 12k Maildir files + commits ONE batch at the very END (all-or-nothing, ~10min, fragile) — for a targeted fix
+  reclassify only the affected `kind` bucket in incremental batches (`build_index_row`→`mail_db.update_kinds`, under `sg mail`).
 - **Mail-render URL/HTML gotchas** (`_parse_full`/`_msg_card`, dashboard-only restart; tests `test_mailcrm_linkify.py`): a
   `text/plain` body can contain raw HTML → flatten via `_html_to_text` when it matches `_PLAIN_HTML_RE` (a fixed tag whitelist,
   so a bare `<a@b.com>` isn't treated as a tag). `_msg_card` does `_linkify(escape(plain))` and `escape()` turns `<`→`&lt;`, so

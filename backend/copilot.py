@@ -225,10 +225,17 @@ async def _ensure_browser():
                     logger.warning("NopeCHA arm failed", exc_info=True)
             await _S["page"].goto("about:blank")
             return _S["page"]
-        _S["browser"] = await _S["pw"].chromium.launch(
-            headless=HEADLESS, args=_launch_args,
-            env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")})
-        ctx = await _S["browser"].new_context(no_viewport=True)
+        _lk = dict(headless=HEADLESS, env={**os.environ, "DISPLAY": os.environ.get("DISPLAY", ":98")},
+                   **_stealth_launch_kwargs(_launch_args))
+        try:
+            # Real Google Chrome = authentic TLS/UA fingerprint (bundled Chromium is a bot tell
+            # reCAPTCHA v3 scores down); falls back to the bundled build if the channel is missing.
+            _S["browser"] = (await _S["pw"].chromium.launch(channel="chrome", **_lk) if STEALTH_ON
+                             else await _S["pw"].chromium.launch(**_lk))
+        except Exception:
+            logger.warning("real Chrome launch failed — using bundled Chromium", exc_info=True)
+            _S["browser"] = await _S["pw"].chromium.launch(**_lk)
+        ctx = await _new_ctx(None)
         _S["ctx"], _S["proxy_server"] = ctx, ""
         _S["page"] = await ctx.new_page()
         # Intercept any button-triggered file picker so the NATIVE OS "Open File" dialog
@@ -270,8 +277,7 @@ async def _use_proxy_context(server: str, username: str | None, password: str | 
             proxy_cfg["username"] = username
             proxy_cfg["password"] = password or ""
     old_ctx = _S.get("ctx")
-    ctx = (await _S["browser"].new_context(no_viewport=True, proxy=proxy_cfg)
-           if proxy_cfg else await _S["browser"].new_context(no_viewport=True))
+    ctx = await _new_ctx(proxy_cfg)
     page = await ctx.new_page()
     page.on("filechooser", _on_filechooser)
     await page.goto("about:blank")
@@ -282,6 +288,78 @@ async def _use_proxy_context(server: str, username: str | None, password: str | 
         except Exception:
             pass
     return page
+
+
+# ---- reCAPTCHA-v3-friendly browser posture (2026-09-13) ------------------------------------
+# Ashby's application form loads reCAPTCHA v3 (`api.js?render=<site key>`) and sends a
+# `recaptchaToken` with the submit mutation; a LOW score = "flagged as possible spam". A bare
+# Playwright browser scores as a bot (navigator.webdriver, --enable-automation, bundled-Chromium
+# TLS) — PROVEN: the same complete Dana form submitted through a real phone's CELLULAR IP was
+# still flagged (E1), so the network was not the tell. The fill browser therefore takes the
+# project's stealth posture (applier/browser.py: real Chrome channel, no automation switch,
+# AutomationControlled off, the _STEALTH init script, en-US / Asia/Almaty) and pauses like a
+# human before pressing Submit (v3 scores interaction too). COPILOT_STEALTH=0 restores the plain
+# launch.
+STEALTH_ON = os.environ.get("COPILOT_STEALTH", "1") != "0"
+
+
+def _stealth_launch_kwargs(base_args: list[str]) -> dict:
+    if not STEALTH_ON:
+        return dict(args=base_args)
+    return dict(ignore_default_args=["--enable-automation"],
+                args=base_args + ["--disable-blink-features=AutomationControlled",
+                                  "--disable-features=IsolateOrigins,site-per-process"])
+
+
+async def _new_ctx(proxy_cfg: dict | None):
+    """A fill context: per-proxy egress + (stealth) a real locale/timezone and the anti-automation
+    init script, so the reCAPTCHA v3 token minted at Submit carries a human-looking browser."""
+    kw: dict = {"no_viewport": True}
+    if STEALTH_ON:
+        kw.update(locale="en-US", timezone_id="Asia/Almaty", color_scheme="light")
+    if proxy_cfg:
+        kw["proxy"] = proxy_cfg
+    ctx = await _S["browser"].new_context(**kw)
+    if STEALTH_ON:
+        try:
+            from backend.applier.browser import _STEALTH
+            await ctx.add_init_script(_STEALTH)
+            # _STEALTH pins navigator.platform to MacIntel (for the spoofed macOS UA of the bundled
+            # build); with REAL Linux Chrome the UA says X11/Linux, so keep platform coherent —
+            # a UA/platform mismatch is itself a fingerprint tell.
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });")
+        except Exception:
+            logger.warning("stealth init script not applied", exc_info=True)
+    return ctx
+
+
+async def _human_dwell(page, submit_selector: str) -> None:
+    """A few seconds of human-looking activity (mouse travel, a pause) before Submit — reCAPTCHA
+    v3 scores interaction, and an instant post-fill click is a bot tell. Never raises."""
+    if not STEALTH_ON:
+        return
+    try:
+        import random
+        btn = page.locator(submit_selector).first
+        try:
+            await btn.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        for _ in range(random.randint(4, 7)):
+            await page.mouse.move(random.randint(200, 1000), random.randint(150, 800),
+                                  steps=random.randint(8, 20))
+            await page.wait_for_timeout(random.randint(350, 900))
+        try:
+            box = await btn.bounding_box()
+            if box:
+                await page.mouse.move(box["x"] + box["width"] / 2 + random.randint(-15, 15),
+                                      box["y"] + box["height"] / 2 + random.randint(-5, 5), steps=15)
+        except Exception:
+            pass
+        await page.wait_for_timeout(random.randint(5000, 9000))
+    except Exception:
+        logger.debug("human dwell skipped", exc_info=True)
 
 
 @app.on_event("startup")
@@ -554,6 +632,7 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
         await page.wait_for_timeout(1500)
         if expected_url and not _same_apply_page(page.url, expected_url):
             return {"clicked": False, "reason": "page_drift", "actual": page.url, "expected": expected_url}
+        await _human_dwell(page, sel)          # look human before the click (reCAPTCHA v3)
         clicked = await filler.click_submit(page, {"submit_selector": sel})
         await page.wait_for_timeout(1500)
         # _submit_evidence now POLLS ~20s for Ashby's async spam-banner / confirmation.

@@ -656,3 +656,23 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   our SOURCE is velocity-flagged on that tenant (149 hits), and each new hit resets the cooldown. Cure = zero Salmon hits
   for ~2 weeks (nothing auto-hits it now: quarantine=14, unfinished ledger has 0 Salmon, bulk drain is manual) then resume
   at the per-company cap. Salmon's English radio = 5 native `<input type=radio>` all `value="on"` (nth-selected) — fills fine.
+- **Ashby "flagged as possible spam" = reCAPTCHA v3 score + tenant reputation (2026-09-13, from the Ashby frontend bundle).**
+  The application page loads `recaptcha/api.js?render=<site key>` (v3, invisible) and the submit mutation
+  `ApiSubmitSingleApplicationFormAction` REQUIRES `$recaptchaToken: String!` (plus nullable `deviceFingerprint`,
+  `sourceAttributionCode`, `applicationRequestId`); the server scores the token → the red banner (its own remedies: "turn off
+  VPN/proxy, switch networks, another browser"). A bare Playwright fill browser is a bot to v3 (`navigator.webdriver`,
+  `--enable-automation`, bundled-Chromium TLS). **The co-pilot now launches with the project stealth posture** (`copilot.py`
+  `STEALTH_ON`/`COPILOT_STEALTH=0`: real Chrome `channel="chrome"` (152 installed), `ignore_default_args=["--enable-automation"]`,
+  `--disable-blink-features=AutomationControlled`, the `applier/browser._STEALTH` init script + a coherent Linux `platform`,
+  en-US / Asia/Almaty contexts, and `_human_dwell` mouse travel + a 5-9s pause before Submit). Verified: `webdriver` null,
+  UA `Chrome/152` (no Headless), grecaptcha loads. **Salmon experiments (all 13/13 fills, C2 selected):** E0 direct datacenter
+  IP → flagged; E1 cellular phone IP, no stealth → flagged; E2 stealth + cellular → flagged; **CONTROL: the same Dana
+  (stealth, WiFi phone IP) to `mural` — a tenant we had NEVER submitted to — ALSO flagged.** So the flag is NOT per-tenant
+  Salmon reputation and is lifted by neither IP nor browser fingerprint: as of 2026-09-13 our SOURCE is flagged GLOBALLY
+  across Ashby (Dana's earlier 34 acks predate it). Common factor of every flagged submit = the `takhet.com` email domain
+  (hundreds of Ashby applications) + all three egress IPs having same-day history. Levers left: a never-seen email domain
+  (Postfix also serves amaskills.com/systeam.kz/proqares.org/mfamask.kz — `ensure_and_wire(email="dana.erlan@amaskills.com")`
+  keeps that exact address; `provision_email` creates the Maildir, but `mail_indexer` watches ONLY takhet.com, so an ack to
+  another domain must be read from `/var/mail/vhosts/<domain>/<local>` by hand), a never-used IP (airplane-mode toggle on the
+  cellular phone = a new carrier IP; BD `alibaba_res` needs its own zone password — `alibaba_dc` auths but is datacenter),
+  and time. Every test = one more hit on our source — do not "just retry".

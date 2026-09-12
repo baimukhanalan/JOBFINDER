@@ -83,7 +83,8 @@ def main() -> None:
         results = _fill_campaign_targets(
             targets, gender=c.get("gender") or None, name=c.get("name"),
             identity_for=lambda jid, _cid=cid: apply_campaigns.next_identity(_cid),
-            workers=CAMPAIGN_WORKERS)
+            workers=CAMPAIGN_WORKERS,
+            english_level=c.get("english_level") or None)   # owner-declared CEFR (Dana: C2)
         done = []
         for jid in targets:                     # TARGET order → the cursor advances past the last one
             jid = int(jid)

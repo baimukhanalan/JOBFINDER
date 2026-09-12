@@ -931,7 +931,8 @@ _SCRAPE_V = 10  # bump: axon military/armed-forces demographic false-positive re
 
 
 def ensure_and_wire(job_id: int, gender: str | None = None, name: str | None = None,
-                    email: str | None = None, pid: str | None = None) -> tuple[str, str, bool]:
+                    email: str | None = None, pid: str | None = None,
+                    english_level: str | None = None) -> tuple[str, str, bool]:
     """One-click backend for the /catalog "Заполнить" button. ALWAYS generates a FRESH
     synthetic persona + ideal draft on every click — no cache reuse — so each click shows a
     brand-new person (per the user's request; cost is not a concern). For custom ATS
@@ -956,7 +957,8 @@ def ensure_and_wire(job_id: int, gender: str | None = None, name: str | None = N
     # the one-click fill is the etalon DEMO: invent a fresh, fictional, region-appropriate
     # persona for this job (never a real roster person) — see synth_persona.
     from backend.tools.synth_persona import synth_persona
-    cand = synth_persona(job, gender=gender, name=name, email=email, pid=pid)
+    cand = synth_persona(job, gender=gender, name=name, email=email, pid=pid,
+                         english_level=english_level)
     # provision the persona's mailbox so its @takhet.com email is a LIVE, deliverable box
     # (row in amasmail.virtual_users + Maildir). Best-effort: a provisioning failure must
     # NEVER break the fill. Idempotent, so a re-click of a cached persona is a no-op.

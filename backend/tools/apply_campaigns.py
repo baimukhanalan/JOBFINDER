@@ -384,17 +384,30 @@ def _alive_ids(ids: list[int], jobs_by_ids, *, rows=None, have_rows=None) -> lis
 
 
 def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
-                    jobs_by_ids=None) -> list[int]:
+                    jobs_by_ids=None, velocity_guard=None) -> list[int]:
     """The job ids to apply to on THIS run, honoring the per-day budget. Single-job → [job_id]
     × remaining. Jobs (a /catalog selection) → the next `remaining_today` ids round-robin from
     the persisted `cursor`, skipping (for this run only) rows that are missing/dead, already-LANDED
     (`confirmed_jobids`), or — unless CAMPAIGN_SOLVE_CAPTCHA=1 — on a captcha-walled ATS. Search → up
     to `remaining_today` NEW jobs from list_jobs(q, region) that this campaign hasn't already applied
     to and that aren't globally submitted. `list_jobs`/`submitted`/`jobs_by_ids` are injectable
-    for testing; default to the live catalog_db/bulk_log."""
+    for testing; default to the live catalog_db/bulk_log. `velocity_guard` (injectable; default
+    `company_velocity.guard`) is the PER-COMPANY cap shared with the bulk drain: it drops companies
+    already over `COMPANY_CAP_PER_DAY`/`_PER_WEEK` and limits this run to each company's remaining
+    budget — the guard that makes a 149-fills-on-Salmon re-hammer impossible from any path."""
     n = remaining_today(camp, today)
     if n <= 0:
         return []
+    if velocity_guard is None:
+        from backend.tools.company_velocity import guard as velocity_guard
+
+    def _capped(cands: list[int]) -> list[int]:
+        try:
+            kept, _ = velocity_guard(cands, jobs_by_ids=jobs_by_ids)
+        except TypeError:
+            kept = velocity_guard(cands)
+            kept = kept[0] if isinstance(kept, tuple) else kept
+        return [int(x) for x in kept][:n]
     applied = set(int(x) for x in (camp.get("applied_jobids") or []))
     kind = camp.get("target_kind")
     if kind == "job":
@@ -437,15 +450,19 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
 
         if not any(_eligible(j) for j in ids):
             return []
+        # Oversample (3×n) so an over-cap company in the selection can't starve the run: the
+        # velocity guard trims per company, then we keep the first n. The cursor is placed by
+        # note_run after the last job ATTEMPTED, so trimmed ids are simply re-walked next run.
         out, pos = [], int(camp.get("cursor") or 0) % len(ids)
-        for _ in range(n * len(ids) + len(ids)):      # bounded: at most n full laps
+        want = n * 3
+        for _ in range(want * len(ids) + len(ids)):   # bounded: at most `want` full laps
             j = ids[pos % len(ids)]
             pos += 1
             if _eligible(j):
                 out.append(j)
-                if len(out) >= n:
+                if len(out) >= want:
                     break
-        return out
+        return _capped(out)
     # search campaign
     if list_jobs is None:
         from backend.tools.catalog_db import list_jobs as list_jobs
@@ -467,9 +484,9 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         if not jid or jid in applied or jid in submitted:
             continue
         out.append(jid)
-        if len(out) >= n:
+        if len(out) >= n * 3:            # oversample; the per-company guard trims, then first n
             break
-    return out
+    return _capped(out)
 
 
 def note_run(cid: int, jobids, today: str, attempted=None) -> None:

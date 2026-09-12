@@ -1167,7 +1167,8 @@ except (TypeError, ValueError):
     CAMPAIGN_WORKERS = 8
 
 
-def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, workers=CAMPAIGN_WORKERS):
+def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, workers=CAMPAIGN_WORKERS,
+                           english_level=None):
     """Fill a campaign's per-day `targets` CONCURRENTLY across headless bulk_pool workers, each
     application under the campaign's fixed `name` + a FRESH (email, pid) from `identity_for(jid)`
     (so one campaign = many CRM cards, same name, distinct mailboxes). Returns {jid: fill_state}
@@ -1192,7 +1193,7 @@ def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, wor
             return {"state": "error", "error": f"identity: {exc}"[:200], "mailbox": ""}
         try:
             pid2, jjid, _gen = catalog_drafts.ensure_and_wire(
-                jid, gender=gender, name=name, email=email, pid=pid)
+                jid, gender=gender, name=name, email=email, pid=pid, english_level=english_level)
         except Exception as exc:
             return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email}
         st = _fill_via(base_url, jjid, pid2, wait_submit=True)
@@ -1830,6 +1831,15 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
             all_ids = [i for i in all_ids if str(i) not in done_ids]
     except Exception:
         pass
+    # PER-COMPANY velocity cap (shared with the campaign cron): this bulk lane is what put 130 of
+    # 149 fills on Salmon and tripped Ashby's per-tenant spam filter. Drop companies over cap and
+    # limit the batch to each company's remaining budget (COMPANY_CAP_PER_DAY/_PER_WEEK).
+    velocity_held: dict = {}
+    try:
+        from backend.tools.company_velocity import guard as _vguard
+        all_ids, velocity_held = _vguard(all_ids)
+    except Exception:
+        pass
     if str(randomize).strip().lower() in ("1", "true", "yes", "on"):
         import random as _rnd
         _rnd.shuffle(all_ids)          # sample DIVERSE jobs across companies, not the first N
@@ -1856,7 +1866,8 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
                          daemon=True).start()
     return JSONResponse({"started": True, "total": len(job_ids),
                          "workers": ("auto" if adaptive else nw),
-                         "requested": ("all" if n is None else n), "novnc": _NOVNC_URL})
+                         "requested": ("all" if n is None else n), "novnc": _NOVNC_URL,
+                         "velocity_held": velocity_held})
 
 
 @app.get("/catalog/fill_all_status")

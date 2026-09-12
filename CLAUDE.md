@@ -145,7 +145,16 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   so enabling the solver for one ATS can't re-hammer a parked wall; reversible via `quarantine_jobs(cid, ids, on=)`),
   **attempt-cap** (≤ `per_day × CAMPAIGN_MAX_ATTEMPTS_FACTOR`=4), **conditional ATS filter** (`jobs` SKIPS lever/workable by
   default; `CAMPAIGN_SOLVE_CAPTCHA=1` to attempt all). A fill counts done only when `fill_counts_as_done` (state done AND
-  confirmed); a `no_form` fill marks the posting dead. **Parallel lane:** the cron fans per-day targets across `bulk_pool`
+  confirmed); a `no_form` fill marks the posting dead. **PER-COMPANY VELOCITY GUARD (2026-09-13,
+  `tools/company_velocity.py`)** — shared by the campaign cron (`resolve_targets`, injectable `velocity_guard`) AND the
+  `/catalog/fill_all` bulk drain: counts fill ATTEMPTS per company from the prefill dirs (code-path-agnostic hit log) and
+  DROPS companies over `COMPANY_CAP_PER_DAY` (2) / `COMPANY_CAP_PER_WEEK` (6), also limiting one batch to the remaining
+  budget; `COMPANY_CAP_OFF=1` disables; any error lets jobs through. Post-mortem: Salmon got 149 fills on 42 jobs (49 on
+  08-23, 36 on 08-27) — 130 from the bulk drain, only 19 from the Dana campaign — which the campaign's quarantine could not
+  stop; the cap makes that impossible from any path. **Campaign `english_level`** (owner-declared CEFR, e.g. Dana=`C2`) is
+  threaded cron → `_fill_campaign_targets` → `ensure_and_wire` → `synth_persona` → `facts.english_level`, where
+  `choices._language_pick` matches the code in the option text and BACKS it (no review gate). Tests:
+  `test_company_velocity.py`, `test_english_level_c2.py`. **Parallel lane:** the cron fans per-day targets across `bulk_pool`
   headless workers (`_fill_campaign_targets`), each a FRESH `(email,pid)` minted in-worker (`next_identity(cid)`, holds the
   fcntl lock). `CAMPAIGN_WORKERS` default 8, max 12; parallel within a campaign, sequential across. `next_identity` issues
   `first.last<N>@takhet.com` per fill (`email_mode='per_apply'` → many CRM cards, same name). Cron finishes the emailed code
@@ -640,3 +649,10 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
 - **takhet.com MX/DNS:** if persona acks stop landing across ALL lanes at once, check DNS first — inbound mail dies if the
   `mail.orta.study` A record (takhet's MX target) is dropped (fix = owner adds A `mail.takhet.com`→173.249.18.153 + MX
   `takhet.com`→`mail.takhet.com`; not a bot bug).
+- **Dana Erlan → Salmon: the FILL is complete; the wall is Salmon's PER-TENANT flag (2026-09-13).** A dry-run of the Dana
+  persona on Salmon 61536 fills 13/13 (English level radio selected, Submit enabled, `unfilled=0`) — the 09-11 `after_submit.png`
+  showing an EMPTY "Your English level" was a PREMATURE snapshot of the old +1.5s detector, not a fill gap. Dana lands on
+  other Ashby tenants (34 `ashbyhq.com` acks) but Salmon delivered 0 of 19 and the campaign quarantined all 14 Salmon jobs:
+  our SOURCE is velocity-flagged on that tenant (149 hits), and each new hit resets the cooldown. Cure = zero Salmon hits
+  for ~2 weeks (nothing auto-hits it now: quarantine=14, unfinished ledger has 0 Salmon, bulk drain is manual) then resume
+  at the per-company cap. Salmon's English radio = 5 native `<input type=radio>` all `value="on"` (nth-selected) — fills fine.

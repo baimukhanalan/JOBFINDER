@@ -637,7 +637,8 @@ def _postal(country: str) -> str:
 
 
 def _build_candidate(raw: dict, country: str, job: dict,
-                     email: str | None = None, pid: str | None = None) -> dict:
+                     email: str | None = None, pid: str | None = None,
+                     english_level: str | None = None) -> dict:
     job_title = job.get("title", "") if job else (raw.get("headline") or "")
     name = str(raw.get("full_name") or "").strip()
     _city_src = str(raw.get("city") or "").strip() or (_CITIES.get(country) or [country])[0]
@@ -709,7 +710,12 @@ def _build_candidate(raw: dict, country: str, job: dict,
         "work_authorization": _citizen(country), "needs_sponsorship": "No",
         "years_experience": yoe, "is_synthetic": True, "is_sample": True, "resume": resume,
     }
-    facts = {"salary_annual": None, "english_level": "Fluent",
+    # `english_level`: an OWNER-declared level for a named campaign persona (e.g. "C2" for Dana
+    # Erlan — choices._language_pick matches the CEFR code in the option text and BACKS it, so the
+    # required "Your English level" radio is answered without a review gate). The synthetic default
+    # stays the vague "Fluent" (substring-matched, e.g. to "C1 - Advanced (fluent…)").
+    facts = {"salary_annual": None,
+             "english_level": (str(english_level).strip() if english_level else "Fluent"),
              "education_level": "Bachelor's" if edu else "", "tools": skills[:10],
              "languages": languages, "bilingual": bilingual,
              "second_language": (req_lang if bilingual else ""),
@@ -718,7 +724,8 @@ def _build_candidate(raw: dict, country: str, job: dict,
 
 
 def synth_persona(job: dict, gender: str | None = None, name: str | None = None,
-                  email: str | None = None, pid: str | None = None) -> dict:
+                  email: str | None = None, pid: str | None = None,
+                  english_level: str | None = None) -> dict:
     """A fresh, fictional demo candidate whose nationality matches the job's country
     (never a real roster person). LLM-authored with a deterministic fallback.
 
@@ -741,7 +748,7 @@ def synth_persona(job: dict, gender: str | None = None, name: str | None = None,
     raw["full_name"] = name                     # force the name in BOTH paths
     if not custom:
         _remember_name(name)
-    cand = _build_candidate(raw, country, job, email=email, pid=pid)
+    cand = _build_candidate(raw, country, job, email=email, pid=pid, english_level=english_level)
     cand["gender"] = gender                      # top-level cache key for ensure_and_wire
     cand["profile"]["sex"] = gender              # persona's assigned sex -> coherent gender/pronoun
     return cand

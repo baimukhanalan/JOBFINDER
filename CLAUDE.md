@@ -211,6 +211,18 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   Tailscale EXIT NODE, which is a GLOBAL server route (one at a time, would hijack ALL server egress) — so iPhones do NOT
   fit the concurrent SOCKS pool without a userspace-`tailscaled`-per-exit-node bridge (NOT built). Recommend Android-only.
   Still BLOCKED on the owner: phones online (Tailscale + a SOCKS server app). Tests: `test_mobile_proxy.py`.
+- **Exit-node egress bridge** (`tools/tailscale_egress.py`, `data/ts_egress.json` + `data/ts-egress/<slot>/` gitignored) —
+  the COMPLEMENT of the SOCKS pool, for phones that can't run a SOCKS server (**iPhone**; Android too). Each phone that is a
+  Tailscale **exit node** gets a dedicated **userspace** `tailscaled` on the server (own socket+state, NO root — no TUN),
+  `-socks5-server=127.0.0.1:<base_port+slot>` (base 10800, loopback ONLY), auth'd with a REUSABLE key and PINNED
+  `--exit-node=<phone_ip>` → that local SOCKS egresses via the phone's carrier IP. Runs one per phone CONCURRENTLY without a
+  global `tailscale up --exit-node` (never hijacks the host's routing). `proxy_pool.residential_slots()` merges `live_socks()`
+  (running slots, TCP-alive) beside `mobile_proxy.live_servers()` — same guarded/additive hot path. `sync(authkey)` reconciles
+  one slot per online `ExitNodeOption` peer (brings up missing, reaps stale); `up`/`down`/`down_all`/`running_slots`/`check`
+  (egress+ASN per slot). Owner go-live: phone → toggle «Use as exit node» + APPROVE in the admin console; mint a REUSABLE
+  (ideally ephemeral) key; server `tailscale_egress --sync --authkey file:/path/key` then `--on`. The key is NEVER tracked or
+  logged (masked everywhere, `file:PATH` accepted). Teardown matches the FULL socket path (a bare state-dir path prefix-
+  matches sibling slots ≥10). Tests: `test_tailscale_egress.py`.
 
 **Mail / CRM**
 - **One live store, one dead.** LIVE: `mail_indexer` (inotify) → Postgres `mail_index` → `/mail` (`mailcrm.py` reads

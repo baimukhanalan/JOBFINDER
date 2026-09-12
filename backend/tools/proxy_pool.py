@@ -67,6 +67,14 @@ def residential_slots() -> list[str]:
         live.extend(s for s in mobile_proxy.live_servers() if s not in live)
     except Exception:
         pass
+    # + phones that are Tailscale EXIT NODES (iPhone/Android): a per-phone userspace tailscaled
+    # exposes a local 127.0.0.1 SOCKS bridge (backend/tools/tailscale_egress.py) egressing via the
+    # phone. Same residential preference; strictly additive + fail-safe (a raise must not break fills).
+    try:
+        from backend.tools import tailscale_egress
+        live.extend(s for s in tailscale_egress.live_socks() if s not in live)
+    except Exception:
+        pass
     _res_cache.update(ts=now, slots=live)
     return live
 

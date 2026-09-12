@@ -122,3 +122,6 @@ logs/crontab.bak-*
 # never commit the secrets bundle (was public on GitHub 2026-08-19..09-05)
 jobfinder-secrets.tar.gz
 backend/data/mobile_proxy.json
+# exit-node egress bridge: settings + per-slot state dirs (hold tailnet node keys) — never commit
+backend/data/ts_egress.json
+backend/data/ts-egress/

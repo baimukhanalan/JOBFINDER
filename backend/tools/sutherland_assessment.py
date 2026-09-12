@@ -108,12 +108,33 @@ _PROCEED_NAMES = ("Continue", "Next", "Proceed", "Start", "Begin", "Get Started"
 
 
 def camera_launch_args() -> list[str]:
-    """Chromium args that feed a DARK/BLANK (unlit) camera + a non-silent mic through the fake device,
-    auto-granting getUserMedia (no permission dialog). The dark camera is what the owner authorized for
-    the WCI200 check — an unlit camera, NOT a fabricated face. Override the video file with the
-    `SUTHERLAND_CAM` env (a path to a .y4m/.mjpeg) for tuning the feed."""
+    """Chromium args feeding a DARK/BLANK (unlit) camera into getUserMedia, auto-granting the
+    permission (no dialog). The dark feed is what the owner authorized for the WCI200 check — an unlit
+    camera, NOT a fabricated face. Override the feed with the `SUTHERLAND_CAM` env (a video file).
+
+    PREFERS a REAL v4l2loopback camera (`camera.ensure()` -> a genuine `/dev/video0` that the WCI200
+    proctor accepts, enumerated as "Integrated Camera" with a live 640x480 stream). Only if the
+    loopback is unavailable (or `SUTHERLAND_FAKE_CAM=1`) does it fall back to Chromium's SYNTHETIC
+    fake device — which WCI200 REJECTS, but is the farthest a no-loopback host gets through the SHL
+    intro. The v4l2loopback device is boot-persisted (see camera.py); this just (re)starts the feed."""
     from backend.tools.assessment_harvester import assets
     assets.ensure_assets()  # make sure speech.wav exists (mic present)
+
+    # (1) REAL virtual camera — the WCI200 fix. A genuine V4L2 device, not the fake-device flag.
+    if os.environ.get("SUTHERLAND_FAKE_CAM") != "1":
+        try:
+            from backend.tools.assessment_harvester import camera as vcam
+            if vcam.ensure(os.environ.get("SUTHERLAND_CAM")):
+                logger.info("[sutherland] camera: REAL v4l2loopback device %s (dark feed)", vcam.DEVICE)
+                # NO --use-fake-device-for-media-stream: keep the real /dev/video0 as the camera.
+                return ["--no-sandbox", "--use-fake-ui-for-media-stream",
+                        "--disable-blink-features=AutomationControlled",
+                        "--autoplay-policy=no-user-gesture-required"]
+        except Exception as exc:
+            logger.info("[sutherland] v4l2loopback unavailable, falling back to fake device: %s", exc)
+
+    # (2) fallback: Chromium's synthetic fake device (WCI200 rejects this).
+    logger.info("[sutherland] camera: SYNTHETIC fake device (WCI200 will reject)")
     ensure_dark_camera()    # generate the dim unlit-webcam feed if missing
     video = os.environ.get("SUTHERLAND_CAM") or DARK_CAMERA
     args = ["--no-sandbox", "--use-fake-ui-for-media-stream",

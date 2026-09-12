@@ -238,6 +238,17 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   (ideally ephemeral) key; server `tailscale_egress --sync --authkey file:/path/key` then `--on`. The key is NEVER tracked or
   logged (masked everywhere, `file:PATH` accepted). Teardown matches the FULL socket path (a bare state-dir path prefix-
   matches sibling slots ≥10). Tests: `test_tailscale_egress.py`.
+- **Public donor onboarding `/join`** (`tools/donor_onboard.py` + dash routes, allowlisted in `interviews/dash_auth.py`
+  `_public_asset`) — a SHAREABLE no-login link (`https://jobs.systeam.kz/join`) turning any volunteer's phone into an
+  exit-node donor. `GET /join` = phone-first page (iOS/Android-aware store link + a «Стать донором» button + the one manual
+  `Exit Node → Run as exit node` toggle, which CANNOT be automated — no mobile API/deep-link). `GET /join/go` mints a FRESH
+  single-use Tailscale invite server-side (`POST …/user-invites` `[{"role":"member"}]`) via `backend/.ts_api_token` and 302s
+  the visitor into the app; rate-limited ≤5/IP/hr; token NEVER reaches the client. **Donor SAFETY (proven via ACL tests):**
+  the tailnet ACL grants network access ONLY to `group:trusted` (owner); an invited donor is a plain `member` with NO grant →
+  EXIT-ONLY, cannot reach any tailnet node; `autoApprovers` auto-approves their exit node; `--sync` adds them in ≤10min.
+  **The API token EXPIRES (~90 days)** → `/join/go` mint breaks until refreshed (durable fix: a scoped OAuth client). Secrets
+  `backend/.ts_api_token` + `.ts_authkey_public` are chmod 600 + gitignored (never commit). `tailscale ping` is NOT ACL-gated
+  (disco-layer) — don't use it to judge isolation; the ACL `tests` block is the authority.
 
 **Mail / CRM**
 - **One live store, one dead.** LIVE: `mail_indexer` (inotify) → Postgres `mail_index` → `/mail` (`mailcrm.py` reads

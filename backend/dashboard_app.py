@@ -113,6 +113,30 @@ def favicon():
     return FileResponse(_STATIC_DIR / "favicon-32.png", media_type="image/png")
 
 
+# --- PUBLIC donor onboarding (no auth; allowlisted in dash_auth) ---------------------------------
+# A link shared with people who volunteer their phone as a Tailscale exit node for the egress pool.
+@app.get("/join", response_class=HTMLResponse)
+def join_page(request: Request):
+    from backend.tools import donor_onboard
+    return HTMLResponse(donor_onboard.render_join_page(request.headers.get("user-agent", "")))
+
+
+@app.get("/join/go")
+def join_go(request: Request):
+    """Mint a FRESH single-use Tailscale invite (server-side) and redirect the visitor into the app
+    to sign in. Rate-limited per client IP; the token never reaches the client."""
+    from backend.tools import donor_onboard
+    ua = request.headers.get("user-agent", "")
+    ip = ((request.headers.get("x-forwarded-for", "").split(",")[0].strip())
+          or (request.client.host if request.client else "") or "?")
+    if not donor_onboard.rate_ok(ip):
+        return HTMLResponse(donor_onboard.render_join_page(ua, error="rate"), status_code=429)
+    url = donor_onboard.mint_invite()
+    if not url:
+        return HTMLResponse(donor_onboard.render_join_page(ua, error="mint"), status_code=502)
+    return RedirectResponse(url, status_code=302)
+
+
 # profiles.json mtime cache: /draft is hit per page load from the extension, the
 # file changes rarely — re-parse only when its mtime moves.
 _PROFILES_CACHE: dict = {"mtime": None, "profiles": {}}

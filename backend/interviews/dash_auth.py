@@ -127,9 +127,12 @@ def _home_for(resp: dict) -> str:
 
 def _public_asset(path: str) -> bool:
     """PWA + static assets that must load WITHOUT a session (manifest, service worker,
-    icons/logo) — so the app is installable and its chrome renders even on /login."""
+    icons/logo) — so the app is installable and its chrome renders even on /login.
+    Also the PUBLIC donor-onboarding page (`/join`, `/join/go`): a link shared with people who
+    volunteer their phone as a Tailscale exit node; it must reach its handler with no admin session."""
     return (path.startswith("/static/") or path == "/sw.js"
-            or path == "/manifest.webmanifest")
+            or path == "/manifest.webmanifest"
+            or path == "/join" or path.startswith("/join/"))
 
 
 def _employee_allowed(path: str) -> bool:

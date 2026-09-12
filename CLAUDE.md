@@ -684,6 +684,14 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   cores/memory, a per-context deterministic canvas/audio perturbation. OFF by default (an inconsistent fingerprint is itself
   a v3 tell); use it ONCE together with a NEVER-used IP (airplane-mode toggle on the cellular phone → new carrier IP, or the
   BD `alibaba_res` zone password). Do NOT keep testing from the three known IPs.
+- **SOLVED 2026-09-13 — E4: the SAME flagged WiFi IP, Dana@takhet.com, stealth + `COPILOT_FP_DIVERSIFY=1` + session
+  warm-up (`_warm_session`: Google consent + a search typed at human speed + the employer's Ashby careers root BEFORE the
+  form) + `_human_dwell` → "Success — Your application was successfully submitted" on Salmon 61536 (persona
+  `demo_dana_erlan1374`, `confirmed: true`). The network was NEVER the decisive signal (the owner called it); the flag was
+  Ashby's `deviceFingerprint` + a sterile cookie-less session feeding reCAPTCHA v3. The winning stack is now the co-pilot
+  DEFAULT (`STEALTH_ON` + `FP_DIVERSIFY` default on; verify with `curl :8102/health` → `stealth`/`fp_diversify`). Not yet
+  bisected (fingerprint vs warm-up) — each bisect costs a hit; keep the full stack. Still honor the per-company velocity
+  cap: the recipe removes the bot tell, not Ashby's volume model.
 - **Name-label gotcha (2026-09-13):** a combined "First and Last Name" / "First & Last Name" box must map to `full_name` in
   BOTH `catalog_drafts._ID_TEXT` and `analyzer.FIELD_PATTERNS` — the last-name rule used to grab its "Last Name" tail and a
   Mural application was drafted/filled as just the surname. Rules are first-match-wins; the combined-name rule sits FIRST.

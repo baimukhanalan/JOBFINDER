@@ -37,6 +37,16 @@ from backend.services.tailor.tailor import tailor_resume
 from backend.services.tailor.variants import variant_for
 
 logger = logging.getLogger(__name__)
+# pm2 runs uvicorn with --log-level warning, which silences every app-level INFO line (auto-submit
+# verdicts, session warm-up, the submit-mutation capture). Give this logger its own INFO handler so
+# those diagnostics reach the pm2 error log regardless of uvicorn's level (idempotent on reload).
+if not any(getattr(h, "_copilot_info", False) for h in logger.handlers):
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s copilot %(levelname)s %(message)s"))
+    _h._copilot_info = True  # type: ignore[attr-defined]
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 os.environ.setdefault("DISPLAY", ":98")
 # COPILOT_HEADLESS=1 launches Chromium headless (no noVNC watch) — used by the parallel
@@ -319,8 +329,11 @@ def _stealth_launch_kwargs(base_args: list[str]) -> dict:
 # domains, stealth on/off, a never-touched tenant — all flagged). Per-context: a common laptop
 # screen size, a plausible cores/memory pair, and a faint deterministic canvas/audio perturbation
 # (a NEW hash per context, stable within it — a fingerprint that changes mid-session is itself a
-# tell). OFF by default: use it for a deliberate fresh-IP attempt, not as a blanket setting.
-FP_DIVERSIFY = os.environ.get("COPILOT_FP_DIVERSIFY", "0") == "1"
+# tell). ON by default since 2026-09-13: with this + the session warm-up, a Dana Erlan application
+# to Salmon was ACCEPTED ("Your application was successfully submitted") on the very WiFi IP that had
+# been flagged minutes earlier — the network was never the decisive signal. COPILOT_FP_DIVERSIFY=0
+# disables.
+FP_DIVERSIFY = os.environ.get("COPILOT_FP_DIVERSIFY", "1") != "0"
 _FP_SCREENS = ((1366, 768), (1440, 900), (1536, 864), (1600, 900), (1680, 1050), (1920, 1080))
 
 _FP_DIVERSIFY_JS = """(() => {
@@ -499,7 +512,9 @@ def _attach_submit_capture(page, shot_dir) -> None:
     async def _on_response(resp):
         try:
             u = resp.url
-            if "non-user-graphql" not in u or "SubmitSingleApplicationFormAction" not in u:
+            # Ashby posts the application through ApiSubmitSingleApplicationFormAction OR
+            # ApiSubmitMultipleFormsAction (multi-form postings) — match both.
+            if "non-user-graphql" not in u or "op=ApiSubmit" not in u or "Form" not in u:
                 return
             body = await resp.text()
             data = {"url": u, "status": resp.status, "body": body[:20000]}

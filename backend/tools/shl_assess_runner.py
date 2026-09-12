@@ -132,13 +132,39 @@ async def _already_done(page) -> bool:
     return (bool(re.search(r"\b0\s*assessment", body)) and "left" in body) or bool(sa._COMPLETE_RE.search(body))
 
 
+def _shl_proxy(name: str = ""):
+    """Route SHL's headful browser through a phone egress slot — the SHL portal TCP-BLOCKS the
+    datacenter IP (proven 2026-09-12: direct connect times out, a phone slot reaches it). `SHL_PROXY`
+    env overrides; else round-robin the LIVE phone slots (spreads concurrent sessions across phones so
+    one phone IP isn't overloaded into the same block). Returns a Playwright proxy dict or None (direct
+    — the old behavior — when no phone is live). socks5 is no-auth (Chromium can't auth socks5)."""
+    import os
+    env = (os.getenv("SHL_PROXY") or "").strip()
+    if env:
+        return {"server": env}
+    try:
+        from backend.tools import proxy_pool
+        slots = [s for s in proxy_pool.residential_slots() if s.startswith("socks5://")]
+        if slots:
+            i = (abs(hash(name)) % len(slots)) if name else 0
+            return {"server": slots[i]}
+    except Exception:
+        pass
+    return None
+
+
 async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
     from playwright.async_api import async_playwright
     logger.info("[%s] start", name)
     last = "?"
     for attempt in range(1, max_retries + 1):
         async with async_playwright() as p:
-            b = await p.chromium.launch(headless=False, args=["--no-sandbox"], timeout=60000)
+            _launch = {"headless": False, "args": ["--no-sandbox"], "timeout": 60000}
+            _px = _shl_proxy(name)
+            if _px:
+                _launch["proxy"] = _px
+                logger.info("[%s] egress via %s", name, _px["server"])
+            b = await p.chromium.launch(**_launch)
             pg = await b.new_page(viewport={"width": 1280, "height": 850})
             try:
                 # WATCHDOG: a single assessment must never hang forever (a stuck run held the drain

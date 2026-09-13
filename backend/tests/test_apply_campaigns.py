@@ -282,7 +282,17 @@ def test_fill_counts_as_done_only_for_a_real_submit():
     assert not ac.fill_counts_as_done({"state": "error", "error": "timeout"})
     assert not ac.fill_counts_as_done({"state": "running"})
     assert not ac.fill_counts_as_done({}) and not ac.fill_counts_as_done(None)
-    assert ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form"}})
+    # A posting is dead ONLY when the page positively classified as terminal (a 404/"job not found"
+    # => page_type "expired", a login wall, a captcha wall). A BARE zero-field "no_form" load whose
+    # page_type is None/"unknown"/"application_form"/"job_listing" is a slow/flapping egress render,
+    # NOT a gone posting — it must NOT be marked dead (a slow phone-SOCKS load once killed live jobs).
+    assert ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "expired"}})
+    assert ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "login_required"}})
+    assert ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "captcha"}})
+    assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form"}})  # page_type absent
+    assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "unknown"}})
+    assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "application_form"}})
+    assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "no_form", "page_type": "job_listing"}})
     assert not ac.fill_is_dead_posting({"state": "done", "submit": {"reason": "incomplete"}})
 
 
@@ -432,7 +442,11 @@ def test_next_identity_fresh_mailbox_per_application(tmp_path, monkeypatch):
 # ---- per-application JOURNAL (events store + outcome derivation + log backfill) ------------------
 def test_outcome_from_fill_state():
     assert ac.outcome_from_fill_state({"state": "done", "submit": {"confirmed": True}})[0] == "confirmed"
-    assert ac.outcome_from_fill_state({"state": "done", "submit": {"reason": "no_form"}})[0] == "dead"
+    # positively-gone page => dead; a bare zero-field load (no page_type) is a transient render
+    # failure, NOT a dead posting — journaled as a retryable error, never mark_dead.
+    assert ac.outcome_from_fill_state(
+        {"state": "done", "submit": {"reason": "no_form", "page_type": "expired"}})[0] == "dead"
+    assert ac.outcome_from_fill_state({"state": "done", "submit": {"reason": "no_form"}})[0] == "error"
     assert ac.outcome_from_fill_state(
         {"state": "done", "submit": {"clicked": True, "blocked": "couldn't submit — flagged as possible spam"}})[0] == "spam"
     assert ac.outcome_from_fill_state(

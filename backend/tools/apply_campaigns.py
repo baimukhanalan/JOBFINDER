@@ -635,10 +635,20 @@ def fill_counts_as_done(fill_state: dict | None) -> bool:
 
 
 def fill_is_dead_posting(fill_state: dict | None) -> bool:
-    """The co-pilot found NO form (`submit_result.reason == 'no_form'`): the posting is gone at
-    the ATS (a 404/'job not found' page) — mark it dead so the rotation skips it."""
+    """The co-pilot POSITIVELY classified the page as terminal (`submit_result.reason == 'no_form'`
+    AND `page_type in {expired, login_required, captcha}`): a 404 / 'job not found' / 'no longer
+    available' / login-wall / captcha-wall page — mark it dead so the rotation skips it.
+
+    A bare zero-field load whose `page_type` is None / 'unknown' / 'application_form' / 'job_listing'
+    is NOT proof the posting is gone: it is what a SLOW or flapping egress render looks like (the
+    form's async fetch didn't finish inside the co-pilot's field-poll window). Marking those dead
+    permanently kills LIVE catalog rows — a slow phone-egress SOCKS load once killed Render 20282,
+    a job still live on Render's Ashby board that same day. Those are retried on a later lap, never
+    permanently killed. `analyze_page` early-returns filled=0 ONLY for the three positive terminal
+    types, so restricting to them is the exact 'the page said it's gone/walled' signal."""
     sub = ((fill_state or {}).get("submit") or {})
-    return sub.get("reason") == "no_form"
+    return (sub.get("reason") == "no_form"
+            and sub.get("page_type") in ("expired", "login_required", "captcha"))
 
 
 # ---- per-application JOURNAL (successes / fails, shown in the dashboard) --------------------------

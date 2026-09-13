@@ -221,7 +221,15 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
 - **Mobile-proxy POOL** (`tools/mobile_proxy.py`, `data/mobile_proxy.json` gitignored): the owner's phones over a
   Tailscale tailnet as residential/mobile egress. `live_servers()` (TCP-alive) is appended by `proxy_pool.residential_
   slots()`, so `_do_fill` walks `egress_candidates()` (live phones · datacenter pool · direct) — a dead phone never
-  blocks a fill. CLI `mobile_proxy --check|--discover|--join-tailnet <KEY> --yes`. **Pipeline VERIFIED end-to-end
+  blocks a fill. **Proxy is opportunistic, DIRECT is the fallback (2026-09-13, `_fill_via`):** a phone/proxy that flaps
+  MID-fill makes the co-pilot `/load` return a 500 whose error matches `_PROXY_ERR_RE` (`ERR_SOCKS`/slow-proxy timeout/
+  `net::ERR_*`) — that is NOT a verdict on the posting, so `_fill_via` now ROTATES to the next egress candidate (which
+  `egress_candidates` always terminates with None=DIRECT) instead of `break`ing into an `error`. Before this, a flapping
+  slot errored the fill outright (8 `ERR_SOCKS` on one Dana lap) OR a slow render false-marked a live job dead. Owner model:
+  a vacancy loads + submits through a proxy WHEN one is reachable, else falls back to the server's own connection; the
+  liveness CHECK (nightly `catalog_collector`) is already server-direct. (Playwright's egress IP is fixed per browser
+  context, so a single fill can't literally load-direct-then-submit-through-a-different-IP — the fallback is whole-fill.)
+  CLI `mobile_proxy --check|--discover|--join-tailnet <KEY> --yes`. **Pipeline VERIFIED end-to-end
   2026-09-12** (real local SOCKS5 stand-in: httpx routes through `socks5://`, ASN-detect works, `egress_candidates`
   ranks phones first→pool→direct) and the pool is now `enabled:true` (armed; 0 phones → `live_servers()`=[] so current
   fills are unaffected, Health row = benign `info`, and `check_and_alert` alerts only on `down` so no Telegram spam).
@@ -397,6 +405,15 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   `_click_submit_after_fill` returns `reason="no_form"` when `page_type∈{expired,login_required,captcha}` or no form;
   `analyzer.detect_page_type` catches "find that page"/"job not found"/`error=true`; `_fill_one_on_worker` calls
   `catalog_db.mark_dead(...)` + `bulk_log.drop_many`. Tests: `test_analyzer_rules.py`.
+  **mark_dead is GATED on the page_type, not on a bare zero-field load (2026-09-13).** `apply_campaigns.fill_is_dead_posting`
+  (used by BOTH `apply_campaign_cron` and the `_fill_one_on_worker` bulk path) marks dead ONLY when `reason=="no_form"` AND
+  `page_type∈{expired,login_required,captcha}` — a page the analyzer POSITIVELY classified as terminal. A `no_form` whose
+  page_type is None/`unknown`/`application_form`/`job_listing` is NOT proof of death: it is what a SLOW or flapping egress
+  render looks like (the React form's async fetch didn't finish inside the co-pilot's field-poll window) → it is retried on a
+  later lap, never killed. A slow phone-SOCKS load had permanently killed the LIVE Render job 20282 (re-collected live that
+  same morning) under the old bare-`no_form` test; ~440 catalog rows were killed via the two no_form paths and an unknown
+  fraction are spurious — a targeted re-verify-and-revive is the cleanup (the new fill logic re-marks a genuinely-gone one dead
+  on its next load, so reviving is self-correcting; the nightly collector's upsert does NOT reset `dead`). Tests: `test_apply_campaigns.py`.
 - **`_SUBMIT_BLOCK_RE` must catch the real ATS rejection wordings** (`copilot.py`): captcha / "is required" / "please enter" /
   "flagged as possible spam" / "we couldn't submit" / "missing entry" / "needs corrections" / "please accept the terms" — a
   missed one is mislabeled `blocked=None` + burns the full `WAIT_SUBMIT_MAX`=300s. **Ashby anti-spam flags the DATACENTER IP
@@ -640,7 +657,20 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   velocity + residential/mobile egress. Don't abandon Salmon or call it "unbeatable".
 - **Captcha/egress:** NopeCHA (`COPILOT_NOPECHA=1`, default off; `campaign_captcha_probe.py`) only helps where a captcha is
   PRESENTED (TP/iCIMS). **binance-Lever uses an INVISIBLE enterprise hCaptcha that risk-DENIES both our datacenter IP AND a
-  BD-residential proxy** (no challenge to solve) → only a real mobile-CARRIER IP beats it. Fill-gaps (`dropdowns.py`): a
+  BD-residential proxy** (no challenge to solve). **DEFINITIVE 2026-09-13 — a real KZ mobile-CARRIER IP does NOT beat the
+  captcha-walled KZ catalog either (corrects the earlier "only a real mobile-CARRIER IP beats it" guess).** The KZ-eligible
+  captcha inventory is 120 Lever (ALL `binance`) + 35 Workable (33 nogigiddy + 2 atleanworld). With NopeCHA properly armed
+  (the key-loading bug fixed; Starter plan, 1135/2000 credits, `turnstile_auto_solve=true`) and egress through a REAL KZ
+  mobile IP (85.117.99.152, AS29555 Mobile Telecom, Almaty): **Workable** fills 5/5 then shows a VISIBLE interactive Cloudflare
+  Turnstile — the co-pilot (`COPILOT_WAIT_TURNSTILE=1`) gave NopeCHA a full 75s POST-mount window and it produced NO
+  `cf-turnstile-response` token (`Turnstile still UNSOLVED after 75s`) → "Something went wrong", 0 acks (3 clean runs:
+  nogigiddy 9659/8973/8316). **binance-Lever** fills 14/14 (even the geocode field, on the mobile IP) → submit → the invisible
+  hCaptcha risk-denies with "There was an error verifying your application. Please try again", 0 acks (27091). So NopeCHA
+  cannot solve Workable's Managed Turnstile (a solver can click the box but Cloudflare's browser-integrity check fails an
+  automated Chromium regardless of IP) and cannot act on binance's INVISIBLE hCaptcha (no challenge is shown). **CONCRETE: all
+  ~155 captcha-walled KZ jobs stay closed to automation — only a live human solving the captcha gets through.** (Probe knobs,
+  all default-off/live-unchanged: `COPILOT_NOPECHA` + `COPILOT_PROXY` egress + `COPILOT_WAIT_TURNSTILE` post-click token wait +
+  `COPILOT_NO_WARM` skips the Google warm-up whose Google step trips the shared-mobile-NAT `/sorry` rate-limit.) Fill-gaps (`dropdowns.py`): a
   Workable marketing opt-in radio → decline via `marketing_optin_pick` (tight `_MARKETING_OPTIN_RE`, NOT the broad
   `_CONSENT_SKIP_RE`). **`_HARVEST_MARKETING_RADIO_JS` fixed 2026-09-11** for nogigiddy's required 'Daily Drop' radio (was
   leaving 35 Workable jobs silently un-submitted): resolve the question via `aria-labelledby` (the prompt `<span>` sits OUTSIDE

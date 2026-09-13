@@ -16,7 +16,7 @@ def _mock_common(monkeypatch, ports):
     monkeypatch.setattr(bulk_pool, "start_workers", fake_start)
     monkeypatch.setattr(bulk_pool, "stop_workers", lambda *a, **k: None)
 
-    def fake_wire(jid, gender=None, name=None, email=None, pid=None):
+    def fake_wire(jid, gender=None, name=None, email=None, pid=None, english_level=None):
         seen_ids.append((email, pid))
         return pid, jid, False
     monkeypatch.setattr(catalog_drafts, "ensure_and_wire", fake_wire)

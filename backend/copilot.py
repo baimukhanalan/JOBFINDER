@@ -64,6 +64,15 @@ PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 NOPECHA_ON = os.environ.get("COPILOT_NOPECHA") == "1"
 NOPECHA_EXT = str(PROJECT_ROOT / "backend" / "vendor" / "nopecha_ext")
 NOPECHA_PROFILE = os.environ.get("COPILOT_NOPECHA_PROFILE", "/tmp/copilot_nopecha_profile")
+# COPILOT_WAIT_TURNSTILE=1: before pressing Submit, if a Cloudflare Turnstile widget is present
+# (Workable lazy-mounts it only AFTER the form is filled), poll up to N s for its token to appear
+# (NopeCHA solving it in-page) so we don't submit with an unsolved challenge. Default off ⇒ the
+# live co-pilot is byte-identical; used with COPILOT_NOPECHA=1 on Workable/Lever captcha probes.
+WAIT_TURNSTILE = os.environ.get("COPILOT_WAIT_TURNSTILE") == "1"
+# COPILOT_NO_WARM=1: skip the pre-form Google/careers session warm-up. The warm-up is a reCAPTCHA-v3
+# measure for Ashby; on a shared mobile-carrier egress its Google step can hit Google's "/sorry"
+# rate-limit page and interrupt the form navigation. Default off ⇒ live co-pilot unchanged.
+NO_WARM = os.environ.get("COPILOT_NO_WARM") == "1"
 
 
 def _nopecha_key() -> str:
@@ -860,6 +869,41 @@ async def _submit_evidence(page, shot_dir, *, poll_secs: float = 20.0) -> dict:
     return ev
 
 
+_TURNSTILE_STATE_JS = r"""() => {
+  const els = [...document.querySelectorAll(
+    'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]')];
+  const tok = els.map(e => e.value || '').find(v => v.length > 20) || '';
+  const present = els.length > 0
+    || document.querySelectorAll('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, [data-sitekey]').length > 0;
+  return {present: !!present, solved: tok.length > 20};
+}"""
+
+
+async def _await_turnstile(page, timeout_s: int = 75):
+    """If a Cloudflare Turnstile is present (Workable/Lever mount it after the fill), poll for its
+    token to appear (NopeCHA solving it) so Submit isn't pressed with an unsolved challenge.
+    Returns True (solved) / False (present but unsolved within timeout) / None (no Turnstile)."""
+    try:
+        st = await page.evaluate(_TURNSTILE_STATE_JS)
+    except Exception:
+        return None
+    if not st.get("present"):
+        return None
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        if st.get("solved"):
+            logger.info("Turnstile token present after %.0fs", time.time() - t0)
+            return True
+        await page.wait_for_timeout(2000)
+        try:
+            st = await page.evaluate(_TURNSTILE_STATE_JS)
+        except Exception:
+            break
+    logger.info("Turnstile still UNSOLVED after %ds (present=True) — NopeCHA did not produce a token",
+                timeout_s)
+    return False
+
+
 async def _click_submit_after_fill(page, result: dict, *, expected_url: str = "",
                                    profile: str = "", shot_dir=None, dry_run: bool = False) -> dict:
     """Press the ATS Submit button after the fill — but ONLY when it is safe to. Enabled by
@@ -924,6 +968,14 @@ async def _click_submit_after_fill(page, result: dict, *, expected_url: str = ""
             return {"clicked": False, "reason": "page_drift", "actual": page.url, "expected": expected_url}
         await _human_dwell(page, sel)          # look human before the click (reCAPTCHA v3)
         clicked = await filler.click_submit(page, {"submit_selector": sel})
+        if WAIT_TURNSTILE:
+            # Workable/Lever mount the Cloudflare Turnstile at submit-INTENT (after this click),
+            # not before — so give NopeCHA the full post-click window to produce a token (and log
+            # whether it EVER does), then press Submit again to send the now-valid form. Isolates
+            # "NopeCHA cannot solve Workable's Turnstile" from "we submitted before it solved".
+            await page.wait_for_timeout(1500)
+            if await _await_turnstile(page, 75):
+                await filler.click_submit(page, {"submit_selector": sel})
         await page.wait_for_timeout(1500)
         # _submit_evidence now POLLS ~20s for Ashby's async spam-banner / confirmation.
         ev = await _submit_evidence(page, shot_dir)
@@ -1109,8 +1161,9 @@ async def load(jobid: str = Form(...), profile: str = Form("michael"), dry_run: 
             # Record the server's verdict on the submit mutation (real error code, not just the
             # banner) and arrive at the form like a person (Google cookies + the careers root).
             _attach_submit_capture(page, d)
-            _ck = re.search(r"ashbyhq\.com/([^/?#]+)", url or "")
-            await _warm_session(page, _ck.group(1) if _ck else "")
+            if not NO_WARM:
+                _ck = re.search(r"ashbyhq\.com/([^/?#]+)", url or "")
+                await _warm_session(page, _ck.group(1) if _ck else "")
             await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             # A React ATS form (Ashby/Greenhouse) can render SECONDS after domcontentloaded —
             # much slower through a residential/phone proxy. A fixed 2s wait intermittently saw

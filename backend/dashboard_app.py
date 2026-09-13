@@ -1117,6 +1117,19 @@ def _fill_via(base_url: str, jid, pid: str, *, wait_submit: bool = False) -> dic
                 r = httpx.post(f"{base_url}/load", data=load_data,
                                timeout=(600 if wait_submit else 240))
                 res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
+            # A PROXY/transport failure THROUGH this egress (ERR_SOCKS, slow-proxy timeout, net::ERR_*)
+            # makes the co-pilot return a 500 — it is NOT a verdict on the posting. Rotate to the next
+            # egress candidate, which ALWAYS ends at DIRECT (the server's own connection): the vacancy
+            # load + submit then complete on server internet when no proxy is reachable, instead of
+            # erroring the fill or letting a flapping phone slot masquerade as a dead posting. (Owner
+            # model: check/submit via a proxy WHEN available, else fall back to the server.) `srv`
+            # truthy = we used a proxy; a DIRECT (srv="") load failure is a real error and stops here.
+            if (r.status_code != 200 and srv
+                    and _PROXY_ERR_RE.search(str(res.get("error") or ""))):
+                last_exc = res.get("error")
+                log.warning("fill job %s: egress %s failed (%s) — falling back to next egress / direct",
+                            jid, srv, str(res.get("error"))[:100])
+                continue
         except Exception as exc:
             last_exc = exc
             continue          # a transport failure -> try the next egress
@@ -1573,11 +1586,16 @@ def _fill_one_on_worker(jid: int, gender, port: int, run: dict, job, name=None) 
                         submit=st.get("submit"), error=st.get("error"))
     except Exception:
         logging.getLogger(__name__).warning("bulk_log.record failed", exc_info=True)
-    # A "no_form" outcome = the posting is GONE at the ATS (404 / "job not found" / listing
-    # redirect) even though the nightly collector still has it live. Mark the catalog row dead
-    # so it leaves the selection pool (never re-loaded / re-drained) and unpark it — no human
-    # can finish a dead posting. This is the real cure for the ~11% "no_button/no_form" churn.
-    if (st.get("submit") or {}).get("reason") == "no_form":
+    # A POSITIVELY-detected terminal page (`no_form` AND page_type ∈ {expired, login_required,
+    # captcha}) = the posting is GONE / walled at the ATS (404 / "job not found" / login wall /
+    # captcha wall) even though the nightly collector still has it live. Mark the catalog row dead
+    # so it leaves the selection pool (never re-loaded / re-drained) and unpark it — no human can
+    # finish a dead posting. A BARE zero-field load (page_type None/"unknown"/"application_form"/
+    # "job_listing") is NOT proof of death — it is a slow/flapping egress render (a slow phone-SOCKS
+    # load once killed the LIVE Render 20282); those retry on a later lap. Shared rule:
+    # apply_campaigns.fill_is_dead_posting.
+    from backend.tools import apply_campaigns as _ac
+    if _ac.fill_is_dead_posting(st):
         j = job or {}
         try:
             from backend.tools import catalog_db

@@ -580,8 +580,18 @@ amcat}.py`. CLI `harvest_runner.py --platform amcat --limit 1` or `--url --mailb
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
   → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment
   (etalon-automated).
-- **Sutherland = SHL front-door → AMCAT; the WCI200 camera wall is BEATEN by a REAL v4l2loopback camera (2026-09-12 —
-  SUPERSEDES the earlier "un-completable" verdict; do NOT re-conclude that Sutherland can't get past the camera).** The "Your
+- **Sutherland = SHL front-door → AMCAT. RE-CORRECTED 2026-09-13: the WCI200 proctor camera wall is NOT beaten — the
+  "beaten by v4l2loopback" claim below was OVER-CLAIMED.** Live-proven (commit b82a3e4): the AMCAT/Aspiring-Minds continuous
+  proctor still logs out "Error Code WCI200 ... unable to detect a camera" EVEN WITH a genuine, continuously-fed v4l2loopback
+  `/dev/video0` — a getUserMedia probe returns a LIVE `Integrated Camera` track (1280x720, live, 0 errors), and the wall hits
+  with a DARK feed AND a bright moving `testsrc2` feed, over the phone egress slot (`sutherland_runner`'s own egress). So it is
+  NOT a local getUserMedia/enumeration failure, NOT feed-brightness- or egress-dependent: the proctor fingerprints + rejects the
+  VIRTUAL camera device. Un-passable on this host without a real physical webcam (or defeating the fingerprint — unbuilt). **What
+  IS now automated (commit b82a3e4, harvester `shl_sutherland`): the whole SHL INTRO end to end** — the real-camera launch
+  hydrates the TalentCentral SPA (the synthetic-camera flag blanks it to `<noscript>`), the MUI Data-Protection consent checkbox
+  is JS-ticked, the SHL→AMCAT loading handoff is waited out, and item #1 is read — stopping only at this proctor camera wall. The
+  camera feed is kept live by a persistent supervised `camera_daemon.py` (reused via a pidfile). The stale "BEATEN" write-up
+  below is kept for the videodev-install detail only; treat its camera verdict as SUPERSEDED. The "Your
   Sutherland assessment invitation" (`talentcentral@shl.com`) autologins to `talentcentral.us1.shl.com`, walks a short SHL
   intro (cookies → Welcome → **About-You[Submit]** → an SHL webcam check a DIM feed passes), then REDIRECTS to the AMCAT player
   (`amcatglobal.aspiringminds.com`) whose continuous **WCI200** proctor demands a REAL camera DEVICE — NOT a face (Chromium's

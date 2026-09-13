@@ -691,6 +691,9 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   the SLOW cellular slot (10802) and every accept on WiFi (10801) — the phantom-fill race is timing-driven; prefer the fast
   slot for Ashby and rely on `_reassert_answers`. Sweep driver pattern (scratch `salmon_sweep.py`): one job at a time,
   fresh identity per job, verify each verdict, STOP only on the spam signature, skip validation misses for retry.
+  **VOLUME CEILING (same night):** after 11 accepted Salmon applications in ~2.5 h the 12th attempt was spam-flagged — the
+  recipe removes the bot tell, Ashby's per-tenant velocity model still polices volume at roughly 10-12 per evening from
+  one source. Stop-on-flag worked as designed; retries (validation misses) go the NEXT day. Keep `company_velocity` caps.
 - **SOLVED 2026-09-13 — E4: the SAME flagged WiFi IP, Dana@takhet.com, stealth + `COPILOT_FP_DIVERSIFY=1` + session
   warm-up (`_warm_session`: Google consent + a search typed at human speed + the employer's Ashby careers root BEFORE the
   form) + `_human_dwell` → "Success — Your application was successfully submitted" on Salmon 61536 (persona

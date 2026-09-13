@@ -64,6 +64,23 @@ PREFILL_ROOT = PROJECT_ROOT / "uploads" / "prefill"
 NOPECHA_ON = os.environ.get("COPILOT_NOPECHA") == "1"
 NOPECHA_EXT = str(PROJECT_ROOT / "backend" / "vendor" / "nopecha_ext")
 NOPECHA_PROFILE = os.environ.get("COPILOT_NOPECHA_PROFILE", "/tmp/copilot_nopecha_profile")
+
+
+def _nopecha_key() -> str:
+    """The NopeCHA subscription key. config.py does NOT declare it (pydantic extra='ignore' drops
+    NOPECHA_KEY), and pm2 doesn't export .env into os.environ, so os.getenv is EMPTY under the live
+    co-pilot — the solver silently ran unauthenticated 'free tier'. Fall back to a direct .env parse
+    (the pattern mass_hiring_apply_tp_cron already uses)."""
+    k = os.environ.get("NOPECHA_KEY", "").strip()
+    if k:
+        return k
+    try:
+        for line in (PROJECT_ROOT / "backend" / ".env").read_text().splitlines():
+            if line.strip().startswith("NOPECHA_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
 LAUNCH_PROXY = os.environ.get("COPILOT_PROXY", "").strip()
 
 # One shared headful browser = one reviewer at a time. A second profile loading a job
@@ -227,7 +244,7 @@ async def _ensure_browser():
             _S["page"].on("filechooser", _on_filechooser)
             if ext_args:
                 try:
-                    _key = os.environ.get("NOPECHA_KEY", "").strip()
+                    _key = _nopecha_key()
                     _cfg = ("input_method=javascript|hcaptcha_auto_open=true|hcaptcha_auto_solve=true|"
                             "recaptcha_auto_solve=true|turnstile_auto_solve=true|"
                             "hcaptcha_solve_delay_time=200|enabled=true"

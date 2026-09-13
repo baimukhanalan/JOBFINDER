@@ -702,11 +702,20 @@ def _build_candidate(raw: dict, country: str, job: dict,
     req_lang = _job_required_language(job) if job else None
     bilingual = bool(req_lang and req_lang in _STAFFABLE_SECOND_LANGS)
     languages = ["English", req_lang] if bilingual else ["English"]
+    # LinkedIn URL must be UNIQUE PER PERSONA. A fixed campaign name reused at one tenant produced the
+    # SAME linkedin.com/in/<slug> on every application — the strongest constant Ashby's per-tenant spam
+    # model clusters on (proven 2026-09-13: the Dana Erlan campaign self-flagged Salmon after ~13 hits,
+    # and a name variant WITH a unique LinkedIn — or a fresh identity — lands on that same flagged
+    # tenant + IP). Append a stable per-persona token (LinkedIn appends digits itself when a vanity slug
+    # is taken, so `first-last-<hex>` is realistic) so every application looks like a distinct person.
+    import hashlib
+    _li_token = hashlib.md5((str(pid) or str(email) or f"{slug}{num}").encode()).hexdigest()[:8]
+    _li_slug = f"{slug.replace('_', '-')}-{_li_token}"
     profile = {
         "id": pid, "full_name": name, "email": email, "phone": phone,
         "location": loc, "city": city, "state": state, "street_address": street,
         "country": country, "zip_code": zipc,
-        "linkedin_url": f"https://www.linkedin.com/in/{slug}",
+        "linkedin_url": f"https://www.linkedin.com/in/{_li_slug}",
         "work_authorization": _citizen(country), "needs_sponsorship": "No",
         "years_experience": yoe, "is_synthetic": True, "is_sample": True, "resume": resume,
     }

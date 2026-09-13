@@ -38,6 +38,27 @@ _COOKIE_JS = r"""() => {
 # a consent checkbox that gates the flow (welcome page "I have read and agree..."). Matched by label.
 _CONSENT_LABEL_RE = "i have read|i agree|data protection|privacy notice|terms|i consent"
 
+# The SHL/Sutherland welcome checkbox is a MUI control whose native <input type=checkbox> is visually
+# hidden (opacity:0) — Playwright .check()/.click() are actionability-gated and miss it, so the flow
+# stalled at "Welcome!" (Continue stays disabled until it's ticked). A JS .click() on the native input
+# bypasses actionability and MUI still fires its change handler -> Continue enables. Gated to a checkbox
+# whose surrounding label text is a consent phrase; never touches Cookiebot toggles.
+_CONSENT_TICK_JS = r"""() => {
+  const re = /i have read|i agree|data protection|privacy notice|\bterms\b|i consent/i;
+  let ticked = false;
+  for (const cb of document.querySelectorAll('input[type="checkbox"], [role="checkbox"]')) {
+    const id = cb.id || '';
+    if (id.indexOf('Cybot') === 0) continue;
+    const isChecked = cb.checked === true || cb.getAttribute('aria-checked') === 'true';
+    if (isChecked) continue;
+    const root = cb.closest('label, .MuiFormControlLabel-root, li, div') || cb.parentElement || cb;
+    const txt = (root && root.textContent) || '';
+    if (!re.test(txt)) continue;
+    try { cb.click(); ticked = true; } catch (e) {}
+  }
+  return ticked;
+}"""
+
 _MEDIA_FLAGS_JS = r"""() => {
   const vis = el => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
      return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
@@ -68,9 +89,16 @@ class ShlAdapter(Adapter):
             return False
 
     async def _tick_consent(self, page) -> bool:
-        """Tick a flow-gating consent checkbox (welcome page) via Playwright .check() — it's a MUI
-        switch, so JS-click/.mandatorychk (the etalon path) doesn't flip it. Excludes the Cookiebot
-        toggles (id^=Cybot). Returns True if it ticked one that was unchecked."""
+        """Tick a flow-gating consent checkbox (welcome page "I have read and agree to SHL's Data
+        Protection Notice"). It's a MUI checkbox whose native <input> is visually hidden, so
+        Playwright .check()/.click() (actionability-gated) miss it and the flow stalled at Welcome.
+        Try a JS .click() on the native input FIRST (bypasses actionability; MUI still fires change),
+        then fall back to the Playwright path for older markup. Excludes Cookiebot (id^=Cybot)."""
+        try:
+            if await page.evaluate(_CONSENT_TICK_JS):
+                return True
+        except Exception:
+            pass
         ticked = False
         try:
             cbs = page.get_by_role("checkbox")
@@ -112,7 +140,7 @@ class ShlAdapter(Adapter):
         # flow-gating consent checkbox (welcome) -> tick it, then let advance() click Continue
         try:
             if await self._tick_consent(page):
-                await page.wait_for_timeout(400)
+                await page.wait_for_timeout(900)   # let React enable the gated Continue button
                 await self.advance(page)
                 return True
         except Exception:
@@ -197,21 +225,22 @@ class ShlAdapter(Adapter):
 
     async def wall(self, page) -> str | None:
         """SHL Sutherland gates the scored assessment behind WEBCAM PROCTORING. The SHL intro
-        (cookies -> Welcome -> About-You[Submit] -> an SHL webcam check a dim fake feed passes) then
-        REDIRECTS to the AMCAT / Aspiring Minds player (`amcatglobal.aspiringminds.com`) whose
-        continuous proctor issues 'Error Code WCI200 ... unable to detect a camera on your device ...
-        you have been logged out' — terminal.
+        (cookies -> Welcome[consent] -> proctoring instructions) redirects to the AMCAT / Aspiring
+        Minds player whose continuous proctor issues 'Error Code WCI200 ... unable to detect a camera
+        on your device ... you have been logged out' — terminal.
 
-        CONFIRMED 2026-09-12 (see `backend/tools/sutherland_assessment.py` for the full write-up; do
-        NOT re-conclude the opposite): the WCI200 proctor rejects Chromium's synthetic camera
-        REGARDLESS of feed brightness (black/dim/lit), egress (direct or phone slot), or driving
-        AMCAT's own diagnostic correctly — driving the Sutherland->AMCAT handoff with THIS package's
-        `AmcatAdapter.enter()` (which PASSES the TP-AMCAT webcam check with the same fake camera) STILL
-        hits WCI200. It is NOT a face requirement (no face is asked for) — it hard-requires a REAL
-        camera DEVICE. This host has none and cannot synthesize one (v4l2loopback's `videodev`
-        dependency is absent from the kernel), so Chromium can only offer its fake device => Sutherland
-        is UN-completable here. The owner's "a dark camera passes" holds only for a REAL physical
-        (unlit) webcam."""
+        RE-CONFIRMED 2026-09-13 (corrects the earlier "beaten by v4l2loopback" claim in CLAUDE.md /
+        this codebase, which was over-claimed): WCI200 fires EVEN WITH a genuine, continuously-fed
+        v4l2loopback `/dev/video0` that Chromium enumerates and streams — a getUserMedia probe returned
+        a LIVE `Integrated Camera` track (1280x720, live, no error), and the same wall hit with a DARK
+        feed AND a bright moving `testsrc2` feed, over the phone egress slot (the same egress the
+        `sutherland_runner` path uses). So WCI200 is NOT a local getUserMedia/enumeration failure and
+        NOT feed-brightness / egress dependent: the AMCAT proctor fingerprints and REJECTS the virtual
+        camera itself (a v4l2loopback device lacks the hardware signature its native check wants). It
+        is un-passable on this host without a REAL physical webcam or defeating the proctor's
+        virtual-camera fingerprint (unbuilt). The rest of the Sutherland SHL INTRO is now automated end
+        to end (real-camera launch hydrates the SPA, the MUI consent checkbox is JS-ticked, the loading
+        handoff is waited out, item #1 is read) — only this proctor camera wall remains."""
         try:
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:

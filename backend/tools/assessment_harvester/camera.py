@@ -36,7 +36,11 @@ logger = logging.getLogger("assessment_harvester")
 DEVICE = os.environ.get("CAMERA_DEVICE", "/dev/video0")
 CARD_LABEL = "Integrated Camera"
 VIDEO_NR = 0
-_WIDTH, _HEIGHT, _FPS = 640, 480, 15
+# A persistent external feeder (camera_daemon.py) writes its pid here. When it is alive, ensure()
+# REUSES its continuous dark feed instead of spawning a second (conflicting) writer — v4l2loopback is
+# single-writer, so two feeders fight over the format (VIDIOC_G_FMT invalid) and BOTH die.
+DAEMON_PIDFILE = os.environ.get("CAMERA_DAEMON_PIDFILE", "/tmp/jf_camera_feeder.pid")
+_WIDTH, _HEIGHT, _FPS = 1280, 720, 15  # 16:9 (real-webcam standard) so proctor's 480x270 req is a clean downscale, not an aspect-crop
 
 # module-level producer handle (analogous to mic.py's paplay Popen)
 _FEEDER: subprocess.Popen | None = None
@@ -69,6 +73,21 @@ def _ensure_module() -> bool:
     return os.path.exists(DEVICE)
 
 
+def _reload_module() -> bool:
+    """Reload v4l2loopback to CLEAR a stuck/incompatible negotiated format (v4l2loopback holds the
+    first format until reload; a producer at a different resolution then fails VIDIOC_G_FMT -> rc=234).
+    Safe only with NO consumer/producer attached (call before the browser opens the device)."""
+    try:
+        subprocess.run(["sudo", "-n", "modprobe", "-r", "v4l2loopback"], capture_output=True, timeout=20)
+        subprocess.run(
+            ["sudo", "-n", "modprobe", "v4l2loopback", "devices=1", f"video_nr={VIDEO_NR}",
+             f"card_label={CARD_LABEL}", "exclusive_caps=1"], capture_output=True, timeout=20)
+        subprocess.run(["sudo", "-n", "chmod", "0666", DEVICE], capture_output=True, timeout=10)
+    except Exception as exc:
+        logger.info("[camera] module reload failed: %s", exc)
+    return os.path.exists(DEVICE)
+
+
 def _feed_cmd(source: str | None) -> list[str]:
     """ffmpeg producer args. `source` = a video file (looped) or None -> a live DARK/BLANK feed
     (dim grey + faint per-frame noise = a live, face-less, unlit webcam)."""
@@ -89,38 +108,66 @@ def feed(video_path: str | None = None) -> bool:
     """(Re)start the producer pushing `video_path` (or the live dark feed) into the device. Analogous
     to mic.speak — swaps the media the "camera" shows. Returns True if a producer is now running."""
     global _FEEDER
+    import time
     stop()
-    try:
+
+    def _spawn() -> bool:
+        global _FEEDER
         _FEEDER = subprocess.Popen(_feed_cmd(video_path),
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # let it fill the device before a reader opens it (else "Not a video capture device")
-        import time
-        time.sleep(2.5)
-        if _FEEDER.poll() is not None:
-            # a writer may already own the single device (another run) — that's a live feed too
-            logger.info("[camera] feeder exited early (device busy or bad source) rc=%s", _FEEDER.returncode)
-            _FEEDER = None
-            return os.path.exists(DEVICE)
-        return True
+        time.sleep(2.5)  # let it fill the device before a reader opens it
+        return _FEEDER.poll() is None
+
+    try:
+        if _spawn():
+            return True
+        # feeder died early — almost always a STUCK v4l2loopback format from a prior run (VIDIOC_G_FMT
+        # Invalid arg / rc=234). Without a live producer the exclusive_caps device presents NO capture
+        # source, so a browser getUserMedia gets NotFoundError. Reload the module to clear it + retry.
+        rc = _FEEDER.returncode if _FEEDER else None
+        logger.info("[camera] feeder exited early rc=%s — reloading module to clear stuck format", rc)
+        _reload_module()
+        if _spawn():
+            logger.info("[camera] feeder recovered after module reload")
+            return True
+        logger.info("[camera] feeder STILL dead after reload rc=%s", _FEEDER.returncode if _FEEDER else None)
+        _FEEDER = None
+        return False
     except Exception as exc:
         logger.info("[camera] feed failed: %s", exc)
         _FEEDER = None
         return False
 
 
+def _daemon_alive() -> bool:
+    """True if the persistent camera_daemon feeder process is running (owns the device's dark feed)."""
+    try:
+        pid = int(open(DAEMON_PIDFILE).read().strip())
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
 def ensure(video_path: str | None = None) -> bool:
-    """Ensure the v4l2loopback device exists + a dark feed is running. Idempotent. Returns True if a
-    real camera device is ready for Chromium to enumerate."""
+    """Ensure the v4l2loopback device exists + a dark feed is running. Idempotent. Returns True ONLY
+    if a real camera device is actually STREAMING frames for Chromium to enumerate (a device that
+    exists but is unfed = 0 frames = the WCI200 'unable to detect a camera' logout, so 'exists' is
+    NOT 'ready')."""
     if not available():
         return False
+    # A persistent external feeder (camera_daemon.py) already owns + streams the device — reuse it and
+    # do NOT touch the module/feeder (a second writer would collide and kill both).
+    if _daemon_alive():
+        return True
     if not _ensure_module():
         logger.info("[camera] no /dev/video device (module load failed)")
         return False
-    if is_running():
+    if video_path is None and is_running():
         return True
     ok = feed(video_path)
-    logger.info("[camera] virtual camera ready=%s (device=%s)", ok or os.path.exists(DEVICE), DEVICE)
-    return ok or os.path.exists(DEVICE)
+    logger.info("[camera] virtual camera ready=%s (device=%s)", ok, DEVICE)
+    return ok
 
 
 def stop():

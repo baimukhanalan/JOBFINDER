@@ -203,7 +203,20 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
         mic_ready = mic.ensure()
     except Exception:
         mic_ready = False
-    if mic_ready:
+    # Platform-specific CAMERA. The SHL TalentCentral SPA (the Sutherland front-door,
+    # talentcentral.us1.shl.com/experience) BLANKS to the React noscript ("You need to enable
+    # JavaScript to run this app") under Chromium's SYNTHETIC camera (--use-fake-device-for-media-
+    # stream / --use-file-for-fake-video-capture) → the harvester stalled at the intro. Use the REAL
+    # v4l2loopback camera instead (sutherland_assessment.camera_launch_args → a genuine /dev/video0,
+    # NO fake-device): it hydrates the SPA AND is what the downstream AMCAT WCI200 proctor accepts.
+    # (Proven 2026-09-13: minimal launch w/o the fake-device flag hydrates rootHTML=8435, 0 errors.)
+    if getattr(adapter, "platform", "") in ("shl_sutherland", "shl"):
+        from backend.tools import sutherland_assessment
+        args = sutherland_assessment.camera_launch_args()   # real /dev/video0 + --use-fake-ui, no fake-device
+        asset_paths = assets.ensure_assets()
+        if mic_ready:
+            launch_env = mic.launch_env()                   # real pulse virtual mic for SVAR speaking
+    elif mic_ready:
         asset_paths = assets.ensure_assets()
         args = ["--no-sandbox"] + mic.launch_args()
         if asset_paths.get("video"):
@@ -236,6 +249,24 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                 logger.info("[%s] egress via RESIDENTIAL proxy (alibaba_res, session %s)", mailbox, sess)
         except Exception as exc:
             logger.info("[%s] residential proxy unavailable (%s) — going direct", mailbox, exc)
+    elif _pmode in ("phone", "mobile"):
+        # PHONE/mobile-carrier egress — the live Tailscale exit-node SOCKS slots, exactly the egress
+        # the SHL lane uses (shl_assess_runner._shl_proxy). The AMCAT/SHL portals NE500-rate-limit /
+        # TCP-block our DATACENTER IP after volume; a real KZ mobile-carrier IP avoids it. Round-robin
+        # a live slot; falls back to the datacenter pool, then DIRECT — a dead phone never blocks.
+        try:
+            from backend.tools import proxy_pool
+            slots = proxy_pool.residential_slots()
+            if slots:
+                res["_proxy"] = {"server": random.choice(slots)}
+                logger.info("[%s] egress via PHONE slot %s", mailbox, res["_proxy"]["server"])
+            else:
+                pr = proxy_pool.next_proxy()
+                if pr and pr.get("server"):
+                    res["_proxy"] = {k: pr[k] for k in ("server", "username", "password") if pr.get(k)}
+                    logger.info("[%s] no phone slot live — egress via pool %s", mailbox, pr.get("server"))
+        except Exception as exc:
+            logger.info("[%s] phone egress unavailable (%s) — going direct", mailbox, exc)
     elif _pmode == "1":
         try:
             from backend.tools import proxy_pool
@@ -308,6 +339,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
             try:
                 await adapter.enter(page, url)
                 stale = 0
+                load_waits = 0             # extra patience budget for blank/loading transition pages
                 typing_seen: dict = {}     # churn guard: a typing sentence that won't advance
                 stall_skips = 0            # how many stuck items we've skipped past (bounded)
                 for step in range(max_items):
@@ -337,14 +369,41 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         if await adapter.advance(page):
                             await page.wait_for_timeout(1200)
                             stale = 0
+                            load_waits = 0
                             continue
                         if await adapter.is_done(page):
                             res["status"] = "completed"; res["note"] = "completed (no forward)"
                             return
+                        # A blank/loading TRANSITION (a spinner, near-empty body) — common when the SHL
+                        # intro hands off to the AMCAT player / next section through the slow phone
+                        # proxy (30s+). Don't mistake it for a stall: poll patiently (up to ~14×3.5s ≈
+                        # 50s) for content or a URL change before counting stale.
+                        try:
+                            _loading = await page.evaluate(
+                                """() => {
+                                  const t = (document.body && document.body.innerText || '').trim();
+                                  const spin = document.querySelector(
+                                    '[class*="spinner" i],[class*="loading" i],[class*="loader" i],'
+                                    + '[role="progressbar"],svg[class*="load" i]');
+                                  return t.length < 40 || !!spin;
+                                }""")
+                        except Exception:
+                            _loading = False
+                        if _loading and load_waits < 14:
+                            load_waits += 1
+                            await page.wait_for_timeout(3500)
+                            continue
                         stale += 1
                         if stale >= 3:
+                            try:
+                                _u = page.url
+                                _sh = await media.capture(page, adapter.platform, "STUCK", [], _u)
+                                if _sh:
+                                    res["shots"].append(("stuck", _sh, _u))
+                            except Exception:
+                                _u = "?"
                             res["status"] = "stuck"
-                            res["note"] = f"no options/forward at step {step}: {item.get('body','')[:120]}"
+                            res["note"] = f"no options/forward at step {step} @ {_u}: {item.get('body','')[:120]}"
                             return
                         await page.wait_for_timeout(1500)
                         continue

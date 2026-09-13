@@ -1022,11 +1022,24 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
             except Exception:
                 pass
         page.on("response", _log_resp)
-        # preseed NopeCHA config (keyless hCaptcha auto-solve; JS input to avoid CDP contention). A
-        # paid key, if ever needed, goes in NOPECHA_KEY -> the same setup URL.
+        # preseed NopeCHA config (JS input to avoid CDP contention). Use the PAID subscription key so
+        # captchas actually solve autonomously — os.getenv("NOPECHA_KEY") is EMPTY under pm2/sg-mail
+        # (config.py's pydantic extra='ignore' drops it; pm2 doesn't export .env into os.environ), so
+        # this ran on the unauthenticated free tier and stalled mid-application. Read it from .env
+        # directly (the copilot._nopecha_key helper, same fix as the co-pilot's).
         if _ext_args:
             try:
                 key = os.getenv("NOPECHA_KEY", "").strip()
+                if not key:                      # pm2/sg-mail don't export .env — read it directly
+                    try:
+                        from pathlib import Path as _P
+                        _root = _P(__file__).resolve().parents[2]
+                        for _ln in (_root / "backend" / ".env").read_text().splitlines():
+                            if _ln.strip().startswith("NOPECHA_KEY="):
+                                key = _ln.split("=", 1)[1].strip().strip('"').strip("'")
+                                break
+                    except Exception:
+                        pass
                 cfg = ("input_method=javascript|hcaptcha_auto_open=true|hcaptcha_auto_solve=true|"
                        "hcaptcha_solve_delay_time=200|enabled=true" + (f"|key={key}" if key else ""))
                 sp = await ctx.new_page()

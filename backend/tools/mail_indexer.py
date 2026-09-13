@@ -146,6 +146,40 @@ _HARVEST_LOG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_amcat_event.log")
 
 
+_HALLO_LOG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_hallo_event.log")
+
+
+def _kill_stuck_harvest(match_token: str, max_secs: int) -> None:
+    """Belt-and-braces: SIGKILL a harvest_runner stuck longer than max_secs so a hung run can't hold
+    the fcntl lock and starve later invites. SCOPED by `match_token` (the --platform arg in the
+    cmdline) so an amcat watchdog never kills a legitimately-long hallo battery, and vice versa."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,etimes,cmd"], capture_output=True, text=True, timeout=8).stdout
+        for line in out.splitlines():
+            if "harvest_runner" not in line or match_token not in line or "ps -eo" in line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) > max_secs:
+                subprocess.run(["kill", "-9", parts[0]], timeout=5)
+    except Exception:
+        pass
+
+
+def _mem_available_kb() -> int:
+    """MemAvailable from /proc/meminfo (kB); a large sentinel on any read error so a parse failure
+    never blocks a trigger."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1])
+    except Exception:
+        pass
+    return 1 << 30
+
+
 def _maybe_trigger_amcat(row, seen):
     """A FRESH AMCAT (Teleperformance) assessment invite just landed → drive it IMMEDIATELY through
     the harvester on a PHONE-egress slot. Two reasons this must be event-driven, not the */20 cron:
@@ -162,24 +196,50 @@ def _maybe_trigger_amcat(row, seen):
     if "shl.com" not in fe or "test login" not in subj:
         return
     import subprocess
-    # WATCHDOG: kill any harvest stuck > 45 min before spawning (belt-and-braces on top of the
-    # harvester's own per-run cap) so a hung run can't hold the drain lock.
-    try:
-        out = subprocess.run(["ps", "-eo", "pid,etimes,cmd"], capture_output=True, text=True, timeout=8).stdout
-        for line in out.splitlines():
-            if "harvest_runner" not in line or "ps -eo" in line:
-                continue
-            parts = line.split(None, 2)
-            if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) > 2700:
-                subprocess.run(["kill", "-9", parts[0]], timeout=5)
-    except Exception:
-        pass
+    _kill_stuck_harvest("amcat", 2700)   # 45 min watchdog, scoped to amcat runs
     env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98", HARVEST_PROXY="phone")
     try:
         log = open(_HARVEST_LOG, "a")
     except Exception:
         log = subprocess.DEVNULL
     subprocess.Popen(["/usr/bin/python3", _HARVEST_RUNNER, "--platform", "amcat", "--limit", "1"],
+                     env=env, stdout=log, stderr=log, start_new_session=True)
+    if hasattr(log, "close"):
+        log.close()
+
+
+def _maybe_trigger_hallo(row, seen):
+    """A FRESH Hallo.ai assessment invite (TP's CURRENT post-apply assessment, from support@hallo.ai,
+    subject "Complete your TP hiring assessment") just landed → drive it through the harvester at once.
+    Event-driven for the same reason as _maybe_trigger_amcat: the app.hallo.ai/.../ai-assessment/<token>
+    link is SINGLE-USE (a burned token is dead) so a token is best walked the moment it arrives. Nothing
+    else triggers on hallo.ai mail — before this hook, Hallo invites (TP migrated off AMCAT) sat
+    unharvested. harvest_runner's fcntl lock serializes it against any other harvest (there is ONE
+    virtual mic + ONE /dev/video0 — NEVER fan out). Fully try/excepted by the caller so it can NEVER
+    affect indexing.
+
+    OOM GUARD: a Hallo run is a headful Chromium; the TP apply lane (icims_recon) fires headful browsers
+    in clustered rounds — exactly when Hallo invites arrive — and stacking them OOM'd the box before. So
+    SKIP when MemAvailable is tight; the invite stays in mail_index (UNBURNED, so nothing is lost) and a
+    later invite from the same TP round (they cluster) or a manual `harvest_runner --platform hallo`
+    sweep picks it up. Direct egress (no HARVEST_PROXY): Hallo has no NE500-style per-IP rate limit and
+    the proven runs ran direct."""
+    if seen != 0:
+        return
+    fe = (row.get("from_email") or "").lower()
+    subj = (row.get("subject") or "").lower()
+    if "hallo.ai" not in fe or "assessment" not in subj:
+        return
+    if _mem_available_kb() < 6 * 1024 * 1024:   # < 6 GiB available → too tight to add a headful browser
+        return
+    import subprocess
+    _kill_stuck_harvest("hallo", 5400)   # 90 min: a full 6-module battery runs long; kill only a hang
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98")
+    try:
+        log = open(_HALLO_LOG, "a")
+    except Exception:
+        log = subprocess.DEVNULL
+    subprocess.Popen(["/usr/bin/python3", _HARVEST_RUNNER, "--platform", "hallo", "--limit", "1"],
                      env=env, stdout=log, stderr=log, start_new_session=True)
     if hasattr(log, "close"):
         log.close()
@@ -208,6 +268,10 @@ def index_file(path):
         _maybe_trigger_amcat(row, seen)
     except Exception as e:
         print(f"amcat trigger error {path}: {e}", flush=True)
+    try:
+        _maybe_trigger_hallo(row, seen)
+    except Exception as e:
+        print(f"hallo trigger error {path}: {e}", flush=True)
 
 
 def prune_file(path):

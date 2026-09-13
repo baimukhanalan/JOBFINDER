@@ -603,6 +603,13 @@ class ApplyStrategy(ABC):
         # option, which populates a SEPARATE backing input the analyzer saw as an empty
         # text field. Re-read live values so a genuinely-populated field is not falsely
         # reported unfilled (false human task + false submit-gate block).
+        # Before judging completeness, make the framework's form state match the DOM (a late
+        # autofill re-render / a synthetic check can leave a visibly-filled field EMPTY server-side).
+        try:
+            await page.wait_for_timeout(800)
+            await self._reassert_answers(page, analysis, unknown, answered_idx, choice_picks)
+        except Exception:
+            logger.debug("reassert pass skipped", exc_info=True)
         unfilled = []
         for i, q in enumerate(unknown):
             if i in answered_idx:
@@ -734,6 +741,76 @@ class ApplyStrategy(ABC):
                     autofilled, attached, filled)
         return {**base, "filled": filled, "resume_autofill": autofilled,
                 "resume_attached": attached, "answer_sources": {"parser": filled}}
+
+    async def _reassert_answers(self, page: Page, analysis: dict, unknown: list, answered_idx: set,
+                                choice_picks: dict) -> int:
+        """Settle-then-reassert pass, run AFTER the whole fill (including any late ATS autofill
+        re-render — Ashby's 'Autofill from resume' can re-render the form after our fills): make the
+        framework's FORM STATE match what the DOM shows.
+
+        Live failure 2026-09-13 (Salmon/Ashby 20037): the screenshot showed Telegram, the relocation
+        radio and the English-level radio all filled/selected, yet the submit mutation answered
+        'Missing entry for required field' for exactly those three — the DOM had the values, React's
+        state did not (a radio checked by the synthetic `_FORCE_CHECK_JS` fallback, or an input whose
+        element was re-rendered after the fill). A radio whose `checked` is already true fires NO
+        `change` on a re-click, so a plain re-click cannot repair it: clear `checked` via JS first,
+        then re-check with a REAL click (input, else its <label for>) so `change` fires and the
+        framework records the value. Required planned text fields are re-`fill()`ed with the same
+        value (fill dispatches the input events a stale element may have missed). Idempotent on a
+        healthy form; never raises. PREFILL_REASSERT=0 disables. Returns the number reasserted."""
+        import os as _os
+        if _os.environ.get("PREFILL_REASSERT", "1") == "0":
+            return 0
+        n = 0
+        # radio / checkbox groups answered by the choice engine
+        for i, q in enumerate(unknown):
+            if i not in answered_idx or q.get("type") not in ("radio_group", "checkbox_group"):
+                continue
+            pick = choice_picks.get(q.get("question_text", "")) or {}
+            opts, sels = q.get("options") or [], q.get("option_selectors") or []
+            try:
+                idx = opts.index(pick.get("option"))
+            except (ValueError, TypeError):
+                continue
+            if idx >= len(sels) or not sels[idx]:
+                continue
+            try:
+                loc = page.locator(sels[idx]).first
+                await loc.evaluate("el => { el.checked = false; }", timeout=1500)
+                try:
+                    await loc.check(timeout=2500)                     # real click on the input
+                except Exception:
+                    lid = await loc.evaluate("el => el.id || ''", timeout=1000)
+                    if lid:
+                        await page.locator(f'label[for="{lid}"]').first.click(timeout=2500)
+                    else:
+                        await loc.click(force=True, timeout=2500)
+                if await loc.evaluate("el => !!el.checked", timeout=1000):
+                    n += 1
+            except Exception as e:
+                logger.debug("reassert choice failed for %r: %s", q.get("question_text", "")[:40], e)
+        # required planned text fields: re-fill the same value so the input events land
+        for f in analysis.get("fields", []) or []:
+            if f.get("action") != "fill" or not f.get("required") or not f.get("selector"):
+                continue
+            val = str(f.get("value") or "").strip()
+            if not val:
+                continue
+            try:
+                loc = page.locator(f["selector"]).first
+                tag = await loc.evaluate("el => (el.tagName||'').toLowerCase()", timeout=1000)
+                if tag not in ("input", "textarea"):
+                    continue
+                cur = await loc.evaluate("el => el.value || ''", timeout=1000)
+                if cur.strip() != val:
+                    continue                 # a widget/typeahead owns it — don't clobber
+                await loc.fill(val, timeout=2500)
+                n += 1
+            except Exception as e:
+                logger.debug("reassert text failed for %r: %s", f.get("label", "")[:40], e)
+        if n:
+            logger.info("reasserted %d answer(s) after fill (form-state sync)", n)
+        return n
 
     async def _fill_choice(self, page: Page, q: dict, index: int) -> bool:
         """Apply a chosen option: select by label, or check the radio/checkbox input."""

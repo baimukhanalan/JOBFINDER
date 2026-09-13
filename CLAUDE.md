@@ -683,7 +683,14 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   `_fp_profile`/`_FP_DIVERSIFY_JS`) gives each fill context a fresh device profile — a common laptop screen size, plausible
   cores/memory, a per-context deterministic canvas/audio perturbation. OFF by default (an inconsistent fingerprint is itself
   a v3 tell); use it ONCE together with a NEVER-used IP (airplane-mode toggle on the cellular phone → new carrier IP, or the
-  BD `alibaba_res` zone password). Do NOT keep testing from the three known IPs.
+  BD `alibaba_res` zone password). Do NOT keep testing from the three known IPs. *(Superseded the same night — see SOLVED
+  below: the stack works on the known IPs.)*
+- **Salmon sweep 2026-09-13 (after SOLVED): 8 Dana Erlan applications ACCEPTED in one evening, 0 spam flags** (61536,
+  20036, 20045, 20047, 30107 first pass; 20037, 20046, 20048 on retry), every one with an Ashby ack ("Got your application,
+  Dana Erlan" / "We've Received Your Application"). Pattern worth keeping: every first-pass `needs correction` miss was on
+  the SLOW cellular slot (10802) and every accept on WiFi (10801) — the phantom-fill race is timing-driven; prefer the fast
+  slot for Ashby and rely on `_reassert_answers`. Sweep driver pattern (scratch `salmon_sweep.py`): one job at a time,
+  fresh identity per job, verify each verdict, STOP only on the spam signature, skip validation misses for retry.
 - **SOLVED 2026-09-13 — E4: the SAME flagged WiFi IP, Dana@takhet.com, stealth + `COPILOT_FP_DIVERSIFY=1` + session
   warm-up (`_warm_session`: Google consent + a search typed at human speed + the employer's Ashby careers root BEFORE the
   form) + `_human_dwell` → "Success — Your application was successfully submitted" on Salmon 61536 (persona
@@ -692,6 +699,16 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   DEFAULT (`STEALTH_ON` + `FP_DIVERSIFY` default on; verify with `curl :8102/health` → `stealth`/`fp_diversify`). Not yet
   bisected (fingerprint vs warm-up) — each bisect costs a hit; keep the full stack. Still honor the per-company velocity
   cap: the recipe removes the bot tell, not Ashby's volume model.
+- **Phantom fill / form-state gotcha (2026-09-13):** `blocked='needs correction'` is FORM VALIDATION, not the spam flag
+  (only `couldn't submit|flagged as possible spam` is). On Ashby (Salmon 20037/20046) the submit reply carried "Missing
+  entry for required field: <radio question>" while the screenshot showed that radio SELECTED — the DOM had the value,
+  React's form state did not (a late "Autofill from resume" re-render / a radio checked by the synthetic `_FORCE_CHECK_JS`
+  fallback). A radio whose `checked` is already true fires NO `change` on a re-click, so a plain re-click cannot repair it.
+  `ApplyStrategy._reassert_answers` (base.py, runs after the whole fill, before `unfilled` is judged; `PREFILL_REASSERT=0`
+  disables) clears `checked` via JS then re-checks with a REAL click (input, else `label[for]`) so `change` reaches the
+  framework, and re-`fill()`s required planned text fields. Ashby's server verdict is now recorded per fill in
+  `<prefill>/submit_response.json` (Salmon submits via `ApiSubmitMultipleFormsAction`). Label note: "Your&nbsp; English
+  level" carries a NBSP — normalize whitespace before matching.
 - **Name-label gotcha (2026-09-13):** a combined "First and Last Name" / "First & Last Name" box must map to `full_name` in
   BOTH `catalog_drafts._ID_TEXT` and `analyzer.FIELD_PATTERNS` — the last-name rule used to grab its "Last Name" tail and a
   Mural application was drafted/filled as just the surname. Rules are first-match-wins; the combined-name rule sits FIRST.

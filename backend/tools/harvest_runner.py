@@ -56,6 +56,16 @@ async def run(platform: str, limit: int, concurrency: int) -> dict:
             res = await core.harvest_one(url, mbx, _adapter(platform))
             status = res.get("status", "error")
             discover.mark(url, f"{status}:banked{res.get('banked', 0)}")
+            # A REAL end-to-end completion (adapter.is_done fired) is a PASS — mark the CRM invite
+            # done so it leaves «Действие», exactly like the SHL-OPQ lane. Only "completed" triggers
+            # this (a stuck/partial harvest never does), so it can't false-mark an unfinished test.
+            if status == "completed":
+                try:
+                    from backend.tools import mailcrm
+                    mailcrm.mark_assessment_done(mbx)
+                    logger.info("[%s] COMPLETED — marked assessment done", mbx)
+                except Exception as exc:
+                    logger.info("[%s] mark_assessment_done failed: %s", mbx, str(exc)[:100])
             logger.info("[%s] %s banked=%d by_type=%s note=%s", mbx, status,
                         res.get("banked", 0), res.get("by_type"), (res.get("note") or "")[:80])
             return mbx, res

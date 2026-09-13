@@ -141,6 +141,50 @@ def _maybe_trigger_shl(row, seen):
         log.close()  # the child keeps its own dup; don't leak the parent fd
 
 
+_HARVEST_RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harvest_runner.py")
+_HARVEST_LOG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_amcat_event.log")
+
+
+def _maybe_trigger_amcat(row, seen):
+    """A FRESH AMCAT (Teleperformance) assessment invite just landed → drive it IMMEDIATELY through
+    the harvester on a PHONE-egress slot. Two reasons this must be event-driven, not the */20 cron:
+    (1) the login token is a SINGLE-USE ES256-JWT that EXPIRES — the cron reaches a deep backlog only
+    after tokens are dead; (2) the AMCAT proctor's NE500 logout is a per-IP rate-limit on our
+    DATACENTER IP, so a mobile-carrier slot (HARVEST_PROXY=phone) is what gets a session through the
+    entry gate / Section C-D. harvest_runner's file lock collapses concurrent triggers. `seen==0`
+    gates it to new/ arrivals. Fully isolated — the caller try/excepts so it can NEVER affect indexing.
+    Only the TP "Test Login Details" subject fires it (Sutherland's shl.com invite is camera-walled)."""
+    if seen != 0:
+        return
+    fe = (row.get("from_email") or "").lower()
+    subj = (row.get("subject") or "").lower()
+    if "shl.com" not in fe or "test login" not in subj:
+        return
+    import subprocess
+    # WATCHDOG: kill any harvest stuck > 45 min before spawning (belt-and-braces on top of the
+    # harvester's own per-run cap) so a hung run can't hold the drain lock.
+    try:
+        out = subprocess.run(["ps", "-eo", "pid,etimes,cmd"], capture_output=True, text=True, timeout=8).stdout
+        for line in out.splitlines():
+            if "harvest_runner" not in line or "ps -eo" in line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[1].isdigit() and int(parts[1]) > 2700:
+                subprocess.run(["kill", "-9", parts[0]], timeout=5)
+    except Exception:
+        pass
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98", HARVEST_PROXY="phone")
+    try:
+        log = open(_HARVEST_LOG, "a")
+    except Exception:
+        log = subprocess.DEVNULL
+    subprocess.Popen(["/usr/bin/python3", _HARVEST_RUNNER, "--platform", "amcat", "--limit", "1"],
+                     env=env, stdout=log, stderr=log, start_new_session=True)
+    if hasattr(log, "close"):
+        log.close()
+
+
 def index_file(path):
     """Index one Maildir file. seen from whether the path is under new/ (0) or cur/ (1);
     build_index_row returns None for anything outside a candidate mailbox (skipped)."""
@@ -160,6 +204,10 @@ def index_file(path):
         _maybe_trigger_shl(row, seen)
     except Exception as e:
         print(f"shl trigger error {path}: {e}", flush=True)
+    try:
+        _maybe_trigger_amcat(row, seen)
+    except Exception as e:
+        print(f"amcat trigger error {path}: {e}", flush=True)
 
 
 def prune_file(path):

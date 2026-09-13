@@ -25,10 +25,38 @@ def _log(msg: str) -> None:
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [camera_daemon] {msg}", flush=True)
 
 
+_CUR_FEEDER: subprocess.Popen | None = None
+
+
+def _cleanup(*_a) -> None:
+    """Kill our ffmpeg feeder + drop the pidfile. CRITICAL: without this, killing the daemon leaves
+    the feeder ORPHANED (reparented to init) still holding /dev/video0 — repeated kill/restart cycles
+    stack multiple writers and corrupt the v4l2loopback device so getUserMedia HANGS (the exact cause
+    of the Hallo device-check hangs this session). Registered on SIGTERM/SIGINT + in `finally`."""
+    global _CUR_FEEDER
+    try:
+        if _CUR_FEEDER and _CUR_FEEDER.poll() is None:
+            _CUR_FEEDER.kill()
+    except Exception:
+        pass
+    _CUR_FEEDER = None
+    try:
+        os.remove(PIDFILE)
+    except Exception:
+        pass
+
+
 def main() -> None:
+    import signal
+    global _CUR_FEEDER
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
     _log(f"start pid={os.getpid()} device={camera.DEVICE}")
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, lambda *_a: (_cleanup(), os._exit(0)))
+        except Exception:
+            pass
     consecutive_fail = 0
     try:
         while True:
@@ -38,6 +66,7 @@ def main() -> None:
             camera._reload_module()
             proc = subprocess.Popen(camera._feed_cmd(None),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _CUR_FEEDER = proc
             time.sleep(3)
             if proc.poll() is not None:
                 consecutive_fail += 1
@@ -51,10 +80,7 @@ def main() -> None:
             _log(f"feeder exited rc={proc.returncode} — restarting")
             time.sleep(1)
     finally:
-        try:
-            os.remove(PIDFILE)
-        except Exception:
-            pass
+        _cleanup()
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class HalloAdapter(Adapter):
         self.mailbox = mailbox
         self._mic_feed: subprocess.Popen | None = None
         self._prep_waits = 0    # consecutive prep/recording auto-waits (bounded so a stuck one can't spin)
+        self._last_prog = ""    # last seen "Part N / Question k of M" marker — resets the wait budget on progress
 
     def _name(self) -> tuple[str, str]:
         local = (self.mailbox or "candidate.user").split("@")[0]
@@ -39,6 +40,18 @@ class HalloAdapter(Adapter):
         first = (parts[0] or "Candidate").capitalize()
         last = re.sub(r"\d+$", "", parts[1]).capitalize() if len(parts) > 1 and parts[1] else "User"
         return first, last or "User"
+
+    @staticmethod
+    def _progress_sig(body: str) -> str:
+        """A stable per-question marker ("part 1 · question 3 of 5") pulled from a listening page so
+        advance() can tell a page that ADVANCED (reset the wait budget) from one that is truly frozen.
+        Keyed on the question INDEX, not the raw body, so a per-second countdown does NOT keep resetting
+        the budget (that would defeat the frozen-page bound on a recording/prep page)."""
+        m_part = re.search(r"part\s+(\d+)", body)
+        m_q = re.search(r"question\s+(\d+)\s+of\s+(\d+)", body)
+        if not m_part and not m_q:
+            return ""
+        return f"{m_part.group(1) if m_part else '?'}:{m_q.group(0) if m_q else '?'}"
 
     def _start_mic_feed(self) -> None:
         """GAPLESS continuous speech into the virtmic sink so Hallo's auto-listening mic meter always
@@ -157,10 +170,24 @@ class HalloAdapter(Adapter):
         # A prep/countdown page ("Prepare your response" / "Think about your response" + a timer, or a
         # live "Recording will end in N seconds") AUTO-transitions — there is NO forward button, so WAIT
         # for it rather than declaring the item stuck (returns True to keep the core loop re-reading).
+        # The LISTENING module is the same shape: an audio passage plays on a page carrying "Listen
+        # carefully to the content" + a "Write your notes here" scratch pad, and the comprehension MCQs
+        # appear on that same page ONLY after the audio finishes — there is no forward button either, so
+        # it must be WAITED OUT (read_item already suppresses the notes textarea so the page isn't
+        # mis-read as a typing item; without this wait advance() fell straight through to `stuck`, which
+        # is exactly where run13 halted at "Part 1 - Question 1 of 5").
         if any(s in body for s in ("prepare your response", "think about your response",
-                                   "recording will end", "get ready", "preparing")):
+                                   "recording will end", "get ready", "preparing",
+                                   "listen carefully to the content", "write your notes")):
+            # A listening passage + its 5 questions runs far longer than a single 60s recording, so the
+            # budget must not trip mid-module: reset it whenever the "Part N / Question k of M" marker
+            # advances (real progress), leaving the bound to catch only a genuinely FROZEN single page.
+            prog = self._progress_sig(body)
+            if prog and prog != self._last_prog:
+                self._last_prog = prog
+                self._prep_waits = 0
             self._prep_waits += 1
-            if self._prep_waits <= 30:          # ~120s: enough for a prep countdown + a 60s recording
+            if self._prep_waits <= 30:          # ~120s on ONE unchanging page; extends across questions
                 await page.wait_for_timeout(4000)
                 return True
             # exceeded the wait budget on a stuck prep/recording page — stop waiting so the core loop

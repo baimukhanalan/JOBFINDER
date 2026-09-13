@@ -31,6 +31,7 @@ class HalloAdapter(Adapter):
         # the mailbox local part (first.last<N>@takhet.com). Set by harvest_runner before enter().
         self.mailbox = mailbox
         self._mic_feed: subprocess.Popen | None = None
+        self._prep_waits = 0    # consecutive prep/recording auto-waits (bounded so a stuck one can't spin)
 
     def _name(self) -> tuple[str, str]:
         local = (self.mailbox or "candidate.user").split("@")[0]
@@ -142,6 +143,79 @@ class HalloAdapter(Adapter):
         # (4) enter the battery
         await self._click(page, "Start Questionnaire") or await self._click(page, "Start")
         await page.wait_for_timeout(4000)
+
+    # Hallo gates each module behind an instructions page with a module-START button ("Start Part 1",
+    # "Start Questionnaire", "Begin", "I'm Ready") that the generic forward matcher misses — click it.
+    _FWD = ("Start Part", "Start Questionnaire", "Begin", "I'?m Ready", "Ready to", "Start Now",
+            "Start", "Continue", "Next", "Proceed", "Got it")
+
+    async def advance(self, page) -> bool:
+        try:
+            body = (await page.inner_text("body", timeout=2000)).lower()
+        except Exception:
+            body = ""
+        # A prep/countdown page ("Prepare your response" / "Think about your response" + a timer, or a
+        # live "Recording will end in N seconds") AUTO-transitions — there is NO forward button, so WAIT
+        # for it rather than declaring the item stuck (returns True to keep the core loop re-reading).
+        if any(s in body for s in ("prepare your response", "think about your response",
+                                   "recording will end", "get ready", "preparing")):
+            self._prep_waits += 1
+            if self._prep_waits <= 30:          # ~120s: enough for a prep countdown + a 60s recording
+                await page.wait_for_timeout(4000)
+                return True
+            # exceeded the wait budget on a stuck prep/recording page — stop waiting so the core loop
+            # can declare it stuck (a real, bounded verdict) instead of spinning to max_items.
+        else:
+            self._prep_waits = 0
+        for rx in self._FWD:
+            if await self._click(page, rx, timeout=2500):
+                await page.wait_for_timeout(1200)
+                return True
+        return await super().advance(page)
+
+    async def try_skip(self, page) -> bool:
+        # instruction/example pages carry a Skip; use it to reach the answerable item faster
+        return await self._click(page, "Skip", timeout=2000)
+
+    async def handle_speaking(self, page, record_secs: float = 4.0, mic_say_wav=None) -> bool:
+        """Hallo open-response (Speaking) items AUTO-RECORD ~60s (a red STOP button + a 'Recording will
+        end in N seconds' countdown) and score the transcribed answer. Feed a spoken answer into the
+        virtmic for the window, try to STOP early, then advance to the next question. Returns True when
+        the recorder is done (the item advanced)."""
+        self._start_mic_feed()
+        try:
+            # let a few seconds of the answer record, then try to STOP early (the red circular button)
+            await page.wait_for_timeout(9000)
+            stopped = False
+            for sel in ('[aria-label*="stop" i]', 'button:has-text("Stop")',
+                        'button[class*="record" i]', 'button:has(svg)'):
+                try:
+                    b = page.locator(sel).first
+                    if await b.count() and await b.is_visible():
+                        await b.click(timeout=2000)
+                        stopped = True
+                        break
+                except Exception:
+                    pass
+            # if we couldn't stop, wait for the countdown to run out (auto-advances)
+            if not stopped:
+                for _ in range(22):    # up to ~66s
+                    try:
+                        body = (await page.inner_text("body", timeout=2000)).lower()
+                    except Exception:
+                        body = ""
+                    if "recording will end" not in body:
+                        break
+                    await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(2500)
+            # advance to the next question / submit the answer if a control is shown
+            for rx in ("Submit", "Next", "Continue", "Save", "Done", "Start Part"):
+                if await self._click(page, rx, timeout=2000):
+                    break
+            await page.wait_for_timeout(2500)
+            return True
+        finally:
+            self._stop_mic_feed()
 
     async def wall(self, page) -> str | None:
         try:

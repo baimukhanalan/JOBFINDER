@@ -210,7 +210,9 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
     # v4l2loopback camera instead (sutherland_assessment.camera_launch_args → a genuine /dev/video0,
     # NO fake-device): it hydrates the SPA AND is what the downstream AMCAT WCI200 proctor accepts.
     # (Proven 2026-09-13: minimal launch w/o the fake-device flag hydrates rootHTML=8435, 0 errors.)
-    if getattr(adapter, "platform", "") in ("shl_sutherland", "shl"):
+    if getattr(adapter, "platform", "") in ("shl_sutherland", "shl", "hallo"):
+        # Hallo.ai's device-check ACCEPTS the real v4l2loopback camera (proven; unlike Sutherland's
+        # WCI200 it does not reject it), and needs the real camera + the pulse virtmic to pass.
         from backend.tools import sutherland_assessment
         args = sutherland_assessment.camera_launch_args()   # real /dev/video0 + --use-fake-ui, no fake-device
         asset_paths = assets.ensure_assets()

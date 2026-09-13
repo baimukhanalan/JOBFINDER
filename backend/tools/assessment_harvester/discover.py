@@ -37,6 +37,14 @@ MATCHERS: dict[str, dict] = {
                   "AND coalesce(outbound,false)=false"),
         "link_re": re.compile(r"https?://teletech\.taleo\.net/[^\s\"'<>\\)]*sealedRequestId=[^\s\"'<>\\)]+"),
     },
+    # Hallo.ai — TP's NEW post-apply assessment (from support@hallo.ai). The assessment link is
+    # URL-ENCODED inside an AWS-tracking (awstrack.me) wrapper, so match the encoded app.hallo.ai
+    # ai-assessment target up to its token and UNQUOTE it to the navigable app.hallo.ai URL.
+    "hallo": {
+        "where": ("from_email ILIKE '%%hallo.ai%%' AND coalesce(outbound,false)=false"),
+        "link_re": re.compile(r"https(?::|%3A)%2F%2Fapp\.hallo\.ai%2F[^\s\"'<>\\)]*?ai-assessment%2F[A-Za-z0-9]+"),
+        "unquote": True,
+    },
 }
 
 
@@ -65,8 +73,9 @@ def mark(url: str, status: str) -> None:
     save_state(st)
 
 
-def link_from_path(path: str, link_re: re.Pattern):
-    """Extract the assessment link from a raw Maildir file (un-quoted-printable first)."""
+def link_from_path(path: str, link_re: re.Pattern, *, unquote: bool = False):
+    """Extract the assessment link from a raw Maildir file (un-quoted-printable first). `unquote`
+    URL-decodes the match (Hallo's link is %2F-encoded inside an awstrack wrapper)."""
     try:
         txt = open(path, "rb").read().decode("utf-8", "ignore").replace("=\r\n", "").replace("=\n", "")
     except Exception:
@@ -75,7 +84,11 @@ def link_from_path(path: str, link_re: re.Pattern):
     if not hits:
         return None
     # 'token=3D...' is quoted-printable for 'token=...'; strip a leading '3D' after '='.
-    return hits[0].replace("=3D", "=")
+    url = hits[0].replace("=3D", "=")
+    if unquote:
+        import urllib.parse
+        url = urllib.parse.unquote(url)
+    return url
 
 
 def discover(platform: str, *, limit: int | None = None, include_done: bool = False) -> list[tuple[str, str]]:
@@ -94,7 +107,7 @@ def discover(platform: str, *, limit: int | None = None, include_done: bool = Fa
     state = load_state()
     out: list[tuple[str, str]] = []
     for mailbox, path, _ts in rows:
-        url = link_from_path(path, m["link_re"])
+        url = link_from_path(path, m["link_re"], unquote=m.get("unquote", False))
         if not url:
             continue
         # Any recorded state means this token was already ATTEMPTED. Single-use assessment tokens go

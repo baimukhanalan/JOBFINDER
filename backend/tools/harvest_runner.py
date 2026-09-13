@@ -28,19 +28,29 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from backend.tools.assessment_harvester import bank, core, discover  # noqa: E402
 from backend.tools.assessment_harvester.adapters.amcat import AmcatAdapter  # noqa: E402
+from backend.tools.assessment_harvester.adapters.hallo import HalloAdapter  # noqa: E402
 from backend.tools.assessment_harvester.adapters.shl import ShlAdapter  # noqa: E402
 
 _DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 LOCK_PATH = os.path.join(_DATA, "harvest_runner.lock")
 
-ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter}
+ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter, "hallo": HalloAdapter}
 
 
-def _adapter(platform: str):
+def _adapter(platform: str, mailbox: str = ""):
     cls = ADAPTERS.get(platform)
     if not cls:
         raise SystemExit(f"no adapter for platform {platform!r} (have {list(ADAPTERS)})")
-    return cls()
+    # HalloAdapter needs the persona name (from the mailbox) for its device-check name gate.
+    try:
+        return cls(mailbox=mailbox) if platform == "hallo" else cls()
+    except TypeError:
+        a = cls()
+        try:
+            a.mailbox = mailbox
+        except Exception:
+            pass
+        return a
 
 
 async def run(platform: str, limit: int, concurrency: int) -> dict:
@@ -53,7 +63,7 @@ async def run(platform: str, limit: int, concurrency: int) -> dict:
 
     async def _one(mbx, url):
         async with sem:
-            res = await core.harvest_one(url, mbx, _adapter(platform))
+            res = await core.harvest_one(url, mbx, _adapter(platform, mbx))
             status = res.get("status", "error")
             discover.mark(url, f"{status}:banked{res.get('banked', 0)}")
             # A REAL end-to-end completion (adapter.is_done fired) is a PASS — mark the CRM invite
@@ -97,7 +107,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.url:
-        adapter = _adapter(args.platform)
+        adapter = _adapter(args.platform, args.mailbox or "")
         _lock = _acquire_lock()  # noqa: F841
         res = asyncio.run(core.harvest_one(args.url, args.mailbox or "manual", adapter,
                                            min_delay=0.0, max_delay=0.0))

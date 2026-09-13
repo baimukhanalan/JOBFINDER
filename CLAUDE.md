@@ -712,7 +712,9 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   it is not a clean exact-name-string cluster either. The real control is CUMULATIVE per-tenant VOLUME: below the
   saturation (~mid-20s from our source/day) near-anything lands (fresh identity, name variant, even Dana+unique above the
   ~14 mark); once saturated, near-everything flags regardless of name/LinkedIn/IP/domain — only TIME (a real cooldown)
-  recovers it.** Practical rule: keep per-tenant volume LOW (the `company_velocity` 2/day cap is the actual lever); unique
+  recovers it.** **CONFIRMED (test 7): a FULLY fresh identity (new name Meruyert Sultanova + amaskills domain + unique LinkedIn) ALSO
+  flagged on Salmon 204219 at ~30 cumulative — so the volume flag is keyed on the SOURCE (IP + device), not the identity;
+  identity variation cannot beat a saturated tenant.** Practical rule: keep per-tenant volume LOW (the `company_velocity` 2/day cap is the actual lever); unique
   LinkedIn + varied names help stay under the threshold but are NOT a way to push past a saturated tenant. Do not keep
   testing a saturated tenant — each attempt only deepens it. Salmon's flag is per-tenant volume+identity, NOT per-IP. The résumé is regenerated per fill (proven: unique
   PDFs) but that never mattered — the constant is the identity HEADER, not the body. **Fix for volume to ONE tenant: UNIQUE

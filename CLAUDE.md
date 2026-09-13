@@ -708,7 +708,11 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   disables) clears `checked` via JS then re-checks with a REAL click (input, else `label[for]`) so `change` reaches the
   framework, and re-`fill()`s required planned text fields. Ashby's server verdict is now recorded per fill in
   `<prefill>/submit_response.json` (Salmon submits via `ApiSubmitMultipleFormsAction`). Label note: "Your&nbsp; English
-  level" carries a NBSP — normalize whitespace before matching.
+  level" carries a NBSP — normalize whitespace before matching. **Numeric-input class (Salmon 40410):** a prose salary
+  draft ("PHP 80,000 per month") typed into `<input type=number>` is REJECTED by the browser and the box stays empty →
+  "Missing entry for required field: How much is your expected salary?". `filler.coerce_for_input` (used by `fill_field`
+  and by `_reassert_answers`) keeps just the number for `type=number|range` / `inputmode=numeric|decimal`
+  (`test_numeric_input_coerce.py`). Read the captured `submit_response.json` errorMessages before guessing a miss's cause.
 - **Name-label gotcha (2026-09-13):** a combined "First and Last Name" / "First & Last Name" box must map to `full_name` in
   BOTH `catalog_drafts._ID_TEXT` and `analyzer.FIELD_PATTERNS` — the last-name rule used to grab its "Last Name" tail and a
   Mural application was drafted/filled as just the surname. Rules are first-match-wins; the combined-name rule sits FIRST.

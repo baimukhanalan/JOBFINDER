@@ -801,8 +801,12 @@ class ApplyStrategy(ABC):
                 tag = await loc.evaluate("el => (el.tagName||'').toLowerCase()", timeout=1000)
                 if tag not in ("input", "textarea"):
                     continue
+                from backend.applier.filler import coerce_for_input
+                _t = await loc.get_attribute("type") or ""
+                _im = await loc.get_attribute("inputmode") or ""
+                val = coerce_for_input(val, _t, _im)   # a numeric box takes the number, not prose
                 cur = await loc.evaluate("el => el.value || ''", timeout=1000)
-                if cur.strip() != val:
+                if cur.strip() and cur.strip() != val:
                     continue                 # a widget/typeahead owns it — don't clobber
                 await loc.fill(val, timeout=2500)
                 n += 1

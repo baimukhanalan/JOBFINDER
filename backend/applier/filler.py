@@ -1,4 +1,5 @@
 import logging
+import re
 
 from playwright.async_api import Page
 
@@ -104,6 +105,28 @@ async def select_dropdown(page: Page, selector: str, label: str) -> bool:
     except Exception as e:
         logger.debug("select_dropdown failed for %s=%r: %s", selector, label, e)
         return False
+
+
+_NUM_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+
+
+def coerce_for_input(value: str, input_type: str = "", inputmode: str = "") -> str:
+    """Make a drafted value acceptable to a NUMERIC input. A prose salary draft ("PHP 80,000 per
+    month") typed into <input type=number> is rejected by the browser and the box stays EMPTY —
+    Ashby then answers "Missing entry for required field: How much is your expected salary?"
+    (Salmon 40410, 2026-09-13). For type=number/range or inputmode=numeric/decimal, keep just the
+    first number (commas stripped); everything else is returned unchanged."""
+    t = (input_type or "").lower()
+    im = (inputmode or "").lower()
+    if t not in ("number", "range") and im not in ("numeric", "decimal"):
+        return value
+    m = _NUM_RE.search(str(value or ""))
+    if not m:
+        return value
+    num = m.group(0).replace(",", "")
+    if im == "numeric" or (t == "number" and "." not in num):
+        num = num.split(".")[0]
+    return num
 
 
 async def fill_field(page: Page, field: dict) -> bool:
@@ -264,6 +287,13 @@ async def fill_field(page: Page, field: dict) -> bool:
                     # required field. Report unfilled instead so it surfaces for the human.
                     logger.debug("lever location typeahead failed: %s", e)
                     return False
+            # A numeric input rejects prose (currency, units) and stays empty — coerce to the number.
+            try:
+                _t = await element.get_attribute("type") or ""
+                _im = await element.get_attribute("inputmode") or ""
+                value = coerce_for_input(value, _t, _im)
+            except Exception:
+                pass
             try:
                 await element.clear(timeout=5000)
                 await element.fill(value, timeout=5000)

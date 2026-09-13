@@ -177,6 +177,22 @@ class HalloAdapter(Adapter):
         # instruction/example pages carry a Skip; use it to reach the answerable item faster
         return await self._click(page, "Skip", timeout=2000)
 
+    async def read_item(self, page) -> dict:
+        item = await super().read_item(page)
+        try:
+            body = (await page.inner_text("body", timeout=1500)).lower()
+        except Exception:
+            body = ""
+        # LISTENING module: a PERSISTENT "Write your notes here while listening" scratch textarea makes
+        # the generic reader classify the whole page as a typing test → the core churn-types the notes.
+        # Suppress that textarea when there are no real answerable options, so the page is a transition
+        # (wait for the audio + the actual questions) rather than a typing item. Real MCQ options (the
+        # comprehension questions that appear after/below the audio) are kept and answered normally.
+        if item.get("has_textarea") and not item.get("options") and not item.get("has_mic"):
+            if "write your notes" in body or "listen carefully to the content" in body:
+                item["has_textarea"] = False
+        return item
+
     async def handle_typing(self, page, text: str) -> bool:
         """Hallo's LISTENING module ("Part N - Question k of M", a countdown timer, audio, and a
         "Write your notes here while listening to the audio" SCRATCH textarea) is NOT a typing test —

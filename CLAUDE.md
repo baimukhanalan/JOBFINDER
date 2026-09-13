@@ -739,12 +739,18 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   constants that tie EVERY submission to us, none of which `COPILOT_FP_DIVERSIFY`'s device profiles touch: **(1) reCAPTCHA v3
   Enterprise is the actual reject gate** — our captured `submit_response.json` codes are `RECAPTCHA_SCORE_BELOW_THRESHOLD`;
   the score keys on automation + behavior + IP reputation, not the hardware profile. **(2) Ashby's `deviceFingerprint` (the
-  field next to `$recaptchaToken`) contains an AUTOMATION DETECTOR (decoded field 56): it wraps `document.querySelector`/
-  `getElementById`, throws, reads `error.stack`, and matches `puppeteer`/`juggler`/`evaluate@`/`callFunctionOn@` — the CDP
-  frames present on EVERY `page.evaluate`/`locator`/`query_selector` our co-pilot issues. Profile/IP/identity-invariant; fires
-  on every submit.** (A second decode read `deviceFingerprint` as also including an OfflineAudioContext + canvas/WebGL hardware
-  hash — the two decodes CONFLICT on the exact field set; unresolved, but both agree device-profile rotation doesn't move the
-  real tell.) **(3) Robotic behavior:** `strategies/base.py` fills text with `.fill()` (sets value, NO keydown/keyup) → the
+  field next to `$recaptchaToken`) has an AUTOMATION DETECTOR (field 56 / `nnt`/`tnt`): it wraps `document.querySelector`/
+  `querySelectorAll`/`getElementById` + `window.eval`, throws to capture `error.stack`, and matches `phantomjs`/`puppeteer`/
+  `juggler`/(`evaluate@` AND `callFunctionOn@`)/(`callFunction` AND `apply.css selector`). **CORRECTION — an earlier claim that
+  this "fires on every submit for us" was WRONG (over-claimed; the owner-was-right lesson applies to MY over-reach too):** a
+  second workflow EMPIRICALLY drove a live Salmon form with our exact Chrome stack, installed a faithful copy of the detector,
+  hammered the wrapped methods via every Playwright mechanism, and field-56 `t.v` stayed **0 (clean)** across 35 captured
+  stacks (positive controls with synthetic puppeteer/firefox stacks correctly returned non-zero). Why: those signatures target
+  PhantomJS/Puppeteer/**Firefox-juggler** SpiderMonkey `name@url` frames; V8 + real-Chrome-channel Playwright emits
+  `at UtilityScript.evaluate (<anonymous>…)`-style frames with NONE of the tokens. **So field 56 is NOT one of our tells.** A
+  contingency freeze (`COPILOT_FREEZE_QS=1`, default OFF, `_FREEZE_QS_JS` — locks those 4 methods so the wrapper can't install;
+  verified not to break the form) is shipped for the day Ashby adds V8 tokens. (The two decodes also disagreed on whether
+  `deviceFingerprint` includes an OfflineAudioContext/canvas hash; unresolved, but our captured request_vars can now settle it.) **(3) Robotic behavior:** `strategies/base.py` fills text with `.fill()` (sets value, NO keydown/keyup) → the
   keystroke-dynamics collectors (dwell 65 / kpm 67 / backspaces 69) come back null on every submit; the mouse path (72) is
   scripted/low-entropy. **(4) WebRTC real-IP LEAK (CONFIRMED on this host):** Chromium gathers STUN candidates OUTSIDE the
   per-context SOCKS proxy → a srflx candidate reflects the SERVER's true public IP (173.249.18.153 + IPv6) on every fill,
@@ -756,11 +762,20 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   the candidate's name (`drafts_ui.render_resume_pdf`, ReportLab honors `producer=/creator=/author=/subject=`; the dead
   `runner._normalize_pdf_metadata` was on the retired michael path only). `copilot._attach_submit_capture` now also records the
   submit REQUEST vars (deviceFingerprint / sourceAttributionCode / applicationRequestId), and `COPILOT_FP_FORCE=<idx>` pins a
-  profile for A/B. **STILL OPEN (the deep root cause, NOT a config tweak):** the CDP automation-stack signature (field 56) and
-  the null keystroke/mouse dynamics — beating these needs real trusted input (per-key keydown/keyup with human dwell/jitter +
-  a natural mouse path via CDP Input dispatch) and a DOM-driving path whose stack doesn't carry `evaluate@`/`callFunctionOn@`
-  during the page's own query calls; plus a residential IP for the reCAPTCHA-v3 score. `sourceAttributionCode`/
-  `applicationRequestId` are `null` for our cold applies (same as organic — not discriminating).
+  profile for A/B. **HUMAN-INPUT ENGINE SHIPPED (addresses tell 3):** `filler.human_type` types open-text char-by-char with
+  real keydown/keyup (isTrusted, native input → React stays in sync; ends with value EXACTLY == text, else falls back to
+  `.fill()` so a miss never blanks a required field) + an occasional typo+Backspace (so collector 69 > 0); `filler.
+  human_mouse_path` draws a curved/eased/jittered cursor trajectory onto Submit (feeds collectors 24/72), wired into
+  `_human_dwell`. Gated per-fill via `filler._HUMAN_TYPE` ContextVar, set in `base.prefill` — **default ON for ashby only**
+  (other ATS' multi-step forms would blow timeouts); `HUMAN_TYPE_FILL=1` forces global. Converted sites: `filler.fill_field`
+  text path, `base.py` open-text answers (×2), `dropdowns.py` cover-letter textareas (×2); LEFT as `.fill()`: `_reassert_answers`
+  re-fill (keystrokes already recorded on the first pass), all comboboxes/typeaheads (dropdowns owns), all non-Ashby strategies.
+  VERIFIED: 113 fill-engine unit tests green; a live Salmon dry-run filled **13/13, 0 unfilled** with human typing (218s vs
+  ~90s — slower by design). Honest limit: synthetic Playwright mouse moves carry no real `pressure`/coalesced-event richness
+  (collector 72 gets a path but not perfect human dynamics). **STILL OPEN / owner-side:** a RESIDENTIAL IP for the reCAPTCHA-v3
+  score (the actual reject gate) — phone egress slots flap (iOS backgrounds). The behavioral fixes make the session genuinely
+  more human but are UNPROVEN to flip the flag alone; the v3 score + per-tenant volume cap (`company_velocity` 2/day) remain the
+  decisive levers. `sourceAttributionCode`/`applicationRequestId` are `null` for our cold applies (same as organic — not a tell).
 - **SOLVED 2026-09-13 — E4: the SAME flagged WiFi IP, Dana@takhet.com, stealth + `COPILOT_FP_DIVERSIFY=1` + session
   warm-up (`_warm_session`: Google consent + a search typed at human speed + the employer's Ashby careers root BEFORE the
   form) + `_human_dwell` → "Success — Your application was successfully submitted" on Salmon 61536 (persona

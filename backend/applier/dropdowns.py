@@ -1343,7 +1343,9 @@ async def fill_cover_letter_known(page, known: dict) -> dict:
             lab = (await ta.evaluate(_LABEL_JS) or "")
             if not _COVER_KEY_RE.search(lab):
                 continue
-            await ta.fill(text)
+            from backend.applier.filler import human_type, human_type_enabled
+            if not (human_type_enabled() and await human_type(page, ta, text)):
+                await ta.fill(text)
             logger.info("cover letter filled (textarea)")
             return {"filled": 1, "handled": ["Cover Letter"]}
         except Exception:
@@ -1378,7 +1380,9 @@ async def fill_cover_letter_known(page, known: dict) -> dict:
             if not ta:
                 ta = await page.query_selector("textarea[id$='_text']")
             if ta:
-                await ta.fill(text)
+                from backend.applier.filler import human_type, human_type_enabled
+                if not (human_type_enabled() and await human_type(page, ta, text)):
+                    await ta.fill(text)
                 logger.info("cover letter filled (enter-manually textarea)")
                 return {"filled": 1, "handled": ["Cover Letter"]}
         except Exception:

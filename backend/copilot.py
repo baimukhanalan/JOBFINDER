@@ -422,6 +422,27 @@ def _device_profile() -> dict:
     return p
 
 
+# COPILOT_FREEZE_QS=1 (default OFF): lock the four methods Ashby's field-56 collector wraps
+# (Document.prototype.querySelector/querySelectorAll/getElementById + window.eval) BEFORE its bundle
+# runs, so its Object.defineProperty throws → the wrapper never installs → field-56 stays clean.
+# DEFAULT OFF because field 56 ALREADY reports clean for our Chromium/V8 stacks (empirically verified
+# 2026-09-13: Ashby's signature table targets PhantomJS/Puppeteer/Firefox-juggler `evaluate@`/
+# `callFunctionOn@` frames, which V8 + real-Chrome-channel Playwright never emits). Enable ONLY if a
+# future Ashby bundle adds V8-style tokens. Verified not to break the Salmon form (renders identically).
+_FREEZE_QS_JS = """(() => {
+  const lock = (obj, prop) => { try {
+    const d = Object.getOwnPropertyDescriptor(obj, prop);
+    if (!d || typeof d.value !== 'function') return;
+    Object.defineProperty(obj, prop, { value: d.value, writable: false, enumerable: d.enumerable, configurable: false });
+  } catch (e) {} };
+  lock(Document.prototype, 'querySelector');
+  lock(Document.prototype, 'querySelectorAll');
+  lock(Document.prototype, 'getElementById');
+  lock(window, 'eval');
+})();"""
+FREEZE_QS = os.environ.get("COPILOT_FREEZE_QS", "0") == "1"
+
+
 async def _new_ctx(proxy_cfg: dict | None):
     """A fill context: per-proxy egress + (stealth) anti-automation + (fp) a full per-context DEVICE
     profile (UA/timezone/locale via context options; platform/WebGL/cores/mem/canvas via init script),
@@ -466,6 +487,11 @@ async def _new_ctx(proxy_cfg: dict | None):
                 "Object.defineProperty(navigator,'platform',{get:()=>'Linux x86_64'});")
         except Exception:
             pass
+    if FREEZE_QS:
+        try:
+            await ctx.add_init_script(_FREEZE_QS_JS)
+        except Exception:
+            logger.warning("freeze-qs init script not applied", exc_info=True)
     return ctx
 
 
@@ -476,20 +502,28 @@ async def _human_dwell(page, submit_selector: str) -> None:
         return
     try:
         import random
+        from backend.applier import filler
         btn = page.locator(submit_selector).first
         try:
             await btn.scroll_into_view_if_needed(timeout=3000)
         except Exception:
             pass
-        for _ in range(random.randint(4, 7)):
-            await page.mouse.move(random.randint(200, 1000), random.randint(150, 800),
-                                  steps=random.randint(8, 20))
-            await page.wait_for_timeout(random.randint(350, 900))
+        # A coherent, curved, eased cursor path across the form and finally onto Submit — Ashby's
+        # deviceFingerprint reads the pointer trajectory (collector 72) + whether the mouse ever
+        # moved (24); random teleports are a weaker signal than a real approach. (Honest limit:
+        # synthetic Playwright moves carry no real pressure / coalesced-event richness.)
+        cur = (random.randint(200, 900), random.randint(150, 500))
+        for _ in range(random.randint(2, 3)):
+            nxt = (random.randint(150, 1000), random.randint(150, 700))
+            await filler.human_mouse_path(page, cur, nxt)
+            cur = nxt
+            await page.wait_for_timeout(random.randint(250, 700))
         try:
             box = await btn.bounding_box()
             if box:
-                await page.mouse.move(box["x"] + box["width"] / 2 + random.randint(-15, 15),
-                                      box["y"] + box["height"] / 2 + random.randint(-5, 5), steps=15)
+                tgt = (box["x"] + box["width"] / 2 + random.uniform(-8, 8),
+                       box["y"] + box["height"] / 2 + random.uniform(-4, 4))
+                await filler.human_mouse_path(page, cur, tgt)
         except Exception:
             pass
         await page.wait_for_timeout(random.randint(5000, 9000))
@@ -922,7 +956,10 @@ async def health():
     ok = _S["page"] is not None and not _S["page"].is_closed()
     return {"ok": True, "browser": ok, "novnc": await _novnc_up(),
             "current": _S["current"], "owner": _S["owner"],
-            "stealth": STEALTH_ON, "fp_diversify": FP_DIVERSIFY}
+            "stealth": STEALTH_ON, "fp_diversify": FP_DIVERSIFY,
+            "human_type": (os.getenv("HUMAN_TYPE_FILL", "").strip().lower() in ("1", "true", "yes", "on")
+                           or "ashby-default"),
+            "freeze_qs": FREEZE_QS}
 
 
 @app.post("/release")

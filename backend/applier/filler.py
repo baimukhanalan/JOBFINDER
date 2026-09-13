@@ -1,9 +1,155 @@
+import contextvars
 import logging
+import math
+import os
+import random
 import re
 
 from playwright.async_api import Page
 
 logger = logging.getLogger(__name__)
+
+# --- Human input (Ashby deviceFingerprint reads keystroke + pointer telemetry) ---------------
+# Ashby's submit-mutation `deviceFingerprint` samples per-key dwell/kpm/backspaces (collectors
+# 65/67/69) and the mouse path (72/24). `.fill()` sets the value with ZERO key events → those
+# collectors read null/robotic on every submit. `human_type` types char-by-char with REAL
+# keydown/keyup (CDP Input, isTrusted) + native input events (React stays in sync — it does NOT
+# regress `_reassert_answers`, it reduces the desync reassert fixes), ending with the field value
+# EXACTLY == text. Gated per-fill via a ContextVar: default ON for Ashby (set in base.prefill),
+# OFF for other ATS (their multi-step forms would blow timeouts); HUMAN_TYPE_FILL=1 forces global.
+# NB: field 56 (the CDP automation-stack detector) is a SEPARATE concern and is empirically CLEAN
+# for our Chromium/V8 stack (verified 2026-09-13) — human_type does not claim to address it.
+_HUMAN_TYPE = contextvars.ContextVar("human_type", default=False)
+
+
+def set_human_type(on: bool) -> None:
+    _HUMAN_TYPE.set(bool(on) or
+                    os.getenv("HUMAN_TYPE_FILL", "").strip().lower() in ("1", "true", "yes", "on"))
+
+
+def human_type_enabled() -> bool:
+    try:
+        return bool(_HUMAN_TYPE.get())
+    except Exception:
+        return False
+
+
+async def human_type(page, loc, text, *, hold=(45, 110), flight=(40, 150),
+                     word_pause=(120, 320), typo_rate=0.06, cap=280,
+                     clear=True, verify=True, retries=1) -> bool:
+    """Type `text` into a plain text input/textarea Locator with REAL key events at a human
+    cadence + an occasional typo+Backspace, ending with the value EXACTLY == text. Returns True
+    iff the final value matches. NEVER for comboboxes/typeaheads/datepickers (dropdowns.py owns
+    those). Does NOT submit."""
+    text = "" if text is None else str(text)
+    loc = loc.first if hasattr(loc, "first") else loc
+
+    async def _key(ch):
+        await page.keyboard.down(ch)
+        await page.wait_for_timeout(random.randint(*hold))
+        await page.keyboard.up(ch)
+
+    async def _do_type():
+        try:
+            await loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        await loc.click(timeout=4000)
+        if clear:
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Delete")
+        forced = set()
+        if len(text) >= 4:
+            forced.add(random.randint(1, len(text) - 1))
+        head = text[:cap]
+        for i, ch in enumerate(head):
+            if i in forced or (ch != " " and random.random() < typo_rate):
+                wrong = random.choice("asdfghjklqwertyuiop")
+                await _key("x" if wrong == ch else wrong)
+                await page.wait_for_timeout(random.randint(*flight))
+                await page.keyboard.press("Backspace")
+                await page.wait_for_timeout(random.randint(60, 160))
+            await _key(ch)
+            await page.wait_for_timeout(random.randint(*flight))
+            if ch == " ":
+                await page.wait_for_timeout(random.randint(*word_pause))
+        if len(text) > cap:
+            await page.keyboard.insert_text(text[cap:])
+
+    for attempt in range(retries + 1):
+        try:
+            await _do_type()
+        except Exception:
+            if attempt >= retries:
+                return False
+            continue
+        if not verify:
+            return True
+        try:
+            if (await loc.input_value(timeout=1500)) == text:
+                return True
+        except Exception:
+            pass
+    try:
+        return (await loc.input_value(timeout=1500)) == text
+    except Exception:
+        return False
+
+
+def _ease(t):
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _bezier(p0, p1, p2, p3, t):
+    u = 1.0 - t
+    x = (u * u * u) * p0[0] + 3 * (u * u * t) * p1[0] + 3 * (u * t * t) * p2[0] + (t * t * t) * p3[0]
+    y = (u * u * u) * p0[1] + 3 * (u * u * t) * p1[1] + 3 * (u * t * t) * p2[1] + (t * t * t) * p3[1]
+    return x, y
+
+
+async def human_mouse_path(page, frm, to, *, steps=None, overshoot=True) -> int:
+    """A curved, eased, jittered multi-segment cursor path (many small mouse.move calls) ending ON
+    `to`. Feeds Ashby collectors 24/72 a rich path. Does NOT press. Honest limit: synthetic
+    Playwright moves carry no real pressure / coalesced-event richness. Returns the move count."""
+    fx, fy = frm
+    tx, ty = to
+    dist = math.hypot(tx - fx, ty - fy)
+    if steps is None:
+        steps = max(18, min(90, int(dist / 6) + random.randint(8, 20)))
+    ang = math.atan2(ty - fy, tx - fx)
+    perp = ang + math.pi / 2
+    bow = random.uniform(0.06, 0.22) * dist * random.choice((-1, 1))
+    c1 = (fx + (tx - fx) * 0.30 + math.cos(perp) * bow * 0.7, fy + (ty - fy) * 0.30 + math.sin(perp) * bow * 0.7)
+    c2 = (fx + (tx - fx) * 0.68 + math.cos(perp) * bow, fy + (ty - fy) * 0.68 + math.sin(perp) * bow)
+    land = (tx, ty)
+    if overshoot and dist > 120:
+        m = random.uniform(4, 16)
+        land = (tx + math.cos(ang) * m, ty + math.sin(ang) * m)
+    moves = 0
+    try:
+        for i in range(1, steps + 1):
+            t = _ease(i / steps)
+            x, y = _bezier(frm, c1, c2, land, t)
+            jit = max(0.4, 2.2 * (1.0 - t))
+            await page.mouse.move(x + random.uniform(-jit, jit), y + random.uniform(-jit, jit))
+            moves += 1
+            base = 3 + 22 * (1.0 - abs(0.5 - i / steps) * 2.0)
+            await page.wait_for_timeout(base * random.uniform(0.5, 1.5))
+        if overshoot and land != (tx, ty):
+            for j in range(1, random.randint(4, 8) + 1):
+                t = _ease(min(1.0, j / 6.0))
+                await page.mouse.move(land[0] + (tx - land[0]) * t + random.uniform(-.6, .6),
+                                      land[1] + (ty - land[1]) * t + random.uniform(-.6, .6))
+                moves += 1
+                await page.wait_for_timeout(random.uniform(12, 34))
+        for _ in range(random.randint(2, 4)):
+            await page.mouse.move(tx + random.uniform(-1.2, 1.2), ty + random.uniform(-1.2, 1.2))
+            moves += 1
+            await page.wait_for_timeout(random.uniform(15, 45))
+        await page.mouse.move(tx, ty)
+    except Exception:
+        pass
+    return moves + 1
 
 # Workable (and friends) hide the real radio/checkbox input (aria-hidden,
 # visually styled wrapper div[role=radio|checkbox]) — Playwright's check()
@@ -294,15 +440,25 @@ async def fill_field(page: Page, field: dict) -> bool:
                 value = coerce_for_input(value, _t, _im)
             except Exception:
                 pass
-            try:
-                await element.clear(timeout=5000)
-                await element.fill(value, timeout=5000)
-            except Exception:
-                # Fallback: click and type
-                await element.click(timeout=3000)
-                await page.keyboard.press("Control+a")
-                await page.keyboard.type(value, delay=50)
-            logger.info("Filled '%s' = '%s'", selector, value[:50])
+            typed = False
+            if human_type_enabled():
+                # Ashby: type with real keystrokes so deviceFingerprint's dwell/kpm/backspace
+                # collectors get human data (not the null of .fill()). Falls back to .fill() below
+                # if the exact-value check fails, so a miss never silently blanks a required field.
+                try:
+                    typed = await human_type(page, element, value)
+                except Exception:
+                    typed = False
+            if not typed:
+                try:
+                    await element.clear(timeout=5000)
+                    await element.fill(value, timeout=5000)
+                except Exception:
+                    # Fallback: click and type
+                    await element.click(timeout=3000)
+                    await page.keyboard.press("Control+a")
+                    await page.keyboard.type(value, delay=50)
+            logger.info("Filled '%s' = '%s'%s", selector, value[:50], " [human]" if typed else "")
 
         elif action == "select":
             if not await select_dropdown(page, selector, value):

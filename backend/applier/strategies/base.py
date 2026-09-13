@@ -30,7 +30,8 @@ from backend.applier.dropdowns import (
     harvest_react_selects,
     list_unanswered_react_selects,
 )
-from backend.applier.filler import check_input, dismiss_overlays, fill_form
+from backend.applier.filler import (check_input, dismiss_overlays, fill_form,
+                                     human_type, human_type_enabled, set_human_type)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,21 @@ def strip_review(ans):
     if isinstance(ans, str) and ans.startswith(_REVIEW_PREFIX):
         return ans.removeprefix("[review] ").removeprefix("[review]").lstrip(), True
     return ans, False
+
+
+async def _type_or_fill(page: Page, sel: str, text: str) -> None:
+    """Fill a plain open-text answer field. On the Ashby path (human_type_enabled) type it with
+    real keystrokes so deviceFingerprint's dwell/kpm/backspace collectors get human data; fall
+    back to .fill() if the human path misses (never silently blanks). Raises on total failure so
+    the caller's try/except continues past a dead selector, exactly as before."""
+    loc = page.locator(sel).first
+    if human_type_enabled():
+        try:
+            if await human_type(page, loc, text):
+                return
+        except Exception:
+            pass
+    await loc.fill(text, timeout=4000)
 
 
 def merge_custom_pick(q_text: str, option_text: str | None, backed: bool,
@@ -197,6 +213,12 @@ class ApplyStrategy(ABC):
         # and attach it, but type nothing else (env RESUME_PARSER_ONLY flips it globally).
         if not resume_parser_only and _env_true("RESUME_PARSER_ONLY"):
             resume_parser_only = True
+        # Ashby's deviceFingerprint reads keystroke telemetry (dwell/kpm/backspaces) — type open
+        # text with real keys on that path. Default ON for ashby only (other ATS' multi-step forms
+        # would blow timeouts); HUMAN_TYPE_FILL=1 forces global. Set per-fill: the next prefill
+        # re-sets it for its own ATS, so there is no cross-fill leak (co-pilot fills one at a time;
+        # the parallel bulk lane runs in separate processes).
+        set_human_type(self.name == "ashby")
         await self.open_form(page)
         await page.wait_for_timeout(1500)
         # Dismiss cookie/consent modals (Workable/OneTrust) whose backdrop intercepts
@@ -417,7 +439,7 @@ class ApplyStrategy(ABC):
                         continue
                     fill_text, flagged = strip_review(ans)
                     try:
-                        await page.locator(sel).first.fill(fill_text, timeout=4000)
+                        await _type_or_fill(page, sel, fill_text)
                     except Exception:
                         continue
                     answered_idx.add(i)
@@ -507,7 +529,7 @@ class ApplyStrategy(ABC):
                     # only the stripped text may touch the live field.
                     fill_text, flagged = strip_review(ans)
                     try:
-                        await page.locator(sel).first.fill(fill_text, timeout=4000)
+                        await _type_or_fill(page, sel, fill_text)
                     except Exception:
                         continue
                     answered_idx.add(i)

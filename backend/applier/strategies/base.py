@@ -807,7 +807,7 @@ class ApplyStrategy(ABC):
                         await page.locator(f'label[for="{lid}"]').first.click(timeout=2500)
                     else:
                         await loc.click(force=True, timeout=2500)
-                if await loc.evaluate("el => !!el.checked", timeout=1000):
+                if await self._await_radio_commit(page, loc):
                     n += 1
             except Exception as e:
                 logger.debug("reassert choice failed for %r: %s", q.get("question_text", "")[:40], e)
@@ -828,7 +828,7 @@ class ApplyStrategy(ABC):
                         await page.locator(f'label[for="{lid}"]').first.click(timeout=2500)
                     else:
                         await loc.click(force=True, timeout=2500)
-                if await loc.evaluate("el => !!el.checked", timeout=1000):
+                if await self._await_radio_commit(page, loc):
                     n += 1
             except Exception as e:
                 logger.debug("reassert planned check failed for %r: %s", f.get("selector", "")[:40], e)
@@ -858,6 +858,57 @@ class ApplyStrategy(ABC):
         if n:
             logger.info("reasserted %d answer(s) after fill (form-state sync)", n)
         return n
+
+    _RADIO_COMMIT_JS = """el => {
+        try {
+          if (!el.checked) return 'phantom';
+          const box = el.closest('.ashby-application-form-option, [class*="_option_"], [role="radio"]');
+          if (box) {
+            const ac = box.getAttribute('aria-checked');
+            if (ac === 'true') return 'committed';
+            if (ac === 'false') return 'phantom';
+            const cls = box.className || '';
+            // Ashby renders the option container class with a boolean token that flips on the
+            // React-committed selection (…_option_x <selected> ashby-…-option): ' false ' when the
+            // framework's state is unset even though the DOM input is checked (the phantom-fill).
+            if (/(^|\\s)false(\\s|$)/i.test(cls)) return 'phantom';
+            if (/(^|\\s)(true|_selected|selected|checked)(\\s|$)/i.test(cls)) return 'committed';
+          }
+          return 'committed';   // no container signal -> trust el.checked
+        } catch (e) { return 'committed'; }
+    }"""
+
+    async def _await_radio_commit(self, page: Page, loc, tries: int = 4) -> bool:
+        """Verify React actually COMMITTED a radio selection, not just the DOM `checked` (the
+        phantom-fill: `el.checked` is true but the framework's form state is empty, so the submit is
+        rejected 'Missing entry' while the screenshot shows it selected — worse under slow egress).
+        Ashby's option container flips a boolean class token on commit; re-click + settle until it
+        commits, up to `tries`. Additive to the caller's unconditional first re-click; never raises.
+        Returns True if committed (or if no commit signal exists and the input is checked)."""
+        for attempt in range(tries):
+            try:
+                st = await loc.evaluate(self._RADIO_COMMIT_JS, timeout=1000)
+            except Exception:
+                return True
+            if st == "committed":
+                return True
+            try:
+                await loc.evaluate("el => { el.checked = false; }", timeout=1000)
+                try:
+                    await loc.check(timeout=2000)
+                except Exception:
+                    lid = await loc.evaluate("el => el.id || ''", timeout=800)
+                    if lid:
+                        await page.locator(f'label[for="{lid}"]').first.click(timeout=2000)
+                    else:
+                        await loc.click(force=True, timeout=2000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(400 + attempt * 250)   # let React commit before re-checking
+        try:
+            return (await loc.evaluate(self._RADIO_COMMIT_JS, timeout=1000)) == "committed"
+        except Exception:
+            return True
 
     async def _fill_choice(self, page: Page, q: dict, index: int) -> bool:
         """Apply a chosen option: select by label, or check the radio/checkbox input."""

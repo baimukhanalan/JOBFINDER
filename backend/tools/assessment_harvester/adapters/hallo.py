@@ -177,6 +177,28 @@ class HalloAdapter(Adapter):
         # instruction/example pages carry a Skip; use it to reach the answerable item faster
         return await self._click(page, "Skip", timeout=2000)
 
+    async def handle_typing(self, page, text: str) -> bool:
+        """Hallo's LISTENING module ("Part N - Question k of M", a countdown timer, audio, and a
+        "Write your notes here while listening to the audio" SCRATCH textarea) is NOT a typing test —
+        the answerable questions appear AFTER the audio. Don't churn-type the notes (the core's
+        churn-guard would stick it); wait in ONE call for the audio/notes phase to end (the questions
+        then classify as MCQ), avoiding repeated typing passes. Otherwise defer to the generic typer."""
+        try:
+            body = (await page.inner_text("body", timeout=2000)).lower()
+        except Exception:
+            body = ""
+        if "write your notes" in body or "listen carefully to the content" in body:
+            for _ in range(30):     # up to ~90s for the audio to finish + the question to appear
+                try:
+                    b2 = (await page.inner_text("body", timeout=2000)).lower()
+                except Exception:
+                    b2 = ""
+                if "write your notes" not in b2:
+                    break
+                await page.wait_for_timeout(3000)
+            return True
+        return await super().handle_typing(page, text)
+
     async def handle_speaking(self, page, record_secs: float = 4.0, mic_say_wav=None) -> bool:
         """Hallo open-response (Speaking) items AUTO-RECORD ~60s (a red STOP button + a 'Recording will
         end in N seconds' countdown) and score the transcribed answer. Feed a spoken answer into the

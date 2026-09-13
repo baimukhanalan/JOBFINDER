@@ -821,6 +821,14 @@ async def detect_page_type(page: Page) -> str:
     return "unknown"
 
 
+# Referral / "where did you find our posting" questions — mirrors choices._REFERRAL_RE so a fuzzy
+# free-text known-answer doesn't consume the radio; the choice engine's _referral_pick picks a valid
+# live option instead (kept in sync with backend/services/tailor/choices.py::_REFERRAL_RE).
+_REFERRAL_Q_RE = re.compile(
+    r"(?i)hear about|how did you (?:find|learn)|where did you (?:find|hear)"
+    r"|find (?:our|this|the) (?:job|posting|position|role|opening)|source of|referr")
+
+
 async def analyze_page(
     page: Page,
     profile: dict,
@@ -900,7 +908,16 @@ async def analyze_page(
         for q_text, answer in ([_best] if _best else []):
             if True:
                 if f["type"] in ("radio_group", "checkbox_group"):
-                    opt = _pick_option(f["options"], answer, "")
+                    # A referral / "where did you find" radio: the offline draft is free text
+                    # (e.g. "Salmon Career Page") that rarely equals a live option; a FUZZY
+                    # _pick_option match can select a wrong or "please specify"-gated option that
+                    # doesn't satisfy the required field on submit (Salmon 204220 "Missing entry").
+                    # Unless the known answer EXACTLY equals an option, route the question to the
+                    # choice engine so _referral_pick chooses a valid non-specify option from the
+                    # ACTUAL options and it gets commit-verified in _reassert_answers.
+                    _exact = str(answer).strip() in (f.get("options") or [])
+                    opt = None if (_REFERRAL_Q_RE.search(display_text or "") and not _exact) \
+                        else _pick_option(f["options"], answer, "")
                     if opt:
                         fields.append({"selector": opt["value"], "action": "check",
                                        "value": "true",

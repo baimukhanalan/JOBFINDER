@@ -334,97 +334,125 @@ def _stealth_launch_kwargs(base_args: list[str]) -> dict:
 # been flagged minutes earlier — the network was never the decisive signal. COPILOT_FP_DIVERSIFY=0
 # disables.
 FP_DIVERSIFY = os.environ.get("COPILOT_FP_DIVERSIFY", "1") != "0"
-_FP_SCREENS = ((1366, 768), (1440, 900), (1536, 864), (1600, 900), (1680, 1050), (1920, 1080))
+
+# The device-identity-neutral parts of applier.browser._STEALTH (webdriver / chrome / plugins /
+# permissions). Used when a full device PROFILE is active, so the profile owns platform / languages /
+# hardwareConcurrency / deviceMemory / WebGL instead of _STEALTH pinning them non-configurable (which
+# blocked the profile's overrides and left a Windows-UA-with-MacIntel-platform mismatch).
+_STEALTH_MIN = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5].map(i => ({ name: 'Plugin ' + i, filename: 'p' + i })) });
+window.chrome = { runtime: {}, app: { isInstalled: false }, loadTimes: function(){}, csi: function(){} };
+const _q = window.navigator.permissions && window.navigator.permissions.query;
+if (_q) { window.navigator.permissions.query = (p) => (p && p.name === 'notifications' ? Promise.resolve({ state: Notification.permission }) : _q(p)); }
+"""
+
+# Per-context DEVICE profiles — each looks like a DIFFERENT real machine so consecutive submissions to
+# one tenant don't share a device signature (the earlier `fp_diversify` only jittered mem/screen/canvas
+# and LEFT the UA, timezone, platform and — worst — the WebGL renderer CONSTANT; on Xvfb that renderer
+# is SwiftShader, a blatant "server/headless" tell). Each profile = a real Chrome UA + coherent platform,
+# a REAL GPU (WebGL vendor/renderer, incl. the UNMASKED debug-extension params 37445/37446), a plausible
+# US timezone/locale, and cores/memory/screen. TLS/JA3 stays the real Chrome's (a Playwright limit that
+# a proxy or a JA3-spoofing engine would be needed to change).
+_CV = "152.0.0.0"
+_DEVICE_PROFILES = [
+    {"ua": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CV} Safari/537.36",
+     "platform": "Win32", "glv": "Google Inc. (Intel)",
+     "glr": "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "tz": "America/New_York", "langs": ["en-US", "en"], "cores": 8, "mem": 8, "w": 1920, "h": 1080},
+    {"ua": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CV} Safari/537.36",
+     "platform": "Win32", "glv": "Google Inc. (NVIDIA)",
+     "glr": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "tz": "America/Chicago", "langs": ["en-US", "en"], "cores": 12, "mem": 16, "w": 2560, "h": 1440},
+    {"ua": f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CV} Safari/537.36",
+     "platform": "MacIntel", "glv": "Google Inc. (Apple)",
+     "glr": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)",
+     "tz": "America/Los_Angeles", "langs": ["en-US", "en"], "cores": 10, "mem": 16, "w": 1728, "h": 1117},
+    {"ua": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{_CV} Safari/537.36",
+     "platform": "Win32", "glv": "Google Inc. (AMD)",
+     "glr": "ANGLE (AMD, AMD Radeon RX 6600 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+     "tz": "America/Denver", "langs": ["en-US", "en"], "cores": 6, "mem": 8, "w": 1600, "h": 900},
+]
 
 _FP_DIVERSIFY_JS = """(() => {
-  const seed = %(seed)d;
-  let s = seed >>> 0;
-  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => %(cores)d });
-  Object.defineProperty(navigator, 'deviceMemory', { get: () => %(mem)d });
-  // canvas: perturb a handful of pixels deterministically per context (invisible, hash-changing)
+  const P = __PROFILE_JSON__;
+  let s = (P.seed >>> 0);
+  const rnd = () => { s = (s*1664525+1013904223)>>>0; return s/4294967296; };
+  const def = (o,k,v) => { try { Object.defineProperty(o,k,{get:()=>v,configurable:true}); } catch(e){} };
+  def(navigator,'hardwareConcurrency',P.cores);
+  def(navigator,'deviceMemory',P.mem);
+  def(navigator,'platform',P.platform);
+  def(navigator,'languages',Object.freeze(P.langs.slice()));
+  // WebGL: spoof a REAL GPU on WebGL1+2, incl. UNMASKED_VENDOR/RENDERER (37445/37446) — kills SwiftShader.
+  const patchGL = (proto) => { if(!proto||!proto.getParameter) return; const g=proto.getParameter;
+    proto.getParameter=function(p){ if(p===37445) return P.glv; if(p===37446) return P.glr; return g.call(this,p); }; };
+  patchGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
+  patchGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+  // canvas + audio: tiny deterministic per-context perturbation (hash-changing, invisible)
   const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
   const _getImageData = CanvasRenderingContext2D.prototype.getImageData;
-  const tweak = (ctx, w, h) => {
-    try {
-      if (!w || !h) return;
-      const img = _getImageData.call(ctx, 0, 0, w, h);
-      const d = img.data;
-      for (let i = 0; i < 12; i++) {
-        const p = (Math.floor(rnd() * (d.length / 4))) * 4;
-        d[p] = (d[p] + 1) & 255;
-      }
-      ctx.putImageData(img, 0, 0);
-    } catch (e) {}
-  };
-  HTMLCanvasElement.prototype.toDataURL = function (...a) {
-    const c = this.getContext && this.getContext('2d');
-    if (c) tweak(c, this.width, this.height);
-    return _toDataURL.apply(this, a);
-  };
-  CanvasRenderingContext2D.prototype.getImageData = function (x, y, w, h, ...r) {
-    const img = _getImageData.call(this, x, y, w, h, ...r);
-    const d = img.data;
-    for (let i = 0; i < 6 && d.length > 4; i++) {
-      const p = (Math.floor(rnd() * (d.length / 4))) * 4;
-      d[p] = (d[p] + 1) & 255;
-    }
-    return img;
-  };
-  // audio: a tiny deterministic offset in the analyser output
-  if (window.AudioBuffer) {
-    const _gcd = AudioBuffer.prototype.getChannelData;
-    AudioBuffer.prototype.getChannelData = function (ch) {
-      const data = _gcd.call(this, ch);
-      const off = (seed %% 97) * 1e-7;
-      for (let i = 0; i < data.length; i += 1000) data[i] = data[i] + off;
-      return data;
-    };
-  }
+  const tweak = (c,w,h) => { try { if(!w||!h) return; const img=_getImageData.call(c,0,0,w,h); const d=img.data;
+    for(let i=0;i<12;i++){ const q=(Math.floor(rnd()*(d.length/4)))*4; d[q]=(d[q]+1)&255; } c.putImageData(img,0,0);}catch(e){} };
+  HTMLCanvasElement.prototype.toDataURL = function(...a){ const c=this.getContext&&this.getContext('2d'); if(c) tweak(c,this.width,this.height); return _toDataURL.apply(this,a); };
+  CanvasRenderingContext2D.prototype.getImageData = function(x,y,w,h,...r){ const img=_getImageData.call(this,x,y,w,h,...r); const d=img.data;
+    for(let i=0;i<6&&d.length>4;i++){ const q=(Math.floor(rnd()*(d.length/4)))*4; d[q]=(d[q]+1)&255; } return img; };
+  if(window.AudioBuffer){ const _gcd=AudioBuffer.prototype.getChannelData;
+    AudioBuffer.prototype.getChannelData=function(ch){ const data=_gcd.call(this,ch); const off=((P.seed%97))*1e-7; for(let i=0;i<data.length;i+=1000) data[i]=data[i]+off; return data; }; }
 })();"""
 
 
-def _fp_profile() -> dict:
-    """One plausible device profile per context (seeded per call)."""
+def _device_profile() -> dict:
+    """Pick one realistic device profile + a per-context seed."""
     import random
-    w, h = random.choice(_FP_SCREENS)
-    return {"seed": random.randrange(1, 2**31 - 1), "cores": random.choice((4, 8, 12)),
-            "mem": random.choice((4, 8, 16)), "w": w, "h": h}
+    p = dict(random.choice(_DEVICE_PROFILES))
+    p["seed"] = random.randrange(1, 2**31 - 1)
+    return p
 
 
 async def _new_ctx(proxy_cfg: dict | None):
-    """A fill context: per-proxy egress + (stealth) a real locale/timezone and the anti-automation
-    init script, so the reCAPTCHA v3 token minted at Submit carries a human-looking browser."""
+    """A fill context: per-proxy egress + (stealth) anti-automation + (fp) a full per-context DEVICE
+    profile (UA/timezone/locale via context options; platform/WebGL/cores/mem/canvas via init script),
+    so consecutive submissions to one tenant carry a DIFFERENT device signature and a human-looking
+    reCAPTCHA-v3 browser."""
+    import json as _json
     kw: dict = {"no_viewport": True}
-    if STEALTH_ON:
-        kw.update(locale="en-US", timezone_id="Asia/Almaty", color_scheme="light")
-    fp = None
+    prof = None
     if FP_DIVERSIFY:
-        fp = _fp_profile()
+        prof = _device_profile()
         kw.pop("no_viewport", None)
-        kw.update(viewport={"width": fp["w"], "height": fp["h"] - 120},
-                  screen={"width": fp["w"], "height": fp["h"]})
+        kw.update(user_agent=prof["ua"], locale=prof["langs"][0], timezone_id=prof["tz"],
+                  color_scheme="light",
+                  viewport={"width": prof["w"], "height": max(600, prof["h"] - 120)},
+                  screen={"width": prof["w"], "height": prof["h"]})
+    elif STEALTH_ON:
+        kw.update(locale="en-US", timezone_id="Asia/Almaty", color_scheme="light")
     if proxy_cfg:
         kw["proxy"] = proxy_cfg
     ctx = await _S["browser"].new_context(**kw)
-    if fp:
-        try:
-            await ctx.add_init_script(_FP_DIVERSIFY_JS % fp)
-            logger.info("fp-diversify: screen %dx%d cores=%d mem=%d seed=%d",
-                        fp["w"], fp["h"], fp["cores"], fp["mem"], fp["seed"])
-        except Exception:
-            logger.warning("fp-diversify script not applied", exc_info=True)
     if STEALTH_ON:
         try:
-            from backend.applier.browser import _STEALTH
-            await ctx.add_init_script(_STEALTH)
-            # _STEALTH pins navigator.platform to MacIntel (for the spoofed macOS UA of the bundled
-            # build); with REAL Linux Chrome the UA says X11/Linux, so keep platform coherent —
-            # a UA/platform mismatch is itself a fingerprint tell.
-            await ctx.add_init_script(
-                "Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });")
+            if prof:
+                await ctx.add_init_script(_STEALTH_MIN)   # profile owns platform/langs/cores/mem/WebGL
+            else:
+                from backend.applier.browser import _STEALTH
+                await ctx.add_init_script(_STEALTH)
         except Exception:
             logger.warning("stealth init script not applied", exc_info=True)
+    if prof:
+        try:
+            # injected AFTER _STEALTH so the profile's platform + real-GPU WebGL win over _STEALTH's
+            # constant MacIntel/Intel-Iris spoof.
+            await ctx.add_init_script(_FP_DIVERSIFY_JS.replace("__PROFILE_JSON__", _json.dumps(prof)))
+            logger.info("device-profile: %s %s %s cores=%d %dx%d",
+                        prof["platform"], prof["glr"][:38], prof["tz"], prof["cores"], prof["w"], prof["h"])
+        except Exception:
+            logger.warning("device-profile script not applied", exc_info=True)
+    elif STEALTH_ON:
+        try:
+            await ctx.add_init_script(
+                "Object.defineProperty(navigator,'platform',{get:()=>'Linux x86_64'});")
+        except Exception:
+            pass
     return ctx
 
 

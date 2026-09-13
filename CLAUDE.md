@@ -698,11 +698,17 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   discriminating tests, 2026-09-13; corrects an earlier per-IP AND an earlier time-cooldown guess).** Same fresh unused IP
   (85.117.99.152, a re-synced phone exit-node) for all three: (1) Dana → Salmon = FLAGGED; (2) Dana → deepgram, a
   never-touched tenant = LANDED (so our source/device/domain is fine, not "us"); (3) a BRAND-NEW identity — name "Aruzhan
-  Sadykova", `@amaskills.com`, a fresh LinkedIn — → Salmon = LANDED with an ack; AND (4) the EXACT name "Dana Erlan" + a
-  unique LinkedIn (the synth_persona fix) → LANDED on job 40400, the very Salmon posting that spam-flagged Dana TWICE that
-  evening, with an ack. So the SOLE cluster anchor was the identical `linkedin.com/in/dana_erlan` URL repeated on all ~13
-  applications — NAME and EMAIL DOMAIN are irrelevant; the exact "Dana Erlan" brand is fine once the LinkedIn is unique.
-  Salmon's flag is NOT blanket (Aruzhan/Dana-Erlan passed immediately, no waiting) and NOT per-IP. The résumé is regenerated per fill (proven: unique
+  Sadykova", `@amaskills.com`, a fresh LinkedIn — → Salmon = LANDED with an ack; (4) the EXACT name "Dana Erlan" + a unique
+  LinkedIn → LANDED on job 40400 (which had flagged Dana twice) at ~14 Dana apps; BUT (5) the SAME recipe (Dana Erlan +
+  unique LinkedIn) FLAGGED on job 20049 once the day's Dana-Erlan count at Salmon reached ~28. **Corrected conclusion
+  (an earlier "name/domain irrelevant, unique LinkedIn alone is enough" was over-claimed from test 4 and refuted by test
+  5): the unique LinkedIn is NECESSARY and moves the threshold up (it was the strongest/first anchor — the identical
+  `/in/dana_erlan` repeated on every app) but is NOT sufficient at high per-tenant volume — the repeated NAME
+  "Dana Erlan" ITSELF becomes a cluster signal once saturated (~28/day). A fully fresh identity (Aruzhan) still lands at
+  that saturation.** So for VOLUME to one tenant, vary the NAME per application (the `synth_persona` per-job-name path),
+  not just the LinkedIn; a single fixed campaign name is safe ONLY at low velocity (the `company_velocity` 2/day cap keeps
+  the name below the saturation threshold). Email DOMAIN is irrelevant (takhet fine). Salmon's flag is per-tenant identity
+  clustering, NOT per-IP and NOT a blanket time cooldown. The résumé is regenerated per fill (proven: unique
   PDFs) but that never mattered — the constant is the identity HEADER, not the body. **Fix for volume to ONE tenant: UNIQUE
   identity per application (fresh name + rotate email domain — Postfix serves amaskills.com/systeam.kz/proqares.org/
   mfamask.kz; `synth_persona`'s default per-job names already do this), NOT one fixed campaign name.** A single fixed name

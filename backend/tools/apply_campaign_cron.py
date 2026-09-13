@@ -80,8 +80,16 @@ def main() -> None:
         # ACROSS campaigns (this returns only when the whole batch is done) so the LLM ceiling holds.
         log.info("campaign %s (%s): filling %d targets with up to %d workers",
                  cid, c.get("name"), len(targets), CAMPAIGN_WORKERS)
+        # vary_name: keep the campaign's IDENTITY (owner-chosen "Dana Erlan") but rotate its spelling
+        # per application — EN / RU (Дана Ерлан) / a Y-form (Dana Yerlan) — with a fresh mailbox + pid
+        # (⇒ a unique linkedin.com/in/ per fill). An IDENTICAL exact name + one LinkedIn on every
+        # application is what BUILT Ashby's per-tenant spam cluster; varied spellings + unique LinkedIn,
+        # under the company_velocity 2/day cap, keep each tenant below the saturation threshold while
+        # the applicant stays recognizably Dana Erlan (owner's requirement). Off => the literal name.
+        _name = ((lambda jid, _n=c.get("name"): apply_campaigns.name_variant(_n))
+                 if c.get("vary_name") else c.get("name"))
         results = _fill_campaign_targets(
-            targets, gender=c.get("gender") or None, name=c.get("name"),
+            targets, gender=c.get("gender") or None, name=_name,
             identity_for=lambda jid, _cid=cid: apply_campaigns.next_identity(_cid),
             workers=CAMPAIGN_WORKERS,
             english_level=c.get("english_level") or None)   # owner-declared CEFR (Dana: C2)

@@ -425,6 +425,53 @@ def _discovery_socket(authkey: str):
         return None, None
 
 
+def _api_exit_peers(max_age_min: float = 12.0) -> list[dict]:
+    """Online exit-node peers via the Tailscale API (backend/.ts_api_token) — a RELIABLE second
+    source for `sync`: the transient discovery probe's netmap lags and can report an online phone as
+    offline (proven 2026-09-13: API showed the iPhone online + advertising 0.0.0.0/0 while `--peers`
+    returned []), which left `desired` empty so a live slot got reaped and fills fell to direct
+    (datacenter → Ashby spam-flag). Returns the same shape as `_parse_exit_peers`. [] if the token is
+    absent or the call fails — callers MERGE this with the probe result, never use it as the sole
+    source. Excludes our own `jf-egress-*` userspace slot nodes."""
+    import datetime
+    import json as _json
+    import urllib.request
+    from pathlib import Path as _Path
+    try:
+        tok = (_Path(__file__).resolve().parent.parent / ".ts_api_token").read_text().strip()
+    except Exception:
+        return []
+    if not tok:
+        return []
+    try:
+        req = urllib.request.Request(
+            "https://api.tailscale.com/api/v2/tailnet/-/devices?fields=all",
+            headers={"Authorization": "Bearer " + tok})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            devs = (_json.load(r) or {}).get("devices") or []
+    except Exception:
+        return []
+    now = datetime.datetime.now(datetime.timezone.utc)
+    out = []
+    for d in devs:
+        host = (d.get("hostname") or "").split(".")[0]
+        if host.startswith("jf-egress"):
+            continue
+        routes = (d.get("advertisedRoutes") or []) + (d.get("enabledRoutes") or [])
+        if "0.0.0.0/0" not in routes and "::/0" not in routes:
+            continue
+        try:
+            ls = datetime.datetime.fromisoformat((d.get("lastSeen") or "").replace("Z", "+00:00"))
+            if (now - ls).total_seconds() > max_age_min * 60:
+                continue
+        except Exception:
+            continue
+        ip = next((a for a in (d.get("addresses") or []) if _IPV4.match(a)), "")
+        if ip:
+            out.append({"name": host, "ip": ip, "os": d.get("os") or "", "online": True})
+    return out
+
+
 def sync(authkey: str) -> dict:
     """Reconcile desired vs running: desired = one slot per ONLINE exit-node peer (discovered on the
     KEY'S tailnet via a clean no-exit probe). Bring up the missing, reap slots whose exit_ip is no
@@ -446,6 +493,10 @@ def sync(authkey: str) -> dict:
         summary["errors"] += 1                              # (the tailnet always has peers; a probe
         return summary                                      #  that shows none is not yet converged)
     peers = _parse_exit_peers(st)
+    # Merge in API-discovered online exit nodes (the probe netmap lags and can miss an online
+    # phone). Additive: more desired peers = fewer reaps + the online phone's slot gets built/kept.
+    _seen = {p["ip"] for p in peers}
+    peers = peers + [p for p in _api_exit_peers() if p.get("ip") and p["ip"] not in _seen]
     desired_ips = {p["ip"] for p in peers if p.get("ip")}
     summary["desired"] = sorted(desired_ips)
     _RUN_CACHE.update(ts=0.0, slots=[])             # force a fresh liveness read (a daemon may have died)

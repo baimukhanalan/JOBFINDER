@@ -212,6 +212,30 @@ def interleave_by_company(job_ids, jobs_by_ids=None) -> list[int]:
     return out
 
 
+# Spelling variants of a campaign's fixed name (owner: "Dana Erlan" must stay Dana Erlan, but
+# EN/RU/Y forms are fine). An IDENTICAL exact name string on every application is what saturated
+# Ashby's per-tenant identity cluster; rotating the spelling (with a unique LinkedIn per fill +
+# the 2/day company cap) keeps each tenant under the threshold while the applicant stays Dana Erlan.
+_NAME_VARIANTS = {
+    "dana erlan": ["Dana Erlan", "Dana Yerlan", "Дана Ерлан", "Дана Эрлан", "Dana Yerlan"],
+}
+
+
+def name_variant(base: str) -> str:
+    """Pick a spelling variant of a campaign name (EN/RU/Y-form). Returns `base` unchanged when
+    there's no variant set and no obvious Y-form, so a name we can't safely vary is never mangled."""
+    import random as _random
+    key = (base or "").strip().lower()
+    variants = _NAME_VARIANTS.get(key)
+    if variants:
+        return _random.choice(variants)
+    parts = (base or "").split()
+    out = [base] if base else []
+    if len(parts) >= 2 and not parts[-1][:1].lower() == "y":     # a plausible Y-form of the surname
+        out.append(" ".join(parts[:-1] + ["Y" + parts[-1]]))
+    return _random.choice(out) if out else (base or "")
+
+
 def _generated_name(job_ids: list[int], gender: str) -> str:
     """A fresh persona name for a `jobs` campaign the owner left unnamed: random from
     synth_persona's per-country banks, the country taken from the FIRST selected job's catalog row

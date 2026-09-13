@@ -1191,11 +1191,21 @@ def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, wor
             email, pid = identity_for(jid)
         except Exception as exc:
             return {"state": "error", "error": f"identity: {exc}"[:200], "mailbox": ""}
+        nm = name(jid) if callable(name) else name    # vary_name: a spelling variant per application
         try:
             pid2, jjid, _gen = catalog_drafts.ensure_and_wire(
-                jid, gender=gender, name=name, email=email, pid=pid, english_level=english_level)
+                jid, gender=gender, name=nm, email=email, pid=pid, english_level=english_level)
         except Exception as exc:
-            return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email}
+            return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email or ""}
+        if not email:
+            # unique_identity mode: synth_persona minted the email — read it back for the
+            # journal / stats mailbox→job join (otherwise the application isn't attributable).
+            try:
+                import json as _json
+                email = ((_json.load(open(f"uploads/prefill/{pid2}/{jjid}/persona.json"))
+                          .get("profile") or {}).get("email") or "")
+            except Exception:
+                email = ""
         st = _fill_via(base_url, jjid, pid2, wait_submit=True)
         st["mailbox"] = email
         return st

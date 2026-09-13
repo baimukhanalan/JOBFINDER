@@ -12,6 +12,9 @@ from backend.tools import tailscale_egress as te
 def _use_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(te, "_PATH", tmp_path / "ts_egress.json")
     monkeypatch.setattr(te, "_STATE_ROOT", tmp_path / "ts-egress")
+    # discovery's API second-source makes a real HTTP call — stub it off by default so unit tests
+    # exercise the probe-merge logic deterministically (the API path is a live-only augmentation).
+    monkeypatch.setattr(te, "_api_exit_peers", lambda *a, **k: [])
     te._CACHE.update(ts=0.0, status=None)
     te._RUN_CACHE.update(ts=0.0, slots=[])
 

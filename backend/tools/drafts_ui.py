@@ -207,9 +207,29 @@ def render_resume_pdf(resume: dict) -> bytes | None:
                                     Spacer)
 
     buf = io.BytesIO()
+    # PDF metadata was a CONSTANT cross-application fingerprint: every résumé carried
+    # Producer="ReportLab PDF Library - (opensource)" + Title="Resume" + Author="(anonymous)" —
+    # a string that never appears on a human résumé (real ones say Word/Quartz/Skia/Google Docs)
+    # and hashed identically for all ~14.8k applications. Set a per-persona, deterministic-but-varied
+    # toolchain + the candidate's own name, so uploaded files don't share one metadata hash.
+    import hashlib as _hashlib
+    _pi = (resume.get("personal_info") or {})
+    _nm = str(_pi.get("name") or _pi.get("full_name") or resume.get("full_name") or "").strip()
+    _TOOLCHAINS = [
+        ("Microsoft: Print To PDF", "Microsoft Word for Microsoft 365"),
+        ("macOS Version 14.5 (Build 23F79) Quartz PDFContext", "Pages"),
+        ("Skia/PDF m127", "Google Docs Renderer"),
+        ("Acrobat Distiller 24.0 (Windows)", "Adobe InDesign 20.0"),
+        ("LibreOffice 24.2", "Writer"),
+    ]
+    _seed = int(_hashlib.md5((_nm or "resume").encode("utf-8")).hexdigest(), 16)
+    _producer, _creator = _TOOLCHAINS[_seed % len(_TOOLCHAINS)]
     doc = SimpleDocTemplate(buf, pagesize=LETTER, topMargin=0.6 * inch,
                             bottomMargin=0.6 * inch, leftMargin=0.7 * inch,
-                            rightMargin=0.7 * inch, title="Resume")
+                            rightMargin=0.7 * inch,
+                            title=(f"{_nm} - Resume" if _nm else "Resume"),
+                            author=(_nm or "Resume"), subject="Resume",
+                            creator=_creator, producer=_producer)
     ss = getSampleStyleSheet()
     name_s = ParagraphStyle("nm", parent=ss["Title"], fontSize=18, spaceAfter=2,
                             alignment=TA_LEFT)

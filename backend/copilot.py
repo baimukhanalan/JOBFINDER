@@ -191,7 +191,15 @@ async def _ensure_browser():
         # A plain launch still honors a per-CONTEXT proxy (verified: a context created with
         # proxy=… routes through it, one without goes DIRECT), so _use_proxy_context's
         # rotation keeps working while the empty-pool/direct case has real internet.
-        _launch_args = ["--no-sandbox", "--disable-dev-shm-usage"]
+        # --webrtc-ip-handling-policy: STOP the WebRTC real-IP leak. Even with a per-CONTEXT SOCKS
+        # proxy, Chromium gathers WebRTC STUN candidates OUTSIDE the proxy → a srflx candidate
+        # reflects the SERVER's real public IP (173.249.18.153 + IPv6), a CONSTANT "true source"
+        # that survives every HTTP-IP rotation across phone exit-nodes. `disable_non_proxied_udp`
+        # forces WebRTC through the proxy (→ 0 leaked candidates; local IPs are already mDNS-hidden).
+        # NB the `--force-webrtc-ip-handling-policy` spelling is SILENTLY IGNORED on this Chrome
+        # build — the non-`force-` switch is the one that works (verified 2026-09-13).
+        _launch_args = ["--no-sandbox", "--disable-dev-shm-usage",
+                        "--webrtc-ip-handling-policy=disable_non_proxied_udp"]
         if not HEADLESS:
             _launch_args.insert(0, "--start-maximized")
         if NOPECHA_ON:
@@ -402,9 +410,14 @@ _FP_DIVERSIFY_JS = """(() => {
 
 
 def _device_profile() -> dict:
-    """Pick one realistic device profile + a per-context seed."""
+    """Pick one realistic device profile + a per-context seed. COPILOT_FP_FORCE=<idx> pins a specific
+    profile (diagnostics: compare the deviceFingerprint two KNOWN-different devices produce)."""
     import random
-    p = dict(random.choice(_DEVICE_PROFILES))
+    _force = os.environ.get("COPILOT_FP_FORCE")
+    if _force is not None and _force.isdigit() and int(_force) < len(_DEVICE_PROFILES):
+        p = dict(_DEVICE_PROFILES[int(_force)])
+    else:
+        p = dict(random.choice(_DEVICE_PROFILES))
     p["seed"] = random.randrange(1, 2**31 - 1)
     return p
 
@@ -548,6 +561,30 @@ def _attach_submit_capture(page, shot_dir) -> None:
             data = {"url": u, "status": resp.status, "body": body[:20000]}
             codes = sorted(set(re.findall(r'"(?:code|errorCode|__typename)"\s*:\s*"([A-Z_]{6,})"', body)))
             data["codes"] = codes
+            # Capture the REQUEST variables too — deviceFingerprint / sourceAttributionCode /
+            # applicationRequestId live here (next to $recaptchaToken). This is the ONLY way to verify
+            # whether Ashby actually sees a DIFFERENT device per fill (a constant fingerprint here =
+            # "they know it's us" regardless of IP/identity). recaptchaToken is truncated (huge + fresh).
+            try:
+                pd = resp.request.post_data or ""
+                fp = {}
+                for key in ("deviceFingerprint", "sourceAttributionCode", "applicationRequestId",
+                            "creditedToUserHash", "utmData"):
+                    m = re.search(r'"%s"\s*:\s*("(?:[^"\\]|\\.)*"|null|\{[^}]*\})' % key, pd)
+                    if m:
+                        fp[key] = m.group(1)[:400]
+                fp["recaptchaToken_present"] = ('"recaptchaToken"' in pd)
+                # any cookie/visitor id echoed in the request headers
+                try:
+                    hdrs = resp.request.headers
+                    fp["has_cookie"] = bool(hdrs.get("cookie"))
+                    fp["referer"] = (hdrs.get("referer") or "")[:120]
+                except Exception:
+                    pass
+                data["request_vars"] = fp
+                logger.info("submit request vars: %s", {k: v for k, v in fp.items() if k != "recaptchaToken_present"})
+            except Exception:
+                pass
             try:
                 os.makedirs(shot_dir, exist_ok=True)
                 with open(os.path.join(str(shot_dir), "submit_response.json"), "w", encoding="utf-8") as f:

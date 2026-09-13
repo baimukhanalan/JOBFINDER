@@ -91,6 +91,9 @@ class BrowserManager:
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-features=IsolateOrigins,site-per-process",
+                # stop the WebRTC real-IP leak (srflx reflects the server's true public IP even
+                # through a per-context SOCKS proxy). Non-`force-` spelling is the one Chrome honors.
+                "--webrtc-ip-handling-policy=disable_non_proxied_udp",
                 "--window-size=1280,900",
                 "--start-maximized",
             ],

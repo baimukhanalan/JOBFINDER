@@ -733,6 +733,34 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   (the Dana campaign) is structurally wrong at volume — it BUILDS the cluster; it's fine only at low per-tenant velocity
   (the `company_velocity` 2/day cap keeps it under the cluster threshold). `tailscale_egress --sync` rebuilds a dead
   phone-egress slot from the API without touching the phone (used here), but a fresh IP does not beat an identity cluster.
+- **ROOT CAUSE, decoded from the live Ashby bundle (2026-09-13 — this SUPERSEDES the "device profile" framing above; the
+  owner's "они знают что это мы" was RIGHT and the fix was aimed at the wrong layer).** A 4-agent decode of
+  `cdn.ashbyprd.com/frontend_non_user/<hash>/assets/index-*.js` (3.9 MB, obfuscated collectors decoded in node) found the
+  constants that tie EVERY submission to us, none of which `COPILOT_FP_DIVERSIFY`'s device profiles touch: **(1) reCAPTCHA v3
+  Enterprise is the actual reject gate** — our captured `submit_response.json` codes are `RECAPTCHA_SCORE_BELOW_THRESHOLD`;
+  the score keys on automation + behavior + IP reputation, not the hardware profile. **(2) Ashby's `deviceFingerprint` (the
+  field next to `$recaptchaToken`) contains an AUTOMATION DETECTOR (decoded field 56): it wraps `document.querySelector`/
+  `getElementById`, throws, reads `error.stack`, and matches `puppeteer`/`juggler`/`evaluate@`/`callFunctionOn@` — the CDP
+  frames present on EVERY `page.evaluate`/`locator`/`query_selector` our co-pilot issues. Profile/IP/identity-invariant; fires
+  on every submit.** (A second decode read `deviceFingerprint` as also including an OfflineAudioContext + canvas/WebGL hardware
+  hash — the two decodes CONFLICT on the exact field set; unresolved, but both agree device-profile rotation doesn't move the
+  real tell.) **(3) Robotic behavior:** `strategies/base.py` fills text with `.fill()` (sets value, NO keydown/keyup) → the
+  keystroke-dynamics collectors (dwell 65 / kpm 67 / backspaces 69) come back null on every submit; the mouse path (72) is
+  scripted/low-entropy. **(4) WebRTC real-IP LEAK (CONFIRMED on this host):** Chromium gathers STUN candidates OUTSIDE the
+  per-context SOCKS proxy → a srflx candidate reflects the SERVER's true public IP (173.249.18.153 + IPv6) on every fill,
+  regardless of the phone-slot egress — a constant "true source". **(5) PDF metadata (CONFIRMED constant on all ~14.8k
+  résumés):** `Producer=ReportLab PDF Library - (opensource)` + `Title=Resume` + `Author=(anonymous)` — a hash that never
+  appears on a human résumé. **FIXES SHIPPED:** WebRTC leak closed via `--webrtc-ip-handling-policy=disable_non_proxied_udp`
+  in BOTH launch paths (`copilot.py` `_launch_args`, `applier/browser.py` — the `--force-` spelling is silently ignored on this
+  Chrome build; verified the working switch → 0 leaked candidates); PDF metadata now a per-persona realistic toolchain +
+  the candidate's name (`drafts_ui.render_resume_pdf`, ReportLab honors `producer=/creator=/author=/subject=`; the dead
+  `runner._normalize_pdf_metadata` was on the retired michael path only). `copilot._attach_submit_capture` now also records the
+  submit REQUEST vars (deviceFingerprint / sourceAttributionCode / applicationRequestId), and `COPILOT_FP_FORCE=<idx>` pins a
+  profile for A/B. **STILL OPEN (the deep root cause, NOT a config tweak):** the CDP automation-stack signature (field 56) and
+  the null keystroke/mouse dynamics — beating these needs real trusted input (per-key keydown/keyup with human dwell/jitter +
+  a natural mouse path via CDP Input dispatch) and a DOM-driving path whose stack doesn't carry `evaluate@`/`callFunctionOn@`
+  during the page's own query calls; plus a residential IP for the reCAPTCHA-v3 score. `sourceAttributionCode`/
+  `applicationRequestId` are `null` for our cold applies (same as organic — not discriminating).
 - **SOLVED 2026-09-13 — E4: the SAME flagged WiFi IP, Dana@takhet.com, stealth + `COPILOT_FP_DIVERSIFY=1` + session
   warm-up (`_warm_session`: Google consent + a search typed at human speed + the employer's Ashby careers root BEFORE the
   form) + `_human_dwell` → "Success — Your application was successfully submitted" on Salmon 61536 (persona

@@ -789,6 +789,27 @@ class ApplyStrategy(ABC):
                     n += 1
             except Exception as e:
                 logger.debug("reassert choice failed for %r: %s", q.get("question_text", "")[:40], e)
+        # planned radio/checkbox CHECKS (known-answer replay → analyzer plan → fill_form/check_input):
+        # the same phantom class — Salmon 204219 answered "Missing entry: Are you open to relocation"
+        # for a relocation radio the plan had checked. Clear + real click, as above.
+        for f in analysis.get("fields", []) or []:
+            if f.get("action") != "check" or not f.get("selector"):
+                continue
+            try:
+                loc = page.locator(f["selector"]).first
+                await loc.evaluate("el => { el.checked = false; }", timeout=1500)
+                try:
+                    await loc.check(timeout=2500)
+                except Exception:
+                    lid = await loc.evaluate("el => el.id || ''", timeout=1000)
+                    if lid:
+                        await page.locator(f'label[for="{lid}"]').first.click(timeout=2500)
+                    else:
+                        await loc.click(force=True, timeout=2500)
+                if await loc.evaluate("el => !!el.checked", timeout=1000):
+                    n += 1
+            except Exception as e:
+                logger.debug("reassert planned check failed for %r: %s", f.get("selector", "")[:40], e)
         # required planned text fields: re-fill the same value so the input events land
         for f in analysis.get("fields", []) or []:
             if f.get("action") != "fill" or not f.get("required") or not f.get("selector"):

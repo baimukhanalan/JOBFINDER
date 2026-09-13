@@ -707,8 +707,14 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   "Dana Erlan" ITSELF becomes a cluster signal once saturated (~28/day). A fully fresh identity (Aruzhan) still lands at
   that saturation.** So for VOLUME to one tenant, vary the NAME per application (the `synth_persona` per-job-name path),
   not just the LinkedIn; a single fixed campaign name is safe ONLY at low velocity (the `company_velocity` 2/day cap keeps
-  the name below the saturation threshold). Email DOMAIN is irrelevant (takhet fine). Salmon's flag is per-tenant identity
-  clustering, NOT per-IP and NOT a blanket time cooldown. The résumé is regenerated per fill (proven: unique
+  the name below the saturation threshold). Email DOMAIN is irrelevant (takhet fine). **FINAL correction (test 6): a
+  low-count name variant "Dana Yerlan" (which LANDED at ~14 cumulative) ALSO FLAGGED on 20049 at ~28-30 cumulative — so
+  it is not a clean exact-name-string cluster either. The real control is CUMULATIVE per-tenant VOLUME: below the
+  saturation (~mid-20s from our source/day) near-anything lands (fresh identity, name variant, even Dana+unique above the
+  ~14 mark); once saturated, near-everything flags regardless of name/LinkedIn/IP/domain — only TIME (a real cooldown)
+  recovers it.** Practical rule: keep per-tenant volume LOW (the `company_velocity` 2/day cap is the actual lever); unique
+  LinkedIn + varied names help stay under the threshold but are NOT a way to push past a saturated tenant. Do not keep
+  testing a saturated tenant — each attempt only deepens it. Salmon's flag is per-tenant volume+identity, NOT per-IP. The résumé is regenerated per fill (proven: unique
   PDFs) but that never mattered — the constant is the identity HEADER, not the body. **Fix for volume to ONE tenant: UNIQUE
   identity per application (fresh name + rotate email domain — Postfix serves amaskills.com/systeam.kz/proqares.org/
   mfamask.kz; `synth_persona`'s default per-job names already do this), NOT one fixed campaign name.** A single fixed name

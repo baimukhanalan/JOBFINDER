@@ -71,7 +71,10 @@ def test_resolve_search_skips_non_auto_submittable_ats(tmp_path, monkeypatch):
     c = ac.list_campaigns()[0]
     rows = [{"id": 1, "ats": "lever"}, {"id": 2, "ats": "workable"},
             {"id": 3, "ats": "greenhouse"}, {"id": 4, "ats": "ashby"}]
-    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: rows, submitted=set())
+    # inject a no-op velocity guard: this test isolates the ATS filter, not the per-company cap
+    # (the real guard reads live prefill dirs, so it flakes when the box has recent fills).
+    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: rows, submitted=set(),
+                             velocity_guard=lambda ids, **k: (list(ids), {}))
     # lever/workable (live-captcha, can't auto-submit) skipped -> only greenhouse/ashby
     assert got == [3, 4]
 

@@ -212,28 +212,90 @@ def interleave_by_company(job_ids, jobs_by_ids=None) -> list[int]:
     return out
 
 
-# Spelling variants of a campaign's fixed name (owner: "Dana Erlan" must stay Dana Erlan, but
-# EN/RU/Y forms are fine). An IDENTICAL exact name string on every application is what saturated
-# Ashby's per-tenant identity cluster; rotating the spelling (with a unique LinkedIn per fill +
-# the 2/day company cap) keeps each tenant under the threshold while the applicant stays Dana Erlan.
-_NAME_VARIANTS = {
-    "dana erlan": ["Dana Erlan", "Dana Yerlan", "Дана Ерлан", "Дана Эрлан", "Dana Yerlan"],
-}
+# AUTO spelling-variants for ANY campaign name (no per-name setup): a fixed exact name string on
+# every application is what saturated Ashby's per-tenant identity cluster; rotating the SPELLING
+# (Latin/Cyrillic transliteration + Y-glide forms) with a unique LinkedIn per fill + the 2/day
+# company cap keeps each tenant under the threshold while the applicant stays recognizably the same
+# person. `_NAME_VARIANTS` is an OPTIONAL hand-tuned override (empty by default — the generator
+# below handles every name automatically so a NEW campaign needs nothing extra).
+_NAME_VARIANTS: dict[str, list[str]] = {}
+
+_LAT2CYR_DI = [("shch", "щ"), ("zh", "ж"), ("kh", "х"), ("ts", "ц"), ("ch", "ч"), ("sh", "ш"),
+               ("th", "т"), ("yo", "ё"), ("yu", "ю"), ("ya", "я"), ("ye", "е"), ("ph", "ф")]
+_LAT2CYR = {"a": "а", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф", "g": "г", "h": "х",
+            "i": "и", "j": "дж", "k": "к", "l": "л", "m": "м", "n": "н", "o": "о", "p": "п",
+            "q": "к", "r": "р", "s": "с", "t": "т", "u": "у", "v": "в", "w": "в", "x": "кс",
+            "y": "й", "z": "з"}
+_CYR2LAT = {"а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo", "ж": "zh",
+            "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+            "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+            "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+            "я": "ya"}
+
+
+def _translit_word(w: str, to_cyr: bool) -> str:
+    lo = w.lower()
+    res = ""
+    if to_cyr:
+        i = 0
+        while i < len(lo):
+            for di, cy in _LAT2CYR_DI:
+                if lo.startswith(di, i):
+                    res += cy
+                    i += len(di)
+                    break
+            else:
+                res += _LAT2CYR.get(lo[i], lo[i])
+                i += 1
+    else:
+        res = "".join(_CYR2LAT.get(ch, ch) for ch in lo)
+    return res[:1].upper() + res[1:] if res else res
+
+
+def _translit(s: str, to_cyr: bool) -> str:
+    return " ".join(_translit_word(w, to_cyr) for w in s.split())
+
+
+def _y_forms(base: str) -> set[str]:
+    """Toggle a leading E↔Ye on each name part (Erlan↔Yerlan) — the 'sometimes add a Y' the owner
+    asked for, applied generally to any name."""
+    out: set[str] = set()
+    parts = base.split()
+    for i, p in enumerate(parts):
+        alt = None
+        if p[:2].lower() == "ye" and len(p) > 2:
+            alt = p[1:2].upper() + p[2:]                          # Yerlan -> Erlan (keep caps)
+        elif p[:1].lower() == "e" and len(p) > 1:
+            alt = ("Y" if p[:1].isupper() else "y") + p[:1].lower() + p[1:]  # Erlan -> Yerlan
+        if alt:
+            out.add(" ".join(parts[:i] + [alt] + parts[i + 1:]))
+    return out
+
+
+def spelling_variants(base: str) -> list[str]:
+    """All spelling variants of a name, auto-generated for ANY input (Latin↔Cyrillic + Y-forms)."""
+    base = (base or "").strip()
+    if not base:
+        return []
+    curated = _NAME_VARIANTS.get(base.lower())
+    if curated:
+        return list(curated)
+    is_cyr = any("Ѐ" <= ch <= "ӿ" for ch in base)
+    variants = {base}
+    latin_forms = {base} if not is_cyr else {_translit(base, to_cyr=False)}
+    for lf in list(latin_forms):
+        latin_forms |= _y_forms(lf)
+    variants |= latin_forms
+    for lf in latin_forms:                               # a Cyrillic spelling of each Latin form
+        variants.add(_translit(lf, to_cyr=True))
+    return sorted(v for v in variants if v)
 
 
 def name_variant(base: str) -> str:
-    """Pick a spelling variant of a campaign name (EN/RU/Y-form). Returns `base` unchanged when
-    there's no variant set and no obvious Y-form, so a name we can't safely vary is never mangled."""
+    """Pick a random spelling variant of a campaign name — works for ANY name with no setup."""
     import random as _random
-    key = (base or "").strip().lower()
-    variants = _NAME_VARIANTS.get(key)
-    if variants:
-        return _random.choice(variants)
-    parts = (base or "").split()
-    out = [base] if base else []
-    if len(parts) >= 2 and not parts[-1][:1].lower() == "y":     # a plausible Y-form of the surname
-        out.append(" ".join(parts[:-1] + ["Y" + parts[-1]]))
-    return _random.choice(out) if out else (base or "")
+    vs = spelling_variants(base)
+    return _random.choice(vs) if vs else (base or "")
 
 
 def _generated_name(job_ids: list[int], gender: str) -> str:

@@ -556,8 +556,15 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         from backend.tools.bulk_log import submitted_jobids
         submitted = submitted_jobids()
     submitted = set(int(x) for x in (submitted or []))
+    # Fetch a WIDE window, not n*8: list_jobs can't filter by ATS, and in a captcha-heavy eligibility
+    # slice (e.g. q='Kazakhstan' is ~80% Lever/Workable) the auto-ATS greenhouse/ashby rows we can
+    # actually submit are SPARSE and sorted PAST a small window — a 120-row limit filled up with
+    # captcha jobs we discard, surfacing 0 fresh auto-ATS and starving the campaign to "nothing to
+    # apply" while real fresh jobs sat at position >120. The in-Python auto-ATS filter + applied/
+    # submitted exclusions + the n*3 oversample + the per-company velocity cap still bound the output;
+    # this only widens what the resolver can SEE. (Bounded so a huge q='' pool stays cheap.)
     rows = list_jobs(q=(camp.get("q") or None), region=(camp.get("region") or None),
-                     remote_only=True, limit=max(n * 8, 40))
+                     remote_only=True, limit=max(n * 8, 2000))
     out = []
     for r in rows:
         # Only greenhouse/ashby auto-submit end-to-end from the datacenter IP (email-code, not a

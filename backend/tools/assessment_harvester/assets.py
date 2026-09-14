@@ -23,9 +23,37 @@ _DIR = os.path.join(os.path.dirname(__file__), "assets")
 SPEECH_WAV = os.path.join(_DIR, "speech.wav")
 FACE_Y4M = os.path.join(_DIR, "face.y4m")
 
+# piper — a local NEURAL TTS (natural voice, no API key), the upgrade over robotic espeak-ng for the
+# AI-scored speaking/video items. Overridable by env; falls back to espeak-ng when absent.
+_PIPER_BIN = os.environ.get("PIPER_BIN", os.path.expanduser("~/.venvs/piper/bin/piper"))
+_PIPER_MODEL = os.environ.get(
+    "PIPER_MODEL", os.path.expanduser("~/.local/share/piper-voices/en_US-amy-medium.onnx"))
+
 
 def _ffmpeg() -> str | None:
     return shutil.which("ffmpeg")
+
+
+def _piper_wav(text: str, path: str) -> bool:
+    """Natural neural TTS via piper -> mono 48kHz s16 WAV. Returns False (so speak_text_wav falls back
+    to espeak-ng) if the piper binary/model are absent or synthesis fails."""
+    ff = _ffmpeg()
+    if not (ff and os.path.exists(_PIPER_BIN) and os.path.exists(_PIPER_MODEL)):
+        return False
+    raw = path + ".piper.wav"
+    try:
+        subprocess.run([_PIPER_BIN, "-m", _PIPER_MODEL, "-f", raw], input=text, text=True,
+                       check=True, timeout=90, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-i", raw,
+                        "-af", "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=mono,volume=2.0",
+                        "-y", path], check=True, timeout=60)
+        try:
+            os.remove(raw)
+        except OSError:
+            pass
+        return os.path.exists(path) and os.path.getsize(path) > 1000
+    except Exception:
+        return False
 
 
 # Generic intelligible English — enough words for SVAR's speech RECOGNITION to register real speech
@@ -40,8 +68,11 @@ _SPEECH_TEXT = (
 
 
 def speak_text_wav(text: str, path: str) -> bool:
-    """Synthesize `text` to a mono 48kHz s16 WAV via espeak-ng (real intelligible speech) + ffmpeg.
-    Used both for the default fake-mic asset and for per-item dynamic TTS of a captured prompt."""
+    """Synthesize `text` to a mono 48kHz s16 WAV — a NATURAL neural voice via piper when available,
+    else robotic-but-intelligible espeak-ng. Used for the default fake-mic asset and for per-item
+    dynamic TTS of a captured prompt / a prepared spoken answer."""
+    if _piper_wav(text, path):          # natural neural voice (preferred for AI-scored speaking/video)
+        return True
     esp = shutil.which("espeak-ng") or shutil.which("espeak")
     ff = _ffmpeg()
     if not esp or not ff:

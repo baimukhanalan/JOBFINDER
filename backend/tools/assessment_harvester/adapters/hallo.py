@@ -345,14 +345,20 @@ class HalloAdapter(Adapter):
         # never advances — a PAGINATED module: Q1..Q4 advance on Next, Q5 has a different forward), dump
         # THAT page's controls + a screenshot ONCE to reveal its real submit/forward control.
         q = (item.get("question") or "")[:60]
-        if q and q == getattr(self, "_last_read_q", None):
+        if q and item.get("options") and q == getattr(self, "_last_read_q", None):
+            # a real ANSWERABLE-question loop (Q5), not the audio-wait phase
             self._read_repeat = getattr(self, "_read_repeat", 0) + 1
             if self._read_repeat == 4 and not getattr(self, "_loop_dumped", False):
                 self._loop_dumped = True
-                await self._log_devcheck_controls(page)
+                try:
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    pass
+                await self._log_devcheck_controls(page)   # now scrolled to the Submit area
         else:
             self._last_read_q = q
-            self._read_repeat = 0
+            self._read_repeat = 0 if item.get("options") else getattr(self, "_read_repeat", 0)
         return item
 
     async def handle_typing(self, page, text: str) -> bool:

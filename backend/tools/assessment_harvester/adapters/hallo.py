@@ -341,6 +341,18 @@ class HalloAdapter(Adapter):
         if item.get("has_textarea") and not item.get("options") and not item.get("has_mic"):
             if "write your notes" in body or "listen carefully to the content" in body:
                 item["has_textarea"] = False
+        # Loop diagnostic: when the SAME question is read repeatedly (the last-of-comprehension Q5 that
+        # never advances — a PAGINATED module: Q1..Q4 advance on Next, Q5 has a different forward), dump
+        # THAT page's controls + a screenshot ONCE to reveal its real submit/forward control.
+        q = (item.get("question") or "")[:60]
+        if q and q == getattr(self, "_last_read_q", None):
+            self._read_repeat = getattr(self, "_read_repeat", 0) + 1
+            if self._read_repeat == 4 and not getattr(self, "_loop_dumped", False):
+                self._loop_dumped = True
+                await self._log_devcheck_controls(page)
+        else:
+            self._last_read_q = q
+            self._read_repeat = 0
         return item
 
     async def handle_typing(self, page, text: str) -> bool:

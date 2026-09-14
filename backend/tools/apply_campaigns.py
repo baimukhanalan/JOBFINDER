@@ -565,20 +565,30 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     # this only widens what the resolver can SEE. (Bounded so a huge q='' pool stays cheap.)
     rows = list_jobs(q=(camp.get("q") or None), region=(camp.get("region") or None),
                      remote_only=True, limit=max(n * 8, 2000))
+    # per_job_per_day (owner opt-in, default 1): apply to EACH eligible vacancy this many times per
+    # day under the campaign's fixed name. >1 is the owner's explicit "3×/vacancy, same name" mode —
+    # it RE-APPLIES already-applied jobs and BYPASSES the per-company velocity cap (that cap exists to
+    # prevent exactly this, so the owner override turns it off for this campaign only). Captcha ATS
+    # (Lever/Workable) stay excluded regardless. NB the ATS/recruiter dedupes repeat applications by
+    # identity, so extra same-name submits to one job rarely add a real chance and raise the spam-flag
+    # risk — this is a deliberate owner setting, not the default.
+    per_job = max(1, int(camp.get("per_job_per_day") or 1))
     out = []
     for r in rows:
         # Only greenhouse/ashby auto-submit end-to-end from the datacenter IP (email-code, not a
-        # live captcha); Lever/Workable would be filled but never submitted, then marked applied
-        # forever — burning the daily budget on un-completable jobs. Mirrors the bulk lane's
-        # _PARA_ATS filter.
+        # live captcha); Lever/Workable would be filled but never submitted. Always excluded.
         if (r.get("ats") or "") not in _AUTO_ATS:
             continue
         jid = int(r.get("id") or r.get("jobid") or 0)
-        if not jid or jid in applied or jid in submitted:
+        if not jid:
             continue
-        out.append(jid)
-        if len(out) >= n * 3:            # oversample; the per-company guard trims, then first n
+        if per_job <= 1 and (jid in applied or jid in submitted):
+            continue                     # normal mode: never re-apply a job
+        out.extend([jid] * per_job)      # per_job>1: emit each vacancy that many times (re-apply ok)
+        if len(out) >= n * 3:            # oversample; trimmed below
             break
+    if per_job > 1:
+        return out[:n]                   # owner override: velocity cap bypassed, capped only by per_day
     return _capped(out)
 
 

@@ -245,7 +245,23 @@ class HalloAdapter(Adapter):
         for rx in self._FWD:
             if await self._click(page, rx, timeout=2500):
                 await page.wait_for_timeout(1200)
+                self._stuck_advances = 0
                 return True
+        # The LAST question of a part / a completed MCQ page advances via a SUBMIT/FINISH button that
+        # the per-question _FWD (Next/Continue) misses — try those before giving up. (Q5 stuck-loop
+        # 2026-09-14: Q1-4 advanced on Next, Q5 = last-of-part looped 30+× because its button wasn't
+        # Next.) Ordered so a plain 'Submit' doesn't fire before a more specific label.
+        for rx in ("Submit Answers", "Submit Assessment", "Next Part", "Save & Continue",
+                   "Finish", "Complete", "Submit", "Done"):
+            if await self._click(page, rx, timeout=2000):
+                await page.wait_for_timeout(1200)
+                self._stuck_advances = 0
+                return True
+        # Still no forward control — dump the page's clickable controls ONCE per stuck streak so a
+        # future run reveals the EXACT label to add (diagnostic-first, don't keep guessing blindly).
+        self._stuck_advances = getattr(self, "_stuck_advances", 0) + 1
+        if self._stuck_advances == 3:
+            await self._log_devcheck_controls(page)
         return await super().advance(page)
 
     async def try_skip(self, page) -> bool:

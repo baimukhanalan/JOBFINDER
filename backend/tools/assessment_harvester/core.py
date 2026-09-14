@@ -188,8 +188,21 @@ def _launch_args() -> tuple[list[str], dict]:
 
 
 async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
-                      min_delay: float = 0.8, max_delay: float = 2.2) -> dict:
-    """Drive ONE assessment session end-to-end. Returns a result dict with per-type counts."""
+                      min_delay: float = 0.8, max_delay: float = 2.2,
+                      session_secs: float = 1200) -> dict:
+    """Drive ONE assessment session end-to-end. Returns a result dict with per-type counts.
+
+    `session_secs` is the hard wall-clock for the whole walk. The 1200s (20-min) default was the #1
+    reason a full AMCAT battery never COMPLETED — the deepest runs (banked ~125) walked SVAR→Typing→
+    Personality→into Analytical and were killed by this cap mid-battery, not by any DOM failure. A full
+    battery needs far longer, so raise it for a completion run (env HARVEST_SESSION_SECS overrides;
+    harvest_runner sets a platform default). Kept at 1200 by default so a pure question-HARVEST pass
+    (which only needs to reach new items, not finish) is unchanged."""
+    import os as _os
+    try:
+        session_secs = float(_os.getenv("HARVEST_SESSION_SECS") or session_secs)
+    except (TypeError, ValueError):
+        pass
     from playwright.async_api import async_playwright
     res = {"status": "error", "banked": 0, "by_type": {}, "shots": [], "note": "", "mailbox": mailbox,
            "walls": []}
@@ -662,9 +675,9 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
 
     page = None
     try:
-        await asyncio.wait_for(_run(), timeout=1200)
+        await asyncio.wait_for(_run(), timeout=session_secs)
     except asyncio.TimeoutError:
-        res["note"] = f"timeout 1200s ({res['banked']} banked before hang)"
+        res["note"] = f"timeout {int(session_secs)}s ({res['banked']} banked before hang)"
         if res["banked"]:
             res["status"] = "partial_timeout"
     except Exception as exc:

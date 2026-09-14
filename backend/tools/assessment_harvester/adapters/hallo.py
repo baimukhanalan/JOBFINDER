@@ -240,7 +240,7 @@ class HalloAdapter(Adapter):
     # Hallo gates each module behind an instructions page with a module-START button ("Start Part 1",
     # "Start Questionnaire", "Begin", "I'm Ready") that the generic forward matcher misses — click it.
     _FWD = ("Start Part", "Start Questionnaire", "Begin", "I'?m Ready", "Ready to", "Start Now",
-            "Start", "Continue", "Next", "Proceed", "Got it")
+            "Start", "Continue", "Next", "Proceed", "Got it", "Resume", "OK", "I understand")
 
     async def _skip_forward(self, page) -> bool:
         """Click the REAL 'Skip' control on an instruction / video-intro page (the intended way forward)
@@ -267,6 +267,40 @@ class HalloAdapter(Adapter):
         except Exception:
             pass
         return False
+
+    # Buttons that must NEVER be auto-clicked when self-finding a forward (destructive / restart).
+    _BTN_DENY = ("quit", "cookie", "skip to main", "retry", "log out", "logout", "appeal",
+                 "cancel", "back", "restart", "exit", "report")
+
+    async def _try_next_button(self, page) -> bool:
+        """When genuinely stuck, click the NEXT enabled, visible, non-destructive button (cycling one
+        per call via _btn_idx) to self-find an icon-only forward without knowing its label. Audio
+        controls are harmless; the real forward advances. Also dismisses an OK/Continue re-entry dialog."""
+        try:
+            btns = page.locator("button:enabled")
+            cands = []
+            for i in range(min(await btns.count(), 30)):
+                b = btns.nth(i)
+                try:
+                    if not await b.is_visible():
+                        continue
+                    lab = (((await b.inner_text()) or "") + " "
+                           + ((await b.get_attribute("aria-label")) or "")).strip().lower()
+                except Exception:
+                    continue
+                if any(d in lab for d in self._BTN_DENY):
+                    continue
+                cands.append((lab or "<icon>", b))
+            if not cands:
+                return False
+            idx = getattr(self, "_btn_idx", 0) % len(cands)
+            self._btn_idx = idx + 1
+            lab, b = cands[idx]
+            logger.info("[hallo] stuck — trying button %d/%d: %r", idx + 1, len(cands), lab[:30])
+            await b.click(timeout=1500)
+            return True
+        except Exception:
+            return False
 
     async def advance(self, page) -> bool:
         try:
@@ -333,6 +367,14 @@ class HalloAdapter(Adapter):
             # has NO submit — it AUTO-advances when the module timer expires. So the wait budget must
             # outlast that timer: ~95×4s ≈ 380s (>5 min). Re-answering the same Q5 each cycle is a
             # harmless no-op that doesn't reset the timer; we simply out-wait it.
+            # Self-find the forward: on a genuinely stuck comprehension page the real forward is an ICON
+            # button (no text) among audio controls. After the labelled attempts fail, cycle through the
+            # enabled NON-destructive buttons one-at-a-time (audio controls are harmless no-ops; the real
+            # forward advances). This also dismisses a re-entry OK/Continue dialog on a re-driven invite.
+            if self._prep_waits >= 12 and self._prep_waits % 3 == 0:
+                if await self._try_next_button(page):
+                    await page.wait_for_timeout(1500)
+                    return True
             if self._prep_waits <= 95:
                 await page.wait_for_timeout(4000)
                 return True

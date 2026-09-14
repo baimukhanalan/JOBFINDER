@@ -149,6 +149,55 @@ _HARVEST_LOG = os.path.join(
 _HALLO_LOG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_hallo_event.log")
 
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
+_SUTHERLAND_PROBE_FLAG = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sutherland_probe_armed")
+_SUTHERLAND_LOG = os.path.join(_LOGS_DIR, "harvest_sutherland_probe.log")
+
+
+def _maybe_trigger_sutherland(row, seen):
+    """ONE-SHOT camera investigation (armed via the `.sutherland_probe_armed` flag file): on a FRESH,
+    ORIGINAL "Your Sutherland assessment invitation", immediately drive THAT exact token — extracted
+    from the just-arrived mail (`row['path']`), so it is inside its short (~1-2h) validity window; a
+    paced/discovery run only ever reaches already-EXPIRED Sutherland tokens (link-expired) — with the
+    camera-capability SPOOF (`CAM_SPOOF`, incl. groupId pairing) + full `CAM_TRACE`, to capture what the
+    WCI200 proctor reads before "unable to detect a camera". Disarms after ONE fire (deletes the flag),
+    so it is not a permanent lane — armed deliberately for this investigation. Fully try/excepted by the
+    caller so it can NEVER affect indexing."""
+    if seen != 0 or not os.path.exists(_SUTHERLAND_PROBE_FLAG):
+        return
+    fe = (row.get("from_email") or "").lower()
+    subj = (row.get("subject") or "").lower()
+    if "talentcentral@shl.com" not in fe or not subj.startswith("your sutherland assessment"):
+        return
+    path = row.get("path")
+    if not path:
+        return
+    try:
+        from backend.tools.assessment_harvester import discover
+        m = discover.MATCHERS["shl_sutherland"]
+        url = discover.link_from_path(path, m["link_re"], unquote=m.get("unquote", False))
+    except Exception:
+        url = None
+    if not url:
+        return
+    try:                                    # disarm FIRST (one-shot) so an invite burst fires once
+        os.remove(_SUTHERLAND_PROBE_FLAG)
+    except Exception:
+        pass
+    import subprocess
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98", HARVEST_PROXY="phone",
+               CAM_SPOOF="1", CAM_TRACE="1", CAM_TRACE_DIR=_LOGS_DIR, HARVEST_SESSION_SECS="600")
+    try:
+        log = open(_SUTHERLAND_LOG, "a")
+    except Exception:
+        log = subprocess.DEVNULL
+    subprocess.Popen(["/usr/bin/python3", _HARVEST_RUNNER, "--platform", "shl_sutherland",
+                      "--url", url, "--mailbox", row.get("mailbox") or "sutherland_probe"],
+                     env=env, stdout=log, stderr=log, start_new_session=True)
+    if hasattr(log, "close"):
+        log.close()
+
 
 def _kill_stuck_harvest(match_token: str, max_secs: int) -> None:
     """Belt-and-braces: SIGKILL a harvest_runner stuck longer than max_secs so a hung run can't hold
@@ -272,6 +321,10 @@ def index_file(path):
         _maybe_trigger_hallo(row, seen)
     except Exception as e:
         print(f"hallo trigger error {path}: {e}", flush=True)
+    try:
+        _maybe_trigger_sutherland(row, seen)
+    except Exception as e:
+        print(f"sutherland trigger error {path}: {e}", flush=True)
 
 
 def prune_file(path):

@@ -187,6 +187,43 @@ def _launch_args() -> tuple[list[str], dict]:
     return args, a
 
 
+# CAM_TRACE=1: wrap every camera-detection API and console.log each call, so a live drive reveals
+# EXACTLY what a "unable to detect a camera" proctor (WCI200) reads before it rejects — device
+# properties (client-side, spoofable) vs frame grab/upload (content/server, needs a real feed/face).
+_CAM_TRACE_JS = r"""
+(() => {
+  const L = (w, d) => { try { console.log('CAMTRACE|' + w + '|' + (typeof d === 'string' ? d : JSON.stringify(d))); } catch (e) { console.log('CAMTRACE|' + w + '|<unser>'); } };
+  try {
+    const md = navigator.mediaDevices;
+    if (md) {
+      const gum = md.getUserMedia && md.getUserMedia.bind(md);
+      if (gum) md.getUserMedia = function (c) { L('getUserMedia', c || {}); return gum(c); };
+      const enu = md.enumerateDevices && md.enumerateDevices.bind(md);
+      if (enu) md.enumerateDevices = function () { L('enumerateDevices', 'called'); return enu(); };
+      const gsc = md.getSupportedConstraints && md.getSupportedConstraints.bind(md);
+      if (gsc) md.getSupportedConstraints = function () { L('getSupportedConstraints', 'called'); return gsc(); };
+    }
+    const tp = self.MediaStreamTrack && MediaStreamTrack.prototype;
+    if (tp) {
+      for (const m of ['getCapabilities', 'getSettings', 'applyConstraints']) {
+        const real = tp[m];
+        if (real) tp[m] = function (...a) { L('track.' + m, a[0] || 'read'); return real.apply(this, a); };
+      }
+    }
+    if (self.ImageCapture) {
+      const IC = self.ImageCapture;
+      const Wrapped = function (t) { L('new ImageCapture', (t && t.label) || '?'); return new IC(t); };
+      Wrapped.prototype = IC.prototype;
+      try { self.ImageCapture = Wrapped; } catch (e) {}
+      for (const m of ['grabFrame', 'takePhoto', 'getPhotoCapabilities']) {
+        const real = IC.prototype[m];
+        if (real) IC.prototype[m] = function (...a) { L('ImageCapture.' + m, 'call'); return real.apply(this, a).then(r => { L('ImageCapture.' + m + '.ok', (r && (r.width ? r.width + 'x' + r.height : r.size || 'ok')) || 'ok'); return r; }, e => { L('ImageCapture.' + m + '.ERR', String(e)); throw e; }); };
+      }
+    }
+  } catch (e) { L('trace-install-error', String(e)); }
+})();
+"""
+
 # Spoof a real integrated webcam's capability surface over our bare v4l2loopback device. Injected into
 # the page BEFORE any site JS (ctx.add_init_script) only when CAM_SPOOF=1. Merges real-webcam image-
 # control capability keys + a non-empty facingMode onto the genuine getCapabilities()/getSettings()
@@ -197,6 +234,7 @@ _CAM_SPOOF_JS = r"""
   const proto = (self.MediaStreamTrack && MediaStreamTrack.prototype);
   if (!proto) return;
   const isVideo = (t) => { try { return t.kind === 'video'; } catch (e) { return false; } };
+  let _micGroup = null;   // captured from enumerateDevices; a real integrated cam shares it with a mic
   const realCaps = proto.getCapabilities;
   const realSet = proto.getSettings;
   if (realCaps) {
@@ -226,9 +264,31 @@ _CAM_SPOOF_JS = r"""
       if (!s.facingMode) s.facingMode = 'user';
       s.exposureMode = 'continuous'; s.whiteBalanceMode = 'continuous'; s.focusMode = 'continuous';
       s.brightness = 0; s.contrast = 32; s.saturation = 64; s.sharpness = 3; s.colorTemperature = 4600;
+      if (_micGroup && s.groupId) s.groupId = _micGroup;   // pair with the mic's group
       return s;
     }});
   }
+  // DEVICE PAIRING: a real integrated webcam shares its groupId with the built-in mic. Our v4l2loopback
+  // camera has a standalone group (sharesGroupWithMic:false) — a likely "detect a camera" tell. Make
+  // enumerateDevices report the camera in the same group as an audio input.
+  try {
+    const md = navigator.mediaDevices;
+    if (md && md.enumerateDevices) {
+      const realEnum = md.enumerateDevices.bind(md);
+      md.enumerateDevices = async function () {
+        const devs = await realEnum();
+        const mic = devs.find(d => d.kind === 'audioinput' && d.groupId);
+        if (mic) _micGroup = mic.groupId;
+        if (!_micGroup) return devs;
+        return devs.map(d => {
+          if (d.kind !== 'videoinput' || d.groupId === _micGroup) return d;
+          const o = {deviceId: d.deviceId, kind: d.kind, label: d.label, groupId: _micGroup};
+          o.toJSON = () => ({deviceId: d.deviceId, kind: d.kind, label: d.label, groupId: _micGroup});
+          return o;
+        });
+      };
+    }
+  } catch (e) {}
 })();
 """
 
@@ -379,7 +439,38 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     await ctx.add_init_script(_CAM_SPOOF_JS)
                 except Exception:
                     pass
+            _on_console = None
+            if os.getenv("CAM_TRACE") == "1":
+                try:
+                    await ctx.add_init_script(_CAM_TRACE_JS)
+                    _cam_trace_path = os.path.join(
+                        os.environ.get("CAM_TRACE_DIR", "/tmp"), f"camtrace_{mailbox}.log")
+                    _ctf = open(_cam_trace_path, "a")
+
+                    def _on_console(msg):
+                        try:
+                            t = msg.text
+                            if "CAMTRACE|" in t:
+                                _ctf.write(t + "\n"); _ctf.flush()
+                        except Exception:
+                            pass
+
+                    def _on_request(req):
+                        try:
+                            if req.method == "POST":
+                                hl = (req.headers or {}).get("content-type", "")
+                                if "image" in hl or "octet-stream" in hl or "form-data" in hl:
+                                    _ctf.write(f"CAMTRACE|POST|{req.url[:120]}|ct={hl[:40]}\n"); _ctf.flush()
+                        except Exception:
+                            pass
+                    ctx.on("request", _on_request)
+                    ctx.on("page", lambda p: p.on("console", _on_console))  # AMCAT player may open a new tab
+                    logger.info("[camtrace] logging camera API calls -> %s", _cam_trace_path)
+                except Exception as _e:
+                    logger.info("[camtrace] setup failed: %s", _e)
             page = await ctx.new_page()
+            if _on_console is not None:
+                page.on("console", _on_console)
             # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
             # (Section B listen-repeat, Section C listen-comprehension) can be transcribed + banked.
             _seen_aud = set()

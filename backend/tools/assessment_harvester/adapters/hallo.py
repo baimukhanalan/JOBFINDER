@@ -341,6 +341,22 @@ class HalloAdapter(Adapter):
         if item.get("has_textarea") and not item.get("options") and not item.get("has_mic"):
             if "write your notes" in body or "listen carefully to the content" in body:
                 item["has_textarea"] = False
+        # LISTENING audio-phase race (root-caused 2026-09-14): on "Listen carefully to the content" the
+        # 5 comprehension questions are ALREADY in the DOM, but the page has NOT handed off to answering
+        # — the audio is still playing and the page stays on "Question 1 of 5". read_item used to keep
+        # the options and the core answered them DURING the audio, so the page never advanced (Q5 looped
+        # forever). Suppress the options while an <audio> is still playing so the adapter WAITS
+        # (advance/is_prep) for the passage to finish; once the audio has ENDED the questions are
+        # returned and answered in the correct phase, where the page's own forward works.
+        if item.get("options") and "listen carefully to the content" in body:
+            try:
+                audio_playing = await page.evaluate(
+                    "() => { const a=[...document.querySelectorAll('audio')]; return a.length>0 && "
+                    "a.some(x => !x.ended && (x.currentTime||0) < ((x.duration||1e9) - 0.3)); }")
+            except Exception:
+                audio_playing = False
+            if audio_playing:
+                item["options"] = []
         # Loop diagnostic: when the SAME question is read repeatedly (the last-of-comprehension Q5 that
         # never advances — a PAGINATED module: Q1..Q4 advance on Next, Q5 has a different forward), dump
         # THAT page's controls + a screenshot ONCE to reveal its real submit/forward control.

@@ -120,12 +120,24 @@ class HalloAdapter(Adapter):
         enables, but the button labels aren't guessable from the shot alone."""
         try:
             ctrls = await page.evaluate(
-                "() => { const t=[]; for (const b of document.querySelectorAll("
-                "'button,[role=button],a')) { const s=((b.innerText||'')+'|'+(b.getAttribute('aria-label')"
-                "||'')+'|'+(b.getAttribute('title')||'')).replace(/\\s+/g,' ').trim(); "
-                "if (s.replace(/\\|/g,'')) t.push(s+(b.disabled?' [disabled]':'')); } "
+                "() => { "
+                # scroll EVERY inner scrollable container to the bottom (the questions/submit live in
+                # an inner div, not the window — window.scrollTo misses them)
+                "for (const e of document.querySelectorAll('*')) { "
+                "  try { if (e.scrollHeight > e.clientHeight + 4) e.scrollTop = e.scrollHeight; } catch(_){} } "
+                "const t=[]; "
+                # buttons + links + role=button + ANY element that looks clickable (onclick / cursor:pointer)
+                "const sel='button,[role=button],a,input,[onclick],[tabindex]'; "
+                "for (const b of document.querySelectorAll(sel)) { "
+                "  let cur=''; try { cur=getComputedStyle(b).cursor; } catch(_){} "
+                "  const clickable = b.tagName==='BUTTON'||b.tagName==='A'||b.getAttribute('role')==='button'"
+                "||b.onclick||cur==='pointer'||b.tagName==='INPUT'; "
+                "  if(!clickable) continue; "
+                "  const s=(b.tagName+':'+(b.type||'')+'|'+(b.innerText||b.value||'')+'|'"
+                "+(b.getAttribute('aria-label')||'')).replace(/\\s+/g,' ').trim().slice(0,60); "
+                "  if (s.replace(/[|:]/g,'').length>1) t.push(s+(b.disabled?' [x]':'')); } "
                 "const au=document.querySelectorAll('audio,video').length; "
-                "return {btns:t.slice(0,40), media:au}; }")
+                "return {btns:t.slice(0,50), media:au}; }")
             logger.info("[hallo] device-check controls: %s | media_els=%s",
                         ctrls.get("btns"), ctrls.get("media"))
             # also capture a SCREENSHOT — a bare button label (e.g. '5' on the comprehension page) isn't

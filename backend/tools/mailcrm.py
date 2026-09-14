@@ -40,7 +40,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-09-11-audit-fleet-v2"
+CLASSIFIER_VERSION = "2026-09-14-assessment-skipped"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be
@@ -320,11 +320,127 @@ def unmark_assessment_done(name: str) -> None:
     _reclassify_assessment(email, to_done=False)
 
 
+# «Пропущенные» — the sibling of assessment_done for tests we are NOT going to complete (structurally
+# un-passable by automation: AMCAT camera-proctor, Harver, SkillCheck) or that have simply gone stale.
+# Same persisted-set + immediate-retag mechanism as done, so a skipped test LEAVES the active «Действие»
+# list into a separate «Пропущен» bucket and stays out across a re-index. Auto-routed by
+# auto_skip_stale_assessments; reversible by unmark_assessment_skipped.
+_ASSESS_SKIPPED_PATH = Path(__file__).resolve().parent.parent / "data" / "shl_assess_skipped.json"
+_assess_skipped_cache = {"mtime": None, "set": frozenset()}
+# Senders whose post-apply test is un-passable by automation (a human / a physical webcam is required):
+# talentcentral@shl.com = TP-AMCAT + Sutherland-AMCAT (WCI200 camera + cognitive), ttec = Harver,
+# conduent = SkillCheck. Maximus (maximus.com) SHL-OPQ and Hallo (hallo.ai) are PASSABLE — never skipped.
+_UNPASSABLE_TEST_SENDERS = ("%shl.com%", "%ttec%", "%conduent%")
+
+
+def assessment_skipped_mailboxes() -> frozenset:
+    try:
+        m = _ASSESS_SKIPPED_PATH.stat().st_mtime
+    except OSError:
+        return frozenset()
+    if _assess_skipped_cache["mtime"] != m:
+        try:
+            _assess_skipped_cache["set"] = frozenset(json.loads(_ASSESS_SKIPPED_PATH.read_text()))
+        except Exception:
+            _assess_skipped_cache["set"] = frozenset()
+        _assess_skipped_cache["mtime"] = m
+    return _assess_skipped_cache["set"]
+
+
+def _write_assess_skipped(skipped: set) -> None:
+    tmp = f"{_ASSESS_SKIPPED_PATH}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(sorted(skipped), f)
+    os.replace(tmp, _ASSESS_SKIPPED_PATH)
+    _assess_skipped_cache["mtime"] = None
+
+
+def _reclassify_assessment_skipped(email: str, to_skipped: bool) -> None:
+    """Retag this mailbox's test rows action_needed→assessment_skipped (or back) NOW for an immediate
+    CRM effect, without a re-index. Best-effort."""
+    frm, to = (("action_needed", "assessment_skipped") if to_skipped
+               else ("assessment_skipped", "action_needed"))
+    try:
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute(f"UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind=%s "
+                        f"AND {mail_db._TEST_SUBJECT_SQL}", (to, email, frm))
+    except Exception:
+        pass
+
+
+def mark_assessment_skipped(name: str) -> None:
+    """Move a persona's test to «Пропущенные»: persist the mailbox to shl_assess_skipped.json (so a
+    re-index keeps the tag) + retag its rows now. A skipped test is NOT done — drop it from the done
+    set if present. Best-effort; never raises."""
+    email = name if "@" in name else f"{name}@takhet.com"
+    try:
+        skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
+    except Exception:
+        skipped = set()
+    if email not in skipped:
+        skipped.add(email)
+        try:
+            _write_assess_skipped(skipped)
+        except Exception:
+            pass
+    # a skipped test must not also be marked done
+    try:
+        done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
+        if email in done:
+            done.discard(email)
+            _write_assess_done(done)
+    except Exception:
+        pass
+    _reclassify_assessment_skipped(email, to_skipped=True)
+
+
+def unmark_assessment_skipped(name: str) -> None:
+    """Reverse mark_assessment_skipped — put the test back into «Действие». Best-effort."""
+    email = name if "@" in name else f"{name}@takhet.com"
+    try:
+        skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
+    except Exception:
+        skipped = set()
+    if email in skipped:
+        skipped.discard(email)
+        try:
+            _write_assess_skipped(skipped)
+        except Exception:
+            pass
+    _reclassify_assessment_skipped(email, to_skipped=False)
+
+
+def auto_skip_stale_assessments(days: int = 7) -> int:
+    """Auto-route STALE, un-passable test invites into «Пропущенные». Targets action_needed test rows
+    from the un-passable senders (AMCAT/Harver/SkillCheck) older than `days`; NEVER touches Maximus-SHL
+    or Hallo (both passable). Returns the number of mailboxes moved. Idempotent."""
+    import time
+    cutoff = int(time.time()) - days * 86400
+    like = " OR ".join(["from_email ILIKE %s"] * len(_UNPASSABLE_TEST_SENDERS))
+    try:
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute(
+                f"SELECT DISTINCT mailbox FROM mail_index WHERE kind='action_needed' "
+                f"AND {mail_db._TEST_SUBJECT_SQL} AND date_ts < %s AND ({like}) "
+                f"AND from_email NOT ILIKE %s",
+                (cutoff, *_UNPASSABLE_TEST_SENDERS, "%maximus%"))
+            mbxs = [r[0] for r in cur.fetchall()]
+    except Exception:
+        return 0
+    for m in mbxs:
+        mark_assessment_skipped(m)
+    return len(mbxs)
+
+
 def _kind_with_done_override(subject: str, body: str, mailbox: str) -> str:
     kind = classify(subject, body)
-    if (kind == "action_needed" and _is_test_subject(subject)
-            and mailbox in assessment_done_mailboxes()):
-        return "assessment_done"
+    if kind == "action_needed" and _is_test_subject(subject):
+        if mailbox in assessment_skipped_mailboxes():
+            return "assessment_skipped"
+        if mailbox in assessment_done_mailboxes():
+            return "assessment_done"
     return kind
 
 

@@ -637,7 +637,15 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         say_wav = None
                         if res.get("mic_pass"):
                             say = None
-                            if not item.get("_walk_only"):
+                            # PREPARED spoken ANSWER (owner's approach: collect all questions, prepare a
+                            # correct answer per question, replay it). For a scenario/open-response item
+                            # (e.g. a Hallo video CSR prompt) the banked answer_key.text is a good spoken
+                            # response — speak THAT, not the prompt. Read-aloud items have no prepared
+                            # answer and fall through to speaking the shown sentence.
+                            prepared = bank.answer_for(adapter.platform, q, [])
+                            if prepared and (prepared.get("text") or "").strip():
+                                say = prepared["text"].strip()
+                            elif not item.get("_walk_only"):
                                 say = (q or "").strip() or None                     # read-aloud
                             elif asr.available():
                                 await page.wait_for_timeout(1500)                    # let the audio play+capture

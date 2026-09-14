@@ -268,7 +268,16 @@ class HalloAdapter(Adapter):
             if prog and prog != self._last_prog:
                 self._last_prog = prog
                 self._prep_waits = 0
+                self._prep_dumped = False
             self._prep_waits += 1
+            # A comprehension page keeps the "write your notes" pad (→ is_prep) even after its MCQs are
+            # answerable — so the LAST question (Q5) can look like a prep page and get WAITED on forever
+            # instead of submitted. When stuck 3× on the SAME progress marker, dump the page's controls
+            # once to reveal the real forward/submit button (the Q5 stuck-loop, still open after the
+            # Submit/Finish guesses missed it).
+            if self._prep_waits == 3 and not getattr(self, "_prep_dumped", False):
+                self._prep_dumped = True
+                await self._log_devcheck_controls(page)
             if self._prep_waits <= 30:          # ~120s on ONE unchanging page; extends across questions
                 await page.wait_for_timeout(4000)
                 return True

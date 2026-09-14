@@ -128,6 +128,15 @@ class HalloAdapter(Adapter):
                 "return {btns:t.slice(0,40), media:au}; }")
             logger.info("[hallo] device-check controls: %s | media_els=%s",
                         ctrls.get("btns"), ctrls.get("media"))
+            # also capture a SCREENSHOT — a bare button label (e.g. '5' on the comprehension page) isn't
+            # enough to see the real forward widget; the shot makes the layout obvious.
+            try:
+                from backend.tools.assessment_harvester import media as _media
+                shot = await _media.capture(page, self.platform, "DEVCHECK", [], page.url)
+                if shot:
+                    logger.info("[hallo] device-check screenshot -> %s", shot)
+            except Exception as _se:
+                logger.info("[hallo] device-check screenshot failed: %s", _se)
         except Exception as e:
             logger.info("[hallo] device-check control dump failed: %s", e)
 
@@ -270,15 +279,34 @@ class HalloAdapter(Adapter):
                 self._prep_waits = 0
                 self._prep_dumped = False
             self._prep_waits += 1
-            # A comprehension page keeps the "write your notes" pad (→ is_prep) even after its MCQs are
-            # answerable — so the LAST question (Q5) can look like a prep page and get WAITED on forever
-            # instead of submitted. When stuck 3× on the SAME progress marker, dump the page's controls
-            # once to reveal the real forward/submit button (the Q5 stuck-loop, still open after the
-            # Submit/Finish guesses missed it).
-            if self._prep_waits == 3 and not getattr(self, "_prep_dumped", False):
+            # Distinguish a NORMAL long prep/listen countdown (a speaking "Prepare your response" timer
+            # runs 30-60s — do NOT interrupt it) from a REAL stuck (the comprehension last-question that
+            # keeps the "write your notes" pad → is_prep, answered but never submitted). Only after ~40s
+            # on the SAME progress marker try to BREAK OUT once: scroll to reveal a below-fold submit,
+            # re-try submit/next labels + a real Skip, press Enter, and dump controls+screenshot to
+            # diagnose. (Earlier the dump fired at 12s and false-flagged normal speaking preps.)
+            if self._prep_waits == 10 and not getattr(self, "_prep_dumped", False):
                 self._prep_dumped = True
+                try:
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(600)
+                except Exception:
+                    pass
+                for rx in ("Submit Answers", "Submit", "Next", "Continue", "Finish", "Done"):
+                    if await self._click(page, rx, timeout=1500):
+                        self._prep_waits = 0
+                        await page.wait_for_timeout(1200)
+                        return True
+                if await self._skip_forward(page):
+                    self._prep_waits = 0
+                    await page.wait_for_timeout(1200)
+                    return True
+                try:
+                    await page.keyboard.press("Enter")
+                except Exception:
+                    pass
                 await self._log_devcheck_controls(page)
-            if self._prep_waits <= 30:          # ~120s on ONE unchanging page; extends across questions
+            if self._prep_waits <= 45:          # ~180s on ONE marker; a long listening module needs it
                 await page.wait_for_timeout(4000)
                 return True
         else:

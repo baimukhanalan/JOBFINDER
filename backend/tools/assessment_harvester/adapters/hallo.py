@@ -210,26 +210,60 @@ class HalloAdapter(Adapter):
     _FWD = ("Start Part", "Start Questionnaire", "Begin", "I'?m Ready", "Ready to", "Start Now",
             "Start", "Continue", "Next", "Proceed", "Got it")
 
+    async def _skip_forward(self, page) -> bool:
+        """Click the REAL 'Skip' control on an instruction / video-intro page (the intended way forward)
+        WITHOUT clicking the 'Skip to main content' accessibility link. Matches Skip / Skip Intro /
+        Skip Video, excludes any label containing 'main content' / 'to content'. Only clicks an ENABLED
+        control (a video's Skip is often disabled until it has played a few seconds — a later advance()
+        pass then catches it)."""
+        try:
+            btns = page.get_by_role("button", name=re.compile(r"^Skip\b", re.I))
+            for i in range(await btns.count()):
+                b = btns.nth(i)
+                try:
+                    lbl = (await b.inner_text() or "").strip().lower()
+                except Exception:
+                    lbl = ""
+                if "main content" in lbl or "to content" in lbl:
+                    continue
+                try:
+                    if await b.is_enabled():
+                        await b.click(timeout=2000)
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return False
+
     async def advance(self, page) -> bool:
         try:
             body = (await page.inner_text("body", timeout=2000)).lower()
         except Exception:
             body = ""
-        # A prep/countdown page ("Prepare your response" / "Think about your response" + a timer, or a
-        # live "Recording will end in N seconds") AUTO-transitions — there is NO forward button, so WAIT
-        # for it rather than declaring the item stuck (returns True to keep the core loop re-reading).
-        # The LISTENING module is the same shape: an audio passage plays on a page carrying "Listen
-        # carefully to the content" + a "Write your notes here" scratch pad, and the comprehension MCQs
-        # appear on that same page ONLY after the audio finishes — there is no forward button either, so
-        # it must be WAITED OUT (read_item already suppresses the notes textarea so the page isn't
-        # mis-read as a typing item; without this wait advance() fell straight through to `stuck`, which
-        # is exactly where run13 halted at "Part 1 - Question 1 of 5").
-        if any(s in body for s in ("prepare your response", "think about your response",
-                                   "recording will end", "get ready", "preparing",
-                                   "listen carefully to the content", "write your notes")):
-            # A listening passage + its 5 questions runs far longer than a single 60s recording, so the
-            # budget must not trip mid-module: reset it whenever the "Part N / Question k of M" marker
-            # advances (real progress), leaving the bound to catch only a genuinely FROZEN single page.
+        # A prep/countdown/listening page ("Prepare your response", "Recording will end in N", "Listen
+        # carefully to the content" + a "Write your notes" pad) AUTO-transitions and the comprehension
+        # MCQs appear on that SAME page after the audio — so it must be WAITED out, NOT skipped.
+        is_prep = any(s in body for s in ("prepare your response", "think about your response",
+                                          "recording will end", "get ready", "preparing",
+                                          "listen carefully to the content", "write your notes"))
+        # FORWARD FIRST (before the prep-wait). This fixes the Q5 stuck-loop (2026-09-14): the last
+        # comprehension question shares the page with the "write your notes" pad, so the old wait-first
+        # order made advance() WAIT on an answerable page forever instead of clicking its Submit. Order:
+        # module-start / Next / Continue (per-question) → a last-of-part Submit/Finish → a real Skip
+        # (instruction/video pages only, never a listening passage — that would skip the audio).
+        for rx in self._FWD:
+            if await self._click(page, rx, timeout=2500):
+                await page.wait_for_timeout(1200); self._stuck_advances = 0; return True
+        for rx in ("Submit Answers", "Submit Assessment", "Next Part", "Save & Continue",
+                   "Finish", "Complete", "Submit", "Done"):
+            if await self._click(page, rx, timeout=2000):
+                await page.wait_for_timeout(1200); self._stuck_advances = 0; return True
+        if not is_prep and await self._skip_forward(page):
+            await page.wait_for_timeout(1200); self._stuck_advances = 0; return True
+        # No forward control — a prep/listening page auto-transitions; WAIT (bounded, budget resets on
+        # real "Part N / Question k of M" progress so a long listening module doesn't trip it).
+        if is_prep:
             prog = self._progress_sig(body)
             if prog and prog != self._last_prog:
                 self._last_prog = prog
@@ -238,35 +272,19 @@ class HalloAdapter(Adapter):
             if self._prep_waits <= 30:          # ~120s on ONE unchanging page; extends across questions
                 await page.wait_for_timeout(4000)
                 return True
-            # exceeded the wait budget on a stuck prep/recording page — stop waiting so the core loop
-            # can declare it stuck (a real, bounded verdict) instead of spinning to max_items.
         else:
             self._prep_waits = 0
-        for rx in self._FWD:
-            if await self._click(page, rx, timeout=2500):
-                await page.wait_for_timeout(1200)
-                self._stuck_advances = 0
-                return True
-        # The LAST question of a part / a completed MCQ page advances via a SUBMIT/FINISH button that
-        # the per-question _FWD (Next/Continue) misses — try those before giving up. (Q5 stuck-loop
-        # 2026-09-14: Q1-4 advanced on Next, Q5 = last-of-part looped 30+× because its button wasn't
-        # Next.) Ordered so a plain 'Submit' doesn't fire before a more specific label.
-        for rx in ("Submit Answers", "Submit Assessment", "Next Part", "Save & Continue",
-                   "Finish", "Complete", "Submit", "Done"):
-            if await self._click(page, rx, timeout=2000):
-                await page.wait_for_timeout(1200)
-                self._stuck_advances = 0
-                return True
-        # Still no forward control — dump the page's clickable controls ONCE per stuck streak so a
-        # future run reveals the EXACT label to add (diagnostic-first, don't keep guessing blindly).
+        # Truly stuck — dump the page's clickable controls ONCE per stuck streak so a future run reveals
+        # the EXACT label to add (diagnostic-first, don't keep guessing blindly).
         self._stuck_advances = getattr(self, "_stuck_advances", 0) + 1
         if self._stuck_advances == 3:
             await self._log_devcheck_controls(page)
         return await super().advance(page)
 
     async def try_skip(self, page) -> bool:
-        # instruction/example pages carry a Skip; use it to reach the answerable item faster
-        return await self._click(page, "Skip", timeout=2000)
+        # instruction/example/video-intro pages carry a Skip; use it to reach the answerable item faster.
+        # Use the precise skip (excludes the 'Skip to main content' a11y link that ^Skip used to grab).
+        return await self._skip_forward(page)
 
     async def read_item(self, page) -> dict:
         item = await super().read_item(page)

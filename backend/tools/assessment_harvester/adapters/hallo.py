@@ -16,11 +16,14 @@ battery. Requires the persistent camera_daemon (a live /dev/video0) + mic.ensure
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
 
 from .base import Adapter
+
+logger = logging.getLogger("assessment_harvester")
 
 
 class HalloAdapter(Adapter):
@@ -110,6 +113,43 @@ class HalloAdapter(Adapter):
         except Exception:
             return False
 
+    async def _log_devcheck_controls(self, page) -> None:
+        """Dump every clickable control (label / aria-label / title / disabled) + any <audio> on the
+        device-check page so a wall reveals the EXACT record/stop/playback button names — the
+        screenshot shows a mic 'recording test' whose sample must be PLAYED BACK before Continue
+        enables, but the button labels aren't guessable from the shot alone."""
+        try:
+            ctrls = await page.evaluate(
+                "() => { const t=[]; for (const b of document.querySelectorAll("
+                "'button,[role=button],a')) { const s=((b.innerText||'')+'|'+(b.getAttribute('aria-label')"
+                "||'')+'|'+(b.getAttribute('title')||'')).replace(/\\s+/g,' ').trim(); "
+                "if (s.replace(/\\|/g,'')) t.push(s+(b.disabled?' [disabled]':'')); } "
+                "const au=document.querySelectorAll('audio,video').length; "
+                "return {btns:t.slice(0,40), media:au}; }")
+            logger.info("[hallo] device-check controls: %s | media_els=%s",
+                        ctrls.get("btns"), ctrls.get("media"))
+        except Exception as e:
+            logger.info("[hallo] device-check control dump failed: %s", e)
+
+    async def _mic_record_playback(self, page) -> None:
+        """Complete Hallo's mic 'recording test': RECORD a few seconds of the looped voice feed, STOP,
+        then PLAY BACK the sample — the step that enables Continue. Tolerant to the exact labels (Record/
+        Start Recording, Stop/Stop Recording, Play Back/Playback/Play/Listen/▶); each click is a no-op
+        when that control is absent, so running the whole cycle is safe regardless of which stage the UI
+        is in."""
+        for rec in ("Record", "Start Recording", "Test", "Start"):
+            if await self._click(page, rec, timeout=1500):
+                break
+        await page.wait_for_timeout(4000)                      # capture a few seconds of live voice
+        for stop in ("Stop Recording", "Stop", "Done"):
+            if await self._click(page, stop, timeout=1500):
+                break
+        await page.wait_for_timeout(1500)
+        for pb in ("Play Back", "Play back", "Playback", "Play Sample", "Play", "Listen", "▶"):
+            if await self._click(page, pb, timeout=1500):
+                await page.wait_for_timeout(4500)              # let the sample play to the end
+                break
+
     async def enter(self, page, url: str) -> None:
         first, last = self._name()
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -131,25 +171,33 @@ class HalloAdapter(Adapter):
         await self._tick_all(page)
         await self._click(page, "Continue")
         await page.wait_for_timeout(6000)
-        # (3) DEVICE CHECK — real camera (daemon) + gapless virtmic feed + consent + internet, then Continue
+        # (3) DEVICE CHECK — real camera (daemon, ACCEPTED by Hallo) + gapless virtmic feed + consent +
+        # internet, then the mic RECORD→STOP→PLAY-BACK cycle. The camera passes on the virtual device;
+        # the wall (run 2026-09-14) was the mic 'recording test': Hallo says "complete the recording test
+        # and play back your sample before continuing", and Continue stays disabled until the recorded
+        # sample is PLAYED BACK. The old flow only Start/Retry'd (recorded, never stopped+played).
         self._start_mic_feed()
         try:
             await self._click(page, "Start")          # Start Camera
             await page.wait_for_timeout(3000)
-            await self._click(page, "Retry")          # (re)run the mic listen with audio flowing
-            await page.wait_for_timeout(6000)
+            await self._log_devcheck_controls(page)   # reveal the exact record/stop/playback labels
+            await self._mic_record_playback(page)     # record a sample + play it back -> enables Continue
             try:
                 await page.mouse.wheel(0, 600)        # bring the bottom 'I understand' consent into view
                 await page.wait_for_timeout(500)
             except Exception:
                 pass
             await self._tick_all(page)
-            for _ in range(24):                       # wait for the internet test + Continue to enable
+            for i in range(24):                       # wait for the internet test + Continue to enable
                 if await self._continue_enabled(page):
                     await self._click(page, "Continue")
                     break
+                if i in (2, 6, 12):                   # re-run the cycle a few times if it raced the UI
+                    await self._mic_record_playback(page)
                 await self._tick_all(page)
                 await page.wait_for_timeout(5000)
+            else:
+                await self._log_devcheck_controls(page)   # still walled — log the final control state
         finally:
             self._stop_mic_feed()
         await page.wait_for_timeout(6000)

@@ -464,6 +464,26 @@ class HalloAdapter(Adapter):
             return True
         return await super().handle_typing(page, text)
 
+    async def handle_writex(self, page, email: dict) -> bool:
+        """Fill the WriteX email THEN advance the Hallo writing module. Hallo's submit is a Next/Submit
+        or an icon-only button (same class as the comprehension Q5 forward), and the core's writing
+        branch does NOT call advance() — so after typing, click the forward here: labelled first, then
+        the real Skip, then cycle a non-destructive button (self-find, one per call — over a couple of
+        core re-reads it lands the icon submit). Returns True so the core loop re-reads (a new item if
+        we advanced; the same writing item — and the NEXT cycled button — if not)."""
+        await super().handle_writex(page, email)          # types the drafted email into the textarea
+        await page.wait_for_timeout(700)
+        for rx in ("Submit Answer", "Submit", "Next", "Continue", "Finish", "Complete", "Done"):
+            if await self._click(page, rx, timeout=1500):
+                await page.wait_for_timeout(1000)
+                return True
+        if await self._skip_forward(page):
+            await page.wait_for_timeout(1000)
+            return True
+        await self._try_next_button(page)                 # cycle an icon button (self-find the submit)
+        await page.wait_for_timeout(1000)
+        return True
+
     async def handle_speaking(self, page, record_secs: float = 4.0, mic_say_wav=None) -> bool:
         """Hallo open-response (Speaking) items AUTO-RECORD ~60s (a red STOP button + a 'Recording will
         end in N seconds' countdown) and score the transcribed answer. Feed a spoken answer into the

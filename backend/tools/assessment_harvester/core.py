@@ -455,15 +455,56 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         except Exception:
                             pass
 
+                    # The proctor domains whose device/camera-check call decides WCI200. The camera
+                    # wall fires right after getUserMedia and BEFORE any frame grab, so the tell is
+                    # in one of these requests (device enumeration uploaded) or its SERVER response
+                    # — not in frame content. Log EVERY POST to them (+ a body snippet) and the
+                    # response verdict, so the next fresh token reveals the exact trigger.
+                    _PROCTOR_HOSTS = ("myamcat.com", "aspiringminds", "amcat", "shl.com", "proctor")
+
+                    def _is_proctor(u):
+                        return any(h in u for h in _PROCTOR_HOSTS)
+
                     def _on_request(req):
                         try:
-                            if req.method == "POST":
-                                hl = (req.headers or {}).get("content-type", "")
-                                if "image" in hl or "octet-stream" in hl or "form-data" in hl:
-                                    _ctf.write(f"CAMTRACE|POST|{req.url[:120]}|ct={hl[:40]}\n"); _ctf.flush()
+                            if req.method != "POST":
+                                return
+                            hl = (req.headers or {}).get("content-type", "")
+                            proc = _is_proctor(req.url)
+                            if proc or "image" in hl or "octet-stream" in hl or "form-data" in hl:
+                                body = ""
+                                if proc:
+                                    try:
+                                        pd = req.post_data or ""
+                                        body = "|body=" + pd[:400].replace("\n", " ")
+                                    except Exception:
+                                        body = ""
+                                _ctf.write(f"CAMTRACE|POST|{req.url[:160]}|ct={hl[:40]}{body}\n"); _ctf.flush()
                         except Exception:
                             pass
+
+                    async def _on_proctor_response(resp):
+                        try:
+                            u = resp.url
+                            if not _is_proctor(u):
+                                return
+                            low = u.lower()
+                            if not any(k in low for k in ("camera", "device", "proctor", "wci",
+                                                          "check", "verify", "snapshot", "media",
+                                                          "webcam", "system", "config")):
+                                return
+                            snippet = ""
+                            try:
+                                b = await resp.body()
+                                snippet = (b or b"")[:400].decode("utf-8", "replace").replace("\n", " ")
+                            except Exception:
+                                snippet = "<no-body>"
+                            _ctf.write(f"CAMTRACE|RESP|{resp.status}|{u[:140]}|{snippet}\n"); _ctf.flush()
+                        except Exception:
+                            pass
+
                     ctx.on("request", _on_request)
+                    ctx.on("response", lambda r: asyncio.create_task(_on_proctor_response(r)))
                     ctx.on("page", lambda p: p.on("console", _on_console))  # AMCAT player may open a new tab
                     logger.info("[camtrace] logging camera API calls -> %s", _cam_trace_path)
                 except Exception as _e:

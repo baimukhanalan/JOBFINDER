@@ -51,7 +51,15 @@ def main() -> None:
     global _CUR_FEEDER
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
-    _log(f"start pid={os.getpid()} device={camera.DEVICE}")
+    # CAMERA_FACE_VIDEO: an optional looping face clip to feed instead of the dark feed — the ready
+    # fallback for the WCI200 frame-content hypothesis (a proctor that reads the picture, not just
+    # the device metadata). Default unset => the owner-authorised dark/unlit feed, unchanged.
+    _face = os.environ.get("CAMERA_FACE_VIDEO") or None
+    if _face and not os.path.exists(_face):
+        _log(f"CAMERA_FACE_VIDEO={_face} not found — falling back to dark feed")
+        _face = None
+    _source = _face
+    _log(f"start pid={os.getpid()} device={camera.DEVICE} feed={'FACE:' + _source if _source else 'dark'}")
     for _sig in (signal.SIGTERM, signal.SIGINT):
         try:
             signal.signal(_sig, lambda *_a: (_cleanup(), os._exit(0)))
@@ -64,7 +72,7 @@ def main() -> None:
             # start and after a feeder death — never while a healthy feeder is streaming, so a reader
             # (Chromium) mid-check is not disturbed during steady state.
             camera._reload_module()
-            proc = subprocess.Popen(camera._feed_cmd(None),
+            proc = subprocess.Popen(camera._feed_cmd(_source),
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _CUR_FEEDER = proc
             time.sleep(3)

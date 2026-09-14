@@ -56,12 +56,15 @@ class HalloAdapter(Adapter):
             return ""
         return f"{m_part.group(1) if m_part else '?'}:{m_q.group(0) if m_q else '?'}"
 
-    def _start_mic_feed(self) -> None:
+    def _start_mic_feed(self, wav: str | None = None) -> None:
         """GAPLESS continuous speech into the virtmic sink so Hallo's auto-listening mic meter always
-        samples live voice (a looped paplay leaves silent gaps the meter fails on)."""
+        samples live voice (a looped paplay leaves silent gaps the meter fails on). When `wav` is a
+        prepared/cached spoken ANSWER, loop THAT (the real answer is scored); else loop the generic
+        speech asset (device-check filler / no prepared answer)."""
         try:
             from backend.tools.assessment_harvester import assets, mic
-            wav = (assets.ensure_assets() or {}).get("audio")
+            if not (wav and os.path.exists(wav)):
+                wav = (assets.ensure_assets() or {}).get("audio")
             if not wav or not os.path.exists(wav):
                 return
             self._mic_feed = subprocess.Popen(
@@ -489,7 +492,7 @@ class HalloAdapter(Adapter):
         end in N seconds' countdown) and score the transcribed answer. Feed a spoken answer into the
         virtmic for the window, try to STOP early, then advance to the next question. Returns True when
         the recorder is done (the item advanced)."""
-        self._start_mic_feed()
+        self._start_mic_feed(mic_say_wav)
         try:
             # let a few seconds of the answer record, then try to STOP early (the red circular button)
             await page.wait_for_timeout(9000)

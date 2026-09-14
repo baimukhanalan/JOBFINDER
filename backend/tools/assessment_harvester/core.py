@@ -651,10 +651,11 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                 await page.wait_for_timeout(1500)                    # let the audio play+capture
                                 if res.get("_latest_aud"):
                                     say = asr.transcribe(res["_latest_aud"])         # listen-repeat / audio-only
-                            # repeat the sentence so one playback comfortably spans the record window
-                            if say and len(say) >= 4 and assets.speak_text_wav(
-                                    ((say.strip() + ". ") * 2).strip(), res["_say_wav"]):
-                                say_wav = res["_say_wav"]
+                            # repeat the sentence so one playback comfortably spans the record window;
+                            # speech_wav_for CACHES the clip content-addressed, so a recurring question
+                            # replays the stored file with no regeneration and no latency.
+                            if say and len(say) >= 4:
+                                say_wav = assets.speech_wav_for(((say.strip() + ". ") * 2).strip())
                         if await adapter.handle_speaking(page, mic_say_wav=say_wav):
                             await page.wait_for_timeout(1500)
                             continue
@@ -668,8 +669,20 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         _bank(item, "video", False,
                               {"text": None, "index": None, "value": "fake_video_submitted", "source": "fake_device"},
                               shot, free="video")
-                        logger.info("[%s] #%d video q=%r (fake cam)", mailbox, res["banked"], q[:60])
-                        if await adapter.handle_speaking(page, record_secs=4.0):
+                        logger.info("[%s] #%d video q=%r (face cam)", mailbox, res["banked"], q[:60])
+                        # A Hallo video-response is a SPOKEN answer on camera: the camera shows the
+                        # session-level face-feed (CAMERA_FACE_VIDEO) and the mic plays the PREPARED
+                        # answer for this question (cached — generated once, replayed on repeats), just
+                        # like the speaking branch. Falls back to the shown prompt if none is banked.
+                        say_wav = None
+                        if res.get("mic_pass"):
+                            prepared = bank.answer_for(adapter.platform, q, [])
+                            say = (prepared.get("text") or "").strip() if prepared else ""
+                            if not say:
+                                say = (q or "").strip()
+                            if say and len(say) >= 4:
+                                say_wav = assets.speech_wav_for(((say.strip() + ". ") * 2).strip())
+                        if await adapter.handle_speaking(page, record_secs=4.0, mic_say_wav=say_wav):
                             await page.wait_for_timeout(1500)
                             continue
                         res["walls"].append(("video", shot, q[:80]))

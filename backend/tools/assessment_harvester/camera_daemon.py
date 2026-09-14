@@ -51,14 +51,10 @@ def main() -> None:
     global _CUR_FEEDER
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
-    # CAMERA_FACE_VIDEO: an optional looping face clip to feed instead of the dark feed — the ready
-    # fallback for the WCI200 frame-content hypothesis (a proctor that reads the picture, not just
-    # the device metadata). Default unset => the owner-authorised dark/unlit feed, unchanged.
-    _face = os.environ.get("CAMERA_FACE_VIDEO") or None
-    if _face and not os.path.exists(_face):
-        _log(f"CAMERA_FACE_VIDEO={_face} not found — falling back to dark feed")
-        _face = None
-    _source = _face
+    # Feed source: the standard face loop if present (a plausible live candidate for a proctor that
+    # reads the PICTURE — Hallo video scoring), else the dark/unlit feed. CAMERA_FACE_VIDEO overrides
+    # (a path, or 'dark'/'0'/'none' to force the dark feed). Single source of truth: camera._default_source.
+    _source = camera._default_source()
     _log(f"start pid={os.getpid()} device={camera.DEVICE} feed={'FACE:' + _source if _source else 'dark'}")
     for _sig in (signal.SIGTERM, signal.SIGINT):
         try:

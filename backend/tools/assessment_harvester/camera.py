@@ -36,6 +36,28 @@ logger = logging.getLogger("assessment_harvester")
 DEVICE = os.environ.get("CAMERA_DEVICE", "/dev/video0")
 CARD_LABEL = "Integrated Camera"
 VIDEO_NR = 0
+
+# Optional FACE-FEED: a looped ready face clip fed into the device instead of the dark feed, so a
+# proctor that reads the PICTURE (Hallo video-response scoring) sees a plausible live candidate — the
+# owner's "готовая запись, не зависеть от реального лица" (a synthetic face, never a real person's).
+# WCI200 (AMCAT/Sutherland) rejects a virtual device regardless of content, so the face is neutral there
+# and beneficial for Hallo. Resolution order (see _default_source): CAMERA_FACE_VIDEO env overrides
+# (a path to feed, or 'dark'/'0'/'none'/'off' to force the dark feed) -> the standard on-disk face loop
+# -> the dark/unlit feed. Default file is gitignored (backend/data/assessment_media/).
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_STD_FACE_VIDEO = os.path.join(_BACKEND_DIR, "data", "assessment_media", "face_loop.mp4")
+
+
+def _default_source() -> str | None:
+    """Feed source when a caller passes no explicit video: the standard face loop if present, else the
+    dark/unlit feed (None). CAMERA_FACE_VIDEO overrides — a path, or 'dark'/'0'/'none'/'off' forces dark."""
+    env = (os.environ.get("CAMERA_FACE_VIDEO") or "").strip()
+    if env:
+        if env.lower() in ("dark", "0", "none", "off", "false"):
+            return None
+        if os.path.exists(env):
+            return env
+    return _STD_FACE_VIDEO if os.path.exists(_STD_FACE_VIDEO) else None
 # A persistent external feeder (camera_daemon.py) writes its pid here. When it is alive, ensure()
 # REUSES its continuous dark feed instead of spawning a second (conflicting) writer — v4l2loopback is
 # single-writer, so two feeders fight over the format (VIDIOC_G_FMT invalid) and BOTH die.
@@ -109,6 +131,8 @@ def feed(video_path: str | None = None) -> bool:
     to mic.speak — swaps the media the "camera" shows. Returns True if a producer is now running."""
     global _FEEDER
     import time
+    if video_path is None:
+        video_path = _default_source()
     stop()
 
     def _spawn() -> bool:
@@ -163,6 +187,8 @@ def ensure(video_path: str | None = None) -> bool:
     if not _ensure_module():
         logger.info("[camera] no /dev/video device (module load failed)")
         return False
+    if video_path is None:
+        video_path = _default_source()
     if video_path is None and is_running():
         return True
     ok = feed(video_path)

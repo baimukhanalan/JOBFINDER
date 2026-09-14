@@ -306,7 +306,11 @@ class HalloAdapter(Adapter):
                 except Exception:
                     pass
                 await self._log_devcheck_controls(page)
-            if self._prep_waits <= 45:          # ~180s on ONE marker; a long listening module needs it
+            # A listening comprehension shows "MM:SS time left" (5 min) and its LAST question (Q5 of 5)
+            # has NO submit — it AUTO-advances when the module timer expires. So the wait budget must
+            # outlast that timer: ~95×4s ≈ 380s (>5 min). Re-answering the same Q5 each cycle is a
+            # harmless no-op that doesn't reset the timer; we simply out-wait it.
+            if self._prep_waits <= 95:
                 await page.wait_for_timeout(4000)
                 return True
         else:

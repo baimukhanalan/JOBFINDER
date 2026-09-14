@@ -1179,6 +1179,74 @@ try:
 except (TypeError, ValueError):
     CAMPAIGN_WORKERS = 8
 
+# Ashby's "flagged as possible spam" is a reCAPTCHA-v3 SCORE below threshold, NOT a hard wall — its
+# own error tells you to "please submit your application again". Live-proven 2026-09-14: monarchmoney
+# flagged one submit then ACKED the very next one (same tenant, minutes apart). So a spam-flagged
+# auto-ATS application is RETRIED with a FRESH identity + a fresh warmed session (a new /load re-runs
+# the Google/careers warm-up that seeds the v3 cookie) up to CAMPAIGN_ASHBY_RETRY times before it is
+# recorded as spam. Bounded + gated; the per-company velocity cap upstream still bounds how many
+# DISTINCT jobs/company are served, so a saturated tenant (which won't convert) costs at most this
+# many extra attempts on one job, never a re-hammer. Set 0 to disable.
+try:
+    CAMPAIGN_ASHBY_RETRY = max(0, min(int(os.getenv("CAMPAIGN_ASHBY_RETRY", "2") or 0), 4))
+except (TypeError, ValueError):
+    CAMPAIGN_ASHBY_RETRY = 2
+
+
+def _is_recaptcha_spam(st: dict) -> bool:
+    """True when a fill-state's submit verdict is Ashby's reCAPTCHA-v3 spam BANNER (a marginal score,
+    retryable) — NOT a confirmed landing. Mirrors bulk_log._SPAM_LEDGER_RE so the retry trigger and
+    the ledger's spam classification never diverge. This is the UI-banner fallback; prefer the
+    reliable GraphQL code via _recaptcha_score_flag (the banner collapses a validation miss and a
+    low score into the SAME text, so it must not be the sole retry gate)."""
+    sub = (st or {}).get("submit") or {}
+    if sub.get("confirmed"):
+        return False
+    try:
+        from backend.tools.bulk_log import _SPAM_LEDGER_RE
+    except Exception:
+        return False
+    return bool(_SPAM_LEDGER_RE.search(str(sub.get("blocked") or "")))
+
+
+def _recaptcha_score_flag(pid: str, jjid, st: dict) -> bool:
+    """Reliable retry gate: retry ONLY a genuine reCAPTCHA-v3 low score, NOT any rejection Ashby
+    happens to render with the same 'flagged as possible spam' banner. Ashby's DOM collapses every
+    submit rejection into that one banner, but the captured GraphQL mutation body carries the real
+    `ashbyErrorType` (RECAPTCHA_SCORE_BELOW_THRESHOLD for a low score vs a different code / missing-
+    field error for a validation miss). So consult `<prefill>/submit_response.json` (written by the
+    co-pilot's _attach_submit_capture) first: if a body is present, retry IFF it is the score code —
+    a validation miss with a body is NOT retried (fresh identities can't fix a fill gap). Only when
+    no reliable capture exists (a non-Ashby ATS, or the capture is missing) fall back to the banner."""
+    sub = (st or {}).get("submit") or {}
+    if sub.get("confirmed"):
+        return False
+    try:
+        p = os.path.join("uploads", "prefill", str(pid), str(jjid), "submit_response.json")
+        if os.path.exists(p):
+            import json as _json
+            body = str((_json.load(open(p)) or {}).get("body") or "")
+            if body:
+                return "RECAPTCHA_SCORE_BELOW_THRESHOLD" in body
+    except Exception:
+        pass
+    return _is_recaptcha_spam(st)
+
+
+def _company_under_day_cap(jid: int) -> bool:
+    """True while the job's company is still UNDER its per-day fill cap — the same
+    company_velocity.guard the bulk drain + resolve_targets use, which counts every prefill dir as a
+    hit. Called before EACH retry so retries count toward the cap and can never re-hammer a saturated
+    tenant past COMPANY_CAP_PER_DAY (the finding: 2 jobs × (1+retries) could otherwise = 3× the cap on
+    one Salmon-like tenant, exactly the volume cluster that only deepens the flag). Fail-OPEN on any
+    guard error, matching resolve_targets' own policy (a guard blip must not silently kill the run)."""
+    try:
+        from backend.tools import company_velocity, catalog_db
+        kept, _ = company_velocity.guard([int(jid)], jobs_by_ids=catalog_db.jobs_by_ids)
+        return int(jid) in {int(x) for x in kept}
+    except Exception:
+        return True
+
 
 def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, workers=CAMPAIGN_WORKERS,
                            english_level=None):
@@ -1200,27 +1268,47 @@ def _fill_campaign_targets(targets, *, gender=None, name=None, identity_for, wor
     n = max(1, min(int(workers), len(targets), 12))
 
     def _one(base_url: str, jid: int) -> dict:
-        try:
-            email, pid = identity_for(jid)
-        except Exception as exc:
-            return {"state": "error", "error": f"identity: {exc}"[:200], "mailbox": ""}
-        nm = name(jid) if callable(name) else name    # vary_name: a spelling variant per application
-        try:
-            pid2, jjid, _gen = catalog_drafts.ensure_and_wire(
-                jid, gender=gender, name=nm, email=email, pid=pid, english_level=english_level)
-        except Exception as exc:
-            return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email or ""}
-        if not email:
-            # unique_identity mode: synth_persona minted the email — read it back for the
-            # journal / stats mailbox→job join (otherwise the application isn't attributable).
+        # A reCAPTCHA-v3 spam flag is a marginal score, not a wall: retry with a FRESH identity +
+        # a fresh warmed session up to CAMPAIGN_ASHBY_RETRY times before recording it. Everything
+        # else (a landing, a validation miss, a dead posting, an error) returns on the first pass.
+        st: dict = {"state": "error", "error": "no attempt", "mailbox": ""}
+        attempts = 1 + CAMPAIGN_ASHBY_RETRY
+        for attempt in range(attempts):
             try:
-                import json as _json
-                email = ((_json.load(open(f"uploads/prefill/{pid2}/{jjid}/persona.json"))
-                          .get("profile") or {}).get("email") or "")
-            except Exception:
-                email = ""
-        st = _fill_via(base_url, jjid, pid2, wait_submit=True)
-        st["mailbox"] = email
+                email, pid = identity_for(jid)
+            except Exception as exc:
+                return {"state": "error", "error": f"identity: {exc}"[:200], "mailbox": ""}
+            nm = name(jid) if callable(name) else name   # vary_name: a spelling variant per application
+            try:
+                pid2, jjid, _gen = catalog_drafts.ensure_and_wire(
+                    jid, gender=gender, name=nm, email=email, pid=pid, english_level=english_level)
+            except Exception as exc:
+                return {"state": "error", "error": f"wire: {exc}"[:200], "mailbox": email or ""}
+            if not email:
+                # unique_identity mode: synth_persona minted the email — read it back for the
+                # journal / stats mailbox→job join (otherwise the application isn't attributable).
+                try:
+                    import json as _json
+                    email = ((_json.load(open(f"uploads/prefill/{pid2}/{jjid}/persona.json"))
+                              .get("profile") or {}).get("email") or "")
+                except Exception:
+                    email = ""
+            st = _fill_via(base_url, jjid, pid2, wait_submit=True)
+            st["mailbox"] = email
+            st["attempt"] = attempt + 1
+            # Retry ONLY: (a) more attempts left, (b) a RELIABLE reCAPTCHA-v3 low score (not a
+            # validation miss wearing the same banner), and (c) the company is still under its
+            # per-day velocity cap (so retries count toward the cap and never re-hammer a saturated
+            # tenant). Everything else — a landing, a validation miss, a dead posting, an error, or a
+            # tenant already at cap — returns immediately.
+            if (attempt + 1 < attempts
+                    and _recaptcha_score_flag(pid2, jjid, st)
+                    and _company_under_day_cap(jid)):
+                log.info("campaign job %s: reCAPTCHA v3 low score on attempt %d/%d — retry with a "
+                         "fresh identity + warm session (company under velocity cap)",
+                         jid, attempt + 1, attempts)
+                continue
+            return st
         return st
 
     if n <= 1:

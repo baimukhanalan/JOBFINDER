@@ -187,6 +187,52 @@ def _launch_args() -> tuple[list[str], dict]:
     return args, a
 
 
+# Spoof a real integrated webcam's capability surface over our bare v4l2loopback device. Injected into
+# the page BEFORE any site JS (ctx.add_init_script) only when CAM_SPOOF=1. Merges real-webcam image-
+# control capability keys + a non-empty facingMode onto the genuine getCapabilities()/getSettings()
+# result (keeping the real deviceId/groupId/resolution), so a proctor that validates "is this a real
+# camera?" by reading the capability set sees a plausible UVC laptop camera.
+_CAM_SPOOF_JS = r"""
+(() => {
+  const proto = (self.MediaStreamTrack && MediaStreamTrack.prototype);
+  if (!proto) return;
+  const isVideo = (t) => { try { return t.kind === 'video'; } catch (e) { return false; } };
+  const realCaps = proto.getCapabilities;
+  const realSet = proto.getSettings;
+  if (realCaps) {
+    Object.defineProperty(proto, 'getCapabilities', {configurable: true, writable: true, value: function () {
+      let c = {}; try { c = realCaps.call(this) || {}; } catch (e) {}
+      if (!isVideo(this)) return c;
+      if (!(c.facingMode && c.facingMode.length)) c.facingMode = ['user'];
+      c.resizeMode = c.resizeMode || ['none', 'crop-and-scale'];
+      c.exposureMode = ['continuous', 'manual'];
+      c.exposureCompensation = {min: -2, max: 2, step: 0.16666667};
+      c.exposureTime = {min: 5, max: 2500, step: 1};
+      c.whiteBalanceMode = ['continuous', 'manual'];
+      c.colorTemperature = {min: 2800, max: 6500, step: 10};
+      c.focusMode = ['continuous', 'manual'];
+      c.focusDistance = {min: 0, max: 1024, step: 1};
+      c.brightness = {min: -64, max: 64, step: 1};
+      c.contrast = {min: 0, max: 64, step: 1};
+      c.saturation = {min: 0, max: 128, step: 1};
+      c.sharpness = {min: 0, max: 6, step: 1};
+      return c;
+    }});
+  }
+  if (realSet) {
+    Object.defineProperty(proto, 'getSettings', {configurable: true, writable: true, value: function () {
+      let s = {}; try { s = realSet.call(this) || {}; } catch (e) {}
+      if (!isVideo(this)) return s;
+      if (!s.facingMode) s.facingMode = 'user';
+      s.exposureMode = 'continuous'; s.whiteBalanceMode = 'continuous'; s.focusMode = 'continuous';
+      s.brightness = 0; s.contrast = 32; s.saturation = 64; s.sharpness = 3; s.colorTemperature = 4600;
+      return s;
+    }});
+  }
+})();
+"""
+
+
 async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                       min_delay: float = 0.8, max_delay: float = 2.2,
                       session_secs: float = 1200) -> dict:
@@ -323,6 +369,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                       permissions=["microphone", "camera"],
                                       proxy=res.get("_proxy") or None,
                                       ignore_https_errors=bool(res.get("_proxy")))
+            # CAM_SPOOF=1: make the v4l2loopback camera's getCapabilities()/getSettings() mimic a real
+            # integrated webcam (non-empty facingMode + exposure/whiteBalance/focus/brightness controls).
+            # Our virtual device exposes a BARE capability set (facingMode:[], no image controls) which is
+            # the likely tell a "unable to detect a camera" proctor (Sutherland WCI200) reads. Default OFF
+            # (an experiment on the Sutherland lane), so normal harvest/AMCAT/Hallo runs are unchanged.
+            if os.getenv("CAM_SPOOF") == "1":
+                try:
+                    await ctx.add_init_script(_CAM_SPOOF_JS)
+                except Exception:
+                    pass
             page = await ctx.new_page()
             # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
             # (Section B listen-repeat, Section C listen-comprehension) can be transcribed + banked.

@@ -140,6 +140,17 @@ class HalloAdapter(Adapter):
                 "return {btns:t.slice(0,50), media:au}; }")
             logger.info("[hallo] device-check controls: %s | media_els=%s",
                         ctrls.get("btns"), ctrls.get("media"))
+            # dump the outerHTML of every EMPTY (icon-only) button so we can identify the forward
+            # (arrow/next) vs the audio controls precisely, by SVG/class.
+            try:
+                empties = await page.evaluate(
+                    "() => [...document.querySelectorAll('button')].filter(b=>!((b.innerText||'')"
+                    "+(b.getAttribute('aria-label')||'')).trim() && !b.disabled).map(b=>{"
+                    "const r=b.getBoundingClientRect(); return b.outerHTML.slice(0,200)+' @['"
+                    "+Math.round(r.x)+','+Math.round(r.y)+' '+Math.round(r.width)+'x'+Math.round(r.height)+']';}).slice(0,8)")
+                logger.info("[hallo] icon-button HTML: %s", empties)
+            except Exception as _he:
+                logger.info("[hallo] icon-button HTML dump failed: %s", _he)
             # also capture a SCREENSHOT — a bare button label (e.g. '5' on the comprehension page) isn't
             # enough to see the real forward widget; the shot makes the layout obvious.
             try:

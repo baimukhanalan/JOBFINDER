@@ -316,8 +316,13 @@ _ERR_RE = re.compile(
     r"(?:\w*error|traceback|exception|failed|no fresh|no module named|"
     r"ne500|state_transition|modulenotfound)", re.I)
 # Benign phrases that CONTAIN an error word but mean success — apply lanes end with a summary like
-# "…errors=0" / "0 errors", and a "still going — exiting" flock-skip is normal. Don't flag those.
-_BENIGN_RE = re.compile(r"errors?\s*[=:]\s*0\b|\b0\s+errors?\b|still going\s*[—-]\s*exiting", re.I)
+# "…errors=0" / "0 errors", a pretty-printed JSON blob ends with `"errors": 0` (the quote sits between
+# the key and the colon, which the old pattern missed → false DOWN on tailscale_egress), and per-job
+# success lines end with `error=None` (matched by `\w*error` → false DOWN on Workday). A "still going —
+# exiting" flock-skip is normal. Don't flag any of those.
+_BENIGN_RE = re.compile(
+    r'errors?["\s]*[=:]\s*0\b|\b0\s+errors?\b|error\s*[=:]\s*(?:none|null|0)\b|'
+    r"still going\s*[—-]\s*exiting", re.I)
 
 
 # A run-completion summary line — every cron here ends a successful run on one of these shapes

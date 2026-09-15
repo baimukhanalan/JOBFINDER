@@ -418,8 +418,11 @@ class HalloAdapter(Adapter):
                     if(!row){ row={y:ic.y, items:[]}; rows.push(row); }
                     row.items.push(ic);
                   }
-                  const optRows=rows.filter(R=>R.items.length===2);
-                  window.__bwRows=optRows.map(R=>R.items.sort((a,b)=>a.x-b.x).map(i=>i.el));
+                  // an option row has 2-4 icon controls (an <svg>-inside-<button> can double-count);
+                  // take the LEFTMOST as thumbs-up (best) + the RIGHTMOST as thumbs-down (worst).
+                  const optRows=rows.filter(R=>R.items.length>=2 && R.items.length<=4);
+                  window.__bwRows=optRows.map(R=>{const s=R.items.sort((a,b)=>a.x-b.x);
+                    return [s[0].el, s[s.length-1].el];});
                   return {rows:optRows.length, icons:ics.length};
                 }""")
         except Exception:

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     brightdata_pool_size: int = 200         # sessions generated per daily refresh
     interview_session_secret: str = ""      # itsdangerous secret for the cabinet session cookie
     iv_bot_token: str = ""                   # dedicated Telegram token for the interview notifier (falls back to telegram_bot_token)
+    admin_bot_token: str = ""                # dedicated Telegram token for ADMIN-only alerts (new offers/interviews + walk-in reminders); separate from the responsible-facing iv_bot_token
 
     class Config:
         env_file = str(ENV_FILE)

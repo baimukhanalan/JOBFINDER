@@ -339,8 +339,10 @@ def _maybe_notify_mail_event(row, seen):
     chat = getattr(settings, "telegram_chat_id", None)
     if not chat:
         return
-    notify.send_dm(chat, notify.mail_event_text(row.get("kind"), row.get("mailbox") or "—",
-                                                 row.get("subject") or ""))
+    # ADMIN-only alert → the dedicated admin bot (@jobfinderadminnbot), NOT the responsible-facing
+    # interview reminder bot (@crmjobfinderbot). send_admin targets the owner chat internally.
+    notify.send_admin(notify.mail_event_text(row.get("kind"), row.get("mailbox") or "—",
+                                             row.get("subject") or ""))
     try:
         with open(_NOTIFIED_PATH, "a") as f:
             f.write(mid + "\n")

@@ -58,6 +58,34 @@ def send_dm(chat_id: int, text: str) -> bool:
         return False
 
 
+def _admin_token() -> str:
+    """The dedicated ADMIN-alert bot token (@jobfinderadminnbot): new offers/interviews + walk-in
+    reminders go here, kept SEPARATE from the responsible-facing interview reminder bot. Falls back to
+    the project-wide token only if the admin token is unset (so alerts still deliver somewhere)."""
+    return settings.admin_bot_token or settings.telegram_bot_token
+
+
+def send_admin(text: str) -> bool:
+    """Post an ADMIN-only alert via the admin bot to the owner/team chat (settings.telegram_chat_id).
+    Returns True on success, False when the token/chat is unset or on any error (never raises). Same
+    token-safe logging as send_dm — the URL embeds the bot token, so we log only status + Telegram's
+    (token-free) error JSON, and on a transport error only the exception TYPE."""
+    token = _admin_token()
+    chat = settings.telegram_chat_id
+    if not token or not chat:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        resp = httpx.post(url, json={"chat_id": chat, "text": text}, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("send_admin: chat %s failed: %s %s", chat, resp.status_code, resp.text[:300])
+            return False
+        return True
+    except Exception as e:
+        logger.warning("send_admin: chat %s transport error: %s", chat, type(e).__name__)
+        return False
+
+
 _BOT_USERNAME: str | None = None
 _OFFSET_FILE = __import__("pathlib").Path(__file__).resolve().parents[2] / "logs" / "iv_tg_offset"
 

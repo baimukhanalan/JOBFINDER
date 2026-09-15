@@ -89,7 +89,13 @@ def tick() -> int:
                 continue
             else:
                 text = notify.reminder_text(iv, name, int(kind), tz)
-            notify.notify_responsible(iv, text)
+            # Walk-in reminders (-2h prep, -15 min) are ADMIN-facing → the dedicated admin bot
+            # (@jobfinderadminnbot). The standard scheduler notices (assigned / -60 rich / -5) stay
+            # on the responsible-facing bot (@crmjobfinderbot).
+            if kind in ("120", "15"):
+                notify.send_admin(text)
+            else:
+                notify.notify_responsible(iv, text)
             # Mark after the send ATTEMPT (not conditional on success) so a permanently
             # bad personal chat_id doesn't re-fire every tick; the owner fallback makes
             # the send usually succeed anyway.

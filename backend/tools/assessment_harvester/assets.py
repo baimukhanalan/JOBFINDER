@@ -24,14 +24,35 @@ _DIR = os.path.join(os.path.dirname(__file__), "assets")
 SPEECH_WAV = os.path.join(_DIR, "speech.wav")
 FACE_Y4M = os.path.join(_DIR, "face.y4m")
 
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _secret(name: str, default: str = "") -> str:
+    """Resolve a secret/env value: os.environ first, else parse it out of backend/.env directly. The
+    harvester is launched by cron/subprocess where config.py's pydantic .env load never reaches
+    os.environ, so ELEVENLABS_API_KEY (gitignored, in backend/.env) would otherwise be invisible here."""
+    v = os.environ.get(name, "").strip()
+    if v:
+        return v
+    try:
+        with open(os.path.join(_BACKEND_DIR, ".env")) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return default
+
+
 # TTS voice STACK (best-first): ElevenLabs (cloud, most natural — only when a key is set) -> piper
 # (local neural, no key) -> espeak-ng (robotic, always available). A synthesized clip is CACHED on
 # disk content-addressed by (engine+voice, text): a repeated/identical question replays the SAME
 # stored file with NO regeneration and NO latency (the owner's "prepared mp3, no extra generation"
 # requirement — collect all questions, synthesize each answer ONCE, replay per matching question).
-_ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
-_ELEVEN_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # a default preset voice
-_ELEVEN_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
+_ELEVEN_KEY = _secret("ELEVENLABS_API_KEY")
+_ELEVEN_VOICE = _secret("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # a default preset voice
+_ELEVEN_MODEL = _secret("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
 
 # piper — a local NEURAL TTS (natural voice, no API key), the fallback under ElevenLabs. Env-overridable.
 _PIPER_BIN = os.environ.get("PIPER_BIN", os.path.expanduser("~/.venvs/piper/bin/piper"))
@@ -39,7 +60,6 @@ _PIPER_MODEL = os.environ.get(
     "PIPER_MODEL", os.path.expanduser("~/.local/share/piper-voices/en_US-amy-medium.onnx"))
 
 # content-addressed TTS cache (gitignored data dir); one file per unique (engine, text)
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TTS_CACHE_DIR = os.environ.get(
     "TTS_CACHE_DIR", os.path.join(_BACKEND_DIR, "data", "assessment_media", "tts_cache"))
 

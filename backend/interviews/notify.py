@@ -250,3 +250,28 @@ def reminder_text(interview: dict, responsible_name: str, minutes: int,
         f"Компания: {interview.get('company') or '—'}\n"
         f"Время: {_when(interview, tz)}"
     )
+
+
+def walkin_prep_text(interview: dict, responsible_name: str, tz: str | None = None) -> str:
+    """The -2h reminder: prepare for a walk-in ('just show up and get hired') interview. Reminds the
+    responsible to have their ID ready — we never fabricate an identity document; a real person attends
+    as the persona and brings their own."""
+    return (
+        "🪪 Собеседование через ~2 часа — подготовься\n"
+        f"Ответственный: {responsible_name}\n"
+        f"Кандидат: {_persona(interview)}\n"
+        f"Компания: {interview.get('company') or '—'}\n"
+        f"Время: {_when(interview, tz)}\n"
+        "Если это walk-in (заходишь — берут на месте): возьми с собой удостоверение личности."
+    )
+
+
+def mail_event_text(kind: str, mailbox: str, subject: str, company: str | None = None) -> str:
+    """One-line owner notification for a fresh recruiter mail classified as an OFFER or an interview
+    invitation — so a new offer/собес is seen the moment it lands, before assignment."""
+    head = {"offer": "🎉 Новый ОФФЕР", "interview": "📨 Новое приглашение на собеседование"}.get(
+        kind, "✉️ Новое событие")
+    body = f"{head}\nКандидат: {mailbox}\n"
+    if company:
+        body += f"Компания: {company}\n"
+    return body + f"Тема: {(subject or '—')[:140]}"

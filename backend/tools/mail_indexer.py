@@ -307,6 +307,47 @@ def _maybe_trigger_hallo(row, seen):
         log.close()
 
 
+_NOTIFIED_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                              "logs", "iv_mail_notified.txt")
+
+
+def _maybe_notify_mail_event(row, seen):
+    """A FRESH recruiter mail classified as an OFFER or an interview INVITATION just landed → ping the
+    owner's Telegram so a new offer/собес is seen the moment it arrives (before assignment). New inbound
+    arrivals only (seen==0, not outbound), recent only (so a reindex of old mail doesn't blast), and
+    de-duplicated by the message id. Fully try/excepted by the caller so it can NEVER affect indexing."""
+    if seen != 0 or row.get("outbound"):
+        return
+    if row.get("kind") not in ("offer", "interview"):
+        return
+    import time as _t
+    try:
+        if row.get("date_ts") and int(row["date_ts"]) < int(_t.time()) - 3 * 3600:
+            return
+    except Exception:
+        pass
+    mid = str(row.get("id") or "")
+    try:
+        if mid and os.path.exists(_NOTIFIED_PATH):
+            with open(_NOTIFIED_PATH) as f:
+                if mid in {x.strip() for x in f}:
+                    return
+    except Exception:
+        pass
+    from backend.config import settings
+    from backend.interviews import notify
+    chat = getattr(settings, "telegram_chat_id", None)
+    if not chat:
+        return
+    notify.send_dm(chat, notify.mail_event_text(row.get("kind"), row.get("mailbox") or "—",
+                                                 row.get("subject") or ""))
+    try:
+        with open(_NOTIFIED_PATH, "a") as f:
+            f.write(mid + "\n")
+    except Exception:
+        pass
+
+
 def index_file(path):
     """Index one Maildir file. seen from whether the path is under new/ (0) or cur/ (1);
     build_index_row returns None for anything outside a candidate mailbox (skipped)."""
@@ -334,6 +375,10 @@ def index_file(path):
         _maybe_trigger_hallo(row, seen)
     except Exception as e:
         print(f"hallo trigger error {path}: {e}", flush=True)
+    try:
+        _maybe_notify_mail_event(row, seen)
+    except Exception as e:
+        print(f"mail-notify error {path}: {e}", flush=True)
     try:
         _maybe_trigger_sutherland(row, seen)
     except Exception as e:

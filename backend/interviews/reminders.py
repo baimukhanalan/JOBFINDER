@@ -20,14 +20,20 @@ from backend.interviews import db, notify
 logger = logging.getLogger(__name__)
 
 
-def plan(announcements: list, due60: list, due5: list) -> list[tuple[dict, str]]:
-    """PURE planner: flatten/label the three input lists into (interview, kind) pairs,
-    kind ∈ {'assigned','60','5'}. No db, no network — unit-testable."""
+def plan(announcements: list, due60: list, due5: list,
+         due120: list | None = None, due15: list | None = None) -> list[tuple[dict, str]]:
+    """PURE planner: flatten/label the input lists into (interview, kind) pairs,
+    kind ∈ {'assigned','120','60','15','5'}. No db, no network — unit-testable.
+    due120/due15 are optional (kept last) so existing 3-arg callers/tests are unaffected."""
     pairs: list[tuple[dict, str]] = []
     for iv in announcements:
         pairs.append((iv, "assigned"))
+    for iv in (due120 or []):
+        pairs.append((iv, "120"))
     for iv in due60:
         pairs.append((iv, "60"))
+    for iv in (due15 or []):
+        pairs.append((iv, "15"))
     for iv in due5:
         pairs.append((iv, "5"))
     return pairs
@@ -53,15 +59,20 @@ def tick() -> int:
 
     now = datetime.now(timezone.utc)
     announcements = db.due_announcements()
+    due120 = db.due_reminders(now, 120)
     due60 = db.due_reminders(now, 60)
+    due15 = db.due_reminders(now, 15)
     due5 = db.due_reminders(now, 5)
 
-    pairs = plan(announcements, due60, due5)
+    pairs = plan(announcements, due60, due5, due120, due15)
     for iv, kind in pairs:
         try:
             name, tz = _responsible_meta(iv)
             if kind == "assigned":
                 text = notify.assigned_text(iv, name, tz)
+            elif kind == "120":
+                # -2h walk-in prep (prepare / bring your own ID; we never fabricate one)
+                text = notify.walkin_prep_text(iv, name, tz)
             elif kind == "60":
                 # the -60 reminder is the RICH one: company · role · persona · Zoom link,
                 # plus the tailored résumé PDF as an attachment.

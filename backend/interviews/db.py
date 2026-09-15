@@ -74,6 +74,12 @@ def ensure_schema() -> None:
         # additive column for the notifier daemon: one-time "interview assigned" ping
         cur.execute("ALTER TABLE iv_interviews "
                     "ADD COLUMN IF NOT EXISTS announced BOOLEAN NOT NULL DEFAULT FALSE;")
+        # additive reminder windows (-2h prep/bring-ID, -15m join-now) beside the original -60/-5.
+        # boolean DEFAULT FALSE => a constant default, no table rewrite (fast ALTER).
+        cur.execute("ALTER TABLE iv_interviews "
+                    "ADD COLUMN IF NOT EXISTS reminded_120 BOOLEAN NOT NULL DEFAULT FALSE;")
+        cur.execute("ALTER TABLE iv_interviews "
+                    "ADD COLUMN IF NOT EXISTS reminded_15 BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_responsible_idx "
                     "ON iv_interviews (responsible_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_mailbox_idx "
@@ -361,8 +367,9 @@ def booked_intervals(rid: int, since: datetime, until: datetime) -> list[tuple]:
 def due_reminders(now: datetime, window_min: int) -> list[dict]:
     """Assigned, not-cancelled interviews whose start_ts falls in (now, now+window_min]
     and whose reminder flag for THIS window hasn't been set yet. window_min selects the
-    flag: 60 -> reminded_60, anything else (5) -> reminded_5."""
-    flag_col = "reminded_60" if int(window_min) == 60 else "reminded_5"
+    flag: 120 -> reminded_120, 60 -> reminded_60, 15 -> reminded_15, else (5) -> reminded_5."""
+    flag_col = {120: "reminded_120", 60: "reminded_60", 15: "reminded_15"}.get(
+        int(window_min), "reminded_5")
     until = now + timedelta(minutes=window_min)
     with mail_db._cur() as cur:
         cur.execute(
@@ -375,8 +382,8 @@ def due_reminders(now: datetime, window_min: int) -> list[dict]:
 
 
 def mark_reminded(interview_id: int, which: str) -> None:
-    """which ∈ {'60','5'} — sets reminded_60 when which=='60', else reminded_5."""
-    col = "reminded_60" if str(which) == "60" else "reminded_5"
+    """which ∈ {'120','60','15','5'} — sets the matching reminded_* column (default reminded_5)."""
+    col = {"120": "reminded_120", "60": "reminded_60", "15": "reminded_15"}.get(str(which), "reminded_5")
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(f"UPDATE iv_interviews SET {col}=TRUE WHERE id=%s", (interview_id,))
 

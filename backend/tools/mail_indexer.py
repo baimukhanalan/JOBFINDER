@@ -130,7 +130,11 @@ def _maybe_trigger_shl(row, seen):
                 subprocess.run(["kill", "-9", parts[0]], timeout=5)
     except Exception:
         pass
-    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98")
+    # SHL_SOLVE_ABILITY: owner opt-in ("try the cognitive ones, see how it goes") — the scored etalon
+    # attempts cognitive/knowledge items (banked strong answer, else model) instead of hard-stopping.
+    # Synthetic-persona etalon only; a diagram/table item the model can't parse still stops for a human.
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98",
+               SHL_SOLVE_ABILITY=os.environ.get("SHL_SOLVE_ABILITY") or "1")
     try:
         log = open(_SHL_LOG, "a")
     except Exception:

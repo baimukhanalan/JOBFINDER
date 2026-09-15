@@ -71,7 +71,7 @@ def send_admin(text: str) -> bool:
     token-safe logging as send_dm — the URL embeds the bot token, so we log only status + Telegram's
     (token-free) error JSON, and on a transport error only the exception TYPE."""
     token = _admin_token()
-    chat = settings.telegram_chat_id
+    chat = settings.admin_chat_id or settings.telegram_chat_id
     if not token or not chat:
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"

@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     interview_session_secret: str = ""      # itsdangerous secret for the cabinet session cookie
     iv_bot_token: str = ""                   # dedicated Telegram token for the interview notifier (falls back to telegram_bot_token)
     admin_bot_token: str = ""                # dedicated Telegram token for ADMIN-only alerts (new offers/interviews + walk-in reminders); separate from the responsible-facing iv_bot_token
+    admin_chat_id: str = ""                   # chat_id the admin bot delivers to (the owner who pressed Start); falls back to telegram_chat_id
 
     class Config:
         env_file = str(ENV_FILE)

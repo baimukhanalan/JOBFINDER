@@ -424,11 +424,28 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
     async def _run():
         nonlocal page
         async with async_playwright() as p:
-            b = await p.chromium.launch(headless=False, args=args, env=launch_env, timeout=60000)
-            ctx = await b.new_context(viewport={"width": 1280, "height": 850},
-                                      permissions=["microphone", "camera"],
-                                      proxy=res.get("_proxy") or None,
-                                      ignore_https_errors=bool(res.get("_proxy")))
+            # REMOTE CDP mode (HARVEST_CDP_URL): drive an already-running Chrome elsewhere (the owner's
+            # MacBook, reached over the Tailscale tunnel) instead of launching a local browser. The
+            # MacBook's REAL webcam beats WCI200 and the owner's live face passes the proctoring
+            # liveness/gaze check that flags a synthetic session. We do NOT own that browser -> reuse its
+            # context + tab and never close it; the fake-device args / virtmic / proxy don't apply (real HW).
+            _cdp = os.getenv("HARVEST_CDP_URL")
+            if _cdp:
+                b = await p.chromium.connect_over_cdp(_cdp, timeout=30000)
+                ctx = b.contexts[0] if b.contexts else await b.new_context(
+                    permissions=["microphone", "camera"])
+                try:
+                    await ctx.grant_permissions(["microphone", "camera"])
+                except Exception:
+                    pass
+                res["_remote_cdp"] = True
+                logger.info("[%s] REMOTE Chrome via CDP %s (real camera + live face)", mailbox, _cdp)
+            else:
+                b = await p.chromium.launch(headless=False, args=args, env=launch_env, timeout=60000)
+                ctx = await b.new_context(viewport={"width": 1280, "height": 850},
+                                          permissions=["microphone", "camera"],
+                                          proxy=res.get("_proxy") or None,
+                                          ignore_https_errors=bool(res.get("_proxy")))
             # CAM_SPOOF=1: make the v4l2loopback camera's getCapabilities()/getSettings() mimic a real
             # integrated webcam (non-empty facingMode + exposure/whiteBalance/focus/brightness controls).
             # Our virtual device exposes a BARE capability set (facingMode:[], no image controls) which is
@@ -509,7 +526,8 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     logger.info("[camtrace] logging camera API calls -> %s", _cam_trace_path)
                 except Exception as _e:
                     logger.info("[camtrace] setup failed: %s", _e)
-            page = await ctx.new_page()
+            # CDP mode: reuse the owner's existing tab (they watch it for the live camera); else a fresh page.
+            page = (ctx.pages[0] if res.get("_remote_cdp") and ctx.pages else await ctx.new_page())
             if _on_console is not None:
                 page.on("console", _on_console)
             # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
@@ -876,11 +894,14 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                 res["status"] = "stuck"
                 res["note"] = f"max_items reached ({res['banked']} banked)"
             finally:
-                try:
-                    await ctx.close()
-                    await b.close()
-                except Exception:
-                    pass
+                # REMOTE CDP: never close the owner's browser/context/tab — just let the async_playwright
+                # context exit drop the CDP transport. Only a browser we launched is torn down here.
+                if not res.get("_remote_cdp"):
+                    try:
+                        await ctx.close()
+                        await b.close()
+                    except Exception:
+                        pass
 
     page = None
     try:

@@ -246,7 +246,9 @@ def _maybe_trigger_amcat(row, seen):
         return
     import subprocess
     _kill_stuck_harvest("amcat", 2700)   # 45 min watchdog, scoped to amcat runs
-    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98", HARVEST_PROXY="phone")
+    # session_secs under the 45-min watchdog (default 20 min truncates the battery).
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98", HARVEST_PROXY="phone",
+               HARVEST_SESSION_SECS=os.environ.get("HARVEST_SESSION_SECS") or "2400")
     try:
         log = open(_HARVEST_LOG, "a")
     except Exception:
@@ -276,14 +278,21 @@ def _maybe_trigger_hallo(row, seen):
     if seen != 0:
         return
     fe = (row.get("from_email") or "").lower()
-    subj = (row.get("subject") or "").lower()
-    if "hallo.ai" not in fe or "assessment" not in subj:
+    # Fire on ANY hallo.ai inbound (seen==0), NOT only subjects containing "assessment": TP/Hallo send
+    # the invite under several subjects ("Complete your TP hiring assessment", "Your career is just a
+    # few steps away…") and the subject gate dropped ~4 of 6 variants. discover.py's ai-assessment
+    # link_re is the real authority — harvest_runner exits without launching a browser when there is no
+    # fresh token, so a non-invite hallo.ai mail is a cheap no-op.
+    if "hallo.ai" not in fe:
         return
     if _mem_available_kb() < 6 * 1024 * 1024:   # < 6 GiB available → too tight to add a headful browser
         return
     import subprocess
     _kill_stuck_harvest("hallo", 5400)   # 90 min: a full 6-module battery runs long; kill only a hang
-    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98")
+    # session_secs: the 20-min default killed a deep battery mid-walk (0 completions, 17 partial_timeout)
+    # — give the full 6-module battery time, kept just under the 90-min watchdog.
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98",
+               HARVEST_SESSION_SECS=os.environ.get("HARVEST_SESSION_SECS") or "5100")
     try:
         log = open(_HALLO_LOG, "a")
     except Exception:

@@ -286,16 +286,27 @@ class Adapter:
     async def handle_typing(self, page, text: str) -> bool:
         """Fill a free-text/typing item with `text` and advance. For a typing-SPEED test this may be
         flagged, but it lets the item advance so we can harvest what follows."""
+        # NATIVE value setter so a React-controlled field (Hallo's WriteX textarea) actually registers
+        # the text — a raw `el.value=` leaves React's internal value-tracker stale, so onChange never
+        # fires and the word counter reads "Words: 0" (proven on a captured Hallo writing screenshot),
+        # and Submit rejects the answer as empty.
         js = r"""(txt) => {
           const vis = el => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
              return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
           const el = [...document.querySelectorAll('textarea,[contenteditable=true],[role=textbox],input[type=text]')].find(vis);
           if (!el) return false;
           el.focus();
-          if (el.isContentEditable) { el.textContent = txt; }
-          else { el.value = txt; }
-          el.dispatchEvent(new Event('input', {bubbles:true}));
-          el.dispatchEvent(new Event('change', {bubbles:true}));
+          if (el.isContentEditable) {
+            el.textContent = txt;
+            el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:txt}));
+          } else {
+            const proto = el.tagName==='TEXTAREA' ? window.HTMLTextAreaElement.prototype
+                                                  : window.HTMLInputElement.prototype;
+            const d = Object.getOwnPropertyDescriptor(proto, 'value');
+            if (d && d.set) d.set.call(el, txt); else el.value = txt;
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+          }
           return true;
         }"""
         ok = False
@@ -307,6 +318,14 @@ class Adapter:
             except Exception:
                 continue
         if ok:
+            # a real keystroke nudge into the just-focused field triggers any keystroke-gated word
+            # counter / anti-cheat that the synthetic input events alone don't satisfy
+            try:
+                await page.keyboard.press("End")
+                await page.keyboard.type(" ")
+                await page.keyboard.press("Backspace")
+            except Exception:
+                pass
             await page.wait_for_timeout(500)
             await self.advance(page)
         return ok

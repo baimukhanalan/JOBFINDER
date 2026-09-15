@@ -931,11 +931,23 @@ async def answer_scored(page, persona: dict | None = None, *, max_items: int = 2
             q_txt = item.get("question", "")
             idx, kind = _pick_answer(q_txt, opts, item.get("has_table", False))
             if idx is None:
-                # ability / unrecognised -> HARD STOP, leave for a human (never auto-solve).
-                res["status"] = "needs_human"
-                res["note"] = (f"{kind} item reached — left for a human (q: {q_txt[:80]})")
-                res["items_answered"] = answered
-                return res
+                # ability / unrecognised. DEFAULT (etalon boundary): HARD STOP, leave for a human.
+                # OWNER OPT-IN `SHL_SOLVE_ABILITY=1` ("try the cognitive ones, see how it goes",
+                # 2026-09-15) — ATTEMPT a cognitive/knowledge item too: replay a banked (strong) answer
+                # first, else let the model solve from the options; a table/diagram item the model
+                # can't parse still stops. Synthetic-persona etalon only (answer_scored is synthetic).
+                if kind == "ability" and _env_solve_ability():
+                    solved = _bank_lookup(q_txt, opts)
+                    if solved is None:
+                        solved = await _llm_pick(q_txt, opts)
+                    if solved is not None:
+                        idx = solved
+                        logger.info("etalon ABILITY solve-attempt pick=%d/%d q=%r", idx, len(opts), q_txt[:60])
+                if idx is None:
+                    res["status"] = "needs_human"
+                    res["note"] = (f"{kind} item reached — left for a human (q: {q_txt[:80]})")
+                    res["items_answered"] = answered
+                    return res
 
             # answer-bank: a previously-seen item replays its stored choice INSTANTLY (no LLM); a
             # NEW judgement item (SJT scenario or forced-choice statement) that is not in the bank is
@@ -1025,6 +1037,12 @@ async def answer_scored(page, persona: dict | None = None, *, max_items: int = 2
 
 def _env_complete_scored() -> bool:
     return str(os.environ.get("SHL_COMPLETE_SCORED", "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_solve_ability() -> bool:
+    """Owner opt-in to ALSO attempt cognitive/knowledge (ability) items in the scored etalon instead of
+    hard-stopping needs_human. Off by default (the safety boundary); on = 'try, see how it goes'."""
+    return str(os.environ.get("SHL_SOLVE_ABILITY", "")).strip().lower() in ("1", "true", "yes", "on")
 
 
 async def run_intro(link: str, persona: dict | None = None, *, page=None,

@@ -305,11 +305,103 @@ class HalloAdapter(Adapter):
         except Exception:
             return False
 
+    # COGNITIVE image-choice module (2026-09-15, live silas run stuck at step 82): a NON-VERBAL
+    # reasoning item ("Five figures are shown. Four share a common rule ... choose the figure that does
+    # not follow the same rule", "Q.1/10", a per-section countdown). The 5 answer choices are clickable
+    # IMAGE CARDS (an <svg>/<img> in a MUI box), NOT text/radio options, so the core reads 0 options and
+    # the page's Next stays DISABLED -> the harvest gave up ("no options/forward"). Detect + click a
+    # choice card (which enables Next). Completion needs only Next to enable; a wrong pick still advances
+    # (the section is SCORED, not gated).
+    _COG_FIG_RE = re.compile(
+        r"figures?\s+are\s+shown|share\s+a\s+common\s+rule|does\s+not\s+follow\s+the\s+same\s+rule"
+        r"|which\s+figure|choose\s+the\s+figure", re.I)
+    # A TIMED question section ("Q.1/10" + "time left") — cognitive / hardskill. NB the slash form
+    # "Q.N/M" is distinct from the listening module's "Question k of M" (no slash), so this never
+    # matches a listening passage.
+    _TIMED_Q = re.compile(r"q\.?\s*\d+\s*/\s*\d+", re.I)
+
+    async def _pick_figure_and_next(self, page) -> bool:
+        """On a cognitive IMAGE-choice page, click one answer card to enable the disabled Next, then
+        advance. SELF-CORRECTING: tries candidate cards until Next actually enables (so clicking a
+        decorative icon by mistake is harmless — only the real choice unblocks Next). Best-effort pick
+        (any valid card completes the item); never raises. Returns True iff it answered + moved on."""
+        try:
+            n = await page.evaluate(
+                """() => {
+                  const vis = e => { const r=e.getBoundingClientRect(); const ar=r.width/(r.height||1);
+                    return r.width>=50 && r.height>=50 && r.width<=440 && r.height<=440
+                      && ar>0.45 && ar<2.2 && r.bottom>0 && r.top<innerHeight; };
+                  // an answer card = the smallest card-sized box wrapping exactly one svg/img choice.
+                  const media=[...document.querySelectorAll('svg,img')];
+                  const cards=[];
+                  for (const m of media){
+                    let el=m;
+                    for (let i=0;i<5 && el.parentElement;i++){
+                      const r=el.getBoundingClientRect();
+                      if (r.width>=70 && r.height>=70) break;
+                      el=el.parentElement;
+                    }
+                    if (el && vis(el) && !cards.includes(el)) cards.push(el);
+                  }
+                  if (cards.length<3 || cards.length>8){ window.__cogCards=null; return cards.length; }
+                  window.__cogCards=cards;
+                  return cards.length;
+                }""")
+        except Exception:
+            return False
+        if not n or n < 3 or n > 8:
+            return False
+        start = getattr(self, "_cog_pick", 0) % n
+        self._cog_pick = start + 1
+        order = list(range(start, n)) + list(range(0, start))
+        for idx in order:
+            try:
+                await page.evaluate(
+                    "(i) => { const c=window.__cogCards; if(!c||!c[i]) return; let el=c[i];"
+                    " for(let k=0;k<4 && el;k++){ const cs=getComputedStyle(el);"
+                    " if(el.tagName==='BUTTON'||el.getAttribute('role')==='button'||el.onclick"
+                    "||cs.cursor==='pointer') break; el=el.parentElement; } (el||c[i]).click(); }", idx)
+            except Exception:
+                continue
+            await page.wait_for_timeout(500)
+            try:
+                nxt = await page.evaluate(
+                    "() => { const b=[...document.querySelectorAll('button')]"
+                    ".find(x=>/^(next|submit)$/i.test((x.innerText||'').trim())); return b?!b.disabled:false; }")
+            except Exception:
+                nxt = False
+            if nxt:
+                logger.info("[hallo] cognitive figure: card %d/%d enabled Next", idx + 1, n)
+                if await self._click(page, "Next", 1500) or await self._click(page, "Submit", 1500):
+                    await page.wait_for_timeout(900)
+                    return True
+        return False
+
     async def advance(self, page) -> bool:
         try:
             body = (await page.inner_text("body", timeout=2000)).lower()
         except Exception:
             body = ""
+        # TIMED cognitive / hardskill section ("Q.1/10 ... 02:26 time left"). The core can't read the
+        # image-card choices as options and Next stays disabled -> without this the harvest gives up.
+        # (1) On a figure page, click a choice card (self-correcting) to answer + advance. (2) Else WAIT
+        # OUT the section countdown so it AUTO-advances at 0:00 (scored, not gated — an unanswered
+        # section still auto-submits and moves to the next module). The wait budget resets whenever the
+        # "Q.N/M" marker changes, so a real multi-question walk isn't cut short.
+        if "time left" in body and self._TIMED_Q.search(body):
+            if self._COG_FIG_RE.search(body) and await self._pick_figure_and_next(page):
+                self._stuck_advances = 0
+                self._timed_waits = 0
+                return True
+            qsig = self._TIMED_Q.search(body).group(0)
+            if qsig != getattr(self, "_last_timed_sig", None):
+                self._last_timed_sig = qsig
+                self._timed_waits = 0
+            self._timed_waits = getattr(self, "_timed_waits", 0) + 1
+            if self._timed_waits <= 45:          # ~3 min per section > the ~2.5-min countdown
+                await page.wait_for_timeout(4000)
+                return True
+            self._timed_waits = 0
         # A prep/countdown/listening page ("Prepare your response", "Recording will end in N", "Listen
         # carefully to the content" + a "Write your notes" pad) AUTO-transitions and the comprehension
         # MCQs appear on that SAME page after the audio — so it must be WAITED out, NOT skipped.

@@ -10,10 +10,13 @@ speaking/listening/video sub-tests are handled by the fake-device path in core.
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from backend.tools import shl_assessment as sa
 from backend.tools.assessment_harvester.adapters.base import Adapter, _GENERIC_ITEM_JS
+
+logger = logging.getLogger("assessment_harvester")
 
 # Cookiebot (Usercentrics) accept + REMOVE the dialog. It overlays the page bottom AND its text
 # ("This website uses cookies", Necessary/Preferences/Statistics/Marketing) pollutes the item reader,
@@ -78,6 +81,50 @@ _MEDIA_FLAGS_JS = r"""() => {
   return {qimgs, has_video:hasVideo, has_audio:hasAudio, has_mic:hasMic, has_textarea:bigText.length>0};
 }"""
 
+# AMCAT / Aspiring-Minds "Identity Verification" proctor gate (post-notice, pre-Instructions). Reports
+# whether this page (or frame) is the IDV page and which of the Take/Submit/Retake controls are present.
+# The IDV page has: heading "Identity Verification" + body "verify your identity" / "Photographs will
+# only be used ..." + a live camera preview + a "Take" button (captures a still) then a "Submit" button
+# (commits it). Owner policy: a FACE-ONLY capture is sufficient (no matching ID card), so we just click
+# Take then Submit with the face in frame. Guarded tightly on the "identity verification" / "verify your
+# identity" text so AMPI / SVAR / listening / cognitive pages never match.
+_IDV_STATE_JS = r"""() => {
+  const body = (document.body && document.body.innerText || '');
+  const idv = /identity verification|verify your identity/i.test(body);
+  const vis = el => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const norm = el => (el.innerText||el.value||el.textContent||'').replace(/\s+/g,' ').trim();
+  const dis = el => !!(el.disabled || el.getAttribute('aria-disabled')==='true');
+  const ctrls = [...document.querySelectorAll(
+     'button,[role=button],a,input[type=submit],input[type=button],div,span')].filter(vis);
+  const find = word => { const re = new RegExp('^\\s*'+word+'\\s*$','i');
+     return ctrls.find(el => re.test(norm(el))); };
+  const take = find('take'), submit = find('submit'), retake = find('retake');
+  return {idv, has_take:!!take, has_submit:!!submit,
+          submit_enabled: submit ? !dis(submit) : false, has_retake:!!retake};
+}"""
+
+# Click the first VISIBLE, ENABLED control whose whole trimmed text is exactly `word` (case-insensitive).
+# Robust to the control being a <button>, [role=button], <a>, <input>, or a styled <div>/<span>: real
+# controls are preferred (ranked first); a wrapper whose text is only `word` still clicks fine. Used for
+# the IDV Take/Submit buttons and the Instructions "Start Assessment" button (query by visible text).
+_CLICK_EXACT_JS = r"""(word) => {
+  const vis = el => { const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+     return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+  const norm = el => (el.innerText||el.value||el.textContent||'').replace(/\s+/g,' ').trim();
+  const re = new RegExp('^\\s*'+word+'\\s*$','i');
+  let els = [...document.querySelectorAll(
+     'button,[role=button],a,input[type=submit],input[type=button],div,span')]
+     .filter(vis).filter(el => re.test(norm(el)));
+  if (!els.length) return false;
+  const rank = el => (el.tagName==='BUTTON'||el.getAttribute('role')==='button'
+                      ||el.tagName==='A'||el.tagName==='INPUT') ? 0 : 1;
+  els.sort((a,b)=>rank(a)-rank(b));
+  const el = els[0];
+  if (el.disabled || el.getAttribute('aria-disabled')==='true') return false;
+  el.scrollIntoView({block:'center'}); el.click(); return true;
+}"""
+
 
 class ShlAdapter(Adapter):
     platform = "shl_sutherland"
@@ -132,11 +179,100 @@ class ShlAdapter(Adapter):
             else:
                 break
 
+    async def _idv_state(self, page) -> dict:
+        """IDV signature across the main frame + any child frame — the AMCAT player is sometimes the
+        top document, sometimes iframed. Returns the first frame that reports idv:true, else idv:false."""
+        for target in [page] + [f for f in page.frames if f is not page.main_frame]:
+            try:
+                st = await target.evaluate(_IDV_STATE_JS)
+            except Exception:
+                continue
+            if st and st.get("idv"):
+                return st
+        return {"idv": False, "has_take": False, "has_submit": False,
+                "submit_enabled": False, "has_retake": False}
+
+    async def _click_exact(self, page, word: str) -> bool:
+        """Click a control whose whole visible text is exactly `word`, in the main frame or any child
+        frame (see _CLICK_EXACT_JS)."""
+        for target in [page] + [f for f in page.frames if f is not page.main_frame]:
+            try:
+                if await target.evaluate(_CLICK_EXACT_JS, word):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _handle_idv(self, page) -> bool:
+        """AMCAT/Aspiring-Minds Identity Verification gate: click Take (capture a still from the live
+        camera — owner policy: a face-only capture is sufficient, no ID card needed), wait for the
+        capture to settle (Submit enables / Retake appears), click Submit, then wait to navigate off
+        the IDV page. BOUNDED — never hangs: a missing control or an unsettling capture gives up after
+        a few attempts with a clear log note so the walk's stuck path can report it. Returns True when
+        it acted (so the walk loop re-loops), False when it could not (Take/Submit absent)."""
+        self._idv_attempts = getattr(self, "_idv_attempts", 0) + 1
+        if self._idv_attempts > 4:
+            logger.warning("shl IDV: giving up after %d attempts (Take/Submit not resolving)",
+                           self._idv_attempts)
+            return False
+        # 1) capture: click Take (unless a capture is already taken — Retake shown / Submit enabled)
+        st = await self._idv_state(page)
+        if not st.get("has_retake") and not st.get("submit_enabled"):
+            if not await self._click_exact(page, "take"):
+                logger.warning("shl IDV: 'Take' control not found — cannot capture the identity photo")
+                return False
+        # 2) wait for the capture to settle: Submit enabled OR Retake appears (bounded ~15s)
+        for _ in range(15):
+            await page.wait_for_timeout(1000)
+            st = await self._idv_state(page)
+            if not st.get("idv"):
+                return True                              # already navigated off
+            if st.get("submit_enabled") or st.get("has_retake"):
+                break
+        # 3) commit the capture
+        if not await self._click_exact(page, "submit"):
+            logger.warning("shl IDV: 'Submit' control not found/enabled after capture")
+            return False
+        # 4) wait to navigate off the IDV page (bounded ~20s)
+        for _ in range(20):
+            await page.wait_for_timeout(1000)
+            if not (await self._idv_state(page)).get("idv"):
+                logger.info("shl IDV: identity capture submitted — advanced past the IDV gate")
+                return True
+        logger.info("shl IDV: submitted the capture but the page still shows IDV (will retry)")
+        return True
+
+    async def _start_assessment(self, page) -> bool:
+        """Instructions page (heading 'Instructions', 'Select the language...', a 'Tips' block) with a
+        single 'Start Assessment' button that enters the AMPI personality battery. Guarded on the exact
+        button text so it fires only here (no AMPI/SVAR page has a 'Start Assessment' control)."""
+        if await self._click_exact(page, "start assessment"):
+            logger.info("shl: clicked 'Start Assessment' — entering the assessment battery")
+            return True
+        return False
+
     async def dismiss_noise(self, page) -> bool:
         acted = False
         if await self._accept_cookies(page):
             await page.wait_for_timeout(600)
             acted = True
+        # AMCAT Identity-Verification gate (Take -> Submit). Runs BEFORE the generic read/random-pick so
+        # the IDV page is recognised, not mis-treated as a 1-option question (the 41-min stall). Tightly
+        # guarded on the IDV signature + a Take/Submit/Retake control.
+        try:
+            st = await self._idv_state(page)
+            if st.get("idv") and (st.get("has_take") or st.get("has_submit") or st.get("has_retake")):
+                if await self._handle_idv(page):
+                    return True
+        except Exception:
+            pass
+        # Instructions page -> click "Start Assessment" to enter the battery (before the generic path).
+        try:
+            if await self._start_assessment(page):
+                await page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            pass
         # flow-gating consent checkbox (welcome) -> tick it, then let advance() click Continue
         try:
             if await self._tick_consent(page):

@@ -172,6 +172,21 @@ async def _signature(page, adapter) -> tuple:
             it.get("progress"))
 
 
+def _is_assessment_url(url: str) -> bool:
+    """True when `url` is already ON an assessment PLAYER (mid-flow), so a CDP-resume can start the walk
+    there instead of re-navigating. The AMCAT/Aspiring-Minds player is the definite mid-assessment
+    surface; the SHL TalentCentral SPA counts only PAST the invite landing (the `#/link/<base64>` hash
+    from the invite email is NOT a resume point — let adapter.enter consume it)."""
+    u = (url or "").lower()
+    if not u or u.startswith("about:") or u.startswith("chrome:") or u.startswith("data:"):
+        return False
+    if "aspiringminds" in u or "amcatglobal" in u or "myamcat" in u or "amcat" in u:
+        return True
+    if "shl.com" in u and "/experience" in u and "/link/" not in u:
+        return True
+    return False
+
+
 def _launch_args() -> tuple[list[str], dict]:
     """Chromium args + the fake-media asset paths. Fake mic/camera let speaking/listening/video
     sections drive past the device check."""
@@ -530,6 +545,16 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
             page = (ctx.pages[0] if res.get("_remote_cdp") and ctx.pages else await ctx.new_page())
             if _on_console is not None:
                 page.on("console", _on_console)
+            # Auto-accept JS dialogs (a beforeunload "leave this page?" when navigating away from an
+            # in-progress assessment tab, or a stray alert) so the driver can't crash with
+            # Page.handleJavaScriptDialog "No dialog is showing" before the walk even starts.
+            def _on_dialog(d):
+                try:
+                    asyncio.create_task(d.accept())
+                except Exception:
+                    pass
+            page.on("dialog", _on_dialog)
+            ctx.on("page", lambda p: p.on("dialog", _on_dialog))
             # Capture question audio (S3 mp3s under SpeechAssessmentBank) so audio-only listen items
             # (Section B listen-repeat, Section C listen-comprehension) can be transcribed + banked.
             _seen_aud = set()
@@ -558,7 +583,17 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
 
             page.on("response", lambda r: asyncio.create_task(_aud_sink(r)))
             try:
-                await adapter.enter(page, url)
+                # CDP RESUME (HARVEST_CDP_RESUME=1, CDP mode only): the owner already navigated the
+                # remote Chrome INTO the assessment (e.g. past the SHL invite landing to the AMCAT
+                # player); a fresh adapter.enter would re-navigate/reset that tab. If the already-open
+                # page is on the assessment domain, SKIP the fresh nav and start the walk on it. Default
+                # behaviour (env unset, or a non-assessment URL) is unchanged: adapter.enter runs.
+                if (res.get("_remote_cdp") and os.getenv("HARVEST_CDP_RESUME") == "1"
+                        and _is_assessment_url(page.url)):
+                    logger.info("[%s] CDP RESUME: already on assessment page %s — skipping fresh nav",
+                                mailbox, page.url)
+                else:
+                    await adapter.enter(page, url)
                 stale = 0
                 load_waits = 0             # extra patience budget for blank/loading transition pages
                 typing_seen: dict = {}     # churn guard: a typing sentence that won't advance

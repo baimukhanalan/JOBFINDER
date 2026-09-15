@@ -319,6 +319,10 @@ class HalloAdapter(Adapter):
     # "Q.N/M" is distinct from the listening module's "Question k of M" (no slash), so this never
     # matches a listening passage.
     _TIMED_Q = re.compile(r"q\.?\s*\d+\s*/\s*\d+", re.I)
+    # BEST/WORST SJT (hardskill "Part N - Question k of M"): a scenario + options A..D, each with a
+    # thumbs-UP (best) + thumbs-DOWN (worst) icon; Next enables once ONE best + ONE (different) worst
+    # are picked. The icons aren't text/radio options, so the core reads 0 options -> stuck.
+    _BEST_WORST_RE = re.compile(r"best.{0,12}worst", re.I)
 
     async def _pick_figure_and_next(self, page) -> bool:
         """On a cognitive IMAGE-choice page, click one answer card to enable the disabled Next, then
@@ -377,28 +381,123 @@ class HalloAdapter(Adapter):
                     return True
         return False
 
+    async def _pick_best_worst_and_next(self, page) -> bool:
+        """Best/worst SJT: click ONE option's thumbs-UP (best) + a DIFFERENT option's thumbs-DOWN
+        (worst) to enable the disabled Next, then advance. The two thumb icons per option row are
+        detected by CLUSTERING small clickable icon controls into rows (left icon = up/best, right =
+        down/worst). SELF-CORRECTING: tries distinct (best,worst) row pairs until Next actually enables.
+        Best-effort (any valid distinct pair completes the item); never raises."""
+        try:
+            info = await page.evaluate(
+                """() => {
+                  const vis=e=>{const r=e.getBoundingClientRect();
+                    return r.width>=12 && r.width<=70 && r.height>=12 && r.height<=70
+                      && r.bottom>0 && r.top<innerHeight;};
+                  const all=[...document.querySelectorAll('button,[role=button],svg,[class*="thumb" i]')];
+                  const seen=new Set(); const ics=[];
+                  for (const n of all){
+                    if(!vis(n)) continue;
+                    const txt=((n.innerText||'')+(n.getAttribute('aria-label')||'')
+                      +(n.getAttribute('title')||'')).trim().toLowerCase();
+                    if(/back|next|quit|appeal|\\bok\\b|cookie|skip|close|stay|submit/.test(txt)) continue;
+                    let clk=n;
+                    for(let k=0;k<3 && clk;k++){ const cs=getComputedStyle(clk);
+                      if(clk.tagName==='BUTTON'||clk.getAttribute('role')==='button'||clk.onclick
+                        ||cs.cursor==='pointer') break; clk=clk.parentElement; }
+                    clk=clk||n;
+                    const rr=clk.getBoundingClientRect();
+                    if(rr.width>90||rr.height>90) continue;
+                    const key=Math.round(rr.x)+','+Math.round(rr.y);
+                    if(seen.has(key)) continue; seen.add(key);
+                    ics.push({el:clk, x:rr.x+rr.width/2, y:rr.y+rr.height/2});
+                  }
+                  ics.sort((a,b)=>a.y-b.y || a.x-b.x);
+                  const rows=[];
+                  for(const ic of ics){
+                    let row=rows.find(R=>Math.abs(R.y-ic.y)<20);
+                    if(!row){ row={y:ic.y, items:[]}; rows.push(row); }
+                    row.items.push(ic);
+                  }
+                  const optRows=rows.filter(R=>R.items.length===2);
+                  window.__bwRows=optRows.map(R=>R.items.sort((a,b)=>a.x-b.x).map(i=>i.el));
+                  return {rows:optRows.length, icons:ics.length};
+                }""")
+        except Exception:
+            return False
+        rows = (info or {}).get("rows") or 0
+        if rows < 2:
+            # detector missed the thumb pairs -> dump the option-area icon DOM ONCE so the exact
+            # up/down control structure can be targeted precisely on the next iteration.
+            if not getattr(self, "_bw_dumped", False):
+                self._bw_dumped = True
+                try:
+                    cands = await page.evaluate(
+                        "() => [...document.querySelectorAll('button,[role=button],svg,[class*=\"thumb\" i],[class*=\"icon\" i]')]"
+                        ".filter(e=>{const r=e.getBoundingClientRect(); return r.width>0 && r.width<=90 && r.height<=90 && r.top<innerHeight && r.bottom>0;})"
+                        ".slice(0,28).map(e=>{const r=e.getBoundingClientRect();"
+                        " const cn=(e.className&&e.className.baseVal!==undefined)?e.className.baseVal:(e.className||'');"
+                        " return (e.tagName+'.'+String(cn)).slice(0,44)+' @['+Math.round(r.x)+','+Math.round(r.y)"
+                        "+' '+Math.round(r.width)+'x'+Math.round(r.height)+'] al='+(e.getAttribute('aria-label')||'');})")
+                    logger.info("[hallo] best/worst detector MISS (rows=%s) — icon candidates: %s",
+                                rows, cands)
+                    await self._log_devcheck_controls(page)
+                except Exception as _e:
+                    logger.info("[hallo] best/worst dump failed: %s", _e)
+            return False
+        allpairs = [(b, w) for b in range(rows) for w in range(rows) if b != w]
+        start = getattr(self, "_bw_pick", 0) % len(allpairs)
+        self._bw_pick = start + 1
+        order = allpairs[start:] + allpairs[:start]
+        for bi, wi in order[:max(rows, 4)]:
+            try:
+                await page.evaluate(
+                    "([b,w]) => { const R=window.__bwRows; if(!R) return;"
+                    " if(R[b]&&R[b][0]) R[b][0].click(); if(R[w]&&R[w][1]) R[w][1].click(); }", [bi, wi])
+            except Exception:
+                continue
+            await page.wait_for_timeout(500)
+            try:
+                nxt = await page.evaluate(
+                    "() => { const b=[...document.querySelectorAll('button')]"
+                    ".find(x=>/^(next|submit)$/i.test((x.innerText||'').trim())); return b?!b.disabled:false; }")
+            except Exception:
+                nxt = False
+            if nxt:
+                logger.info("[hallo] best/worst SJT: best=row%d worst=row%d enabled Next", bi, wi)
+                if await self._click(page, "Next", 1500) or await self._click(page, "Submit", 1500):
+                    await page.wait_for_timeout(900)
+                    return True
+        return False
+
     async def advance(self, page) -> bool:
         try:
             body = (await page.inner_text("body", timeout=2000)).lower()
         except Exception:
             body = ""
-        # TIMED cognitive / hardskill section ("Q.1/10 ... 02:26 time left"). The core can't read the
-        # image-card choices as options and Next stays disabled -> without this the harvest gives up.
-        # (1) On a figure page, click a choice card (self-correcting) to answer + advance. (2) Else WAIT
-        # OUT the section countdown so it AUTO-advances at 0:00 (scored, not gated — an unanswered
-        # section still auto-submits and moves to the next module). The wait budget resets whenever the
-        # "Q.N/M" marker changes, so a real multi-question walk isn't cut short.
-        if "time left" in body and self._TIMED_Q.search(body):
-            if self._COG_FIG_RE.search(body) and await self._pick_figure_and_next(page):
+        # TIMED custom-widget sections the core can't read as options (Next stays disabled -> the
+        # harvest gives up). Handle the known widgets, else WAIT OUT the countdown so the scored section
+        # auto-advances at 0:00 (an unanswered section still auto-submits + moves on). Gated on the
+        # widget REs so listening ("Question k of M" + a prep pad, is_prep below) is left untouched.
+        #   (a) best/worst SJT thumbs (hardskill "Part N - Question k of M")
+        #   (b) cognitive figure odd-one-out ("Q.1/10 ... time left")
+        if "time left" in body and (self._BEST_WORST_RE.search(body) or self._COG_FIG_RE.search(body)):
+            picked = False
+            if self._BEST_WORST_RE.search(body):
+                picked = await self._pick_best_worst_and_next(page)
+            if not picked and self._COG_FIG_RE.search(body):
+                picked = await self._pick_figure_and_next(page)
+            if picked:
                 self._stuck_advances = 0
                 self._timed_waits = 0
                 return True
-            qsig = self._TIMED_Q.search(body).group(0)
+            # known widget we couldn't click -> out-wait the countdown (bounded; resets per question)
+            m = self._TIMED_Q.search(body) or re.search(r"question\s+\d+\s+of\s+\d+", body)
+            qsig = m.group(0) if m else body[:40]
             if qsig != getattr(self, "_last_timed_sig", None):
                 self._last_timed_sig = qsig
                 self._timed_waits = 0
             self._timed_waits = getattr(self, "_timed_waits", 0) + 1
-            if self._timed_waits <= 45:          # ~3 min per section > the ~2.5-min countdown
+            if self._timed_waits <= 120:         # ~8 min > any single section countdown
                 await page.wait_for_timeout(4000)
                 return True
             self._timed_waits = 0
@@ -618,6 +717,32 @@ class HalloAdapter(Adapter):
             return True
         finally:
             self._stop_mic_feed()
+
+    async def is_done(self, page) -> bool:
+        """Completion check + a one-shot DIAGNOSTIC: the FIRST time completion is seen, log the final
+        body text + capture a screenshot, and flag whether a proctoring 'Appeal / reviewing your
+        account' overlay is present. Lets the log distinguish a CLEAN unflagged completion from a
+        submitted-but-flagged one (an integrity flag is a different ceiling than a clean pass)."""
+        done = await super().is_done(page)
+        if done and not getattr(self, "_done_logged", False):
+            self._done_logged = True
+            try:
+                body = await page.inner_text("body", timeout=2000)
+            except Exception:
+                body = ""
+            low = body.lower()
+            flagged = any(s in low for s in ("appeal", "reviewing your account", "under review",
+                                             "flagged", "integrity", "violation", "we detected"))
+            logger.info("[hallo] COMPLETE — proctor_flagged=%s body=%r",
+                        flagged, " ".join(body.split())[:400])
+            try:
+                from backend.tools.assessment_harvester import media as _media
+                shot = await _media.capture(page, self.platform, "COMPLETE", [], page.url)
+                if shot:
+                    logger.info("[hallo] completion screenshot -> %s", shot)
+            except Exception:
+                pass
+        return done
 
     async def wall(self, page) -> str | None:
         try:

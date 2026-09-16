@@ -87,7 +87,13 @@ async def run(platform: str, limit: int, concurrency: int) -> dict:
 
 def _acquire_lock():
     os.makedirs(_DATA, exist_ok=True)
-    f = open(LOCK_PATH, "w")
+    lock_path = LOCK_PATH
+    if os.getenv("HARVEST_CDP_URL"):
+        # CDP mode drives a REMOTE browser per tab; the global single-instance guard (which protects
+        # the server's one local browser / virtmic / camera) does not apply. Use a PER-TAB lock so two
+        # tabs run concurrently, while the same tab still can't be double-driven.
+        lock_path = f"{LOCK_PATH}.cdp{os.getenv('HARVEST_CDP_TAB_INDEX', 'x')}"
+    f = open(lock_path, "w")
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:

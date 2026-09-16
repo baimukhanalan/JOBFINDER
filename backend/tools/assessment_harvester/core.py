@@ -183,6 +183,12 @@ def _is_assessment_url(url: str) -> bool:
     if "aspiringminds" in u or "amcatglobal" in u or "myamcat" in u or "amcat" in u:
         return True
     if "shl.com" in u and "/experience" in u and "/link/" not in u:
+        # Exclude the SHL INTRO pages (auth/welcome, task list). A CDP-resume there must RE-RUN
+        # adapter.enter (the welcome->consent->task-list->launch intro is idempotent); otherwise the
+        # walk loop mis-reads the welcome page as a 1-option "question" ("Are you excited to start
+        # your journey?") and answers it. Only an in-progress assessment task is a real resume point.
+        if any(k in u for k in ("/auth", "welcome", "task-list", "basic-task", "tasklist")):
+            return False
         return True
     return False
 
@@ -333,10 +339,12 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
     # pulse mic isn't available (old behaviour: harvests Section A + listening, stalls at listen-repeat).
     mic_ready = False
     launch_env = None
-    try:
-        mic_ready = mic.ensure()
-    except Exception:
-        mic_ready = False
+    _cdp_mode = bool(os.getenv("HARVEST_CDP_URL"))
+    if not _cdp_mode:
+        try:
+            mic_ready = mic.ensure()
+        except Exception:
+            mic_ready = False
     # Platform-specific CAMERA. The SHL TalentCentral SPA (the Sutherland front-door,
     # talentcentral.us1.shl.com/experience) BLANKS to the React noscript ("You need to enable
     # JavaScript to run this app") under Chromium's SYNTHETIC camera (--use-fake-device-for-media-
@@ -344,7 +352,11 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
     # v4l2loopback camera instead (sutherland_assessment.camera_launch_args → a genuine /dev/video0,
     # NO fake-device): it hydrates the SPA AND is what the downstream AMCAT WCI200 proctor accepts.
     # (Proven 2026-09-13: minimal launch w/o the fake-device flag hydrates rootHTML=8435, 0 errors.)
-    if getattr(adapter, "platform", "") in ("shl_sutherland", "shl", "hallo"):
+    if _cdp_mode:
+        # Remote Mac browser: no local launch args / assets needed (and no /dev/video0 to touch).
+        args = ["--no-sandbox"]
+        asset_paths = {}
+    elif getattr(adapter, "platform", "") in ("shl_sutherland", "shl", "hallo"):
         # Hallo.ai's device-check ACCEPTS the real v4l2loopback camera (proven; unlike Sutherland's
         # WCI200 it does not reject it), and needs the real camera + the pulse virtmic to pass.
         from backend.tools import sutherland_assessment
@@ -453,6 +465,28 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     await ctx.grant_permissions(["microphone", "camera"])
                 except Exception:
                     pass
+                # Pin the proctor's camera to the OBS Virtual Camera (our looping face) and hide the
+                # Mac's built-in webcam, so a device picker or a bare {video:true} can't grab the real
+                # camera. Fail-open: passes through untouched when no OBS device is enumerable.
+                try:
+                    await ctx.add_init_script("""(() => {
+                      const md = navigator.mediaDevices; if (!md) return;
+                      const rGUM = md.getUserMedia.bind(md), rEnum = md.enumerateDevices.bind(md);
+                      let obsId = null;
+                      const find = async () => { try { const ds = await rEnum();
+                        const o = ds.find(d => d.kind==='videoinput' && /obs/i.test(d.label));
+                        return o ? o.deviceId : null; } catch(e){ return null; } };
+                      md.enumerateDevices = async () => { const ds = await rEnum();
+                        const has = ds.some(d=>d.kind==='videoinput' && /obs/i.test(d.label));
+                        return has ? ds.filter(d=>d.kind!=='videoinput' || /obs/i.test(d.label)) : ds; };
+                      md.getUserMedia = async (c) => { c = c || {};
+                        if (c.video) { if (obsId === null) obsId = await find();
+                          if (obsId) { const v = (typeof c.video === 'object') ? c.video : {};
+                            v.deviceId = {exact: obsId}; c.video = v; } }
+                        return rGUM(c); };
+                    })();""")
+                except Exception:
+                    pass
                 res["_remote_cdp"] = True
                 logger.info("[%s] REMOTE Chrome via CDP %s (real camera + live face)", mailbox, _cdp)
             else:
@@ -541,8 +575,19 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     logger.info("[camtrace] logging camera API calls -> %s", _cam_trace_path)
                 except Exception as _e:
                     logger.info("[camtrace] setup failed: %s", _e)
-            # CDP mode: reuse the owner's existing tab (they watch it for the live camera); else a fresh page.
-            page = (ctx.pages[0] if res.get("_remote_cdp") and ctx.pages else await ctx.new_page())
+            # CDP mode: reuse the owner's existing tab (they watch it for the live camera); else a fresh
+            # page. Prefer the tab that is already ON the assessment player (a stray "Example Domain" /
+            # new-tab could be pages[0] and would make adapter.enter re-navigate + burn the token).
+            if res.get("_remote_cdp") and ctx.pages:
+                # HARVEST_CDP_TAB_INDEX pins THIS run to a specific existing tab (0-based over
+                # ctx.pages) so two harvester processes can drive two different tabs concurrently.
+                _ti = os.getenv("HARVEST_CDP_TAB_INDEX")
+                if _ti is not None and _ti.isdigit() and int(_ti) < len(ctx.pages):
+                    page = ctx.pages[int(_ti)]
+                else:
+                    page = next((pg for pg in ctx.pages if _is_assessment_url(pg.url)), ctx.pages[0])
+            else:
+                page = await ctx.new_page()
             if _on_console is not None:
                 page.on("console", _on_console)
             # Auto-accept JS dialogs (a beforeunload "leave this page?" when navigating away from an
@@ -623,7 +668,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     # ---- landing / transition (nothing to answer, no media widget) ----
                     if not opts and item_type not in ("speaking", "video", "typing", "writing"):
                         if await adapter.advance(page):
-                            await page.wait_for_timeout(1200)
+                            await page.wait_for_timeout(450)
                             stale = 0
                             load_waits = 0
                             continue
@@ -757,7 +802,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                               shot, free="typing")
                         logger.info("[%s] #%d typing q=%r", mailbox, res["banked"], q[:60])
                         if await adapter.handle_typing(page, _FAKE_SPEECH_TEXT):
-                            await page.wait_for_timeout(1200)
+                            await page.wait_for_timeout(450)
                             continue
                         res["walls"].append(("typing", shot, q[:80]))
                         res["status"] = "stuck_free_response"
@@ -783,7 +828,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                             continue
                         # fall back to plain typing of the body so the run still advances past the module
                         if await adapter.handle_typing(page, (email or {}).get("body") or _FAKE_SPEECH_TEXT):
-                            await page.wait_for_timeout(1200)
+                            await page.wait_for_timeout(450)
                             continue
                         res["walls"].append(("writing", shot, q[:80]))
                         res["status"] = "stuck_free_response"
@@ -806,7 +851,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                             res["status"] = "stuck"
                             res["note"] = f"{item_type} item, no options, could not advance"
                             return
-                        await page.wait_for_timeout(1200)
+                        await page.wait_for_timeout(450)
                         continue
 
                     # Answer selection: (1) REPLAY the banked answer key (match by TEXT — option order can
@@ -896,8 +941,9 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                     elif not await adapter.answer_mcq(page, item, idx):
                         await adapter.advance(page)
                     advanced = False
-                    for _ in range(10):
-                        await page.wait_for_timeout(600)
+                    _poll = 300 if os.getenv("HARVEST_FAST", "1") != "0" else 600
+                    for _ in range(16):
+                        await page.wait_for_timeout(_poll)
                         cur = await _signature(page, adapter)
                         if cur != prev and (cur[0] or cur[1]):
                             advanced = True

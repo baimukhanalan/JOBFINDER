@@ -11,6 +11,7 @@ speaking/listening/video sub-tests are handled by the fake-device path in core.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from backend.tools import shl_assessment as sa
@@ -172,10 +173,11 @@ class ShlAdapter(Adapter):
 
     async def enter(self, page, url: str) -> None:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(5000)
+        # No timing/speed check on the SHL intro — load fast. FAST (default) trims the settle wait.
+        await page.wait_for_timeout(1200 if os.getenv("HARVEST_FAST", "1") != "0" else 5000)
         for _ in range(3):
             if await self._accept_cookies(page):
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
             else:
                 break
 
@@ -215,19 +217,23 @@ class ShlAdapter(Adapter):
             logger.warning("shl IDV: giving up after %d attempts (Take/Submit not resolving)",
                            self._idv_attempts)
             return False
-        # 1) capture: click Take (unless a capture is already taken — Retake shown / Submit enabled)
+        # 1) capture: click Take unless a capture ALREADY exists (Retake shown). GOTCHA: this IDV's
+        # Submit is ALWAYS enabled (no disabled attr), so an old `not submit_enabled` guard SKIPPED Take
+        # entirely -> Submit fired on an EMPTY frame -> "still shows IDV". The only reliable "capture
+        # taken" signal is the Retake button appearing, so gate Take on has_retake alone.
         st = await self._idv_state(page)
-        if not st.get("has_retake") and not st.get("submit_enabled"):
+        if not st.get("has_retake"):
             if not await self._click_exact(page, "take"):
                 logger.warning("shl IDV: 'Take' control not found — cannot capture the identity photo")
                 return False
-        # 2) wait for the capture to settle: Submit enabled OR Retake appears (bounded ~15s)
+        # 2) wait for the capture to REGISTER: Retake appears (bounded ~15s). Do NOT break on
+        # submit_enabled (always true here) — that skips waiting for the actual capture.
         for _ in range(15):
             await page.wait_for_timeout(1000)
             st = await self._idv_state(page)
             if not st.get("idv"):
                 return True                              # already navigated off
-            if st.get("submit_enabled") or st.get("has_retake"):
+            if st.get("has_retake"):
                 break
         # 3) commit the capture
         if not await self._click_exact(page, "submit"):
@@ -348,14 +354,23 @@ class ShlAdapter(Adapter):
             pass
         return await super().advance(page)
 
+    # STRICT completion signal only. The etalon's sa._COMPLETE_RE also matches bare "return to" /
+    # "congratulations" / "all done", which appear on the Sutherland SHL *intro* pages (welcome /
+    # proctoring / marketing footer) and false-fired is_done at step 0 -> "completed (0 banked)" before
+    # a single item was answered. Require an actual assessment-completion phrase (or a real "0 … left").
+    _DONE_RE = re.compile(
+        r"you have (completed|finished)|assessment (is )?(complete|finished|submitted)|"
+        r"thank you for (completing|taking)|successfully (completed|submitted)|"
+        r"no more (questions|assessments)|you may now close (the )?(window|tab|browser)", re.I)
+
     async def is_done(self, page) -> bool:
         try:
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:
             body = ""
-        if re.search(r"\b0\s*assessment", body) and "left" in body:
+        if re.search(r"\b0\s*assessments?\s*(left|remaining)", body):
             return True
-        if sa._COMPLETE_RE.search(body):
+        if self._DONE_RE.search(body):
             return True
         return False
 

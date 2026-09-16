@@ -117,6 +117,17 @@ def main() -> None:
         _lock = _acquire_lock()  # noqa: F841
         res = asyncio.run(core.harvest_one(args.url, args.mailbox or "manual", adapter,
                                            min_delay=0.0, max_delay=0.0))
+        # A REAL completion marks the CRM invite «пройдено» (leaves «Действие»), same as the discover
+        # path — so the dashboard reflects what the Mac lane passed. Guarded on status=="completed"
+        # (never false-marks a stuck/partial run) + a real persona email (contains '@'), since --mailbox
+        # may be a bare label.
+        if res.get("status") == "completed" and "@" in (args.mailbox or ""):
+            try:
+                from backend.tools import mailcrm
+                mailcrm.mark_assessment_done(args.mailbox)
+                print("marked assessment done (пройдено):", args.mailbox)
+            except Exception as exc:
+                print("mark_assessment_done failed:", str(exc)[:100])
         print("\n==== SINGLE-URL HARVEST ====")
         print("status :", res.get("status"))
         print("banked :", res.get("banked"), "by_type:", res.get("by_type"))

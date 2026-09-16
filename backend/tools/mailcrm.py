@@ -330,7 +330,7 @@ _assess_skipped_cache = {"mtime": None, "set": frozenset()}
 # Senders whose post-apply test is un-passable by automation (a human / a physical webcam is required):
 # talentcentral@shl.com = TP-AMCAT + Sutherland-AMCAT (WCI200 camera + cognitive), ttec = Harver,
 # conduent = SkillCheck. Maximus (maximus.com) SHL-OPQ and Hallo (hallo.ai) are PASSABLE — never skipped.
-_UNPASSABLE_TEST_SENDERS = ("%shl.com%", "%ttec%", "%conduent%")
+_UNPASSABLE_TEST_SENDERS = ("%ttec%", "%conduent%")  # shl.com (Sutherland) is now passable via the Mac+OBS lane — do NOT auto-skip it
 
 
 def assessment_skipped_mailboxes() -> frozenset:

@@ -595,6 +595,22 @@ class HalloAdapter(Adapter):
             body = (await page.inner_text("body", timeout=1500)).lower()
         except Exception:
             body = ""
+        # CONSENT / TERMS checkbox mid-flow ("By checking this box, I agree to the Terms of Service and
+        # Recording ..."). The page also carries a mic element, so the generic reader classified it as a
+        # SPEAKING item and the core churn-spoke the SAME prompt forever without ever ticking the box.
+        # Tick it and return a bare landing item so the walk loop clicks Continue/Next.
+        _q = ((item.get("question", "") or "") + " " + body).lower()
+        if re.search(r"by checking this box|i agree to the terms|agree to the terms of service|"
+                     r"consent to (the )?record", _q):
+            try:
+                await self._tick_all(page)
+            except Exception:
+                pass
+            item = dict(item)
+            item["options"] = []
+            item["has_mic"] = item["has_textarea"] = item["has_audio"] = item["has_video"] = False
+            item["qimgs"] = []
+            return item
         # LISTENING module: a PERSISTENT "Write your notes here while listening" scratch textarea makes
         # the generic reader classify the whole page as a typing test → the core churn-types the notes.
         # Suppress that textarea when there are no real answerable options, so the page is a transition

@@ -296,6 +296,16 @@ class ShlAdapter(Adapter):
         return acted
 
     async def read_item(self, page) -> dict:
+        # The talentcentral INTRO pages (welcome-consent, about-you, task list) are NOT questions.
+        # Return a bare LANDING item (no options) so the walk loop ADVANCES (clicks Continue / launches
+        # the pending task) instead of mis-reading e.g. "Are you excited to start your journey?" as a
+        # 1-option question and random-answering it. (dismiss_noise still ticks the consent box first.)
+        url = (page.url or "").lower()
+        if "talentcentral" in url and "aspiringminds" not in url and any(
+                k in url for k in ("/auth", "welcome", "about-you", "task-list", "basic-task", "tasklist")):
+            return {"question": "", "options": [], "has_table": False, "progress": None, "body": "",
+                    "qimgs": [], "has_video": False, "has_audio": False, "has_mic": False,
+                    "has_textarea": False, "_src": "intro"}
         # (1) etalon item reader (label.question-answer-label) across frames — Maximus-OPQ markup.
         base = {"question": "", "options": [], "has_table": False, "progress": None, "body": ""}
         for target in [page] + [f for f in page.frames if f is not page.main_frame]:
@@ -368,8 +378,17 @@ class ShlAdapter(Adapter):
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:
             body = ""
+        url = (page.url or "").lower()
+        # Definitive: the task list explicitly has nothing left.
         if re.search(r"\b0\s*assessments?\s*(left|remaining)", body):
             return True
+        # On the talentcentral INTRO / task list a per-task "completed" label (from PRIOR assessments in
+        # this persona's history) is NOT whole-flow completion — a still-pending task must be launched.
+        # Trusting _DONE_RE there false-completed personas with any history at step 0 (0 banked). Only the
+        # AMCAT player (or a page with no task list) is a real completion surface for _DONE_RE.
+        on_intro = "talentcentral" in url and "aspiringminds" not in url
+        if on_intro:
+            return False
         if self._DONE_RE.search(body):
             return True
         return False

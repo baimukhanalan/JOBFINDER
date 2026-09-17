@@ -356,9 +356,10 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
         # Remote Mac browser: no local launch args / assets needed (and no /dev/video0 to touch).
         args = ["--no-sandbox"]
         asset_paths = {}
-    elif getattr(adapter, "platform", "") in ("shl_sutherland", "shl", "hallo"):
+    elif getattr(adapter, "platform", "") in ("shl_sutherland", "shl", "hallo", "harver"):
         # Hallo.ai's device-check ACCEPTS the real v4l2loopback camera (proven; unlike Sutherland's
-        # WCI200 it does not reject it), and needs the real camera + the pulse virtmic to pass.
+        # WCI200 it does not reject it), and needs the real camera + the pulse virtmic to pass. Harver
+        # (TTEC) is proctored the same way (camera + mic) → give it the real camera + virtmic too.
         from backend.tools import sutherland_assessment
         args = sutherland_assessment.camera_launch_args()   # real /dev/video0 + --use-fake-ui, no fake-device
         asset_paths = assets.ensure_assets()
@@ -907,7 +908,10 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                 idx = ak["index"]
                             if idx is not None:
                                 pick_src = "answer_key"
-                        if idx is None and not has_img:      # solve live (with the dialogue if we have it)
+                        # `_no_llm_solve` lets an adapter opt an item OUT of the wasted local-model solve
+                        # when it answers that item itself (Harver SJT best/worst + personality rating are
+                        # decided inside the adapter, so core's solve_one here is pure latency).
+                        if idx is None and not has_img and not item.get("_no_llm_solve"):  # solve live
                             solve_q = (f"[You heard this dialogue]: {listen_ctx}\n\nQuestion: {q}"
                                        if listen_ctx else q)
                             try:

@@ -29,21 +29,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from backend.tools.assessment_harvester import bank, core, discover  # noqa: E402
 from backend.tools.assessment_harvester.adapters.amcat import AmcatAdapter  # noqa: E402
 from backend.tools.assessment_harvester.adapters.hallo import HalloAdapter  # noqa: E402
+from backend.tools.assessment_harvester.adapters.harver import HarverAdapter  # noqa: E402
 from backend.tools.assessment_harvester.adapters.shl import ShlAdapter  # noqa: E402
 
 _DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 LOCK_PATH = os.path.join(_DATA, "harvest_runner.lock")
 
-ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter, "hallo": HalloAdapter}
+ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter, "hallo": HalloAdapter,
+            "harver": HarverAdapter}
+
+# Adapters that need the persona email/name at construction (device-check name gate / saved-cred lookup).
+_MAILBOX_ADAPTERS = ("hallo", "harver")
 
 
 def _adapter(platform: str, mailbox: str = ""):
     cls = ADAPTERS.get(platform)
     if not cls:
         raise SystemExit(f"no adapter for platform {platform!r} (have {list(ADAPTERS)})")
-    # HalloAdapter needs the persona name (from the mailbox) for its device-check name gate.
+    # HalloAdapter/HarverAdapter need the persona mailbox (name gate / Taleo cred lookup).
     try:
-        return cls(mailbox=mailbox) if platform == "hallo" else cls()
+        return cls(mailbox=mailbox) if platform in _MAILBOX_ADAPTERS else cls()
     except TypeError:
         a = cls()
         try:

@@ -86,7 +86,31 @@ main{max-width:940px;margin:0 auto;padding:20px 18px;}
   .mg-assign .btn{flex:1 1 100%;}}
 /* distribute tool */
 .mg-dist{display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
-.mg-dist input{width:90px;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:14px;}
+.mg-dist select{flex:1 1 160px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px;}
+.mg-dist input{width:84px;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;font-size:14px;}
+@media(max-width:560px){.mg-dist select{flex:1 1 100%;}.mg-dist input{flex:1 1 100%;width:auto;}.mg-dist .btn{flex:1 1 100%;}}
+/* gender/direction chips on interview cards */
+.mg-chip{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:var(--r-full);font-size:10.5px;font-weight:700;line-height:1;}
+.mg-chip.sx-female{color:#9d174d;background:#fce7f3;}
+.mg-chip.sx-male{color:#1e40af;background:#dbeafe;}
+.mg-chip.dir{color:#3730a3;background:#e0e7ff;}
+/* pool filter row */
+.mg-filter{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 12px;}
+.mg-filter input,.mg-filter select{flex:1 1 140px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px;}
+.mg-filter .hbtn{flex:0 0 auto;}
+@media(max-width:560px){.mg-filter input,.mg-filter select{flex:1 1 100%;}.mg-filter .hbtn{flex:1 1 100%;}}
+/* my-own queue rows */
+.mg-own-foot{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:9px;}
+.mg-own-act{margin:0;}
+/* team-assigned collapsible */
+.mg-details>summary{cursor:pointer;font-size:15px;font-weight:700;list-style:none;user-select:none;display:inline-flex;align-items:center;gap:7px;}
+.mg-details>summary::before{content:'▸';color:var(--ink-mute);font-size:12px;}
+.mg-details[open]>summary::before{content:'▾';}
+.mg-teamlist{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.mg-teamrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 12px;}
+.mg-tr-cand{font-weight:700;font-size:13.5px;display:inline-flex;align-items:center;gap:6px;}
+.mg-tr-who{font-size:12.5px;color:var(--ink-soft);}
+.mg-teamrow form{margin-left:auto;}
 """
 
 
@@ -146,6 +170,32 @@ def _fmt_local(dt, tz=None) -> str:
         return ""
 
 
+# gender / direction display + filter labels (neutral, no stack names)
+_SEX_LBL = {"male": "М", "female": "Ж"}
+_DIR_LBL = {"it": "IT", "nonit": "не-IT", "other": "другое"}
+_GENDER_OPTS = (("", "Любой пол"), ("male", "Мужчины"), ("female", "Женщины"))
+_DIR_OPTS = (("", "Любое направление"), ("it", "IT"), ("nonit", "Не-IT"), ("other", "Другое"))
+
+
+def _sel(name: str, opts, current: str = "", aria: str = "") -> str:
+    o = "".join(f"<option value='{v}'{' selected' if v == (current or '') else ''}>{escape(lbl)}</option>"
+                for v, lbl in opts)
+    a = f" aria-label='{escape(aria)}'" if aria else ""
+    return f"<select name='{name}'{a}>{o}</select>"
+
+
+def _chips(iv: dict) -> str:
+    """Small gender + direction chips for an interview card."""
+    out = []
+    sx = _SEX_LBL.get(iv.get("sex"))
+    if sx:
+        out.append(f'<span class="mg-chip sx-{iv.get("sex")}">{sx}</span>')
+    di = iv.get("direction")
+    if di and di != "other":
+        out.append(f'<span class="mg-chip dir">{_DIR_LBL.get(di, di)}</span>')
+    return "".join(out)
+
+
 def _assign_select(iid: int, team: list[tuple], current_rid=None, as_id=None) -> str:
     """The interviewer <select> for one interview: the manager himself first (marked «я»),
     then his subordinates. `current_rid` preselects the assigned person on a reassign."""
@@ -170,7 +220,7 @@ def _iv_card(iv: dict, team: list[tuple], names: dict, as_id=None) -> str:
     subject = escape((iv.get("notes") or "").strip())
     co = f' · {company}' if company else ""
     head = (f'<div class="mg-iv-head"><span class="mg-iv-cand">{cand}</span>'
-            f'<span class="mg-iv-co">{co}</span></div>')
+            f'<span class="mg-iv-co">{co}</span>{_chips(iv)}</div>')
     subj = f'<div class="mg-iv-subj">{subject}</div>' if subject else ""
     assigned = iv.get("responsible_id")
     if assigned:
@@ -194,8 +244,58 @@ def _iv_card(iv: dict, team: list[tuple], names: dict, as_id=None) -> str:
     return f'<div class="mg-iv">{head}{subj}{state}{assign}</div>'
 
 
-def portal_page(manager: dict, subs: list[dict], interviews: list[dict],
-                loads: dict, names: dict, notice=None,
+def _own_card(iv: dict, as_id=None) -> str:
+    """A row in the manager's OWN interview queue (assigned to himself as attendee)."""
+    cand = escape(_cand_label(iv))
+    company = escape(iv.get("company") or "")
+    co = f' · {company}' if company else ""
+    when = _fmt_local(iv.get("start_ts"))
+    when_txt = escape(when) if when else "время не указано"
+    h = iv.get("source_message_hash")
+    link = (f'<a href="/cabinet/thread?hash={escape(str(h), quote=True)}">Переписка</a>'
+            if h else "")
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
+    ret = (f'<form method="post" action="/manage/unassign" class="mg-own-act">'
+           f'<input type="hidden" name="iid" value="{iv["id"]}">{as_field}'
+           f'<button class="ghost btn" type="submit">Вернуть в пул</button></form>')
+    return (f'<div class="mg-iv"><div class="mg-iv-head"><span class="mg-iv-cand">{cand}</span>'
+            f'<span class="mg-iv-co">{co}</span>{_chips(iv)}</div>'
+            f'<div class="mg-iv-state assigned"><span class="mg-dot assigned"></span>'
+            f'{when_txt}</div>'
+            f'<div class="mg-own-foot">{link}{ret}</div></div>')
+
+
+def _team_card(iv: dict, names: dict, as_id=None) -> str:
+    """A compact row for an interview assigned to a SUBORDINATE (transparency for the manager)."""
+    cand = escape(_cand_label(iv))
+    who = escape(names.get(iv.get("responsible_id")) or "—")
+    when = _fmt_local(iv.get("start_ts"))
+    when_txt = f' · {escape(when)}' if when else ""
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
+    ret = (f'<form method="post" action="/manage/unassign" class="mg-own-act">'
+           f'<input type="hidden" name="iid" value="{iv["id"]}">{as_field}'
+           f'<button class="ghost btn" type="submit">Вернуть в пул</button></form>')
+    return (f'<div class="mg-teamrow"><span class="mg-tr-cand">{cand}{_chips(iv)}</span>'
+            f'<span class="mg-tr-who">→ {who}{when_txt}</span>{ret}</div>')
+
+
+def _filter_form(q: str, gender: str, direction: str, as_id=None) -> str:
+    """Email-search + gender + direction filter over the managed pool (GET, preserves ?as=)."""
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
+    return (
+        '<form class="mg-filter" method="get" action="/manage">'
+        f'{as_field}'
+        f'<input name="q" value="{escape(q or "", quote=True)}" autocomplete="off" '
+        'placeholder="Поиск по e-mail" aria-label="Поиск по e-mail">'
+        + _sel("gender", _GENDER_OPTS, gender, "Пол")
+        + _sel("direction", _DIR_OPTS, direction, "Направление") +
+        '<button class="hbtn" type="submit">Фильтр</button>'
+        '</form>')
+
+
+def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: list[dict],
+                team_ivs: list[dict], loads: dict, names: dict, counts: dict,
+                q: str = "", gender: str = "", direction: str = "", notice=None,
                 is_admin_view: bool = False) -> str:
     as_id = manager["id"] if is_admin_view else None
     # team options for the assign dropdowns: the manager himself + his ACTIVE subordinates
@@ -203,17 +303,14 @@ def portal_page(manager: dict, subs: list[dict], interviews: list[dict],
     for s in subs:
         if s.get("active"):
             team.append((s["id"], s.get("name") or s.get("login") or "—", False))
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
 
-    n_assigned = sum(1 for iv in interviews if iv.get("responsible_id"))
-    n_pool = len(interviews) - n_assigned
-
-    # summary stats
     stats = (
         '<div class="mg-stats">'
-        f'<div class="mg-stat"><b>{len(interviews)}</b><span>Всего собесов</span></div>'
-        f'<div class="mg-stat"><b>{n_pool}</b><span>В пуле</span></div>'
-        f'<div class="mg-stat"><b>{n_assigned}</b><span>Назначено</span></div>'
-        f'<div class="mg-stat"><b>{len([s for s in subs if s.get("active")])}</b><span>В команде</span></div>'
+        f'<div class="mg-stat"><b>{counts.get("pool", 0)}</b><span>В пуле</span></div>'
+        f'<div class="mg-stat"><b>{counts.get("own", 0)}</b><span>Мои собесы</span></div>'
+        f'<div class="mg-stat"><b>{counts.get("team", 0)}</b><span>У команды</span></div>'
+        f'<div class="mg-stat"><b>{counts.get("team_size", 0)}</b><span>В команде</span></div>'
         '</div>')
 
     # team card
@@ -230,7 +327,6 @@ def portal_page(manager: dict, subs: list[dict], interviews: list[dict],
     else:
         team_list = '<div class="mg-empty">Пока нет сотрудников — добавьте первого ниже.</div>'
 
-    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
     add_form = (
         '<form class="mg-add" method="post" action="/manage/subordinate/add">'
         f'{as_field}'
@@ -240,28 +336,47 @@ def portal_page(manager: dict, subs: list[dict], interviews: list[dict],
         '<div class="go"><button class="primary" type="submit">Добавить сотрудника</button></div>'
         '</form>')
 
-    # interviews
-    if interviews:
-        # unassigned (pool) first, then assigned
-        pool_ivs = [iv for iv in interviews if not iv.get("responsible_id")]
-        asgn_ivs = [iv for iv in interviews if iv.get("responsible_id")]
-        cards = "".join(_iv_card(iv, team, names, as_id=as_id) for iv in pool_ivs + asgn_ivs)
-        ivs_block = f'<div class="mg-ivs">{cards}</div>'
-    else:
-        ivs_block = ('<div class="mg-empty">Пока нет выделенных собеседований. '
-                     'Их выделяет главный админ в разделе «Пользователи».</div>')
+    # team-distribute tool: N matching pool interviews → a chosen member (self or subordinate)
+    member_opts = "".join(
+        f'<option value="{rid}">{escape(name)}{" · я" if is_self else ""}</option>'
+        for rid, name, is_self in team)
+    dist = (
+        '<div class="mg-card"><h3>Раздать команде</h3>'
+        '<p class="mg-hint">Выдать N собесов из пула конкретному человеку (себе или сотруднику), '
+        'по текущему фильтру пола/направления ниже.</p>'
+        '<form method="post" action="/manage/distribute_to" class="mg-dist">'
+        f'{as_field}'
+        f'<input type="hidden" name="gender" value="{escape(gender or "", quote=True)}">'
+        f'<input type="hidden" name="direction" value="{escape(direction or "", quote=True)}">'
+        f'<select name="member_id" aria-label="Кому">{member_opts}</select>'
+        '<input type="number" name="count" min="1" step="1" value="1" inputmode="numeric" aria-label="Сколько">'
+        '<button class="primary btn" type="submit">Раздать</button>'
+        '</form></div>')
 
-    # distribute tool (only if there IS a pool + a team to spread across)
-    dist = ""
-    if n_pool and len(team) > 1:
-        dist = (
-            '<div class="mg-card"><h3>Быстрое распределение</h3>'
-            '<p class="mg-hint">Разложить все непризначенные собесы из пула поровну между вами и '
-            'сотрудниками (по кругу). Время можно назначить позже.</p>'
-            '<form method="post" action="/manage/distribute" class="mg-dist">'
-            f'{as_field}'
-            '<button class="primary" type="submit">Распределить поровну</button>'
-            '</form></div>')
+    # SECTION A — managed pool (to distribute), filtered
+    if pool_ivs:
+        pool_cards = "".join(_iv_card(iv, team, names, as_id=as_id) for iv in pool_ivs)
+        pool_block = f'<div class="mg-ivs">{pool_cards}</div>'
+    elif counts.get("pool", 0):
+        pool_block = '<div class="mg-empty">По этому фильтру собесов нет — измените фильтр.</div>'
+    else:
+        pool_block = ('<div class="mg-empty">Пул пуст. Собеседования выделяет главный админ '
+                      'в разделе «Пользователи».</div>')
+
+    # SECTION B — my own interviews (assigned to me as the attendee)
+    if own_ivs:
+        own_block = f'<div class="mg-ivs">{"".join(_own_card(iv, as_id) for iv in own_ivs)}</div>'
+    else:
+        own_block = ('<div class="mg-empty">Вам лично пока не назначено ни одного собеседования. '
+                     'Назначьте себе из пула выше.</div>')
+
+    # team-assigned list (transparency; collapsed)
+    team_assigned = ""
+    if team_ivs:
+        rows = "".join(_team_card(iv, names, as_id) for iv in team_ivs)
+        team_assigned = (
+            f'<details class="mg-card mg-details"><summary>Назначено команде ({len(team_ivs)})</summary>'
+            f'<div class="mg-teamlist">{rows}</div></details>')
 
     admin_bar = ('<div class="mg-adminbar">Просмотр портала управляющего от имени '
                  f'<b>{escape(manager.get("name") or "")}</b> (режим главного админа).</div>'
@@ -274,13 +389,21 @@ def portal_page(manager: dict, subs: list[dict], interviews: list[dict],
         '<p class="mg-lead">Выделенные вам собеседования, ваша команда и её загрузка. '
         'Назначайте собесы себе или сотрудникам — только из выделенного вам пула.</p>'
         + _note(notice) + stats +
-        f'<div class="mg-card"><h3>Моя команда</h3>'
+        '<div class="mg-card"><h3>Моя команда</h3>'
         '<p class="mg-hint">Сотрудники под вашим руководством. Вы можете назначать им '
         'собеседования и видеть их загрузку.</p>'
         + team_list + add_form + '</div>'
         + dist +
-        '<div class="mg-card"><h3>Собеседования</h3>'
-        '<p class="mg-hint">Пул выделенных вам собесов. Выберите исполнителя (себя или '
-        'сотрудника) и, при желании, время.</p>'
-        + ivs_block + '</div>')
+        # Section A
+        '<div class="mg-card"><h3>Пул на распределение</h3>'
+        '<p class="mg-hint">Собесы, выделенные вам админом. Найдите нужный по e-mail, '
+        'отфильтруйте по полу/направлению и назначьте себе или сотруднику.</p>'
+        + _filter_form(q, gender, direction, as_id)
+        + pool_block + '</div>'
+        # Section B
+        '<div class="mg-card"><h3>Мои собеседования</h3>'
+        '<p class="mg-hint">Собесы, которые проводите вы сами. Полный кабинет — вкладка '
+        '«Мои собесы».</p>'
+        + own_block + '</div>'
+        + team_assigned)
     return _doc(body)

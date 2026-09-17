@@ -304,6 +304,92 @@ def test_iv_delete_manager_detaches_subordinates_and_frees_pool():
     assert "test_iv_m_delm@x.com" not in db.handled_pool_mailboxes()  # back to free pool
 
 
+# ---- pool enrichment: gender + direction filters --------------------------------
+def test_iv_pool_direction_and_match():
+    from backend.interviews import pool
+    assert pool.direction_of("Engineering") == "it"
+    assert pool.direction_of("Data & ML") == "it"
+    assert pool.direction_of("Customer Support & Success") == "nonit"
+    assert pool.direction_of("Other") == "other"
+    assert pool.direction_of(None) == "other"
+    row = {"mailbox": "jane.doe1@takhet.com", "candidate": "Jane Doe",
+           "sex": "female", "direction": "it"}
+    assert pool._match(row, None, None, None)
+    assert pool._match(row, "jane", "female", "it")       # email + gender + direction all hit
+    assert not pool._match(row, None, "male", None)        # wrong gender
+    assert not pool._match(row, None, None, "nonit")       # wrong direction
+    assert not pool._match(row, "zzz", None, None)         # email/name miss
+
+
+def _it_nonit_jobids():
+    with mail_db._cur() as cur:
+        cur.execute("SELECT id FROM job_catalog WHERE role_category='Engineering' LIMIT 1")
+        r = cur.fetchone()
+        it_id = str(r["id"]) if r else None
+        cur.execute("SELECT id FROM job_catalog WHERE role_category IN "
+                    "('Operations','Finance & Accounting','Customer Support & Success') LIMIT 1")
+        r = cur.fetchone()
+        nonit_id = str(r["id"]) if r else None
+    return it_id, nonit_id
+
+
+def test_iv_enrich_iv_rows_direction_from_jobid():
+    from backend.interviews import pool
+    it_id, nonit_id = _it_nonit_jobids()
+    if not it_id or not nonit_id:
+        pytest.skip("no categorized jobs in job_catalog")
+    rows = [{"mailbox": "test_iv_e_a@x.com", "jobid": it_id},
+            {"mailbox": "test_iv_e_b@x.com", "jobid": nonit_id},
+            {"mailbox": "test_iv_e_c@x.com", "jobid": None}]
+    pool.enrich_iv_rows(rows)
+    assert rows[0]["direction"] == "it"
+    assert rows[1]["direction"] == "nonit"
+    assert rows[2]["direction"] == "other"     # no jobid → uncategorized, never dropped
+
+
+def test_iv_manager_distribute_to_with_direction_and_isolation():
+    it_id, _ = _it_nonit_jobids()
+    if not it_id:
+        pytest.skip("no Engineering job in job_catalog")
+    ids = _chain()
+    i1 = db.allocate_interview("test_iv_m_d1@x.com", ids["mgrA"], jobid=it_id, subject="s1")
+    i2 = db.allocate_interview("test_iv_m_d2@x.com", ids["mgrA"], jobid=it_id, subject="s2")
+    i3 = db.allocate_interview("test_iv_m_d3@x.com", ids["mgrA"], jobid="", subject="s3")  # other
+
+    _login("test_iv_m_A")
+    # give 2 IT interviews to subordinate S
+    r = client.post("/manage/distribute_to",
+                    data={"member_id": ids["subS"], "count": 2, "direction": "it"},
+                    follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    got = [db.interview_by_id(i)["responsible_id"] for i in (i1, i2, i3)]
+    assert got.count(ids["subS"]) == 2                       # the two IT ones
+    assert db.interview_by_id(i3)["responsible_id"] is None  # the 'other' one stays in the pool
+
+    # ISOLATION: a manager cannot distribute to a non-subordinate (the plain employee E)
+    r = client.post("/manage/distribute_to",
+                    data={"member_id": ids["empE"], "count": 1}, follow_redirects=False)
+    _mark_announced()
+    assert not db.assigned_load([ids["empE"]]).get(ids["empE"])
+
+
+def test_iv_manager_portal_two_sections():
+    ids = _chain()
+    i_self = db.allocate_interview("test_iv_m_s1@x.com", ids["mgrA"], subject="mine")
+    i_team = db.allocate_interview("test_iv_m_s2@x.com", ids["mgrA"], subject="teammate")
+    db.manager_assign_interview(i_self, ids["mgrA"])   # manager attends this one himself
+    db.manager_assign_interview(i_team, ids["subS"])   # delegated to a subordinate
+    _mark_announced()
+    _login("test_iv_m_A")
+    r = client.get("/manage", follow_redirects=False)
+    assert r.status_code == 200
+    # the two required sections are present + separated
+    assert "Пул на распределение" in r.text and "Мои собеседования" in r.text
+    assert "test_iv_m_s1" in r.text                    # own queue shows the self-assigned one
+    assert "Назначено команде" in r.text               # subordinate assignment is visible too
+
+
 def test_iv_delete_protects_real_interviewers_and_self():
     from backend.interviews import routes_users
     assert routes_users._PROTECTED_LOGINS == {"1", "2", "3"}

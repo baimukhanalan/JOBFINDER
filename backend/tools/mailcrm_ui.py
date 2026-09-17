@@ -200,8 +200,12 @@ _CSS = """
 *{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}
 a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
-.layout{display:flex;min-height:100vh;}
-.sidebar{width:var(--sidebar-w);background:#fff;border-right:1px solid var(--line);padding:16px 0;display:flex;flex-direction:column;align-items:center;position:sticky;top:0;height:100vh;gap:6px;}
+.layout{display:flex;min-height:100vh;padding-left:var(--sidebar-w);}
+/* FIXED rail (not sticky): the global html,body{overflow-x:hidden} makes body the scroll
+   container, under which position:sticky is unreliable — the rail scrolled away with the
+   content. position:fixed pins it to the viewport, full-height; .layout's padding-left keeps
+   the main column clear of it. Reset both on mobile (the drawer/topbar replace the rail). */
+.sidebar{width:var(--sidebar-w);background:#fff;border-right:1px solid var(--line);padding:16px 0;display:flex;flex-direction:column;align-items:center;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:15;gap:6px;}
 .sidebar .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;margin-bottom:6px;overflow:hidden;padding:0;}
 .jf-logo{width:100%;height:100%;object-fit:cover;display:block;}
 .gm-ava,.gm-drawer-head .brand{overflow:hidden;padding:0;}
@@ -438,7 +442,7 @@ button.primary:hover{background:var(--accent-deep);}
 .keyword-card textarea{min-height:220px;font-family:var(--ff-mono);font-size:12.5px;line-height:1.55;}
 .keyword-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:920px;margin-top:16px;}
 .keyword-note{background:var(--accent-soft);color:var(--accent-deep);border-radius:var(--r-sm);padding:10px 13px;margin:0 0 14px;max-width:920px;}
-@media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;}.sidebar{justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
+@media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;padding-left:0;}.sidebar{position:static;height:auto;overflow:visible;justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
 /* iOS auto-zooms the page when a focused input's font-size is < 16px. The generic
    `input,select,textarea{font-size:16px}` above is low-specificity, so a class rule
    (e.g. .cat-company input[list]) can shrink it back below 16 and re-trigger the zoom.

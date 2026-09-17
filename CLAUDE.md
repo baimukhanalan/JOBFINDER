@@ -325,6 +325,12 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   action_needed=«Действие», assessment_done=«Тест сдан», code=«Коды»). `_fmt(n)`=space thousands-sep. Neutral RU labels only
   (no stack disclosure). Micro-animations + `touch-action:manipulation` (double-tap zoom off) live in `_CSS`, included on
   every surface via `_page`/`_doc`/`dash_auth._doc` — one edit restyles the whole platform.
+- **Desktop rail is `position:fixed`, NOT sticky** (`mailcrm_ui._CSS` `.sidebar`): the global `html,body{overflow-x:hidden}`
+  makes `body` the scroll container, under which `position:sticky` is unreliable — the rail scrolled AWAY with the content. Fix:
+  `.sidebar{position:fixed;top:0;left:0;height:100vh}` + `.layout{padding-left:var(--sidebar-w)}` to clear the main column; the
+  ≤760px block resets BOTH (`position:static` + `padding-left:0`) since the drawer/`_topbar` replace the rail there. Don't revert
+  the rail to `sticky` (same class of bug as the `.gm-topbar`/`.msg-toolbar` fixed toolbars). Verify by scrolling a tall admin
+  page: the rail's `getBoundingClientRect().top` stays 0.
 - **Brand / PWA:** mark = serif interlocked "JF" white on `#0c47c2` (`static/logo.svg` + maskable + PNGs; rebuild
   `rsvg-convert -w N -h N logo-maskable.svg -o icon-*.png`; keep `theme-color` `#0c47c2` in sync across `manifest.
   webmanifest` + `_HEAD_PWA`). Install = `_HEAD_PWA` + `_SW_REG`; `GET /sw.js` + `/static/*` on the dash_auth public allowlist.
@@ -664,21 +670,34 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   mutating handler, not just the gate**: `manager_assign_interview` checks `iv.manager_id==acting.id` AND the target ∈ {manager}
   ∪ {his active subordinates}. `_acting` is MULTI-ROLE aware (`has_role`): an admin+`?as=<mid>` reads-through that manager; else
   a `has_role(me,'manager')` user acts on his OWN portal (a non-admin can't spoof `?as`); a bare admin → `/users`.
-  `POST /manage/{assign,unassign,subordinate/add,distribute}`; own minimal shell
-  (like the cabinet), NOT `mailcrm_ui._page`. Manager-assigned rows keep `manager_id`, flip `status`→`assigned`, and are
-  announced by the LIVE `ivremind` daemon (no restart needed; NULL start_ts → «время не указано», safe).
+  **TWO CLEAR SECTIONS** (req): «Пул на распределение» (rows `manager_id`=him, `responsible_id` NULL — to distribute; carries the
+  same email-search + gender + direction filter, GET `?q=&gender=&direction=`) and «Мои собеседования» (`responsible_id`=him —
+  his own attendee queue, links to `/cabinet`); a collapsible «Назначено команде» lists subordinate assignments. Manager→team
+  delegation mirrors admin→manager: **`POST /manage/distribute_to`** (member_id ∈ {self}∪subordinates + count + gender/direction)
+  hands N MATCHING pool interviews to one person (incl. HIMSELF). `POST /manage/{assign,unassign,subordinate/add,distribute,
+  distribute_to}`; own minimal shell (like the cabinet), NOT `mailcrm_ui._page`. Manager-assigned rows keep `manager_id`, flip
+  `status`→`assigned`, and are announced by the LIVE `ivremind` daemon (no restart needed; NULL start_ts → «время не указано»).
 - **The interview POOL** (`pool.py`): the allocatable "interviews" = persona mailboxes whose furthest inbound stage is
   `interview` (mail_index kind='interview', ~220 live) MINUS any mailbox already `handled` (has a non-cancelled `iv_interviews`
-  row — a delegation row OR a direct «Собес» booking, so the two paths never double-serve). `unallocated()`/`count_unallocated()`
-  = one SELECT (funnel-ranked, latest interview msg meta); `split({mid:N})` blocks the pool newest-first across managers;
-  `allocate_specific(mailbox, mid)` sends one. Allocation = `db.allocate_interview` → an `iv_interviews` row `status='pool'`,
-  `responsible_id` NULL, `manager_id`=mid, `announced=TRUE` (a pool row must NOT be announced until assigned).
+  row — a delegation row OR a direct «Собес» booking, so the two paths never double-serve). `unallocated(q,gender,direction)` /
+  `count_unallocated(...)` / `facets()` (a gender×direction cross-tab for the split UI) enumerate + FILTER the whole pool in
+  Python (TTL-cached 20s via `_all_unallocated`, invalidated on allocate). **ENRICHMENT** (`enrich`/`enrich_iv_rows`): GENDER
+  from `uploads/prefill/<demo_id>/<jobid>/persona.json` `profile.sex`, else a fallback from the SYNTH name banks
+  (`synth_persona._NAMES`, gendered first names — ~90% coverage); DIRECTION from the applied job's `role_category` (job_catalog,
+  via the persona-dir `jobid`) mapped by `direction_of` → **it** (`IT_CATEGORIES`=Engineering/Data&ML/Product/Design) / **nonit**
+  / **other** (Other/unknown — NEVER dropped). `email→demo_id` = `data/demo_personas.json` (unique email key). NB direction
+  coverage is limited to personas whose prefill artifact still exists (retention prunes after 20d) → most are «other»; it grows
+  as fresh interviews arrive. `split({mid:N}, gender, direction)` blocks the MATCHING pool newest-first; `allocate_specific(
+  mailbox, mid)` sends one by its unique e-mail; both store `jobid` on the row so the manager portal recomputes direction.
+  Allocation = `db.allocate_interview` → `status='pool'`, `responsible_id` NULL, `manager_id`=mid, `jobid`, `announced=TRUE`.
 - **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): create (MULTI-ROLE checkboxes + optional
   supervising manager)/reset-password/link-telegram/toggle-active + **MULTI-ROLE edit** (`POST /users/{rid}/roles`, checkboxes
   admin/manager/employee; used by BOTH the INLINE per-card «Роли и доступ» editor — `from_list=1` re-renders the list in place —
   AND the edit page; `set_roles` normalises + mirrors primary) + **set a subordinate's manager** (`POST /users/{rid}/manager`) +
-  the **delegation tools** (`POST /users/allocate/split` = «Разделить интервью» N-per-manager; `POST /users/allocate/send` =
-  «Отправить конкретное интервью» one mailbox→one manager) + a **read-through link** to each manager's portal (`/manage?as=<id>`)
+  the **delegation tools** (`POST /users/allocate/split` = «Разделить интервью» N-per-manager, **FILTERED by `split_gender` +
+  `split_direction`** with a gender×direction availability cross-tab (`pool.facets`) so the admin can e.g. "give manager X 20 IT
+  female"; `POST /users/allocate/send` = «Отправить конкретное интервью», an **e-mail SEARCH** via a native `<datalist>` of pool
+  e-mails, since the mailbox is the UNIQUE key — names repeat) + a **read-through link** to each manager's portal (`/manage?as=<id>`)
   + a weekly availability editor + a 7-day load calendar. Auto-refresh via `GET /users/signature` (registered BEFORE
   `/users/{rid}`; `/users/allocate/*` + `/users/{rid}/roles` are POST, no collision). **DELETE ANY user** (`POST
   /users/{rid}/delete` → `db.delete_responsible_cascade`, incl. deactivated / WITH interview history): the cascade detaches

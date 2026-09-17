@@ -104,6 +104,14 @@ _CSS = """
 .u-inline-del{margin-top:10px}
 /* delegation / allocation card */
 .u-alloc{display:flex;flex-direction:column;gap:12px}
+.u-alloc-filters{display:flex;gap:8px;flex-wrap:wrap}
+.u-alloc-filters select{flex:1 1 150px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+.u-facet-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 4px}
+.u-facet{border-collapse:collapse;font-size:12.5px;min-width:300px;width:100%}
+.u-facet th,.u-facet td{border:1px solid var(--line);padding:5px 9px;text-align:center;white-space:nowrap}
+.u-facet th{background:var(--panel-2);color:var(--ink-soft);font-weight:700}
+.u-facet td{font-family:var(--ff-mono);color:var(--ink)}
+.u-facet tr th:first-child{text-align:left}
 .u-alloc-list{display:flex;flex-direction:column;gap:8px}
 .u-alloc-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;font-weight:600}
 .u-alloc-nm{flex:1 1 200px;font-size:13.5px;color:var(--ink)}
@@ -112,8 +120,8 @@ _CSS = """
 .u-alloc-sub{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .u-alloc-sub h4{margin:0 0 10px;font-size:13.5px;font-weight:700}
 .u-alloc-send{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.u-alloc-send select{flex:1 1 200px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
-@media(max-width:560px){.u-alloc-send select{flex:1 1 100%}.u-alloc-send button{flex:1 1 100%}}
+.u-alloc-send select,.u-alloc-send input{flex:1 1 200px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+@media(max-width:560px){.u-alloc-send select,.u-alloc-send input{flex:1 1 100%}.u-alloc-send button{flex:1 1 100%}}
 @media(max-width:760px){.u-h1{font-size:23px}}
 </style>
 """
@@ -247,10 +255,44 @@ def _manager_options(managers: list[dict], selected=None, blank_label: str = "�
     return "".join(opts)
 
 
+# shared filter-select option groups (М/Ж + IT/не-IT/другое), neutral labels
+_GENDER_OPTS = (("", "Любой пол"), ("male", "Мужчины"), ("female", "Женщины"))
+_DIR_OPTS = (("", "Любое направление"), ("it", "IT"), ("nonit", "Не-IT"), ("other", "Другое"))
+
+
+def _sel(name: str, opts, aria: str = "") -> str:
+    o = "".join(f"<option value='{v}'>{escape(lbl)}</option>" for v, lbl in opts)
+    a = f" aria-label='{escape(aria)}'" if aria else ""
+    return f"<select name='{name}'{a}>{o}</select>"
+
+
+def _facet_table(f: dict) -> str:
+    """Compact availability cross-tab (gender × direction) so the admin sees how many e.g.
+    IT female interviews are free before splitting. Horizontally scrollable on a phone."""
+    if not f:
+        return ""
+    cross = f.get("cross", {})
+    dcols = [("it", "IT"), ("nonit", "Не-IT"), ("other", "Другое")]
+    grows = [("female", "Женщины"), ("male", "Мужчины"), ("unknown", "Не указан")]
+    head = "<tr><th></th>" + "".join(f"<th>{escape(l)}</th>" for _k, l in dcols) + "<th>Всего</th></tr>"
+    body = []
+    for gk, gl in grows:
+        cells = "".join(f"<td>{cross.get((gk, dk), 0)}</td>" for dk, _dl in dcols)
+        tot = f.get("gender", {}).get(gk, 0)
+        body.append(f"<tr><th>{escape(gl)}</th>{cells}<td><b>{tot}</b></td></tr>")
+    dtot = f.get("direction", {})
+    foot = ("<tr><th>Всего</th>"
+            + "".join(f"<td><b>{dtot.get(dk, 0)}</b></td>" for dk, _dl in dcols)
+            + f"<td><b>{f.get('total', 0)}</b></td></tr>")
+    return (f"<div class='u-facet-wrap'><table class='u-facet'>{head}{''.join(body)}{foot}"
+            "</table></div>")
+
+
 def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
-                   mgr_alloc: dict) -> str:
-    """The admin delegation tools: split the free interview pool across managers, and send a
-    specific interview to a specific manager. Rendered only when at least one manager exists."""
+                   mgr_alloc: dict, pool_facets: dict | None = None) -> str:
+    """The admin delegation tools: split the free interview pool across managers (filtered by
+    gender + direction, N per manager), and send a specific interview (email search) to a
+    specific manager. Rendered only when at least one manager exists."""
     if not managers:
         return ("<div class='u-card'><h3>Делегирование интервью</h3>"
                 "<p class='u-chint'>Чтобы делить интервью, сначала добавьте хотя бы одного "
@@ -267,27 +309,35 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
             f"<input type='number' name='count_{m['id']}' min='0' step='1' placeholder='0' inputmode='numeric'>"
             "</label>")
     manager_opts = _manager_options(managers, blank_label="— выберите управляющего —")
-    # send-one: a dropdown of the freshest pool interviews + a manager picker
-    send_opts = []
+    # send-one: email SEARCH (email is the unique key) via a native datalist + a manager picker
+    dl_opts = []
     for r in pool_rows:
-        cand = (r.get("mailbox") or "").split("@")[0]
-        subj = (r.get("subject") or "").strip()
-        label = cand + (f" · {subj[:48]}" if subj else "")
-        send_opts.append(f"<option value='{escape(r.get('mailbox') or '', quote=True)}'>{escape(label)}</option>")
-    send_block = ""
-    if pool_rows:
-        send_block = (
-            "<div class='u-alloc-sub'><h4>Отправить конкретное интервью</h4>"
-            "<form class='u-alloc-send' method='post' action='/users/allocate/send'>"
-            f"<select name='mailbox' aria-label='Интервью'>{''.join(send_opts)}</select>"
-            f"<select name='manager_id' aria-label='Управляющий'>{manager_opts}</select>"
-            "<button class='hbtn' type='submit'>Отправить</button></form></div>")
+        mb = r.get("mailbox") or ""
+        nm = (r.get("candidate") or "").strip()
+        sx = {"male": "М", "female": "Ж"}.get(r.get("sex"), "")
+        di = {"it": "IT", "nonit": "не-IT"}.get(r.get("direction"), "")
+        hint = " · ".join(x for x in (nm, sx, di) if x)
+        dl_opts.append(f"<option value='{escape(mb, quote=True)}'>{escape(hint)}</option>")
+    send_block = (
+        "<div class='u-alloc-sub'><h4>Отправить конкретное интервью</h4>"
+        "<p class='u-chint' style='margin-top:0'>Поиск по e-mail персоны (уникальный ключ).</p>"
+        "<form class='u-alloc-send' method='post' action='/users/allocate/send'>"
+        "<input name='mailbox' list='u-pool-emails' required autocomplete='off' "
+        "placeholder='e-mail персоны' aria-label='E-mail интервью'>"
+        f"<datalist id='u-pool-emails'>{''.join(dl_opts)}</datalist>"
+        f"<select name='manager_id' aria-label='Управляющий'>{manager_opts}</select>"
+        "<button class='hbtn' type='submit'>Отправить</button></form></div>")
     return (
         "<div class='u-card'><h3>Делегирование интервью</h3>"
         f"<p class='u-chint'>В свободном пуле сейчас <b>{pool_count}</b> интервью "
         "(персоны с приглашением на собеседование, ещё не переданные никому). Разделите их "
-        "между управляющими — поровну или как угодно.</p>"
+        "между управляющими: выберите пол и направление, укажите сколько кому.</p>"
+        + _facet_table(pool_facets or {}) +
         "<form class='u-alloc' method='post' action='/users/allocate/split'>"
+        "<div class='u-alloc-filters'>"
+        + _sel("split_gender", _GENDER_OPTS, "Пол")
+        + _sel("split_direction", _DIR_OPTS, "Направление") +
+        "</div>"
         f"<div class='u-alloc-list'>{''.join(split_rows)}</div>"
         "<button class='primary' type='submit'>Разделить интервью</button>"
         "</form>"
@@ -298,11 +348,13 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
 def list_page(users: list[dict], avail_by_id: dict, notice=None,
               week_by_id: dict | None = None, monday=None, week_sig: str = "",
               managers: list[dict] | None = None, pool_count: int = 0,
-              pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None) -> str:
+              pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None,
+              pool_facets: dict | None = None) -> str:
     week_by_id = week_by_id or {}
     managers = managers or []
     pool_rows = pool_rows or []
     mgr_alloc = mgr_alloc or {}
+    pool_facets = pool_facets or {}
     cards = []
     for u in users:
         rid = u["id"]
@@ -372,7 +424,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<div class='u-go'><button class='primary' type='submit'>Добавить</button></div>"
         "</form></div>"
 
-        + _allocate_card(managers, pool_count, pool_rows, mgr_alloc)
+        + _allocate_card(managers, pool_count, pool_rows, mgr_alloc, pool_facets)
         + listing +
         "</div>"
         + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))

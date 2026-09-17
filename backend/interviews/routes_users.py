@@ -46,12 +46,14 @@ def _render_list(notice=None) -> HTMLResponse:
     managers: list[dict] = []
     pool_count = 0
     pool_rows: list[dict] = []
+    pool_facets: dict = {}
     mgr_alloc: dict = {}
     try:
         managers = db.list_managers(active_only=True)
         if managers:
-            pool_count = pool.count_unallocated()
-            pool_rows = pool.unallocated(limit=40)
+            pool_facets = pool.facets()
+            pool_count = pool_facets.get("total", 0)
+            pool_rows = pool.unallocated(limit=400)   # for the email-search datalist
             for m in managers:
                 ivs = db.manager_interviews(m["id"])
                 mgr_alloc[m["id"]] = {
@@ -62,7 +64,8 @@ def _render_list(notice=None) -> HTMLResponse:
         managers = managers or []
     return HTMLResponse(users_ui.list_page(
         users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
-        managers=managers, pool_count=pool_count, pool_rows=pool_rows, mgr_alloc=mgr_alloc))
+        managers=managers, pool_count=pool_count, pool_rows=pool_rows,
+        pool_facets=pool_facets, mgr_alloc=mgr_alloc))
 
 
 def _week_window():
@@ -219,18 +222,30 @@ async def users_allocate_split(request: Request):
             counts[mid] = n
     if not counts:
         return _render_list(("err", "Укажите, сколько интервью выделить хотя бы одному управляющему."))
+    gender = (form.get("split_gender") or "").strip() or None
+    direction = (form.get("split_direction") or "").strip() or None
+    if gender not in (None,) + pool.GENDERS:
+        gender = None
+    if direction not in (None,) + pool.DIRECTIONS:
+        direction = None
     try:
-        allocated = pool.split(counts)
+        allocated = pool.split(counts, gender=gender, direction=direction)
     except Exception as e:
         return _render_list(("err", f"Не удалось распределить: {escape(str(e))}"))
     total = sum(allocated.values())
     if not total:
-        return _render_list(("err", "В свободном пуле нет интервью для распределения."))
+        return _render_list(("err", "По этому фильтру в свободном пуле нет интервью для распределения."))
     parts = []
     for mid, n in allocated.items():
         m = db.get_responsible(mid)
         parts.append(f"{escape((m or {}).get('name') or str(mid))}: {n}")
-    return _render_list(("ok", f"Выделено интервью — {total}. " + "; ".join(parts) + "."))
+    filt = []
+    if gender:
+        filt.append("муж." if gender == "male" else "жен.")
+    if direction:
+        filt.append({"it": "IT", "nonit": "не-IT", "other": "другое"}.get(direction, direction))
+    fs = f" ({', '.join(filt)})" if filt else ""
+    return _render_list(("ok", f"Выделено интервью — {total}{fs}. " + "; ".join(parts) + "."))
 
 
 @router.post("/users/allocate/send", response_class=HTMLResponse)

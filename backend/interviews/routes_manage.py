@@ -20,7 +20,7 @@ import psycopg2
 from fastapi import APIRouter, Depends, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from backend.interviews import auth, db, manage_ui, slots
+from backend.interviews import auth, db, manage_ui, pool, slots
 
 router = APIRouter()
 
@@ -52,16 +52,29 @@ def _acting(me: dict, as_id: str | int | None):
     return None, False
 
 
-def _render(manager: dict, is_admin_view: bool, notice=None) -> HTMLResponse:
-    subs = db.subordinates(manager["id"], active_only=False)
-    interviews = db.manager_interviews(manager["id"])
+def _render(manager: dict, is_admin_view: bool, notice=None,
+            q: str = "", gender: str = "", direction: str = "") -> HTMLResponse:
+    mid = manager["id"]
+    subs = db.subordinates(mid, active_only=False)
+    sub_ids = {s["id"] for s in subs}
+    # enrich with gender (from mailbox) + direction (from stored jobid) for the chips/filters
+    interviews = pool.enrich_iv_rows(db.manager_interviews(mid))
+    pool_all = [iv for iv in interviews if not iv.get("responsible_id")]
+    own = [iv for iv in interviews if iv.get("responsible_id") == mid]
+    team_ivs = [iv for iv in interviews if iv.get("responsible_id") in sub_ids]
+    g = gender if gender in pool.GENDERS else None
+    d = direction if direction in pool.DIRECTIONS else None
+    pool_ivs = [iv for iv in pool_all if pool._match(iv, (q or None), g, d)]
     loads = db.assigned_load([s["id"] for s in subs])
     # names for assigned rows: the manager + every subordinate (assignment is confined to them)
-    names = {manager["id"]: manager.get("name") or manager.get("login") or "—"}
+    names = {mid: manager.get("name") or manager.get("login") or "—"}
     for s in subs:
         names[s["id"]] = s.get("name") or s.get("login") or "—"
+    counts = {"pool": len(pool_all), "own": len(own), "team": len(team_ivs),
+              "team_size": len([s for s in subs if s.get("active")])}
     return HTMLResponse(manage_ui.portal_page(
-        manager, subs, interviews, loads, names, notice=notice,
+        manager, subs, pool_ivs, own, team_ivs, loads, names, counts,
+        q=q, gender=gender, direction=direction, notice=notice,
         is_admin_view=is_admin_view))
 
 
@@ -73,14 +86,15 @@ def _allowed_interviewer_ids(manager: dict) -> set:
 
 
 @router.get("/manage", response_class=HTMLResponse)
-def manage_home(as_: str = Query("", alias="as"),
+def manage_home(as_: str = Query("", alias="as"), q: str = Query(""),
+                gender: str = Query(""), direction: str = Query(""),
                 me: dict = Depends(auth.current_responsible)):
     manager, is_admin_view = _acting(me, as_)
     if manager is None:
         # an admin with no (valid) target: send them to the roster where the managers +
         # their read-through links live.
         return RedirectResponse("/users", status_code=303)
-    return _render(manager, is_admin_view)
+    return _render(manager, is_admin_view, q=q.strip(), gender=gender, direction=direction)
 
 
 @router.post("/manage/subordinate/add", response_class=HTMLResponse)
@@ -179,3 +193,36 @@ def manage_distribute(as_: str = Form("", alias="as"),
         except psycopg2.IntegrityError:
             continue
     return _render(manager, is_admin_view, ("ok", f"Распределено собесов: {n}."))
+
+
+@router.post("/manage/distribute_to", response_class=HTMLResponse)
+def manage_distribute_to(member_id: int = Form(...), count: int = Form(1),
+                         gender: str = Form(""), direction: str = Form(""),
+                         as_: str = Form("", alias="as"),
+                         me: dict = Depends(auth.current_responsible)):
+    """Give N interviews from the manager's pool (matching the gender/direction filter) to ONE
+    chosen person — himself or a subordinate. Mirrors the admin split, scoped to this manager's
+    pool + team (isolation: member must be him or his subordinate)."""
+    manager, is_admin_view = _acting(me, as_)
+    if manager is None:
+        return RedirectResponse("/users", status_code=303)
+    if member_id not in _allowed_interviewer_ids(manager):
+        return _render(manager, is_admin_view,
+                       ("err", "Можно раздавать только себе или своим сотрудникам."),
+                       gender=gender, direction=direction)
+    g = gender if gender in pool.GENDERS else None
+    d = direction if direction in pool.DIRECTIONS else None
+    interviews = pool.enrich_iv_rows(db.manager_interviews(manager["id"]))
+    cands = [iv for iv in interviews
+             if not iv.get("responsible_id") and pool._match(iv, None, g, d)]
+    n = 0
+    for iv in cands[:max(0, int(count))]:
+        try:
+            db.manager_assign_interview(iv["id"], member_id, None, None)
+            n += 1
+        except psycopg2.IntegrityError:
+            continue
+    who = db.get_responsible(member_id) or {}
+    return _render(manager, is_admin_view,
+                   ("ok", f"Роздано собесов: {n} → {who.get('name') or member_id}."),
+                   gender=gender, direction=direction)

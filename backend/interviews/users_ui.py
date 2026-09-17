@@ -89,14 +89,15 @@ _CSS = """
 .u-rolebtns form{margin:0}
 .u-roleform{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .u-roleform select{min-width:150px}
-/* multi-role checkboxes */
+/* multi-role checkboxes — `label.u-rolechk` (0,1,1) beats `.u-add label` (0,1,1) by source
+   order so the checkbox+label stay inline «☑ label», not stacked, inside the add form. */
 .u-rolechecks{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center}
-.u-rolechk{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:600;color:var(--ink);margin:0;cursor:pointer;white-space:nowrap}
-.u-rolechk input{width:17px;height:17px;flex:0 0 auto}
+label.u-rolechk{display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:13.5px;font-weight:600;color:var(--ink);margin:0;cursor:pointer;white-space:nowrap}
+label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-add-roles{grid-column:1/-1}
 /* inline per-user role editor + delete in the list */
 .u-rolebox{margin-top:11px;border-top:1px solid var(--line);padding-top:9px}
-.u-rolebox>summary{cursor:pointer;font-size:12.5px;font-weight:700;color:var(--ink-soft);list-style:none;user-select:none;display:inline-flex;align-items:center;gap:6px}
+.u-rolebox>summary{cursor:pointer;font-size:12.5px;font-weight:700;color:var(--ink-soft);list-style:none;user-select:none;display:flex;width:100%;align-items:center;gap:6px;padding:8px 0}
 .u-rolebox>summary::before{content:'▸';color:var(--ink-mute);font-size:11px}
 .u-rolebox[open]>summary::before{content:'▾'}
 .u-rolebox>summary:hover{color:var(--ink)}
@@ -105,7 +106,9 @@ _CSS = """
 /* delegation / allocation card */
 .u-alloc{display:flex;flex-direction:column;gap:12px}
 .u-alloc-filters{display:flex;gap:8px;flex-wrap:wrap}
-.u-alloc-filters select{flex:1 1 150px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+.u-alloc-filters select{flex:1 1 170px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+/* full-width on a narrow phone so «Любое направление» isn't truncated in the closed select */
+@media(max-width:560px){.u-alloc-filters select{flex:1 1 100%}}
 .u-facet-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 4px}
 .u-facet{border-collapse:collapse;font-size:12.5px;min-width:300px;width:100%}
 .u-facet th,.u-facet td{border:1px solid var(--line);padding:5px 9px;text-align:center;white-space:nowrap}
@@ -349,7 +352,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
               week_by_id: dict | None = None, monday=None, week_sig: str = "",
               managers: list[dict] | None = None, pool_count: int = 0,
               pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None,
-              pool_facets: dict | None = None) -> str:
+              pool_facets: dict | None = None, me_id: int | None = None) -> str:
     week_by_id = week_by_id or {}
     managers = managers or []
     pool_rows = pool_rows or []
@@ -370,8 +373,9 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
             badge = (f"<span class='u-tag' style='color:#6d28d9;background:#ede9fe'>"
                      f"собесов: {a.get('total', 0)}</span>" if a else "")
             extra = (f"{badge}<a class='hbtn' href='/manage?as={rid}'>Портал →</a>")
-        # inline MULTI-ROLE editor + delete (protected logins 1/2/3 keep no delete button)
-        protected = (u.get("login") or "") in ("1", "2", "3")
+        # inline MULTI-ROLE editor + delete. NO delete button for the protected logins 1/2/3
+        # NOR the acting admin's OWN card (self-delete is blocked server-side; don't offer it).
+        protected = (u.get("login") or "") in ("1", "2", "3") or rid == me_id
         del_form = ("" if protected else
                     f"<form method='post' action='/users/{rid}/delete' class='u-inline-del' "
                     "onsubmit=\"return confirm('Удалить пользователя безвозвратно? Его собесы вернутся в пул.');\">"
@@ -477,12 +481,13 @@ document.addEventListener('keydown',function(e){
 
 
 def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0,
-              managers: list[dict] | None = None) -> str:
+              managers: list[dict] | None = None, me_id: int | None = None) -> str:
     rid = u["id"]
     roles = _roles_of(u)
     active = u.get("active")
     managers = managers or []
     protected = (u.get("login") or "") in ("1", "2", "3")
+    is_self = rid == me_id
 
     toggle_lbl = "Отключить" if active else "Включить"
     toggle_val = "0" if active else "1"
@@ -513,7 +518,11 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
     # are protected. A count warning is informational only, never a block.
     warn = (f"<p class='u-chint'>За пользователем закреплено интервью — <b>{interview_count}</b>; "
             "при удалении они вернутся в пул.</p>" if interview_count else "")
-    if protected:
+    if is_self:
+        del_block = (
+            "<div class='u-card u-set u-span'><h3>Удаление</h3>"
+            "<p class='u-chint'>Нельзя удалить собственную учётную запись — вы под ней вошли.</p></div>")
+    elif protected:
         del_block = (
             "<div class='u-card u-set u-span'><h3>Удаление</h3>"
             "<p class='u-chint'>Штатного интервьюера удалять нельзя — можно только отключить.</p></div>")

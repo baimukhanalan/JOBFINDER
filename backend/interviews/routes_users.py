@@ -23,7 +23,7 @@ router = APIRouter()
 _ROLES = ("admin", "manager", "employee")
 
 
-def _render_list(notice=None) -> HTMLResponse:
+def _render_list(notice=None, me_id: int | None = None) -> HTMLResponse:
     users = db.list_responsibles(active_only=False)
     avail = {u["id"]: db.get_availability(u["id"]) for u in users}
     # This week's booked interviews per responsible — the weekly load view, so the operator
@@ -65,7 +65,7 @@ def _render_list(notice=None) -> HTMLResponse:
     return HTMLResponse(users_ui.list_page(
         users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
         managers=managers, pool_count=pool_count, pool_rows=pool_rows,
-        pool_facets=pool_facets, mgr_alloc=mgr_alloc))
+        pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id))
 
 
 def _week_window():
@@ -86,7 +86,7 @@ def users_signature() -> JSONResponse:
         return JSONResponse({"sig": ""})
 
 
-def _render_edit(rid: int, notice=None) -> HTMLResponse:
+def _render_edit(rid: int, notice=None, me_id: int | None = None) -> HTMLResponse:
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
@@ -97,24 +97,25 @@ def _render_edit(rid: int, notice=None) -> HTMLResponse:
         managers = []
     return HTMLResponse(users_ui.edit_page(u, db.get_availability(rid), notice,
                                            interview_count=db.interview_count(rid),
-                                           managers=managers))
+                                           managers=managers, me_id=me_id))
 
 
 @router.get("/users", response_class=HTMLResponse)
-def users_list():
-    return _render_list()
+def users_list(me: dict = Depends(auth.current_responsible)):
+    return _render_list(me_id=(me or {}).get("id"))
 
 
 @router.post("/users/add", response_class=HTMLResponse)
-async def users_add(request: Request):
+async def users_add(request: Request, me: dict = Depends(auth.current_responsible)):
     # MULTI-ROLE: the add form sends 0..N `role` checkboxes; default to a single interviewer.
+    me_id = (me or {}).get("id")
     form = await request.form()
     name = (form.get("name") or "").strip()
     login = (form.get("login") or "").strip()
     password = (form.get("password") or "").strip()
     roles = db.normalize_roles([r for r in form.getlist("role") if r in _ROLES])
     if not name or not login:
-        return _render_list(("err", "Имя и логин обязательны."))
+        return _render_list(("err", "Имя и логин обязательны."), me_id=me_id)
     # a subordinate under a manager (only meaningful when they hold the interviewer role)
     mid = None
     if "employee" in roles and (form.get("manager_id") or "").strip():
@@ -129,35 +130,39 @@ async def users_add(request: Request):
         db.add_responsible(login, auth.hash_password(pw), name, roles=roles,
                            tz="Asia/Almaty", manager_id=mid)
     except Exception as e:
-        return _render_list(("err", f"Не удалось создать (логин, возможно, занят): {escape(str(e))}"))
+        return _render_list(("err", f"Не удалось создать (логин, возможно, занят): {escape(str(e))}"), me_id=me_id)
     return _render_list(("pw",
         f"Создан <b>{escape(name)}</b> (логин <b>{escape(login)}</b>). "
-        f"Пароль: <code>{escape(pw)}</code> — сохрани, он больше не покажется."))
+        f"Пароль: <code>{escape(pw)}</code> — сохрани, он больше не покажется."), me_id=me_id)
 
 
 @router.get("/users/{rid}", response_class=HTMLResponse)
-def users_edit(rid: int):
-    return _render_edit(rid)
+def users_edit(rid: int, me: dict = Depends(auth.current_responsible)):
+    return _render_edit(rid, me_id=(me or {}).get("id"))
 
 
 @router.post("/users/{rid}/passwd", response_class=HTMLResponse)
-def users_passwd(rid: int, password: str = Form("")):
+def users_passwd(rid: int, password: str = Form(""),
+                 me: dict = Depends(auth.current_responsible)):
     if not db.get_responsible(rid):
         return HTMLResponse("<h1>404</h1>", status_code=404)
     pw = password.strip() or secrets.token_urlsafe(9)
     db.set_password_hash(rid, auth.hash_password(pw))
-    return _render_edit(rid, ("pw", f"Новый пароль: <code>{escape(pw)}</code> — сохрани, больше не покажу."))
+    return _render_edit(rid, ("pw", f"Новый пароль: <code>{escape(pw)}</code> — сохрани, больше не покажу."),
+                        me_id=(me or {}).get("id"))
 
 
 _ROLE_LBL = {"admin": "админ", "manager": "управляющий", "employee": "интервьюер"}
 
 
 @router.post("/users/{rid}/roles", response_class=HTMLResponse)
-async def users_roles(rid: int, request: Request):
+async def users_roles(rid: int, request: Request,
+                      me: dict = Depends(auth.current_responsible)):
     """Set a user's MULTI-ROLE set from checkboxes (admin/manager/employee). Persisted
     immediately. Used by BOTH the inline list editor and the edit page. `from_list=1` (a
     hidden field the list editor sends) re-renders the whole list so the change shows in
     place; otherwise the edit page is re-rendered."""
+    me_id = (me or {}).get("id")
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
@@ -174,39 +179,43 @@ async def users_roles(rid: int, request: Request):
     lbls = ", ".join(_ROLE_LBL.get(r, r) for r in roles)
     notice = ("ok", f"Роли обновлены: {lbls}.")
     if (form.get("from_list") or "") == "1":
-        return _render_list(notice)
-    return _render_edit(rid, notice)
+        return _render_list(notice, me_id=me_id)
+    return _render_edit(rid, notice, me_id=me_id)
 
 
 @router.post("/users/{rid}/manager", response_class=HTMLResponse)
-def users_set_manager(rid: int, manager_id: str = Form("")):
+def users_set_manager(rid: int, manager_id: str = Form(""),
+                      me: dict = Depends(auth.current_responsible)):
     """Set (or clear) which manager supervises this responsible. Admin-only (gated). A
     manager can't supervise themselves, and only a real manager account may be chosen."""
+    me_id = (me or {}).get("id")
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
     mid = manager_id.strip()
     if not mid:
         db.set_manager(rid, None)
-        return _render_edit(rid, ("ok", "Управляющий откреплён."))
+        return _render_edit(rid, ("ok", "Управляющий откреплён."), me_id=me_id)
     try:
         mid_i = int(mid)
     except ValueError:
-        return _render_edit(rid, ("err", "Неверный управляющий."))
+        return _render_edit(rid, ("err", "Неверный управляющий."), me_id=me_id)
     if mid_i == rid:
-        return _render_edit(rid, ("err", "Нельзя назначить сотрудника управляющим самому себе."))
+        return _render_edit(rid, ("err", "Нельзя назначить сотрудника управляющим самому себе."), me_id=me_id)
     m = db.get_responsible(mid_i)
     if not m or not db.has_role(m, "manager"):
-        return _render_edit(rid, ("err", "Выбранный пользователь не является управляющим."))
+        return _render_edit(rid, ("err", "Выбранный пользователь не является управляющим."), me_id=me_id)
     db.set_manager(rid, mid_i)
-    return _render_edit(rid, ("ok", f"Закреплён за управляющим «{escape(m.get('name') or '')}»."))
+    return _render_edit(rid, ("ok", f"Закреплён за управляющим «{escape(m.get('name') or '')}»."), me_id=me_id)
 
 
 @router.post("/users/allocate/split", response_class=HTMLResponse)
-async def users_allocate_split(request: Request):
+async def users_allocate_split(request: Request,
+                               me: dict = Depends(auth.current_responsible)):
     """Divide the free interview pool among managers — the «Разделить интервью» tool. Each
     manager gets a count (equal or custom); blocks are taken newest-first. Form fields:
     `count_<manager_id>` = how many to allocate to that manager (blank/0 = none)."""
+    me_id = (me or {}).get("id")
     form = await request.form()
     managers = {m["id"] for m in db.list_managers(active_only=True)}
     counts: dict[int, int] = {}
@@ -221,7 +230,7 @@ async def users_allocate_split(request: Request):
         if mid in managers and n > 0:
             counts[mid] = n
     if not counts:
-        return _render_list(("err", "Укажите, сколько интервью выделить хотя бы одному управляющему."))
+        return _render_list(("err", "Укажите, сколько интервью выделить хотя бы одному управляющему."), me_id=me_id)
     gender = (form.get("split_gender") or "").strip() or None
     direction = (form.get("split_direction") or "").strip() or None
     if gender not in (None,) + pool.GENDERS:
@@ -231,10 +240,10 @@ async def users_allocate_split(request: Request):
     try:
         allocated = pool.split(counts, gender=gender, direction=direction)
     except Exception as e:
-        return _render_list(("err", f"Не удалось распределить: {escape(str(e))}"))
+        return _render_list(("err", f"Не удалось распределить: {escape(str(e))}"), me_id=me_id)
     total = sum(allocated.values())
     if not total:
-        return _render_list(("err", "По этому фильтру в свободном пуле нет интервью для распределения."))
+        return _render_list(("err", "По этому фильтру в свободном пуле нет интервью для распределения."), me_id=me_id)
     parts = []
     for mid, n in allocated.items():
         m = db.get_responsible(mid)
@@ -245,48 +254,54 @@ async def users_allocate_split(request: Request):
     if direction:
         filt.append({"it": "IT", "nonit": "не-IT", "other": "другое"}.get(direction, direction))
     fs = f" ({', '.join(filt)})" if filt else ""
-    return _render_list(("ok", f"Выделено интервью — {total}{fs}. " + "; ".join(parts) + "."))
+    return _render_list(("ok", f"Выделено интервью — {total}{fs}. " + "; ".join(parts) + "."), me_id=me_id)
 
 
 @router.post("/users/allocate/send", response_class=HTMLResponse)
-def users_allocate_send(mailbox: str = Form(...), manager_id: int = Form(...)):
+def users_allocate_send(mailbox: str = Form(...), manager_id: int = Form(...),
+                        me: dict = Depends(auth.current_responsible)):
     """Send ONE specific pool interview (a persona mailbox) to a specific manager."""
+    me_id = (me or {}).get("id")
     m = db.get_responsible(manager_id)
     if not m or not db.has_role(m, "manager"):
-        return _render_list(("err", "Выберите управляющего."))
+        return _render_list(("err", "Выберите управляющего."), me_id=me_id)
     ok = False
     try:
         ok = pool.allocate_specific(mailbox.strip(), manager_id)
     except Exception as e:
-        return _render_list(("err", f"Не удалось выделить: {escape(str(e))}"))
+        return _render_list(("err", f"Не удалось выделить: {escape(str(e))}"), me_id=me_id)
     if not ok:
-        return _render_list(("err", "Это интервью уже выделено или недоступно."))
+        return _render_list(("err", "Это интервью уже выделено или недоступно."), me_id=me_id)
     return _render_list(("ok",
-        f"Интервью «{escape(mailbox)}» выделено управляющему «{escape(m.get('name') or '')}»."))
+        f"Интервью «{escape(mailbox)}» выделено управляющему «{escape(m.get('name') or '')}»."), me_id=me_id)
 
 
 @router.post("/users/{rid}/telegram", response_class=HTMLResponse)
-def users_telegram(rid: int, chat_id: str = Form("")):
+def users_telegram(rid: int, chat_id: str = Form(""),
+                   me: dict = Depends(auth.current_responsible)):
+    me_id = (me or {}).get("id")
     if not db.get_responsible(rid):
         return HTMLResponse("<h1>404</h1>", status_code=404)
     chat_id = chat_id.strip()
     if not chat_id:
         db.set_telegram_chat(rid, None)
-        return _render_edit(rid, ("ok", "Telegram отвязан."))
+        return _render_edit(rid, ("ok", "Telegram отвязан."), me_id=me_id)
     try:
         db.set_telegram_chat(rid, int(chat_id))
     except ValueError:
-        return _render_edit(rid, ("err", "chat_id должен быть числом."))
-    return _render_edit(rid, ("ok", "Telegram сохранён."))
+        return _render_edit(rid, ("err", "chat_id должен быть числом."), me_id=me_id)
+    return _render_edit(rid, ("ok", "Telegram сохранён."), me_id=me_id)
 
 
 @router.post("/users/{rid}/active", response_class=HTMLResponse)
-def users_active(rid: int, active: str = Form(...)):
+def users_active(rid: int, active: str = Form(...),
+                 me: dict = Depends(auth.current_responsible)):
     if not db.get_responsible(rid):
         return HTMLResponse("<h1>404</h1>", status_code=404)
     on = active == "1"
     db.set_active(rid, on)
-    return _render_edit(rid, ("ok", "Пользователь включён." if on else "Пользователь отключён (сессия отозвана)."))
+    return _render_edit(rid, ("ok", "Пользователь включён." if on else "Пользователь отключён (сессия отозвана)."),
+                        me_id=(me or {}).get("id"))
 
 
 # The three REAL interviewers (Alan/Аружан/Нурбол) are protected from deletion — their logins
@@ -296,29 +311,31 @@ _PROTECTED_LOGINS = {"1", "2", "3"}
 
 @router.post("/users/{rid}/delete", response_class=HTMLResponse)
 def users_delete(rid: int, me: dict = Depends(auth.current_responsible)):
+    me_id = (me or {}).get("id")
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
     # Never let an admin delete the account they are signed in as (would lock themselves out).
     if me and me.get("id") == rid:
-        return _render_edit(rid, ("err", "Нельзя удалить собственную учётную запись — вы под ней вошли."))
+        return _render_edit(rid, ("err", "Нельзя удалить собственную учётную запись — вы под ней вошли."), me_id=me_id)
     # Protect the real interviewers 1/2/3.
     if (u.get("login") or "") in _PROTECTED_LOGINS:
         return _render_edit(rid, ("err",
-            "Этого пользователя удалять нельзя (штатный интервьюер). Можно только отключить."))
+            "Этого пользователя удалять нельзя (штатный интервьюер). Можно только отключить."), me_id=me_id)
     # Hard-delete ANY user (incl. deactivated / with interview history): the cascade returns
     # their managed/assigned interviews to the pool and clears every FK before removing the row.
     try:
         db.delete_responsible_cascade(rid)
     except Exception as e:
-        return _render_edit(rid, ("err", f"Не удалось удалить: {escape(str(e))}"))
+        return _render_edit(rid, ("err", f"Не удалось удалить: {escape(str(e))}"), me_id=me_id)
     return _render_list(("ok",
         f"Пользователь «{escape(str(u.get('name') or u.get('login') or rid))}» удалён. "
-        "Его собеседования (если были) возвращены в пул."))
+        "Его собеседования (если были) возвращены в пул."), me_id=me_id)
 
 
 @router.post("/users/{rid}/availability", response_class=HTMLResponse)
-async def users_availability(rid: int, request: Request):
+async def users_availability(rid: int, request: Request,
+                             me: dict = Depends(auth.current_responsible)):
     if not db.get_responsible(rid):
         return HTMLResponse("<h1>404</h1>", status_code=404)
     form = await request.form()
@@ -342,4 +359,4 @@ async def users_availability(rid: int, request: Request):
                 continue
             rows.append({"dow": d, "start_min": sm, "end_min": em, "enabled": True})
     db.set_availability(rid, rows)
-    return _render_edit(rid, ("ok", "Доступность сохранена."))
+    return _render_edit(rid, ("ok", "Доступность сохранена."), me_id=(me or {}).get("id"))

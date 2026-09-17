@@ -505,6 +505,16 @@ button.cg-ct:hover{color:var(--accent);}
 .cg-act.done{color:var(--ok);}
 .cg-act.mut{color:var(--ink-mute);font-weight:600;}
 .cg-act:disabled{opacity:.5;cursor:default;}
+/* PHONE tap targets: these metaline buttons render ~13px tall (padding:0;line-height:1) — too
+   small to tap on the primary phone tab. Give them real vertical padding (~31px tap area) and
+   bump the metaline min-height UNIFORMLY so the taller buttons fit centred without a clip
+   (.cg-metaline is overflow:hidden). The bump is on EVERY metaline → the 0-badge==5-badge
+   equal-height contract still holds; only vertical (no horizontal growth) so nowrap never
+   truncates earlier. */
+@media(max-width:760px){
+  .cg-metaline{min-height:36px;}
+  .cg-act,button.cg-ct{padding:9px 0;}
+}
 .cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
 .cg-chev{flex:0 0 auto;font-size:22px;line-height:1;color:var(--ink-mute);transition:transform .18s;}

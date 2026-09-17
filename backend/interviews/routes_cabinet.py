@@ -128,6 +128,15 @@ def inbox(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse
         except Exception as e:
             log.warning("list_messages failed for %s: %s", m, e)
     rows.sort(key=lambda r: r.get("date_ts", 0), reverse=True)
+    # Strip leaked CSS/HTML from the preview snippet, same as the operator grouped inbox does
+    # (a Calendly reminder otherwise shows `a:visited{color…}@media…` garbage to the employee).
+    try:
+        from backend.tools.candidates_inbox import _clean_snippet
+        for r in rows:
+            if r.get("snippet"):
+                r["snippet"] = _clean_snippet(r["snippet"])
+    except Exception as e:
+        log.warning("snippet clean failed: %s", e)
     return HTMLResponse(cabinet_ui.inbox_page(responsible, rows))
 
 

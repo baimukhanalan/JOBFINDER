@@ -70,7 +70,9 @@ def _render(manager: dict, is_admin_view: bool, notice=None,
     names = {mid: manager.get("name") or manager.get("login") or "—"}
     for s in subs:
         names[s["id"]] = s.get("name") or s.get("login") or "—"
-    counts = {"pool": len(pool_all), "own": len(own), "team": len(team_ivs),
+    counts = {"pool": len(pool_all), "pool_shown": len(pool_ivs),
+              "filtered": bool((q or "").strip() or g or d),
+              "own": len(own), "team": len(team_ivs),
               "team_size": len([s for s in subs if s.get("active")])}
     return HTMLResponse(manage_ui.portal_page(
         manager, subs, pool_ivs, own, team_ivs, loads, names, counts,

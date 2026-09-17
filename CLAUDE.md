@@ -654,7 +654,10 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
 - **Employee cabinet** (`routes_cabinet.py`, `prefix="/cabinet"`, merged into the dash — the separate 8103 app +
   `cabinet.systeam.kz` are RETIRED, the vhost 301s to `/cabinet`): `/cabinet`, `/availability`, `/inbox`, `/thread`, `/reply`.
   Ownership guard in `/thread` + `/reply` (`get_row(hash).mailbox in assigned_mailboxes(rid)` else 404); reply sent FROM the
-  persona TO the recruiter (headers derived server-side).
+  persona TO the recruiter (headers derived server-side). `/inbox` runs each row's `snippet` through
+  `candidates_inbox._clean_snippet` (same as the operator grouped inbox) so leaked CSS never shows to the interviewer. Each home
+  interview card is one full-width tap `<a>` (`cabinet_ui.iv-card-link`); a missing time reads «время не указано» (matches the
+  manager portal).
 - **Auth** (`dash_auth.py` `AdminAuthMiddleware`, fail-closed, hierarchy **admin > manager > employee**, MULTI-ROLE = UNION):
   no session → `/login`; **holds `admin`** → full; **holds `manager`** → ONLY `/manage/*` + `/cabinet/*` (`_manager_allowed`)
   else 303 `/manage` (a manager also attends собесы assigned to himself, hence the cabinet); **holds `employee`** → ONLY
@@ -704,8 +707,9 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   subordinates (`manager_id`→NULL), DROPS the delegation rows they manage (mailbox → free pool), returns their still-managed
   ASSIGNED собесы to that manager's pool (`responsible_id`→NULL, status='pool', announced), deletes remaining referencing rows
   (direct bookings + cancelled history), then the account (availability cascades). **GUARDS: not self, not logins `1`/`2`/`3`**
-  (`_PROTECTED_LOGINS` — the REAL interviewers Alan/Аружан/Нурбол; delete control is hidden for them + refused server-side).
-  CLI `admin_cli` (`setrole` single, `setmanager --login --manager`, `list` shows `roles=`).
+  (`_PROTECTED_LOGINS` — the REAL interviewers Alan/Аружан/Нурбол; delete control is hidden for them AND the acting admin's OWN
+  card — `list_page`/`edit_page` take `me_id`, threaded from every handler via `Depends(auth.current_responsible)` — + refused
+  server-side). CLI `admin_cli` (`setrole` single, `setmanager --login --manager`, `list` shows `roles=`).
 - **Telegram NOTIFIER** (`reminders.py`, pm2 `jobfinder-alan-ivremind`; `notify.py`): polls every 60s → assignment notice +
   reminders at −60 (RICH: company · role · persona ФИО · Zoom link from the thread · résumé PDF via `sendDocument`,
   `service.interview_pack`) and −5. Target = the responsible's `telegram_chat_id` else the owner chat. Self-service linking:

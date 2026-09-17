@@ -46,7 +46,12 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .login-wrap button{width:100%;margin-top:18px;}
 .iv-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
 .iv-list li{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-  padding:14px 16px;display:flex;flex-direction:column;gap:4px;}
+  padding:0;overflow:hidden;}
+/* the whole card is one tap target: the <a> fills the card incl. its padding */
+.iv-card-link{display:flex;flex-direction:column;gap:4px;padding:14px 16px;color:inherit;
+  text-decoration:none;min-height:44px;box-sizing:border-box;}
+.iv-card-link:hover{background:var(--panel-2);text-decoration:none;}
+.iv-open{color:var(--accent);font-weight:600;font-size:13px;margin-top:2px;}
 .iv-list .iv-when{font-weight:700;color:var(--ink);font-size:14px;}
 .iv-list .iv-meta{color:var(--ink-soft);font-size:13px;}
 .iv-list .iv-meta b{color:var(--ink);}
@@ -82,7 +87,9 @@ h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .tcard .tmeta .addr{color:var(--ink-mute);font-size:12px;font-family:var(--ff-mono);}
 .tcard .tmeta .date{color:var(--ink-mute);font-size:12px;margin-left:auto;}
 .tcard .body{white-space:pre-wrap;word-break:break-word;color:var(--ink);font-size:13.5px;line-height:1.6;}
-.back-link{display:inline-block;margin-bottom:14px;color:var(--ink-soft);font-weight:600;}
+.back-link{display:inline-flex;align-items:center;padding:10px 8px;margin:0 0 8px -8px;
+  color:var(--ink-soft);font-weight:600;min-height:40px;box-sizing:border-box;}
+.back-link:hover{color:var(--ink);text-decoration:none;}
 .tsubj{font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0 0 4px;}
 .tbox{color:var(--ink-mute);font-size:12px;margin-bottom:16px;}
 .cab-reply{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
@@ -138,7 +145,7 @@ def login_page(error: str = "") -> str:
 
 def _fmt_local(dt, tz=None) -> str:
     if not dt:
-        return "—"
+        return "время не указано"     # match the manager portal's convention (not a bare «—»)
     try:
         z = tz or slots.DEFAULT_TZ
         return slots.to_local(dt, z).strftime("%d.%m.%Y %H:%M") + f" ({slots.tz_label(z)})"
@@ -154,15 +161,17 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
         company = escape(iv.get("company") or "")
         when = escape(_fmt_local(iv.get("start_ts"), rtz))
         h = iv.get("source_message_hash")
-        link = (f'<a href="/cabinet/thread?hash={escape(str(h))}">Переписка</a>'
-                if h else '<a href="/cabinet/inbox">Почта</a>')
+        # the WHOLE card is the tap target (a wrapping <a>), not just the small text link
+        href = (f"/cabinet/thread?hash={escape(str(h), quote=True)}" if h else "/cabinet/inbox")
+        open_lbl = "Переписка →" if h else "Почта →"
         meta = mailbox + (f' · <b>{company}</b>' if company else "")
         li_open = '<li style="opacity:.62;">' if past else '<li>'
         tag = ('<span style="color:var(--ink-mute);font-weight:600;font-size:12px;">'
                ' · прошло</span>' if past else "")
-        return (f'{li_open}<span class="iv-when">{when}{tag}</span>'
+        return (f'{li_open}<a class="iv-card-link" href="{href}">'
+                f'<span class="iv-when">{when}{tag}</span>'
                 f'<span class="iv-meta">{meta}</span>'
-                f'<span>{link}</span></li>')
+                f'<span class="iv-open">{open_lbl}</span></a></li>')
 
     # An assigned собес whose slot time has already passed (but that was never cancelled)
     # is STILL shown — the operator week grid can book an already-passed day of the current

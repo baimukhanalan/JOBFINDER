@@ -41,6 +41,7 @@ main{max-width:940px;margin:0 auto;padding:20px 18px;}
 .mg-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
 .mg-stat{flex:1 1 120px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 15px;}
 .mg-stat b{display:block;font-size:24px;font-weight:800;letter-spacing:-.02em;color:var(--ink);font-family:var(--ff-mono);}
+.mg-of{font-size:13px;font-weight:600;color:var(--ink-mute);font-family:var(--ff);letter-spacing:0;}
 .mg-stat span{font-size:12px;color:var(--ink-mute);font-weight:600;}
 .mg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px;margin-bottom:14px;}
 .mg-card>h3{margin:0 0 3px;font-size:15px;font-weight:700;}
@@ -103,7 +104,7 @@ main{max-width:940px;margin:0 auto;padding:20px 18px;}
 .mg-own-foot{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:9px;}
 .mg-own-act{margin:0;}
 /* team-assigned collapsible */
-.mg-details>summary{cursor:pointer;font-size:15px;font-weight:700;list-style:none;user-select:none;display:inline-flex;align-items:center;gap:7px;}
+.mg-details>summary{cursor:pointer;font-size:15px;font-weight:700;list-style:none;user-select:none;display:flex;width:100%;align-items:center;gap:7px;padding:8px 0;}
 .mg-details>summary::before{content:'▸';color:var(--ink-mute);font-size:12px;}
 .mg-details[open]>summary::before{content:'▾';}
 .mg-teamlist{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
@@ -305,9 +306,15 @@ def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: 
             team.append((s["id"], s.get("name") or s.get("login") or "—", False))
     as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
 
+    # «В пуле» shows the FILTERED count («2 из 18») when a filter narrows the list, so the
+    # gap between the stat and the visible cards never reads as "where did the rest go?".
+    pool_total = counts.get("pool", 0)
+    pool_shown = counts.get("pool_shown", pool_total)
+    pool_stat = (f'{pool_shown} <span class="mg-of">из {pool_total}</span>'
+                 if counts.get("filtered") and pool_shown != pool_total else str(pool_total))
     stats = (
         '<div class="mg-stats">'
-        f'<div class="mg-stat"><b>{counts.get("pool", 0)}</b><span>В пуле</span></div>'
+        f'<div class="mg-stat"><b>{pool_stat}</b><span>В пуле</span></div>'
         f'<div class="mg-stat"><b>{counts.get("own", 0)}</b><span>Мои собесы</span></div>'
         f'<div class="mg-stat"><b>{counts.get("team", 0)}</b><span>У команды</span></div>'
         f'<div class="mg-stat"><b>{counts.get("team_size", 0)}</b><span>В команде</span></div>'

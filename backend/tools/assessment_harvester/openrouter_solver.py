@@ -1,9 +1,9 @@
-"""Live VISION/TEXT solver via the OpenAI API — used by the harvester for items the local text model
-can't answer (figural odd-one-out, image/diagram cognitive, hard knowledge MCQs). The answer is banked
-keyed to the question+media so a recurrence REPLAYS it (the harvester's normal replay path).
+"""Live VISION/TEXT solver via the OpenRouter API — the PREFERRED cognitive solver for the harvester
+(the direct OpenAI account is low on credits). OpenRouter is OpenAI-compatible (chat/completions with
+`image_url` blocks), so this mirrors openai_solver but points at OpenRouter and reads a DEDICATED key.
 
-Key is read from OPENAI_API_KEY (env, else parsed from backend/.env). NEVER logged. This module is only
-imported when a live solve is needed, so the harvester runs unchanged when no key is present.
+Key from HARVEST_OPENROUTER_KEY (env, else parsed from backend/.env). NEVER logged. Imported only when a
+live solve is needed; the adapter falls back to Anthropic/OpenAI/local when no key is present.
 """
 from __future__ import annotations
 
@@ -14,21 +14,26 @@ import re
 
 import httpx
 
-_API = "https://api.openai.com/v1/chat/completions"
-_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")  # higher rate limits + cheaper; ok for these MCQs
-_TEXT_MODEL = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+_API = "https://openrouter.ai/api/v1/chat/completions"
+# OpenRouter model IDs are "<vendor>/<model>". gpt-4o-mini keeps parity with the proven OpenAI path
+# (cheap + vision); override with OPENROUTER_VISION_MODEL / OPENROUTER_TEXT_MODEL for stronger models
+# (e.g. openai/gpt-4o, google/gemini-2.0-flash-001, anthropic/claude-sonnet-4).
+_VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini")
+_TEXT_MODEL = os.getenv("OPENROUTER_TEXT_MODEL", "openai/gpt-4o-mini")
 
 
 def _key() -> str | None:
-    k = os.getenv("OPENAI_API_KEY")
-    if k:
+    k = os.getenv("HARVEST_OPENROUTER_KEY")
+    if k and k.strip():
         return k.strip()
     # fall back to parsing backend/.env (the harvester process may not export it)
     try:
         env = pathlib.Path(__file__).resolve().parents[2] / ".env"
         for line in env.read_text().splitlines():
-            if line.startswith("OPENAI_API_KEY="):
-                return line.split("=", 1)[1].strip()
+            if line.startswith("HARVEST_OPENROUTER_KEY="):
+                v = line.split("=", 1)[1].strip()
+                if v:
+                    return v
     except Exception:
         pass
     return None
@@ -49,12 +54,14 @@ def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> s
     for attempt in range(6):
         try:
             r = httpx.post(_API, timeout=timeout,
-                           headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                           headers={"Authorization": f"Bearer {key}",
+                                    "Content-Type": "application/json",
+                                    # optional OpenRouter attribution headers (neutral, no stack disclosure)
+                                    "HTTP-Referer": "https://jobs.systeam.kz",
+                                    "X-Title": "assessment-harvester"},
                            json={"model": model, "max_tokens": max_tokens, "temperature": 0,
                                  "messages": [{"role": "user", "content": content}]})
             if r.status_code == 429:
-                # rate-limited (many parallel workers) — back off (honor Retry-After) and retry so the
-                # answer is the CORRECT vision pick, not a placeholder. Self-throttles the whole lane.
                 try:
                     wait = float(r.headers.get("retry-after", "") or 0)
                 except ValueError:
@@ -63,18 +70,24 @@ def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> s
                 time.sleep(min(wait, 40) + random.uniform(0, 1.5))
                 continue
             r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
+            data = r.json()
+            # OpenRouter mirrors the OpenAI shape; guard against a provider error body
+            ch = (data.get("choices") or [])
+            if not ch:
+                log.info("[openrouter] no choices: %s", str(data)[:160])
+                return None
+            return ch[0]["message"]["content"]
         except httpx.HTTPStatusError as e:
             sc = getattr(e.response, "status_code", None)
             if sc == 429 and attempt < 5:
                 time.sleep(min(2 ** attempt, 30) + random.uniform(0, 1.5))
                 continue
-            log.info("[openai] solve failed: %s", str(e)[:160])
+            log.info("[openrouter] solve failed: %s", str(e)[:160])
             return None
         except Exception as exc:
-            log.info("[openai] solve failed: %s", str(exc)[:160])
+            log.info("[openrouter] solve failed: %s", str(exc)[:160])
             return None
-    log.info("[openai] gave up after 429 retries")
+    log.info("[openrouter] gave up after 429 retries")
     return None
 
 
@@ -87,9 +100,7 @@ def _img_data_url(image_path: str) -> str | None:
 
 
 def solve_vision_mcq(image_path: str, n: int, question: str = "", odd_one_out: bool = False) -> int | None:
-    """A screenshot of an N-option multiple-choice question (figural OR text/knowledge). Return the 0-based
-    index of the answer the model picks. `odd_one_out` frames a non-verbal figural item; otherwise a normal
-    'pick the correct answer' knowledge/reasoning item."""
+    """A screenshot of an N-option MCQ (figural OR text/knowledge). Return the 0-based index picked."""
     du = _img_data_url(image_path)
     if not du:
         return None

@@ -464,6 +464,48 @@ class HarverAdapter(Adapter):
             pass
         return False
 
+    # Live Chat Support Simulation: a customer chats and you pick the BEST canned reply from options
+    # labelled "Response 1..N" (like SJT, but a chat roleplay), then Next. Timed. Solve which response is
+    # best via the OpenAI vision model on the screenshot; the customer text + first response give a per-turn
+    # unique question so core's advance check works.
+    _READ_CHAT_JS = """() => {
+      const btns=[...document.querySelectorAll('button,[role=button]')];
+      const resp=btns.filter(b=>/^response\\s*\\d+/i.test((b.innerText||'').trim()));
+      if(resp.length<2) return {is_chat:false, n:resp.length};
+      const rtext=resp.map(b=>(b.innerText||'').trim().slice(0,40));
+      const lines=(document.body.innerText||'').split('\\n').map(s=>s.trim()).filter(Boolean);
+      const cust=lines.filter(t=>/(help|hello|please|can you|could you|\\?|order|return|refund|problem|issue|need|want|broken|wrong|cancel)/i.test(t)
+        && !/^response/i.test(t) && !/skip to main|log out|^help$|view responses|time remaining|open the dialog/i.test(t)
+        && t.length<160).slice(0,3);
+      return {is_chat:true, n:resp.length, q:(cust.join(' ')+' || '+(rtext[0]||'')).slice(0,220)};
+    }"""
+
+    async def _click_chat_response(self, page, k: int) -> bool:
+        """REAL click the k-th (0-based) canned chat reply ('Response k+1 …'). The reply may be a button,
+        role=button, or a styled div — match by leading text across tags + click the clickable ancestor."""
+        try:
+            loc = page.get_by_role("button", name=re.compile(rf"^\s*Response\s*{k + 1}\b", re.I))
+            if await loc.count():
+                await loc.first.click(timeout=3000)
+                return True
+        except Exception:
+            pass
+        try:
+            return bool(await page.evaluate(
+                "(k) => {"
+                " const re=new RegExp('^\\\\s*response\\\\s*'+k+'\\\\b','i');"
+                " const els=[...document.querySelectorAll('button,[role=button],div,li,label,a,span')]"
+                "   .filter(e=>re.test((e.innerText||'').trim()));"
+                " if(!els.length) return false;"
+                " els.sort((a,b)=>((a.innerText||'').length)-((b.innerText||'').length));"
+                " let el=els[0], n=el;"
+                " for(let i=0;i<4&&n;i++){ const cs=getComputedStyle(n);"
+                "   if(n.tagName==='BUTTON'||n.getAttribute('role')==='button'||n.onclick||cs.cursor==='pointer') break;"
+                "   n=n.parentElement; }"
+                " (n||el).click(); return true; }", k + 1))
+        except Exception:
+            return False
+
     async def read_item(self, page) -> dict:
         item = await super().read_item(page)
         try:
@@ -567,6 +609,27 @@ class HarverAdapter(Adapter):
                 item["_harver_jk"] = True
                 item["_jk_n"] = n
                 item["_no_llm_solve"] = True
+        # Live Chat Support Simulation — pick the best canned reply (Response 1..N) to the customer.
+        if (not item.get("_harver_sjt") and not item.get("_harver_pers") and not item.get("_harver_noa")
+                and not item.get("_harver_jk")
+                and ("chat" in tl or "simulation" in tl or "support" in tl)):
+            try:
+                chat = await page.evaluate(self._READ_CHAT_JS)
+            except Exception:
+                chat = {"is_chat": False}
+            if chat.get("is_chat"):
+                n = chat.get("n") or 3
+                q = chat.get("q") or "chat sim"
+                if q[:40] != getattr(self, "_chat_last_q", None):
+                    self._chat_last_q = q[:40]
+                    logger.info("[harver] CHAT probe: n=%s q=%r", n, q[:70])
+                item = dict(item)
+                item["question"] = q
+                item["options"] = [{"text": f"Response {i + 1}", "image": "chat"} for i in range(n)]
+                item["has_video"] = item["has_mic"] = item["has_textarea"] = item["has_audio"] = False
+                item["_harver_chat"] = True
+                item["_chat_n"] = n
+                item["_no_llm_solve"] = True
         # Dump each DISTINCT screen (SPA → same URL; dedup on title + question text) for capture.
         sig = (title + "::" + (item.get("question", "") or "")[:80]).strip().lower()
         seen = getattr(self, "_dumped_sigs", None)
@@ -578,7 +641,8 @@ class HarverAdapter(Adapter):
             # mode — SJT/personality are already understood and don't need per-item shots.
             force = any(k in tl for k in ("exclusion", "noa", "cognitive", "typing", "language",
                                           "reasoning", "numerical", "verbal", "skills", "aptitude",
-                                          "interactive", "video", "logic", "knowledge", "job "))
+                                          "interactive", "video", "logic", "knowledge", "job ",
+                                          "chat", "simulation", "support"))
             await self._dump_controls(page, "read", force_shot=force)
         return item
 
@@ -649,8 +713,12 @@ class HarverAdapter(Adapter):
         question) via the OpenAI vision model. Screenshots the page; returns a 0-based option index, or
         None when vision is unavailable/fails."""
         try:
-            from backend.tools.assessment_harvester import openai_solver
-            if not openai_solver.available():
+            # PREFER OpenRouter (has credits) → Anthropic → OpenAI (low on credits, kept as last resort).
+            from backend.tools.assessment_harvester import (anthropic_solver, openai_solver,
+                                                            openrouter_solver)
+            solver = next((s for s in (openrouter_solver, anthropic_solver, openai_solver)
+                           if s.available()), None)
+            if solver is None:
                 return None
             import asyncio
             import os as _os
@@ -659,7 +727,7 @@ class HarverAdapter(Adapter):
                                 f"harver_vis_{_os.getpid()}_{getattr(self, '_vis_i', 0)}.png")
             self._vis_i = getattr(self, "_vis_i", 0) + 1
             await page.screenshot(path=tmp)
-            idx = await asyncio.to_thread(openai_solver.solve_vision_mcq, tmp, n, question, odd_one_out)
+            idx = await asyncio.to_thread(solver.solve_vision_mcq, tmp, n, question, odd_one_out)
             try:
                 _os.remove(tmp)
             except Exception:
@@ -715,6 +783,24 @@ class HarverAdapter(Adapter):
             logger.info("[harver] JK %s option %d/%d clicked=%s continue=%s", src, pick + 1, n,
                         clicked, cont_ok)
             await page.wait_for_timeout(600)
+            return True
+        if item.get("_harver_chat"):
+            n = int(item.get("_chat_n") or 3)
+            pick = await self._vision_pick(page, n, "customer-service chat: pick the BEST reply to send",
+                                           odd_one_out=False)
+            src = "VISION"
+            if pick is None:
+                self._chat_i = getattr(self, "_chat_i", 0) + 1
+                pick = self._chat_i % n
+                src = "placeholder"
+            clicked = await self._click_chat_response(page, pick)
+            await page.wait_for_timeout(500)
+            # advance the conversation (Next), else the module's generic forward
+            cont_ok = await self._click(page, "Next") or await self._click(page, "Continue") \
+                or await self._click(page, "Send") or await self._forward(page)
+            logger.info("[harver] CHAT %s response %d/%d clicked=%s next=%s", src, pick + 1, n,
+                        clicked, cont_ok)
+            await page.wait_for_timeout(700)
             return True
         if item.get("_harver_pers"):
             n = int(item.get("_pers_n") or 6)

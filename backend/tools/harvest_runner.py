@@ -98,6 +98,11 @@ def _acquire_lock():
         # the server's one local browser / virtmic / camera) does not apply. Use a PER-TAB lock so two
         # tabs run concurrently, while the same tab still can't be double-driven.
         lock_path = f"{LOCK_PATH}.cdp{os.getenv('HARVEST_CDP_TAB_INDEX', 'x')}"
+    elif os.getenv("HARVEST_LOCK_SUFFIX"):
+        # PARALLEL local lane (e.g. the Harver/TTEC mass run): each worker sets a distinct suffix so N
+        # independent local browsers run concurrently (Harver solves via the OpenAI API, not the shared
+        # virtmic, so the single-instance guard isn't needed). Same suffix still can't be double-run.
+        lock_path = f"{LOCK_PATH}.{os.getenv('HARVEST_LOCK_SUFFIX')}"
     f = open(lock_path, "w")
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)

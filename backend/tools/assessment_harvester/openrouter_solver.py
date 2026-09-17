@@ -21,6 +21,11 @@ _API = "https://openrouter.ai/api/v1/chat/completions"
 _VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", "openai/gpt-4o-mini")
 _TEXT_MODEL = os.getenv("OPENROUTER_TEXT_MODEL", "openai/gpt-4o-mini")
 
+# Set once a 402/401 proves the account is unfunded/invalid — after that `available()` is False so the
+# adapter's solver cascade skips OpenRouter (and falls through to the next funded solver) instead of
+# burning a doomed call on every item.
+_DEAD = False
+
 
 def _key() -> str | None:
     k = os.getenv("HARVEST_OPENROUTER_KEY")
@@ -40,7 +45,7 @@ def _key() -> str | None:
 
 
 def available() -> bool:
-    return bool(_key())
+    return bool(_key()) and not _DEAD
 
 
 def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> str | None:
@@ -69,6 +74,14 @@ def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> s
                 wait = wait or min(2 ** attempt, 30)
                 time.sleep(min(wait, 40) + random.uniform(0, 1.5))
                 continue
+            if r.status_code in (401, 402):
+                # unfunded (402 Payment Required) or invalid key (401) — retrying can't help. Disable
+                # OpenRouter for the rest of this process so the cascade falls through to another solver.
+                global _DEAD
+                if not _DEAD:
+                    log.info("[openrouter] disabled: HTTP %s (account unfunded / key invalid)", r.status_code)
+                _DEAD = True
+                return None
             r.raise_for_status()
             data = r.json()
             # OpenRouter mirrors the OpenAI shape; guard against a provider error body

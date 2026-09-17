@@ -740,12 +740,13 @@ class HarverAdapter(Adapter):
         question) via the OpenAI vision model. Screenshots the page; returns a 0-based option index, or
         None when vision is unavailable/fails."""
         try:
-            # PREFER OpenRouter (has credits) → Anthropic → OpenAI (low on credits, kept as last resort).
+            # CASCADE OpenRouter → Anthropic → OpenAI: try each available solver until one returns an
+            # index. A solver that's unfunded (OpenRouter 402) self-disables via available()=False after
+            # its first payment error, so the next call skips it and reaches a solver that still has credit.
             from backend.tools.assessment_harvester import (anthropic_solver, openai_solver,
                                                             openrouter_solver)
-            solver = next((s for s in (openrouter_solver, anthropic_solver, openai_solver)
-                           if s.available()), None)
-            if solver is None:
+            solvers = [s for s in (openrouter_solver, anthropic_solver, openai_solver) if s.available()]
+            if not solvers:
                 return None
             import asyncio
             import os as _os
@@ -754,7 +755,11 @@ class HarverAdapter(Adapter):
                                 f"harver_vis_{_os.getpid()}_{getattr(self, '_vis_i', 0)}.png")
             self._vis_i = getattr(self, "_vis_i", 0) + 1
             await page.screenshot(path=tmp)
-            idx = await asyncio.to_thread(solver.solve_vision_mcq, tmp, n, question, odd_one_out)
+            idx = None
+            for solver in solvers:
+                idx = await asyncio.to_thread(solver.solve_vision_mcq, tmp, n, question, odd_one_out)
+                if idx is not None:
+                    break
             try:
                 _os.remove(tmp)
             except Exception:
@@ -813,6 +818,23 @@ class HarverAdapter(Adapter):
             return True
         if item.get("_harver_chat"):
             n = int(item.get("_chat_n") or 3)
+            # Clicking a reply doesn't always advance the sim to completion — it can cycle a few customer
+            # messages forever (core's signature keeps changing, so its no-advance guard never fires). Cap
+            # the module so a non-completing chat can't consume the whole session: after a ceiling (or a
+            # clearly-stuck same-prompt streak) STOP answering and try to LEAVE the module (Skip/Submit),
+            # then return False so core moves on instead of looping.
+            self._chat_turns = getattr(self, "_chat_turns", 0) + 1
+            q0 = (item.get("question") or "")[:40]
+            self._chat_stuck = (getattr(self, "_chat_stuck", 0) + 1
+                                if q0 and q0 == getattr(self, "_chat_prev_q", None) else 0)
+            self._chat_prev_q = q0
+            if self._chat_turns > 12 or self._chat_stuck >= 4:
+                exited = (await self._click(page, "Skip") or await self._click(page, "Submit")
+                          or await self._click(page, "Finish") or await self._click(page, "End")
+                          or await self._click(page, "Done") or await self._forward(page))
+                logger.info("[harver] CHAT giving up after %d turns (stuck=%d) exited=%s",
+                            self._chat_turns, self._chat_stuck, exited)
+                return False
             pick = await self._vision_pick(page, n, "customer-service chat: pick the BEST reply to send",
                                            odd_one_out=False)
             src = "VISION"
@@ -822,11 +844,12 @@ class HarverAdapter(Adapter):
                 src = "placeholder"
             clicked = await self._click_chat_response(page, pick)
             await page.wait_for_timeout(500)
-            # advance the conversation (Next), else the module's generic forward
+            # advance the conversation (Next/Send/Submit), else the module's generic forward
             cont_ok = await self._click(page, "Next") or await self._click(page, "Continue") \
-                or await self._click(page, "Send") or await self._forward(page)
-            logger.info("[harver] CHAT %s response %d/%d clicked=%s next=%s", src, pick + 1, n,
-                        clicked, cont_ok)
+                or await self._click(page, "Send") or await self._click(page, "Submit") \
+                or await self._forward(page)
+            logger.info("[harver] CHAT %s response %d/%d clicked=%s next=%s turn=%d", src, pick + 1, n,
+                        clicked, cont_ok, self._chat_turns)
             await page.wait_for_timeout(700)
             return True
         if item.get("_harver_pers"):

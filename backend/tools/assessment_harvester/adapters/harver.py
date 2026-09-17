@@ -743,9 +743,12 @@ class HarverAdapter(Adapter):
             # CASCADE OpenRouter → Anthropic → OpenAI: try each available solver until one returns an
             # index. A solver that's unfunded (OpenRouter 402) self-disables via available()=False after
             # its first payment error, so the next call skips it and reaches a solver that still has credit.
-            from backend.tools.assessment_harvester import (anthropic_solver, openai_solver,
-                                                            openrouter_solver)
-            solvers = [s for s in (openrouter_solver, anthropic_solver, openai_solver) if s.available()]
+            from backend.tools.assessment_harvester import (anthropic_solver, claude_cli_solver,
+                                                            openai_solver, openrouter_solver)
+            # claude_cli first when enabled: it runs on the local Claude subscription (no API credit), so
+            # it's the free way to actually SOLVE (not placeholder) when the paid keys are out of balance.
+            solvers = [s for s in (claude_cli_solver, openrouter_solver, anthropic_solver, openai_solver)
+                       if s.available()]
             if not solvers:
                 return None
             import asyncio

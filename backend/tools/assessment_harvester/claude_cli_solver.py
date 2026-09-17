@@ -15,8 +15,30 @@ import re
 import shutil
 import subprocess
 
-_MODEL = os.getenv("HARVEST_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
-_TIMEOUT = float(os.getenv("HARVEST_CLAUDE_TIMEOUT", "90"))
+def _env(name: str, default: str = "") -> str:
+    """Read a setting from the environment, else from backend/.env — so the mass run can be toggled live
+    (a fresh candidate subprocess re-reads .env at import) without restarting the orchestrator."""
+    v = os.getenv(name)
+    if v is not None and v != "":
+        return v
+    try:
+        for line in (pathlib.Path(__file__).resolve().parents[2] / ".env").read_text().splitlines():
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return default
+
+
+def _model() -> str:
+    return _env("HARVEST_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+
+
+def _timeout() -> float:
+    try:
+        return float(_env("HARVEST_CLAUDE_TIMEOUT", "90"))
+    except ValueError:
+        return 90.0
 
 
 def _bin() -> str | None:
@@ -32,10 +54,10 @@ def _bin() -> str | None:
 def available() -> bool:
     # OPT-IN: the mass run only uses this when explicitly enabled (it draws on the Claude subscription's
     # usage quota, thousands of calls over a full run), and only if the CLI is actually installed.
-    return os.getenv("HARVEST_CLAUDE_SOLVER") == "1" and bool(_bin())
+    return _env("HARVEST_CLAUDE_SOLVER") == "1" and bool(_bin())
 
 
-def _run(prompt: str, timeout: float = _TIMEOUT) -> str | None:
+def _run(prompt: str, timeout: float | None = None) -> str | None:
     b = _bin()
     if not b:
         return None
@@ -45,9 +67,9 @@ def _run(prompt: str, timeout: float = _TIMEOUT) -> str | None:
     env["PATH"] = os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
     try:
         p = subprocess.run(
-            [b, "-p", prompt, "--allowedTools", "Read", "--model", _MODEL],
+            [b, "-p", prompt, "--allowedTools", "Read", "--model", _model()],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, timeout=timeout, text=True)
+            env=env, timeout=timeout or _timeout(), text=True)
         out = (p.stdout or "").strip()
         if not out:
             log.info("[claude-cli] empty output (rc=%s): %s", p.returncode, (p.stderr or "")[:120])

@@ -67,6 +67,21 @@ def _save() -> None:
     bank = _load()
     try:
         _os.makedirs(_os.path.dirname(_BANK_PATH), exist_ok=True)
+        # PRESERVE answer_keys another process wrote since we cached our copy. Each candidate subprocess
+        # holds a module-level `_BANK` loaded at its start; without this, saving that stale copy would
+        # DELETE answer_keys added on disk afterwards (e.g. an offline Sonnet-agent pre-solve merge) —
+        # exactly the clobber that wiped a merge mid-run. A key is only ever ADDED back, never removed.
+        try:
+            with open(_BANK_PATH, encoding="utf-8") as f:
+                disk = _json.load(f)
+            ditems = disk.get("items", {}) if isinstance(disk, dict) else {}
+            mitems = bank.get("items", {})
+            for k, de in ditems.items():
+                dk = de.get("answer_key")
+                if dk and k in mitems and not mitems[k].get("answer_key"):
+                    mitems[k]["answer_key"] = dk
+        except Exception:
+            pass
         tmp = f"{_BANK_PATH}.{_os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             _json.dump(bank, f, ensure_ascii=False)

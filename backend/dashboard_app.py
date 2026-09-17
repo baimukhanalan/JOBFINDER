@@ -2252,6 +2252,18 @@ except Exception:
     logging.getLogger(__name__).warning("interview cabinet routes unavailable", exc_info=True)
 
 
+# Manager («Управляющий») portal under /manage: the middle tier (admin > manager >
+# employee). A manager sees the interviews the admin allocated to him, adds subordinates,
+# and assigns from his pool to himself/subordinates. Confined to /manage/* (+ /cabinet/*)
+# by the AdminAuthMiddleware; admins read-through via /manage?as=<manager_id>. Guarded like
+# the other interview routers so a broken import degrades to "no portal", never a boot fail.
+try:
+    from backend.interviews.routes_manage import router as iv_manage_router
+    app.include_router(iv_manage_router)
+except Exception:
+    logging.getLogger(__name__).warning("interview manager routes unavailable", exc_info=True)
+
+
 # In-app admin login + a fail-closed auth gate over every non-allowlisted route
 # (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
 # sits in front for now.

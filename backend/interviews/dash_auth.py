@@ -120,9 +120,15 @@ def _admin_from_request(request: Request) -> dict | None:
 
 
 def _home_for(resp: dict) -> str:
-    """Where a freshly-authenticated / misrouted session belongs: admins own the whole
-    operator dashboard (/), employees are confined to their cabinet (/cabinet)."""
-    return "/" if resp.get("role") == "admin" else "/cabinet"
+    """Where a freshly-authenticated / misrouted session belongs, per role:
+    admins own the whole operator dashboard (/), managers land in their management portal
+    (/manage), employees are confined to their cabinet (/cabinet)."""
+    role = resp.get("role")
+    if role == "admin":
+        return "/"
+    if role == "manager":
+        return "/manage"
+    return "/cabinet"
 
 
 def _public_asset(path: str) -> bool:
@@ -143,13 +149,25 @@ def _employee_allowed(path: str) -> bool:
     return path == "/cabinet" or path.startswith("/cabinet/")
 
 
+def _manager_allowed(path: str) -> bool:
+    """The manager WHITELIST: a manager may reach ONLY their own management portal
+    (/manage/*) PLUS the interviewer cabinet (/cabinet/*) — a manager also attends
+    interviews assigned to himself, so he needs the cabinet (its ownership guard already
+    confines him to HIS assigned personas). Everything else (the full admin dashboard,
+    /users, /mail, /catalog, …) is blocked at the door → redirected to /manage. Isolation
+    rests on this single positive check, like the employee whitelist."""
+    return (path == "/manage" or path.startswith("/manage/")
+            or _employee_allowed(path))
+
+
 class AdminAuthMiddleware(BaseHTTPMiddleware):
-    """Fail-closed role gate over the merged dashboard:
+    """Fail-closed role gate over the merged dashboard (hierarchy admin > manager > employee):
       * ALLOWLIST paths (login/logout/favicon + self-authenticating extension endpoints)
         pass without a session.
       * no valid session            -> 303 /login
-      * role=='admin'  (+active)    -> full access
-      * role=='employee' (+active)  -> ONLY /cabinet/* (whitelist), else 303 /cabinet
+      * role=='admin'   (+active)   -> full access
+      * role=='manager' (+active)   -> ONLY /manage/* + /cabinet/* (whitelist), else 303 /manage
+      * role=='employee'(+active)   -> ONLY /cabinet/* (whitelist), else 303 /cabinet
     """
     async def dispatch(self, request, call_next):
         if request.url.path in ALLOWLIST or _public_asset(request.url.path):
@@ -162,8 +180,14 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             resp = None
         if resp is None:
             return RedirectResponse("/login", status_code=303)
-        if resp.get("role") == "admin":
+        role = resp.get("role")
+        if role == "admin":
             return await call_next(request)
+        # manager: confined to the management portal + the interviewer cabinet
+        if role == "manager":
+            if _manager_allowed(request.url.path):
+                return await call_next(request)
+            return RedirectResponse("/manage", status_code=303)
         # employee: confined to the cabinet whitelist
         if _employee_allowed(request.url.path):
             return await call_next(request)

@@ -12,7 +12,7 @@ import sys
 
 from backend.interviews import auth, db
 
-ROLES = ("admin", "employee")
+ROLES = ("admin", "manager", "employee")
 
 
 def hhmm_to_min(hhmm: str) -> int:
@@ -100,6 +100,27 @@ def cmd_setrole(args: argparse.Namespace) -> None:
     print(f"Set role for {args.login} to {args.role}")
 
 
+def cmd_setmanager(args: argparse.Namespace) -> None:
+    """Attach a responsible to a supervising manager (or detach with --manager '')."""
+    responsible = db.get_responsible_by_login(args.login)
+    if not responsible:
+        print(f"No such responsible: {args.login}", file=sys.stderr)
+        raise SystemExit(1)
+    if not (args.manager or "").strip():
+        db.set_manager(responsible["id"], None)
+        print(f"Detached {args.login} from any manager")
+        return
+    manager = db.get_responsible_by_login(args.manager)
+    if not manager:
+        print(f"No such manager login: {args.manager}", file=sys.stderr)
+        raise SystemExit(1)
+    if manager.get("role") != "manager":
+        print(f"{args.manager} is not a manager (role={manager.get('role')})", file=sys.stderr)
+        raise SystemExit(1)
+    db.set_manager(responsible["id"], manager["id"])
+    print(f"Attached {args.login} to manager {args.manager} (id={manager['id']})")
+
+
 def cmd_setavail(args: argparse.Namespace) -> None:
     if not (0 <= args.dow <= 6):
         print(f"Invalid --dow {args.dow}: must be 0-6 (Monday=0 .. Sunday=6)",
@@ -156,10 +177,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_link.add_argument("--chat-id", type=int, required=True, dest="chat_id")
     p_link.set_defaults(func=cmd_link)
 
-    p_setrole = sub.add_parser("setrole", help="Set a responsible's role (admin|employee).")
+    p_setrole = sub.add_parser("setrole", help="Set a responsible's role (admin|manager|employee).")
     p_setrole.add_argument("--login", required=True)
     p_setrole.add_argument("--role", required=True)
     p_setrole.set_defaults(func=cmd_setrole)
+
+    p_setmgr = sub.add_parser("setmanager",
+                              help="Attach a responsible to a supervising manager (empty --manager detaches).")
+    p_setmgr.add_argument("--login", required=True)
+    p_setmgr.add_argument("--manager", default="", help="the manager's login (empty to detach)")
+    p_setmgr.set_defaults(func=cmd_setmanager)
 
     p_setavail = sub.add_parser("setavail", help="Set one weekday's availability window.")
     p_setavail.add_argument("--login", required=True)

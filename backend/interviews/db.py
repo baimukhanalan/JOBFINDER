@@ -19,6 +19,17 @@ DOW_COUNT = 7
 
 
 # ---- schema ----------------------------------------------------------------------
+def _has_column(cur, table: str, column: str) -> bool:
+    """True if `table.column` already exists — the information_schema check that gates
+    every additive ALTER (repo DDL rule: never a bare ALTER; add only a genuinely-missing
+    column, under a bounded lock_timeout, so a nightly/boot ensure_schema can't hostage the
+    table)."""
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name=%s AND column_name=%s", (table, column))
+    return cur.fetchone() is not None
+
+
 def ensure_schema() -> None:
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("""
@@ -88,16 +99,38 @@ def ensure_schema() -> None:
                     "ON iv_interviews (responsible_id, start_ts) "
                     "WHERE responsible_id IS NOT NULL AND status <> 'cancelled';")
 
+        # ---- manager tier (role 'manager'; hierarchy admin > manager > employee) -------
+        # A subordinate's supervising manager, and which manager an interview is
+        # allocated to. Both nullable self-FKs on iv_responsibles, added only when
+        # genuinely missing and under a bounded lock (SET LOCAL is transaction-scoped; the
+        # mail_db pool commits per-_cur block, so it applies to the ALTER that follows).
+        if not _has_column(cur, "iv_responsibles", "manager_id"):
+            cur.execute("SET LOCAL lock_timeout='15s'")
+            cur.execute("ALTER TABLE iv_responsibles "
+                        "ADD COLUMN manager_id INTEGER REFERENCES iv_responsibles(id)")
+        if not _has_column(cur, "iv_interviews", "manager_id"):
+            cur.execute("SET LOCAL lock_timeout='15s'")
+            cur.execute("ALTER TABLE iv_interviews "
+                        "ADD COLUMN manager_id INTEGER REFERENCES iv_responsibles(id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS iv_responsibles_manager_idx "
+                    "ON iv_responsibles (manager_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_manager_idx "
+                    "ON iv_interviews (manager_id);")
+
 
 # ---- responsibles ------------------------------------------------------------------
 def add_responsible(login: str, password_hash: str, name: str, tz: str = "UTC",
-                    role: str = "employee") -> int:
-    """Insert a new responsible. Raises psycopg2.IntegrityError on a duplicate login."""
+                    role: str = "employee", manager_id: int | None = None) -> int:
+    """Insert a new responsible. Raises psycopg2.IntegrityError on a duplicate login.
+
+    `manager_id` (optional) links a subordinate to their supervising manager (the manager
+    tier): a manager creating an employee passes their own id, so the employee shows up in
+    the manager's portal and only that manager (or an admin) may assign their interviews."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(
-            "INSERT INTO iv_responsibles (login, password_hash, name, tz, role) "
-            "VALUES (%s,%s,%s,%s,%s) RETURNING id",
-            (login, password_hash, name, tz, role))
+            "INSERT INTO iv_responsibles (login, password_hash, name, tz, role, manager_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (login, password_hash, name, tz, role, manager_id))
         return cur.fetchone()[0]
 
 
@@ -168,10 +201,42 @@ def set_active(rid: int, active: bool) -> None:
 
 
 def set_role(rid: int, role: str) -> None:
-    """Set a responsible's role ('admin' | 'employee') for the upcoming unified login."""
+    """Set a responsible's role ('admin' | 'manager' | 'employee'). Hierarchy is
+    admin > manager > employee (see dash_auth for the access gate per role)."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_responsibles SET role=%s WHERE id=%s",
                     (role, rid))
+
+
+def set_manager(rid: int, manager_id: int | None) -> None:
+    """Set (or clear, with None) which manager supervises this responsible. A subordinate
+    with a manager appears in that manager's portal; the manager (or an admin) may assign
+    their interviews. Clearing it (None) detaches them back to the admin's direct pool."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET manager_id=%s WHERE id=%s",
+                    (manager_id, rid))
+
+
+def subordinates(manager_id: int, active_only: bool = True) -> list[dict]:
+    """Every responsible whose manager_id is `manager_id` (a manager's team), ordered by id."""
+    sql = "SELECT * FROM iv_responsibles WHERE manager_id=%s"
+    if active_only:
+        sql += " AND active=TRUE"
+    sql += " ORDER BY id"
+    with mail_db._cur() as cur:
+        cur.execute(sql, (manager_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def list_managers(active_only: bool = True) -> list[dict]:
+    """All responsibles with role='manager'."""
+    sql = "SELECT * FROM iv_responsibles WHERE role='manager'"
+    if active_only:
+        sql += " AND active=TRUE"
+    sql += " ORDER BY id"
+    with mail_db._cur() as cur:
+        cur.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
 
 
 def interview_count(rid: int) -> int:
@@ -349,6 +414,101 @@ def assignments_for_mailboxes(mailboxes) -> dict:
         "start_ts": r.get("start_ts"),
         "thread_key": r.get("thread_key") or "",
     } for r in rows}
+
+
+# ---- manager tier: allocation + delegated assignment -----------------------------
+# An "interview" in the delegation model is one iv_interviews row per persona mailbox:
+#   * allocated to a manager     → manager_id set, status='pool', responsible_id NULL
+#   * assigned by that manager   → responsible_id set (self or a subordinate), status='assigned'
+# The pool of allocatable interviews is the set of persona mailboxes with an interview
+# invitation (mail_index kind='interview'); a mailbox is "handled" (out of the free pool)
+# once it has ANY non-cancelled iv_interviews row — a delegation row OR a direct «Собес»
+# booking — so the two paths never double-serve the same interview.
+def handled_pool_mailboxes() -> set:
+    """Persona mailboxes that already have a non-cancelled interview row (delegated OR
+    directly booked) — excluded from the free/unallocated pool the admin splits."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("SELECT DISTINCT mailbox FROM iv_interviews WHERE status <> 'cancelled'")
+        return {r[0] for r in cur.fetchall()}
+
+
+def allocate_interview(mailbox: str, manager_id: int, company: str = "",
+                       jobid: str = "", subject: str = "",
+                       source_message_hash: str = "") -> int:
+    """Allocate one pool interview (a persona mailbox) to a manager: insert an unassigned
+    delegation row (status='pool', responsible_id NULL). `subject` is stashed in notes for
+    display. Returns the new row id. The caller guarantees the mailbox is unallocated."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(
+            "INSERT INTO iv_interviews "
+            "(mailbox, thread_key, company, jobid, responsible_id, manager_id, status, "
+            " source_message_hash, notes, announced) "
+            "VALUES (%s,'',%s,%s,NULL,%s,'pool',%s,%s,TRUE) RETURNING id",
+            (mailbox, company, jobid, manager_id, source_message_hash, subject))
+        return cur.fetchone()[0]
+
+
+def manager_interviews(manager_id: int) -> list[dict]:
+    """Every non-cancelled interview allocated to this manager (pool + assigned), newest
+    first. The spine of the manager portal + the admin read-through."""
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT * FROM iv_interviews WHERE manager_id=%s AND status <> 'cancelled' "
+            "ORDER BY created_at DESC, id DESC", (manager_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def interview_by_id(iid: int) -> dict | None:
+    with mail_db._cur() as cur:
+        cur.execute("SELECT * FROM iv_interviews WHERE id=%s", (iid,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def manager_assign_interview(iid: int, responsible_id: int,
+                             start_ts: datetime | None = None,
+                             end_ts: datetime | None = None) -> None:
+    """Assign (or reassign) an allocated interview to an interviewer (the manager himself or
+    a subordinate). Sets responsible_id + status='assigned' and re-arms the notifier
+    (announced=FALSE). `start_ts` is optional — an interview may be assigned before its exact
+    time is fixed (it then shows «время не указано» until scheduled). Raises
+    psycopg2.IntegrityError on a start_ts double-book (the partial unique index)."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(
+            "UPDATE iv_interviews SET responsible_id=%s, start_ts=%s, end_ts=%s, "
+            "status='assigned', announced=FALSE WHERE id=%s",
+            (responsible_id, start_ts, end_ts, iid))
+
+
+def manager_unassign_interview(iid: int) -> None:
+    """Pull an assigned interview back into the manager's unassigned pool (clears the
+    interviewer + time, status='pool'). The allocation to the manager is kept."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(
+            "UPDATE iv_interviews SET responsible_id=NULL, start_ts=NULL, end_ts=NULL, "
+            "status='pool', announced=TRUE WHERE id=%s", (iid,))
+
+
+def deallocate_interview(iid: int) -> None:
+    """Remove an UNASSIGNED delegation row (admin returns it to the global free pool). Only
+    a pool row (never assigned) is deleted; an assigned one must be unassigned first."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("DELETE FROM iv_interviews WHERE id=%s AND status='pool' "
+                    "AND responsible_id IS NULL", (iid,))
+
+
+def assigned_load(rids) -> dict:
+    """{responsible_id: count of its non-cancelled ASSIGNED interviews} over the given ids —
+    the per-subordinate load shown in the manager portal. Empty input → {}."""
+    ids = [r for r in (rids or []) if r]
+    if not ids:
+        return {}
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(
+            "SELECT responsible_id, COUNT(*) FROM iv_interviews "
+            "WHERE responsible_id = ANY(%s) AND status <> 'cancelled' "
+            "GROUP BY responsible_id", (ids,))
+        return {r[0]: int(r[1]) for r in cur.fetchall()}
 
 
 def booked_intervals(rid: int, since: datetime, until: datetime) -> list[tuple]:

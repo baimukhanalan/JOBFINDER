@@ -84,8 +84,23 @@ _CSS = """
 .u-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center}
 /* settings blocks */
 .u-set label{font-size:12px;font-weight:600;color:var(--ink-soft);display:block;margin:0 0 6px}
-.u-set input{width:100%;margin-bottom:9px}
-.u-rolebtns{display:flex;gap:8px;flex-wrap:wrap}
+.u-set input,.u-set select{width:100%;margin-bottom:9px}
+.u-rolebtns{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.u-rolebtns form{margin:0}
+.u-roleform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.u-roleform select{min-width:150px}
+/* delegation / allocation card */
+.u-alloc{display:flex;flex-direction:column;gap:12px}
+.u-alloc-list{display:flex;flex-direction:column;gap:8px}
+.u-alloc-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;font-weight:600}
+.u-alloc-nm{flex:1 1 200px;font-size:13.5px;color:var(--ink)}
+.u-alloc-row input{width:110px;padding:9px 10px;text-align:center}
+.u-alloc button{align-self:flex-start}
+.u-alloc-sub{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.u-alloc-sub h4{margin:0 0 10px;font-size:13.5px;font-weight:700}
+.u-alloc-send{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.u-alloc-send select{flex:1 1 200px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+@media(max-width:560px){.u-alloc-send select{flex:1 1 100%}.u-alloc-send button{flex:1 1 100%}}
 @media(max-width:760px){.u-h1{font-size:23px}}
 </style>
 """
@@ -99,6 +114,8 @@ def _min_to_hhmm(m) -> str:
 def _role_tag(role: str) -> str:
     if role == "admin":
         return '<span class="u-tag" style="color:#b45309;background:#fef3c7">админ</span>'
+    if role == "manager":
+        return '<span class="u-tag" style="color:#6d28d9;background:#ede9fe">управляющий</span>'
     return '<span class="u-tag" style="color:#3730a3;background:#e0e7ff">интервьюер</span>'
 
 
@@ -174,15 +191,84 @@ def _week_calendar(interviews: list[dict], tz, monday) -> str:
             f"<div class='u-cal'>{''.join(cols)}</div>")
 
 
+def _manager_options(managers: list[dict], selected=None, blank_label: str = "— не выбран —") -> str:
+    opts = [f"<option value=''>{escape(blank_label)}</option>"]
+    for m in managers:
+        sel = " selected" if selected is not None and m["id"] == selected else ""
+        opts.append(f"<option value='{m['id']}'{sel}>{escape(m.get('name') or '')} "
+                    f"(@{escape(m.get('login') or '')})</option>")
+    return "".join(opts)
+
+
+def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
+                   mgr_alloc: dict) -> str:
+    """The admin delegation tools: split the free interview pool across managers, and send a
+    specific interview to a specific manager. Rendered only when at least one manager exists."""
+    if not managers:
+        return ("<div class='u-card'><h3>Делегирование интервью</h3>"
+                "<p class='u-chint'>Чтобы делить интервью, сначала добавьте хотя бы одного "
+                "пользователя с ролью «управляющий» (в форме выше).</p></div>")
+    # split rows: one count input per manager
+    split_rows = []
+    for m in managers:
+        a = mgr_alloc.get(m["id"], {})
+        got = f" · выделено: {a.get('total', 0)}" if a else ""
+        split_rows.append(
+            "<label class='u-alloc-row'>"
+            f"<span class='u-alloc-nm'>{escape(m.get('name') or '')} "
+            f"<span class='u-login'>@{escape(m.get('login') or '')}</span>{escape(got)}</span>"
+            f"<input type='number' name='count_{m['id']}' min='0' step='1' placeholder='0' inputmode='numeric'>"
+            "</label>")
+    manager_opts = _manager_options(managers, blank_label="— выберите управляющего —")
+    # send-one: a dropdown of the freshest pool interviews + a manager picker
+    send_opts = []
+    for r in pool_rows:
+        cand = (r.get("mailbox") or "").split("@")[0]
+        subj = (r.get("subject") or "").strip()
+        label = cand + (f" · {subj[:48]}" if subj else "")
+        send_opts.append(f"<option value='{escape(r.get('mailbox') or '', quote=True)}'>{escape(label)}</option>")
+    send_block = ""
+    if pool_rows:
+        send_block = (
+            "<div class='u-alloc-sub'><h4>Отправить конкретное интервью</h4>"
+            "<form class='u-alloc-send' method='post' action='/users/allocate/send'>"
+            f"<select name='mailbox' aria-label='Интервью'>{''.join(send_opts)}</select>"
+            f"<select name='manager_id' aria-label='Управляющий'>{manager_opts}</select>"
+            "<button class='hbtn' type='submit'>Отправить</button></form></div>")
+    return (
+        "<div class='u-card'><h3>Делегирование интервью</h3>"
+        f"<p class='u-chint'>В свободном пуле сейчас <b>{pool_count}</b> интервью "
+        "(персоны с приглашением на собеседование, ещё не переданные никому). Разделите их "
+        "между управляющими — поровну или как угодно.</p>"
+        "<form class='u-alloc' method='post' action='/users/allocate/split'>"
+        f"<div class='u-alloc-list'>{''.join(split_rows)}</div>"
+        "<button class='primary' type='submit'>Разделить интервью</button>"
+        "</form>"
+        + send_block +
+        "</div>")
+
+
 def list_page(users: list[dict], avail_by_id: dict, notice=None,
-              week_by_id: dict | None = None, monday=None, week_sig: str = "") -> str:
+              week_by_id: dict | None = None, monday=None, week_sig: str = "",
+              managers: list[dict] | None = None, pool_count: int = 0,
+              pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None) -> str:
     week_by_id = week_by_id or {}
+    managers = managers or []
+    pool_rows = pool_rows or []
+    mgr_alloc = mgr_alloc or {}
     cards = []
     for u in users:
         av = _avail_summary(avail_by_id.get(u["id"], []))
         tg = ('<span class="u-tag" style="color:#1e40af;background:#dbeafe">TG ✓</span>'
               if u.get("telegram_chat_id") else "")
         week_html = _week_calendar(week_by_id.get(u["id"], []), u.get("tz"), monday)
+        # a manager gets a read-through link into their delegation portal + an allocation count
+        extra = ""
+        if u.get("role") == "manager":
+            a = mgr_alloc.get(u["id"], {})
+            badge = (f"<span class='u-tag' style='color:#6d28d9;background:#ede9fe'>"
+                     f"собесов: {a.get('total', 0)}</span>" if a else "")
+            extra = (f"{badge}<a class='hbtn' href='/manage?as={u['id']}'>Портал →</a>")
         cards.append(
             f"<div class='u-user{'' if u.get('active') else ' off'}'>"
             "<div class='u-utop'>"
@@ -190,6 +276,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
             f"<span class='u-login'>@{escape(u.get('login') or '')}</span>"
             f"{_role_tag(u.get('role'))}{_status_tag(u.get('active'))}{tg}"
             f"<span class='u-spacer'></span>"
+            f"{extra}"
             f"<a class='hbtn' href='/users/{u['id']}'>Настроить</a>"
             "</div>"
             f"<div class='u-av'><span class='k'>Доступность ({escape(slots.tz_label(u.get('tz')))}):</span>{av}</div>"
@@ -206,7 +293,8 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<a class='hbtn u-logout' href='/logout'>Выход</a></div>"
         "<p class='u-lead'>Ответственные, которым можно назначать интервью по кнопке «Собес». "
         "Они входят в кабинет и видят почту персоны только после назначения. "
-        "Чтобы человека можно было назначить — задайте ему доступность.</p>"
+        "Роли: <b>админ</b> (всё) · <b>управляющий</b> (свой пул интервью + сотрудники) · "
+        "<b>интервьюер</b> (свой кабинет). Чтобы человека можно было назначить — задайте доступность.</p>"
         + _note(notice) +
 
         "<div class='u-card'><h3>Добавить пользователя</h3>"
@@ -214,12 +302,17 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<label>Имя<input name='name' required placeholder='Иван Петров'></label>"
         "<label>Логин<input name='login' required placeholder='ivan' autocomplete='off'></label>"
         "<label>Пароль<input name='password' placeholder='(сгенерируется)' autocomplete='off'></label>"
-        "<label>Роль<select name='role'>"
-        "<option value='employee'>интервьюер</option><option value='admin'>админ</option>"
+        "<label>Роль<select name='role' id='u-add-role' onchange='uAddRole()'>"
+        "<option value='employee'>интервьюер</option>"
+        "<option value='manager'>управляющий</option>"
+        "<option value='admin'>админ</option>"
         "</select></label>"
+        "<label id='u-add-mgr-wrap'>Управляющий (для интервьюера)"
+        f"<select name='manager_id'>{_manager_options(managers)}</select></label>"
         "<div class='u-go'><button class='primary' type='submit'>Добавить</button></div>"
         "</form></div>"
 
+        + _allocate_card(managers, pool_count, pool_rows, mgr_alloc)
         + listing +
         "</div>"
         + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))
@@ -228,6 +321,13 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
 
 _USERS_JS = """
 <script>
+// show the «Управляющий» picker in the add-user form only when the role is «интервьюер»
+function uAddRole(){
+  var r=document.getElementById('u-add-role'), w=document.getElementById('u-add-mgr-wrap');
+  if(!r||!w) return; w.style.display=(r.value==='employee')?'':'none';
+}
+document.addEventListener('DOMContentLoaded', uAddRole);
+uAddRole();
 // collapse/expand an interviewer's weekly calendar (click the «Собесы на неделе» head)
 function uCalToggle(head){
   var cal=head.nextElementSibling;
@@ -262,16 +362,38 @@ document.addEventListener('keydown',function(e){
 """
 
 
-def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0) -> str:
+def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0,
+              managers: list[dict] | None = None) -> str:
     rid = u["id"]
     role = u.get("role")
     active = u.get("active")
+    managers = managers or []
 
-    role_other = "employee" if role == "admin" else "admin"
-    role_other_lbl = "интервьюер" if role == "admin" else "админ"
     toggle_lbl = "Отключить" if active else "Включить"
     toggle_val = "0" if active else "1"
     toggle_cls = "hbtn danger" if active else "primary"
+
+    # a 3-way role select (admin > управляющий > интервьюер)
+    _role_opts = "".join(
+        f"<option value='{val}'{' selected' if role == val else ''}>{lbl}</option>"
+        for val, lbl in (("employee", "интервьюер"), ("manager", "управляющий"), ("admin", "админ")))
+    role_form = (
+        f"<form class='u-roleform' method='post' action='/users/{rid}/role'>"
+        f"<label style='margin:0'>Роль<select name='role'>{_role_opts}</select></label>"
+        "<button class='hbtn' type='submit'>Сменить роль</button></form>")
+
+    # manager assignment — only meaningful for an interviewer (employee). Which управляющий
+    # supervises them (their собесы then show up in that manager's portal).
+    mgr_block = ""
+    if role == "employee":
+        mgr_block = (
+            "<div class='u-card u-set u-span'><h3>Управляющий</h3>"
+            "<p class='u-chint'>Кто из управляющих руководит этим интервьюером. "
+            "Тогда его собесы попадают в портал этого управляющего, и тот может их назначать.</p>"
+            f"<form class='u-roleform' method='post' action='/users/{rid}/manager'>"
+            f"<label style='margin:0'>Управляющий<select name='manager_id'>"
+            f"{_manager_options(managers, selected=u.get('manager_id'))}</select></label>"
+            "<button class='hbtn' type='submit'>Сохранить</button></form></div>")
 
     # Danger zone: hard-delete. A user with any interview can't be hard-deleted (FK keeps the
     # history) — show why + point to «Отключить» instead. Otherwise a confirmed delete button.
@@ -338,14 +460,14 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         # role + active
         "<div class='u-card u-set u-span'><h3>Роль и доступ</h3>"
         "<div class='u-rolebtns'>"
-        f"<form method='post' action='/users/{rid}/role'>"
-        f"<input type='hidden' name='role' value='{role_other}'>"
-        f"<button class='hbtn' type='submit'>→ {role_other_lbl}</button></form>"
+        f"{role_form}"
         f"<form method='post' action='/users/{rid}/active'>"
         f"<input type='hidden' name='active' value='{toggle_val}'>"
         f"<button class='{toggle_cls}' type='submit'>{toggle_lbl}</button></form>"
         "</div>"
-        "<p class='u-chint' style='margin-top:8px'>Отключение мгновенно отзывает сессию в кабинете.</p></div>"
+        "<p class='u-chint' style='margin-top:8px'>Управляющий видит свой пул интервью и "
+        "сотрудников; интервьюер — только свой кабинет. Отключение мгновенно отзывает сессию.</p></div>"
+        + mgr_block +
         "</div>"
         + del_block +
         "</div>"

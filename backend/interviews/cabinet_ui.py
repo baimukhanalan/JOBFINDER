@@ -106,7 +106,11 @@ def _doc(body: str, title: str = "Кабинет") -> str:
 
 def _topbar(responsible: dict, active: str) -> str:
     name = escape(responsible.get("name") or responsible.get("login") or "")
-    nav = (f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Собесы</a>'
+    # a manager attends interviews here too; give them a way back to their portal
+    portal = ('<a href="/manage">← Портал</a>'
+              if responsible.get("role") == "manager" else "")
+    nav = (portal +
+           f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Собесы</a>'
            f'<a class="{"active" if active=="availability" else ""}" href="/cabinet/availability">Расписание</a>'
            f'<a class="{"active" if active=="inbox" else ""}" href="/cabinet/inbox">Почта</a>'
            f'<a href="/logout">Выход</a>')

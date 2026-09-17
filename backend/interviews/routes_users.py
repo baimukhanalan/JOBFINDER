@@ -16,9 +16,11 @@ from html import escape
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from backend.interviews import auth, db, slots, users_ui
+from backend.interviews import auth, db, pool, slots, users_ui
 
 router = APIRouter()
+
+_ROLES = ("admin", "manager", "employee")
 
 
 def _render_list(notice=None) -> HTMLResponse:
@@ -39,8 +41,28 @@ def _render_list(notice=None) -> HTMLResponse:
         sig = db.week_signature(since, until)
     except Exception:
         week_by_id = {}
-    return HTMLResponse(users_ui.list_page(users, avail, notice,
-                                           week_by_id=week_by_id, monday=monday, week_sig=sig))
+    # manager-tier context for the delegation tools (split the pool, send one to a manager,
+    # read-through into a manager's portal). All best-effort so a hiccup never breaks /users.
+    managers: list[dict] = []
+    pool_count = 0
+    pool_rows: list[dict] = []
+    mgr_alloc: dict = {}
+    try:
+        managers = db.list_managers(active_only=True)
+        if managers:
+            pool_count = pool.count_unallocated()
+            pool_rows = pool.unallocated(limit=40)
+            for m in managers:
+                ivs = db.manager_interviews(m["id"])
+                mgr_alloc[m["id"]] = {
+                    "total": len(ivs),
+                    "assigned": sum(1 for iv in ivs if iv.get("responsible_id")),
+                }
+    except Exception:
+        managers = managers or []
+    return HTMLResponse(users_ui.list_page(
+        users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
+        managers=managers, pool_count=pool_count, pool_rows=pool_rows, mgr_alloc=mgr_alloc))
 
 
 def _week_window():
@@ -65,8 +87,14 @@ def _render_edit(rid: int, notice=None) -> HTMLResponse:
     u = db.get_responsible(rid)
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
+    managers = []
+    try:
+        managers = [m for m in db.list_managers(active_only=False) if m["id"] != rid]
+    except Exception:
+        managers = []
     return HTMLResponse(users_ui.edit_page(u, db.get_availability(rid), notice,
-                                           interview_count=db.interview_count(rid)))
+                                           interview_count=db.interview_count(rid),
+                                           managers=managers))
 
 
 @router.get("/users", response_class=HTMLResponse)
@@ -76,16 +104,25 @@ def users_list():
 
 @router.post("/users/add", response_class=HTMLResponse)
 def users_add(name: str = Form(...), login: str = Form(...),
-              password: str = Form(""), role: str = Form("employee")):
+              password: str = Form(""), role: str = Form("employee"),
+              manager_id: str = Form("")):
     name, login = name.strip(), login.strip()
-    role = role if role in ("admin", "employee") else "employee"
+    role = role if role in _ROLES else "employee"
     if not name or not login:
         return _render_list(("err", "Имя и логин обязательны."))
+    # a subordinate under a manager (only meaningful for an employee)
+    mid = None
+    if role == "employee" and manager_id.strip():
+        try:
+            mid = int(manager_id)
+        except ValueError:
+            mid = None
     pw = password.strip() or secrets.token_urlsafe(9)
     try:
         # default to the team home zone; it auto-updates to their device zone on first
         # cabinet login (POST /cabinet/tz)
-        db.add_responsible(login, auth.hash_password(pw), name, role=role, tz="Asia/Almaty")
+        db.add_responsible(login, auth.hash_password(pw), name, role=role,
+                           tz="Asia/Almaty", manager_id=mid)
     except Exception as e:
         return _render_list(("err", f"Не удалось создать (логин, возможно, занят): {escape(str(e))}"))
     return _render_list(("pw",
@@ -107,14 +144,98 @@ def users_passwd(rid: int, password: str = Form("")):
     return _render_edit(rid, ("pw", f"Новый пароль: <code>{escape(pw)}</code> — сохрани, больше не покажу."))
 
 
+_ROLE_LBL = {"admin": "админ", "manager": "управляющий", "employee": "интервьюер"}
+
+
 @router.post("/users/{rid}/role", response_class=HTMLResponse)
 def users_role(rid: int, role: str = Form(...)):
     if not db.get_responsible(rid):
         return HTMLResponse("<h1>404</h1>", status_code=404)
-    if role not in ("admin", "employee"):
+    if role not in _ROLES:
         return _render_edit(rid, ("err", "Неизвестная роль."))
     db.set_role(rid, role)
-    return _render_edit(rid, ("ok", f"Роль изменена на «{'админ' if role == 'admin' else 'интервьюер'}»."))
+    # a manager/admin is not anybody's subordinate — clear a stale manager link on promotion
+    if role in ("admin", "manager"):
+        try:
+            db.set_manager(rid, None)
+        except Exception:
+            pass
+    return _render_edit(rid, ("ok", f"Роль изменена на «{_ROLE_LBL.get(role, role)}»."))
+
+
+@router.post("/users/{rid}/manager", response_class=HTMLResponse)
+def users_set_manager(rid: int, manager_id: str = Form("")):
+    """Set (or clear) which manager supervises this responsible. Admin-only (gated). A
+    manager can't supervise themselves, and only a real manager account may be chosen."""
+    u = db.get_responsible(rid)
+    if not u:
+        return HTMLResponse("<h1>404</h1>", status_code=404)
+    mid = manager_id.strip()
+    if not mid:
+        db.set_manager(rid, None)
+        return _render_edit(rid, ("ok", "Управляющий откреплён."))
+    try:
+        mid_i = int(mid)
+    except ValueError:
+        return _render_edit(rid, ("err", "Неверный управляющий."))
+    if mid_i == rid:
+        return _render_edit(rid, ("err", "Нельзя назначить сотрудника управляющим самому себе."))
+    m = db.get_responsible(mid_i)
+    if not m or m.get("role") != "manager":
+        return _render_edit(rid, ("err", "Выбранный пользователь не является управляющим."))
+    db.set_manager(rid, mid_i)
+    return _render_edit(rid, ("ok", f"Закреплён за управляющим «{escape(m.get('name') or '')}»."))
+
+
+@router.post("/users/allocate/split", response_class=HTMLResponse)
+async def users_allocate_split(request: Request):
+    """Divide the free interview pool among managers — the «Разделить интервью» tool. Each
+    manager gets a count (equal or custom); blocks are taken newest-first. Form fields:
+    `count_<manager_id>` = how many to allocate to that manager (blank/0 = none)."""
+    form = await request.form()
+    managers = {m["id"] for m in db.list_managers(active_only=True)}
+    counts: dict[int, int] = {}
+    for key in form.keys():
+        if not key.startswith("count_"):
+            continue
+        try:
+            mid = int(key[len("count_"):])
+            n = int((form.get(key) or "0").strip() or 0)
+        except ValueError:
+            continue
+        if mid in managers and n > 0:
+            counts[mid] = n
+    if not counts:
+        return _render_list(("err", "Укажите, сколько интервью выделить хотя бы одному управляющему."))
+    try:
+        allocated = pool.split(counts)
+    except Exception as e:
+        return _render_list(("err", f"Не удалось распределить: {escape(str(e))}"))
+    total = sum(allocated.values())
+    if not total:
+        return _render_list(("err", "В свободном пуле нет интервью для распределения."))
+    parts = []
+    for mid, n in allocated.items():
+        m = db.get_responsible(mid)
+        parts.append(f"{escape((m or {}).get('name') or str(mid))}: {n}")
+    return _render_list(("ok", f"Выделено интервью — {total}. " + "; ".join(parts) + "."))
+
+
+@router.post("/users/allocate/send", response_class=HTMLResponse)
+def users_allocate_send(mailbox: str = Form(...), manager_id: int = Form(...)):
+    """Send ONE specific pool interview (a persona mailbox) to a specific manager."""
+    m = db.get_responsible(manager_id)
+    if not m or m.get("role") != "manager":
+        return _render_list(("err", "Выберите управляющего."))
+    ok = False
+    try:
+        ok = pool.allocate_specific(mailbox.strip(), manager_id)
+    except Exception as e:
+        return _render_list(("err", f"Не удалось выделить: {escape(str(e))}"))
+    if not ok:
+        return _render_list(("err", "Это интервью уже выделено или недоступно."))
+    return _render_list(("ok",
+        f"Интервью «{escape(mailbox)}» выделено управляющему «{escape(m.get('name') or '')}»."))
 
 
 @router.post("/users/{rid}/telegram", response_class=HTMLResponse)

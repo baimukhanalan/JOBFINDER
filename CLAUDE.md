@@ -628,12 +628,15 @@ Assign an incoming interview (`kind=interview` mail) into a free slot of a "resp
 **Visibility == assignment** (a responsible sees a persona's mail ONLY because an `iv_interviews` row links them). **Per-person timezones:** `iv_responsibles.tz` (auto-detected via `/cabinet/tz`); availability is wall-clock in
 that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge = absolute UTC intervals (`slots.*`); `start_ts` stays tz-aware UTC.
 - **Data** (Postgres `jobfinder_crm` via the `mail_db` pool, `db.py::ensure_schema`): `iv_responsibles` (login, bcrypt hash,
-  name, `tz`, `telegram_chat_id`, `role` admin|employee, `active`), `iv_availability` (**MULTIPLE windows/weekday**, the
+  name, `tz`, `telegram_chat_id`, `role` **admin|manager|employee**, `active`, **`manager_id`** = a subordinate's supervising
+  manager, nullable self-FK), `iv_availability` (**MULTIPLE windows/weekday**, the
   `UNIQUE(responsible_id,dow)` was DROPPED; a window is same-day / OVERNIGHT (`end<start`, e.g. US hours) / 24h —
   `HOUR_START/END` is full 0–24, do NOT re-add an `end<=start` rejection or `end>start` filter, it drops night windows;
   `set_availability` REPLACE-ALL; shared editor `avail_editor.py`), `iv_interviews` (mailbox=persona addr=visibility key,
-  thread_key, company, jobid, responsible_id, start_ts, status, reminded_60/5, announced; partial-UNIQUE `(responsible_id,
-  start_ts) WHERE status<>'cancelled'` = double-book guard).
+  thread_key, company, jobid, responsible_id, **`manager_id`** = which manager an interview is allocated to, start_ts, status,
+  reminded_60/5, announced; partial-UNIQUE `(responsible_id, start_ts) WHERE status<>'cancelled'` = double-book guard).
+  **The two `manager_id` cols are added under the repo DDL rule** (`db._has_column` information_schema check + `SET LOCAL
+  lock_timeout='15s'`, never a bare ALTER).
 - **Operator** (inside `/mail`): a «Собес» control opens a MODAL (`operator_ui.py`) with the week grid of all responsibles'
   free slots → click a cell → pick a responsible → «Назначить». Routes `routes_operator.py` (`.../grid`, `.../assign` 409 on
   `SlotConflict`, `/cancel`, `/status`), `include_router`'d inside try/except (a broken import → "no button", never crashes the
@@ -642,15 +645,36 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   `cabinet.systeam.kz` are RETIRED, the vhost 301s to `/cabinet`): `/cabinet`, `/availability`, `/inbox`, `/thread`, `/reply`.
   Ownership guard in `/thread` + `/reply` (`get_row(hash).mailbox in assigned_mailboxes(rid)` else 404); reply sent FROM the
   persona TO the recruiter (headers derived server-side).
-- **Auth** (`dash_auth.py` `AdminAuthMiddleware`, fail-closed): no session → `/login`; `admin` → full; `employee` → ONLY
-  `/cabinet/*` (`_employee_allowed`) else 303. Allowlist = extension endpoints + `/login`/`/logout`/`/favicon.ico` + public
-  assets (EXACT-match). `current_responsible` re-checks `active` per request; `_install_dash_auth` FATAL when
-  `IV_COOKIE_SECURE=1`. Keep the nginx `00-default-drop` `default_server` intact.
-- **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): create/reset-password/set-role/link-telegram/
-  toggle-active + a weekly availability editor + a 7-day load calendar. Auto-refresh via `GET /users/signature` (registered
-  BEFORE `/users/{rid}`). A responsible with history → DEACTIVATED (FK preserves history); `interview_count==0` →
-  hard-DELETABLE (guards: not self, not with-history). Logins `1`/`2`/`3` are REAL interviewers (Alan/Аружан/Нурбол) — do NOT
-  delete. CLI `admin_cli`.
+- **Auth** (`dash_auth.py` `AdminAuthMiddleware`, fail-closed, hierarchy **admin > manager > employee**): no session →
+  `/login`; `admin` → full; **`manager` → ONLY `/manage/*` + `/cabinet/*` (`_manager_allowed`) else 303 `/manage`** (a manager
+  also attends собесы assigned to himself, hence the cabinet); `employee` → ONLY `/cabinet/*` (`_employee_allowed`) else 303
+  `/cabinet`. `_home_for` routes each role home (admin `/`, manager `/manage`, employee `/cabinet`). Allowlist = extension
+  endpoints + `/login`/`/logout`/`/favicon.ico` + public assets (EXACT-match). `current_responsible` re-checks `active` per
+  request; `_install_dash_auth` FATAL when `IV_COOKIE_SECURE=1`. Keep the nginx `00-default-drop` `default_server` intact.
+- **Manager portal `/manage`** (`routes_manage.py` + `manage_ui.py`, `pool.py`): the middle tier. A manager sees the
+  interviews the admin allocated to him (rows with `manager_id`=him), his subordinates + their load, adds subordinates
+  (`role=employee`, `manager_id`=him), and assigns each allocated interview to **himself or a subordinate ONLY** (an optional
+  `datetime-local`, interpreted in the interviewer's tz → UTC; blank = «время не указано»). **ISOLATION is enforced in every
+  mutating handler, not just the gate**: `manager_assign_interview` checks `iv.manager_id==acting.id` AND the target ∈ {manager}
+  ∪ {his active subordinates}. An admin READS-THROUGH any manager's portal via `/manage?as=<mid>` (and may act on his behalf);
+  a manager without `?as` acting → `/users`. `POST /manage/{assign,unassign,subordinate/add,distribute}`; own minimal shell
+  (like the cabinet), NOT `mailcrm_ui._page`. Manager-assigned rows keep `manager_id`, flip `status`→`assigned`, and are
+  announced by the LIVE `ivremind` daemon (no restart needed; NULL start_ts → «время не указано», safe).
+- **The interview POOL** (`pool.py`): the allocatable "interviews" = persona mailboxes whose furthest inbound stage is
+  `interview` (mail_index kind='interview', ~220 live) MINUS any mailbox already `handled` (has a non-cancelled `iv_interviews`
+  row — a delegation row OR a direct «Собес» booking, so the two paths never double-serve). `unallocated()`/`count_unallocated()`
+  = one SELECT (funnel-ranked, latest interview msg meta); `split({mid:N})` blocks the pool newest-first across managers;
+  `allocate_specific(mailbox, mid)` sends one. Allocation = `db.allocate_interview` → an `iv_interviews` row `status='pool'`,
+  `responsible_id` NULL, `manager_id`=mid, `announced=TRUE` (a pool row must NOT be announced until assigned).
+- **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): create (role admin|manager|employee + optional
+  supervising manager)/reset-password/**set-role (3-way)**/link-telegram/toggle-active + **set a subordinate's manager**
+  (`POST /users/{rid}/manager`) + the **delegation tools** (`POST /users/allocate/split` = «Разделить интервью» N-per-manager;
+  `POST /users/allocate/send` = «Отправить конкретное интервью» one mailbox→one manager) + a **read-through link** to each
+  manager's portal (`/manage?as=<id>`) + a weekly availability editor + a 7-day load calendar. Auto-refresh via `GET
+  /users/signature` (registered BEFORE `/users/{rid}`; my new `/users/allocate/*` are POST, no collision). A responsible with
+  history → DEACTIVATED (FK preserves history); `interview_count==0` → hard-DELETABLE (guards: not self, not with-history).
+  Logins `1`/`2`/`3` are REAL interviewers (Alan/Аружан/Нурбол) — do NOT delete. CLI `admin_cli` (`setrole` now admin|manager|
+  employee; new `setmanager --login --manager`).
 - **Telegram NOTIFIER** (`reminders.py`, pm2 `jobfinder-alan-ivremind`; `notify.py`): polls every 60s → assignment notice +
   reminders at −60 (RICH: company · role · persona ФИО · Zoom link from the thread · résumé PDF via `sendDocument`,
   `service.interview_pack`) and −5. Target = the responsible's `telegram_chat_id` else the owner chat. Self-service linking:
@@ -658,7 +682,11 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   offset`) binds the chat_id (a bot can't DM by @username — the user must press Start). Token = `IV_BOT_TOKEN` else
   `TELEGRAM_BOT_TOKEN`. **Token-leak gotcha:** `notify.py` pins `httpx`'s logger to WARNING at import (it logs the full
   `bot<TOKEN>` URL at INFO) — don't lower it. Deploy: `UPDATE iv_interviews SET announced=TRUE` once before first start.
-- NOT YET BUILT (Phase 3, deferred): auto-assign. Tests: `test_interviews_*.py` (live DB, `test_iv_%`-prefixed, run SEQUENTIALLY).
+- NOT YET BUILT (Phase 3, deferred): auto-assign. Tests: `test_interviews_*.py` incl. `test_interviews_manager.py` (live DB,
+  `test_iv_%`-prefixed, run SEQUENTIALLY). **GOTCHA:** a `status='assigned'` `iv_interviews` row with `announced=FALSE` is
+  picked up by the LIVE `ivremind` daemon within ~60s and DMed to the responsible (or the OWNER chat if unlinked) — so any test
+  that assigns MUST `UPDATE iv_interviews SET announced=TRUE WHERE mailbox LIKE 'test_iv_%'` right after (the manager test does),
+  or it spams the owner's Telegram with throwaway собесы.
 
 ## Live findings (reality checks — don't re-conclude the opposite)
 - **Salmon (Ashby `salmon-group`) is ACCEPTING, degraded by VELOCITY — NOT a strict-tier wall.** `mail_index` has 49 real

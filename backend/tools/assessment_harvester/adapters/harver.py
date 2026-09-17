@@ -482,16 +482,31 @@ class HarverAdapter(Adapter):
 
     async def _click_chat_response(self, page, k: int) -> bool:
         """REAL click the k-th (0-based) canned chat reply ('Response k+1 …'). The reply may be a button,
-        role=button, or a styled div — match by leading text across tags + click the clickable ancestor."""
-        try:
-            loc = page.get_by_role("button", name=re.compile(rf"^\s*Response\s*{k + 1}\b", re.I))
-            if await loc.count():
-                await loc.first.click(timeout=3000)
+        role=button, or a styled div — match by leading text across tags + click the clickable ancestor.
+        A failed selection strands the module (the final Next stays disabled with no reply picked → the
+        session times out), so try several REAL Playwright strategies (trusted events drive React), and if
+        all miss, log the response-like elements actually present so the next chat hit is diagnosable."""
+        rx = re.compile(rf"^\s*Response\s*{k + 1}\b", re.I)
+        # 1) REAL Playwright clicks (trusted events → React registers the selection + enables Next).
+        #    Try, in order: the accessible-name button, any tag filtered by leading text, the text node.
+        for loc in (page.get_by_role("button", name=rx),
+                    page.locator("button, [role=button], div, li, a, label").filter(has_text=rx),
+                    page.get_by_text(rx)):
+            try:
+                if not await loc.count():
+                    continue
+                el = loc.first
+                try:
+                    await el.scroll_into_view_if_needed(timeout=1500)
+                except Exception:
+                    pass
+                await el.click(timeout=3000)
                 return True
-        except Exception:
-            pass
+            except Exception:
+                continue
+        # 2) JS fallback: click the clickable ancestor of the shortest matching element.
         try:
-            return bool(await page.evaluate(
+            if bool(await page.evaluate(
                 "(k) => {"
                 " const re=new RegExp('^\\\\s*response\\\\s*'+k+'\\\\b','i');"
                 " const els=[...document.querySelectorAll('button,[role=button],div,li,label,a,span')]"
@@ -502,9 +517,21 @@ class HarverAdapter(Adapter):
                 " for(let i=0;i<4&&n;i++){ const cs=getComputedStyle(n);"
                 "   if(n.tagName==='BUTTON'||n.getAttribute('role')==='button'||n.onclick||cs.cursor==='pointer') break;"
                 "   n=n.parentElement; }"
-                " (n||el).click(); return true; }", k + 1))
+                " (n||el).click(); return true; }", k + 1)):
+                return True
         except Exception:
-            return False
+            pass
+        # 3) diagnostics — dump the response-like elements present so a persistent miss is debuggable.
+        try:
+            found = await page.evaluate(
+                "() => [...document.querySelectorAll('button,[role=button],div,li,a,span')]"
+                " .map(e=>({t:e.tagName,role:e.getAttribute('role'),al:e.getAttribute('aria-label'),"
+                "          x:(e.innerText||'').trim().slice(0,44)}))"
+                " .filter(o=>/response\\s*\\d/i.test(o.x)||/response\\s*\\d/i.test(o.al||'')).slice(0,8)")
+            logger.info("[harver] CHAT click MISS k=%d response-like els=%s", k + 1, found)
+        except Exception:
+            pass
+        return False
 
     async def read_item(self, page) -> dict:
         item = await super().read_item(page)

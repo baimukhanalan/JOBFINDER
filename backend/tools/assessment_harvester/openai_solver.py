@@ -18,6 +18,12 @@ _API = "https://api.openai.com/v1/chat/completions"
 _VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini")  # higher rate limits + cheaper; ok for these MCQs
 _TEXT_MODEL = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
 
+# Set once a 429 proves the account is out of quota/credit (insufficient_quota) — NOT a transient rate
+# limit. After that available()=False so the solver cascade skips OpenAI instantly instead of burning the
+# full 6-retry ~65s backoff per item on a quota error that retrying can never clear (that backoff was
+# slowing the whole lane ~10x once credits ran out).
+_DEAD = False
+
 
 def _key() -> str | None:
     k = os.getenv("OPENAI_API_KEY")
@@ -35,7 +41,7 @@ def _key() -> str | None:
 
 
 def available() -> bool:
-    return bool(_key())
+    return bool(_key()) and not _DEAD
 
 
 def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> str | None:
@@ -53,6 +59,22 @@ def _post(model: str, content, max_tokens: int = 12, timeout: float = 60.0) -> s
                            json={"model": model, "max_tokens": max_tokens, "temperature": 0,
                                  "messages": [{"role": "user", "content": content}]})
             if r.status_code == 429:
+                # Distinguish a real rate limit (retry helps) from an out-of-credit quota error (retry is
+                # useless). On insufficient_quota / credit_balance_exhausted, disable OpenAI for the rest
+                # of the process so the cascade returns a placeholder INSTANTLY instead of after ~65s.
+                body = ""
+                try:
+                    err = (r.json() or {}).get("error", {})
+                    body = f"{err.get('type', '')} {err.get('code', '')} {err.get('message', '')}".lower()
+                except Exception:
+                    body = (r.text or "").lower()
+                if ("insufficient_quota" in body or "credit_balance_exhausted" in body
+                        or "no credits" in body or "exceeded your current quota" in body):
+                    global _DEAD
+                    if not _DEAD:
+                        log.info("[openai] disabled: out of credit (insufficient_quota)")
+                    _DEAD = True
+                    return None
                 # rate-limited (many parallel workers) — back off (honor Retry-After) and retry so the
                 # answer is the CORRECT vision pick, not a placeholder. Self-throttles the whole lane.
                 try:

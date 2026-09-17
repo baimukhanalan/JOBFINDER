@@ -113,20 +113,21 @@ def _responsible_from_request(request: Request) -> dict | None:
 
 
 def _admin_from_request(request: Request) -> dict | None:
-    """The active responsible ONLY if role=='admin', else None (kept for callers that
-    specifically need an admin)."""
+    """The active responsible ONLY if they hold the 'admin' role, else None (kept for callers
+    that specifically need an admin). Multi-role aware."""
     resp = _responsible_from_request(request)
-    return resp if (resp and resp.get("role") == "admin") else None
+    return resp if (resp and db.has_role(resp, "admin")) else None
 
 
 def _home_for(resp: dict) -> str:
-    """Where a freshly-authenticated / misrouted session belongs, per role:
-    admins own the whole operator dashboard (/), managers land in their management portal
-    (/manage), employees are confined to their cabinet (/cabinet)."""
-    role = resp.get("role")
-    if role == "admin":
+    """Where a freshly-authenticated / misrouted session belongs — the HIGHEST surface they
+    hold (admin > manager > employee), so a multi-role user lands on their richest home:
+    admin → the whole operator dashboard (/), manager → the management portal (/manage),
+    employee → their cabinet (/cabinet)."""
+    primary = db.primary_role(db.roles_of(resp))
+    if primary == "admin":
         return "/"
-    if role == "manager":
+    if primary == "manager":
         return "/manage"
     return "/cabinet"
 
@@ -161,13 +162,16 @@ def _manager_allowed(path: str) -> bool:
 
 
 class AdminAuthMiddleware(BaseHTTPMiddleware):
-    """Fail-closed role gate over the merged dashboard (hierarchy admin > manager > employee):
+    """Fail-closed role gate over the merged dashboard (hierarchy admin > manager > employee).
+    MULTI-ROLE: access is the UNION of a user's roles. Because each higher surface is a
+    superset of the lower (admin=full ⊇ manager=/manage+/cabinet ⊇ employee=/cabinet),
+    granting the HIGHEST role's allowance == the union:
       * ALLOWLIST paths (login/logout/favicon + self-authenticating extension endpoints)
         pass without a session.
-      * no valid session            -> 303 /login
-      * role=='admin'   (+active)   -> full access
-      * role=='manager' (+active)   -> ONLY /manage/* + /cabinet/* (whitelist), else 303 /manage
-      * role=='employee'(+active)   -> ONLY /cabinet/* (whitelist), else 303 /cabinet
+      * no valid session               -> 303 /login
+      * holds 'admin'    (+active)      -> full access
+      * holds 'manager'  (+active)      -> ONLY /manage/* + /cabinet/* (whitelist), else 303 /manage
+      * holds 'employee' (+active)      -> ONLY /cabinet/* (whitelist), else 303 /cabinet
     """
     async def dispatch(self, request, call_next):
         if request.url.path in ALLOWLIST or _public_asset(request.url.path):
@@ -180,15 +184,15 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             resp = None
         if resp is None:
             return RedirectResponse("/login", status_code=303)
-        role = resp.get("role")
-        if role == "admin":
+        roles = db.roles_of(resp)
+        if "admin" in roles:
             return await call_next(request)
         # manager: confined to the management portal + the interviewer cabinet
-        if role == "manager":
+        if "manager" in roles:
             if _manager_allowed(request.url.path):
                 return await call_next(request)
             return RedirectResponse("/manage", status_code=303)
-        # employee: confined to the cabinet whitelist
+        # employee (or any other): confined to the cabinet whitelist
         if _employee_allowed(request.url.path):
             return await call_next(request)
         return RedirectResponse("/cabinet", status_code=303)

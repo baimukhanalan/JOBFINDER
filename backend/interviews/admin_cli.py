@@ -48,7 +48,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     for r in roster:
         status = "active" if r.get("active") else "inactive"
         print(f"id={r['id']} login={r['login']} name={r['name']} "
-              f"tz={r['tz']} role={r.get('role')} {status}")
+              f"tz={r['tz']} roles={','.join(db.roles_of(r))} {status}")
 
 
 def cmd_passwd(args: argparse.Namespace) -> None:
@@ -114,8 +114,8 @@ def cmd_setmanager(args: argparse.Namespace) -> None:
     if not manager:
         print(f"No such manager login: {args.manager}", file=sys.stderr)
         raise SystemExit(1)
-    if manager.get("role") != "manager":
-        print(f"{args.manager} is not a manager (role={manager.get('role')})", file=sys.stderr)
+    if not db.has_role(manager, "manager"):
+        print(f"{args.manager} is not a manager (roles={db.roles_of(manager)})", file=sys.stderr)
         raise SystemExit(1)
     db.set_manager(responsible["id"], manager["id"])
     print(f"Attached {args.login} to manager {args.manager} (id={manager['id']})")

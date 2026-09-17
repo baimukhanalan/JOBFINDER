@@ -209,3 +209,115 @@ def test_iv_admin_read_through_portal():
     # admin with no target is sent to the roster
     r = client.get("/manage", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("/users")
+
+
+# ---- multi-role -----------------------------------------------------------------
+def test_iv_multi_role_db_roundtrip():
+    rid = db.add_responsible("test_iv_mr_am", "h", "AdminMgr", roles=["admin", "manager"])
+    u = db.get_responsible(rid)
+    assert set(db.roles_of(u)) == {"admin", "manager"}
+    assert u["role"] == "admin"                       # legacy column mirrors the PRIMARY
+    assert db.has_role(u, "admin") and db.has_role(u, "manager")
+    # a user holding manager (even alongside admin) is listed as a manager
+    assert rid in {m["id"] for m in db.list_managers(active_only=False)}
+    # set_roles replaces the set + re-mirrors primary; normalisation drops junk/dupes
+    db.set_roles(rid, ["employee", "manager", "manager", "bogus"])
+    u = db.get_responsible(rid)
+    assert set(db.roles_of(u)) == {"employee", "manager"} and u["role"] == "manager"
+    # empty → never role-less
+    db.set_roles(rid, [])
+    assert db.roles_of(db.get_responsible(rid)) == ["employee"]
+
+
+def test_iv_multi_role_access_union():
+    # [admin, manager]: full admin access AND his own /manage portal
+    am = db.add_responsible("test_iv_mr_A", auth.hash_password(_PW), "AM", roles=["admin", "manager"])
+    r = client.post("/login", data={"login": "test_iv_mr_A", "password": _PW}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"      # home = highest surface
+    client.cookies.set(auth.COOKIE_NAME, r.cookies.get(auth.COOKIE_NAME))
+    assert client.get("/users", follow_redirects=False).status_code == 200          # admin surface
+    assert client.get("/manage", follow_redirects=False).status_code == 200          # own portal
+    assert client.get("/mail/candidates", follow_redirects=False).status_code == 200  # admin surface
+
+    # [manager, employee]: /manage AND /cabinet, but NOT admin surfaces
+    db.add_responsible("test_iv_mr_ME", auth.hash_password(_PW), "ME", roles=["manager", "employee"])
+    r = client.post("/login", data={"login": "test_iv_mr_ME", "password": _PW}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/manage"
+    client.cookies.set(auth.COOKIE_NAME, r.cookies.get(auth.COOKIE_NAME))
+    assert client.get("/manage", follow_redirects=False).status_code == 200
+    assert client.get("/cabinet", follow_redirects=False).status_code == 200
+    rr = client.get("/users", follow_redirects=False)
+    assert rr.status_code == 303 and rr.headers["location"] == "/manage"   # bounced off admin
+
+
+def test_iv_role_edit_from_list_changes_access_live():
+    admin = db.add_responsible("test_iv_re_adm", auth.hash_password(_PW), "Adm", role="admin")
+    emp = db.add_responsible("test_iv_re_emp", auth.hash_password(_PW), "Emp", role="employee")
+    # before: the employee is bounced off /manage
+    r = client.post("/login", data={"login": "test_iv_re_emp", "password": _PW}, follow_redirects=False)
+    emp_cookie = r.cookies.get(auth.COOKIE_NAME)
+    client.cookies.set(auth.COOKIE_NAME, emp_cookie)
+    assert client.get("/manage", follow_redirects=False).headers["location"] == "/cabinet"
+
+    # admin promotes them to [manager, employee] via the INLINE list editor
+    _login("test_iv_re_adm")
+    r = client.post(f"/users/{emp}/roles",
+                    data={"role": ["manager", "employee"], "from_list": "1"},
+                    follow_redirects=False)
+    assert r.status_code == 200
+    assert set(db.roles_of(db.get_responsible(emp))) == {"manager", "employee"}
+
+    # the SAME employee session now reaches /manage (access changed live, no re-login)
+    client.cookies.set(auth.COOKIE_NAME, emp_cookie)
+    assert client.get("/manage", follow_redirects=False).status_code == 200
+
+
+# ---- delete any user (incl. deactivated / with history) --------------------------
+def test_iv_delete_returns_interviews_to_pool():
+    ids = _chain()
+    iid = db.allocate_interview("test_iv_m_del@x.com", ids["mgrA"], subject="Del interview")
+    db.manager_assign_interview(iid, ids["subS"])
+    _mark_announced()
+    # deactivate the subordinate, then hard-delete them as admin
+    db.set_active(ids["subS"], False)
+    _login("test_iv_m_admin")
+    r = client.post(f"/users/{ids['subS']}/delete", follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    # the subordinate is gone; their interview is back in manager A's pool, allocation kept
+    assert db.get_responsible(ids["subS"]) is None
+    row = db.interview_by_id(iid)
+    assert row is not None and row["responsible_id"] is None
+    assert row["status"] == "pool" and row["manager_id"] == ids["mgrA"]
+
+
+def test_iv_delete_manager_detaches_subordinates_and_frees_pool():
+    ids = _chain()
+    iid = db.allocate_interview("test_iv_m_delm@x.com", ids["mgrA"], subject="Mgr del")
+    _login("test_iv_m_admin")
+    r = client.post(f"/users/{ids['mgrA']}/delete", follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    assert db.get_responsible(ids["mgrA"]) is None            # manager removed
+    assert db.get_responsible(ids["subS"])["manager_id"] is None  # subordinate detached
+    assert db.interview_by_id(iid) is None                    # delegation row freed
+    assert "test_iv_m_delm@x.com" not in db.handled_pool_mailboxes()  # back to free pool
+
+
+def test_iv_delete_protects_real_interviewers_and_self():
+    from backend.interviews import routes_users
+    assert routes_users._PROTECTED_LOGINS == {"1", "2", "3"}
+    _chain()
+    _login("test_iv_m_admin")
+    me = db.get_responsible_by_login("test_iv_m_admin")
+
+    # deleting yourself is refused (you're signed in as it)
+    r = client.post(f"/users/{me['id']}/delete", follow_redirects=False)
+    assert r.status_code == 200 and db.get_responsible(me["id"]) is not None
+
+    # the real interviewers 1/2/3 are protected — the guard returns BEFORE any delete
+    real = db.get_responsible_by_login("1")
+    if real:  # present on the live DB
+        r = client.post(f"/users/{real['id']}/delete", follow_redirects=False)
+        assert r.status_code == 200
+        assert db.get_responsible(real["id"]) is not None  # untouched

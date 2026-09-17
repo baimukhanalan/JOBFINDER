@@ -87,8 +87,21 @@ _CSS = """
 .u-set input,.u-set select{width:100%;margin-bottom:9px}
 .u-rolebtns{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
 .u-rolebtns form{margin:0}
-.u-roleform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+.u-roleform{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .u-roleform select{min-width:150px}
+/* multi-role checkboxes */
+.u-rolechecks{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center}
+.u-rolechk{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:600;color:var(--ink);margin:0;cursor:pointer;white-space:nowrap}
+.u-rolechk input{width:17px;height:17px;flex:0 0 auto}
+.u-add-roles{grid-column:1/-1}
+/* inline per-user role editor + delete in the list */
+.u-rolebox{margin-top:11px;border-top:1px solid var(--line);padding-top:9px}
+.u-rolebox>summary{cursor:pointer;font-size:12.5px;font-weight:700;color:var(--ink-soft);list-style:none;user-select:none;display:inline-flex;align-items:center;gap:6px}
+.u-rolebox>summary::before{content:'▸';color:var(--ink-mute);font-size:11px}
+.u-rolebox[open]>summary::before{content:'▾'}
+.u-rolebox>summary:hover{color:var(--ink)}
+.u-roleedit{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;margin-top:11px}
+.u-inline-del{margin-top:10px}
 /* delegation / allocation card */
 .u-alloc{display:flex;flex-direction:column;gap:12px}
 .u-alloc-list{display:flex;flex-direction:column;gap:8px}
@@ -111,12 +124,46 @@ def _min_to_hhmm(m) -> str:
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
+_ROLE_META = {
+    "admin": ("админ", "color:#b45309;background:#fef3c7"),
+    "manager": ("управляющий", "color:#6d28d9;background:#ede9fe"),
+    "employee": ("интервьюер", "color:#3730a3;background:#e0e7ff"),
+}
+# fixed display order (high→low) so a multi-role user's tags read consistently
+_ROLE_ORDER = ("admin", "manager", "employee")
+_ROLE_CHECK_LABELS = (("admin", "админ"), ("manager", "управляющий"), ("employee", "интервьюер"))
+
+
+def _roles_of(u: dict) -> list[str]:
+    """A user row's role SET — the `roles` array, else the legacy single `role`."""
+    rs = u.get("roles")
+    if rs:
+        return list(rs)
+    r = u.get("role")
+    return [r] if r else []
+
+
 def _role_tag(role: str) -> str:
-    if role == "admin":
-        return '<span class="u-tag" style="color:#b45309;background:#fef3c7">админ</span>'
-    if role == "manager":
-        return '<span class="u-tag" style="color:#6d28d9;background:#ede9fe">управляющий</span>'
-    return '<span class="u-tag" style="color:#3730a3;background:#e0e7ff">интервьюер</span>'
+    lbl, style = _ROLE_META.get(role, (role, "color:#374151;background:#f3f4f6"))
+    return f'<span class="u-tag" style="{style}">{escape(lbl)}</span>'
+
+
+def _role_tags(roles) -> str:
+    """One coloured tag per role a user holds, in high→low order."""
+    have = set(roles or [])
+    return "".join(_role_tag(r) for r in _ROLE_ORDER if r in have)
+
+
+def _role_checks(roles, name: str = "role") -> str:
+    """The admin/manager/interviewer checkbox trio, pre-ticked from `roles` — the multi-role
+    editor reused by the add form, the inline list editor, and the edit page."""
+    have = set(roles or [])
+    out = []
+    for val, lbl in _ROLE_CHECK_LABELS:
+        chk = " checked" if val in have else ""
+        out.append(f"<label class='u-rolechk'><input type='checkbox' name='{name}' "
+                   f"value='{val}'{chk}> {escape(lbl)}</label>")
+    return "".join(out)
 
 
 def _status_tag(active) -> str:
@@ -258,29 +305,45 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
     mgr_alloc = mgr_alloc or {}
     cards = []
     for u in users:
-        av = _avail_summary(avail_by_id.get(u["id"], []))
+        rid = u["id"]
+        roles = _roles_of(u)
+        av = _avail_summary(avail_by_id.get(rid, []))
         tg = ('<span class="u-tag" style="color:#1e40af;background:#dbeafe">TG ✓</span>'
               if u.get("telegram_chat_id") else "")
-        week_html = _week_calendar(week_by_id.get(u["id"], []), u.get("tz"), monday)
+        week_html = _week_calendar(week_by_id.get(rid, []), u.get("tz"), monday)
         # a manager gets a read-through link into their delegation portal + an allocation count
         extra = ""
-        if u.get("role") == "manager":
-            a = mgr_alloc.get(u["id"], {})
+        if "manager" in roles:
+            a = mgr_alloc.get(rid, {})
             badge = (f"<span class='u-tag' style='color:#6d28d9;background:#ede9fe'>"
                      f"собесов: {a.get('total', 0)}</span>" if a else "")
-            extra = (f"{badge}<a class='hbtn' href='/manage?as={u['id']}'>Портал →</a>")
+            extra = (f"{badge}<a class='hbtn' href='/manage?as={rid}'>Портал →</a>")
+        # inline MULTI-ROLE editor + delete (protected logins 1/2/3 keep no delete button)
+        protected = (u.get("login") or "") in ("1", "2", "3")
+        del_form = ("" if protected else
+                    f"<form method='post' action='/users/{rid}/delete' class='u-inline-del' "
+                    "onsubmit=\"return confirm('Удалить пользователя безвозвратно? Его собесы вернутся в пул.');\">"
+                    "<button class='hbtn danger' type='submit'>Удалить</button></form>")
+        manage = (
+            "<details class='u-rolebox'><summary>Роли и доступ</summary>"
+            f"<form method='post' action='/users/{rid}/roles' class='u-roleedit'>"
+            "<input type='hidden' name='from_list' value='1'>"
+            f"<div class='u-rolechecks'>{_role_checks(roles)}</div>"
+            "<button class='hbtn' type='submit'>Сохранить роли</button></form>"
+            f"{del_form}</details>")
         cards.append(
             f"<div class='u-user{'' if u.get('active') else ' off'}'>"
             "<div class='u-utop'>"
             f"<span class='u-name'>{escape(u.get('name') or '—')}</span>"
             f"<span class='u-login'>@{escape(u.get('login') or '')}</span>"
-            f"{_role_tag(u.get('role'))}{_status_tag(u.get('active'))}{tg}"
+            f"{_role_tags(roles)}{_status_tag(u.get('active'))}{tg}"
             f"<span class='u-spacer'></span>"
             f"{extra}"
-            f"<a class='hbtn' href='/users/{u['id']}'>Настроить</a>"
+            f"<a class='hbtn' href='/users/{rid}'>Настроить</a>"
             "</div>"
             f"<div class='u-av'><span class='k'>Доступность ({escape(slots.tz_label(u.get('tz')))}):</span>{av}</div>"
             f"{week_html}"
+            f"{manage}"
             "</div>")
     listing = ("<div class='u-list' id='u-list'>" + "".join(cards) + "</div>") if cards else (
         "<div class='u-empty' id='u-list'>Пока нет пользователей — добавьте первого выше.</div>")
@@ -302,11 +365,8 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<label>Имя<input name='name' required placeholder='Иван Петров'></label>"
         "<label>Логин<input name='login' required placeholder='ivan' autocomplete='off'></label>"
         "<label>Пароль<input name='password' placeholder='(сгенерируется)' autocomplete='off'></label>"
-        "<label>Роль<select name='role' id='u-add-role' onchange='uAddRole()'>"
-        "<option value='employee'>интервьюер</option>"
-        "<option value='manager'>управляющий</option>"
-        "<option value='admin'>админ</option>"
-        "</select></label>"
+        "<label class='u-add-roles'>Роли (можно несколько)"
+        f"<div class='u-rolechecks' id='u-add-roles' onchange='uAddRole()'>{_role_checks(['employee'])}</div></label>"
         "<label id='u-add-mgr-wrap'>Управляющий (для интервьюера)"
         f"<select name='manager_id'>{_manager_options(managers)}</select></label>"
         "<div class='u-go'><button class='primary' type='submit'>Добавить</button></div>"
@@ -321,10 +381,12 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
 
 _USERS_JS = """
 <script>
-// show the «Управляющий» picker in the add-user form only when the role is «интервьюер»
+// show the «Управляющий» picker in the add-user form only when the «интервьюер» role is ticked
 function uAddRole(){
-  var r=document.getElementById('u-add-role'), w=document.getElementById('u-add-mgr-wrap');
-  if(!r||!w) return; w.style.display=(r.value==='employee')?'':'none';
+  var box=document.getElementById('u-add-roles'), w=document.getElementById('u-add-mgr-wrap');
+  if(!box||!w) return;
+  var emp=box.querySelector("input[value='employee']");
+  w.style.display=(emp&&emp.checked)?'':'none';
 }
 document.addEventListener('DOMContentLoaded', uAddRole);
 uAddRole();
@@ -365,27 +427,26 @@ document.addEventListener('keydown',function(e){
 def edit_page(u: dict, availability: list[dict], notice=None, interview_count: int = 0,
               managers: list[dict] | None = None) -> str:
     rid = u["id"]
-    role = u.get("role")
+    roles = _roles_of(u)
     active = u.get("active")
     managers = managers or []
+    protected = (u.get("login") or "") in ("1", "2", "3")
 
     toggle_lbl = "Отключить" if active else "Включить"
     toggle_val = "0" if active else "1"
     toggle_cls = "hbtn danger" if active else "primary"
 
-    # a 3-way role select (admin > управляющий > интервьюер)
-    _role_opts = "".join(
-        f"<option value='{val}'{' selected' if role == val else ''}>{lbl}</option>"
-        for val, lbl in (("employee", "интервьюер"), ("manager", "управляющий"), ("admin", "админ")))
+    # MULTI-ROLE checkboxes (admin AND/OR управляющий AND/OR интервьюер) — capabilities are
+    # the union; persisted immediately by /users/{rid}/roles.
     role_form = (
-        f"<form class='u-roleform' method='post' action='/users/{rid}/role'>"
-        f"<label style='margin:0'>Роль<select name='role'>{_role_opts}</select></label>"
-        "<button class='hbtn' type='submit'>Сменить роль</button></form>")
+        f"<form class='u-roleform' method='post' action='/users/{rid}/roles'>"
+        f"<div class='u-rolechecks'>{_role_checks(roles)}</div>"
+        "<button class='hbtn' type='submit'>Сохранить роли</button></form>")
 
-    # manager assignment — only meaningful for an interviewer (employee). Which управляющий
-    # supervises them (their собесы then show up in that manager's portal).
+    # manager assignment — only meaningful when they hold the interviewer role. Which
+    # управляющий supervises them (their собесы then show up in that manager's portal).
     mgr_block = ""
-    if role == "employee":
+    if "employee" in roles:
         mgr_block = (
             "<div class='u-card u-set u-span'><h3>Управляющий</h3>"
             "<p class='u-chint'>Кто из управляющих руководит этим интервьюером. "
@@ -395,21 +456,22 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
             f"{_manager_options(managers, selected=u.get('manager_id'))}</select></label>"
             "<button class='hbtn' type='submit'>Сохранить</button></form></div>")
 
-    # Danger zone: hard-delete. A user with any interview can't be hard-deleted (FK keeps the
-    # history) — show why + point to «Отключить» instead. Otherwise a confirmed delete button.
-    if interview_count:
+    # Danger zone: hard-delete ANY user (incl. deactivated / with interview history). Their
+    # собесы are returned to the pool by the cascade. The three штатных interviewers (1/2/3)
+    # are protected. A count warning is informational only, never a block.
+    warn = (f"<p class='u-chint'>За пользователем закреплено интервью — <b>{interview_count}</b>; "
+            "при удалении они вернутся в пул.</p>" if interview_count else "")
+    if protected:
         del_block = (
             "<div class='u-card u-set u-span'><h3>Удаление</h3>"
-            "<p class='u-chint'>Нельзя удалить: за пользователем закреплено интервью — "
-            f"<b>{interview_count}</b>. Чтобы сохранить историю, используйте «Отключить». "
-            "Удаление доступно только для пользователя без интервью.</p></div>")
+            "<p class='u-chint'>Штатного интервьюера удалять нельзя — можно только отключить.</p></div>")
     else:
         del_block = (
             "<div class='u-card u-set u-span'><h3>Удаление</h3>"
             "<p class='u-chint'>Полностью удаляет учётную запись и её доступность. "
-            "Действие необратимо.</p>"
+            "Действие необратимо.</p>" + warn +
             f"<form method='post' action='/users/{rid}/delete' "
-            "onsubmit=\"return confirm('Удалить безвозвратно?');\">"
+            "onsubmit=\"return confirm('Удалить безвозвратно? Его собесы вернутся в пул.');\">"
             "<button class='hbtn danger' type='submit'>Удалить</button></form></div>")
 
     body = (
@@ -418,7 +480,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
         "<a class='u-back' href='/users'>← Пользователи</a>"
         "<div class='u-card'>"
         f"<div class='u-eh'><h2>{escape(u.get('name') or '—')}</h2>"
-        f"{_role_tag(role)}{_status_tag(active)}</div>"
+        f"{_role_tags(roles)}{_status_tag(active)}</div>"
         f"<p class='u-sub'>Логин <code>{escape(u.get('login') or '')}</code> · id {rid} · "
         "вход в кабинет — на том же адресе через <code>/login</code> (роль ведёт в «/cabinet»).</p>"
         + _note(notice) +

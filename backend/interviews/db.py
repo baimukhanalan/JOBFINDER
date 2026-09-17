@@ -117,20 +117,71 @@ def ensure_schema() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_manager_idx "
                     "ON iv_interviews (manager_id);")
 
+        # ---- multi-role: a user may hold SEVERAL roles at once (admin AND manager AND
+        # employee); capabilities are the UNION. `roles TEXT[]` is authoritative; the legacy
+        # single `role` column is kept mirrored to the PRIMARY (highest-precedence) role for
+        # any reader that still reads it. Added under the DDL rule, then backfilled from role.
+        if not _has_column(cur, "iv_responsibles", "roles"):
+            cur.execute("SET LOCAL lock_timeout='15s'")
+            cur.execute("ALTER TABLE iv_responsibles ADD COLUMN roles TEXT[]")
+        cur.execute("UPDATE iv_responsibles SET roles=ARRAY[role] "
+                    "WHERE roles IS NULL OR cardinality(roles)=0")
+
+
+# ---- roles (multi-role: a user may hold several at once; capabilities = the UNION) -----
+VALID_ROLES = ("admin", "manager", "employee")
+_ROLE_RANK = {"admin": 3, "manager": 2, "employee": 1}
+
+
+def primary_role(roles) -> str:
+    """The highest-precedence role in a set (admin > manager > employee) — the value mirrored
+    into the legacy `role` column and used for HOME routing. Empty → 'employee'."""
+    rs = [r for r in (roles or []) if r in _ROLE_RANK]
+    return max(rs, key=lambda r: _ROLE_RANK[r]) if rs else "employee"
+
+
+def normalize_roles(roles) -> list[str]:
+    """Clean a role set: keep only valid roles, dedup, order high→low, default ['employee']
+    when empty. So a user is never role-less (they'd be unreachable at the gate)."""
+    seen = {r for r in (roles or []) if r in _ROLE_RANK}
+    ordered = [r for r in ("admin", "manager", "employee") if r in seen]
+    return ordered or ["employee"]
+
+
+def roles_of(resp: dict | None) -> list[str]:
+    """A responsible's role SET — `roles` if present, else the legacy single `role`. The one
+    place callers should read roles from, so the array/legacy fallback lives in one spot."""
+    if not resp:
+        return []
+    rs = resp.get("roles")
+    if rs:
+        return list(rs)
+    r = resp.get("role")
+    return [r] if r else []
+
+
+def has_role(resp: dict | None, role: str) -> bool:
+    """True if the responsible holds `role` (checks the full set, not just the primary)."""
+    return role in roles_of(resp)
+
 
 # ---- responsibles ------------------------------------------------------------------
 def add_responsible(login: str, password_hash: str, name: str, tz: str = "UTC",
-                    role: str = "employee", manager_id: int | None = None) -> int:
+                    role: str = "employee", manager_id: int | None = None,
+                    roles: list[str] | None = None) -> int:
     """Insert a new responsible. Raises psycopg2.IntegrityError on a duplicate login.
 
+    `roles` (optional) is the multi-role set; when omitted it defaults to [`role`] for
+    backward compatibility. The legacy `role` column is stored as the PRIMARY of the set.
     `manager_id` (optional) links a subordinate to their supervising manager (the manager
     tier): a manager creating an employee passes their own id, so the employee shows up in
     the manager's portal and only that manager (or an admin) may assign their interviews."""
+    norm = normalize_roles(roles if roles is not None else [role])
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(
-            "INSERT INTO iv_responsibles (login, password_hash, name, tz, role, manager_id) "
-            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-            (login, password_hash, name, tz, role, manager_id))
+            "INSERT INTO iv_responsibles (login, password_hash, name, tz, role, roles, manager_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            (login, password_hash, name, tz, primary_role(norm), norm, manager_id))
         return cur.fetchone()[0]
 
 
@@ -200,12 +251,19 @@ def set_active(rid: int, active: bool) -> None:
                     (active, rid))
 
 
-def set_role(rid: int, role: str) -> None:
-    """Set a responsible's role ('admin' | 'manager' | 'employee'). Hierarchy is
-    admin > manager > employee (see dash_auth for the access gate per role)."""
+def set_roles(rid: int, roles: list[str]) -> None:
+    """REPLACE a responsible's role SET (multi-role). Normalised (valid, dedup, never empty);
+    the legacy `role` column is kept mirrored to the PRIMARY. Capabilities are the UNION of
+    the set — see dash_auth (access) and routes_manage (`has_role`)."""
+    norm = normalize_roles(roles)
     with mail_db._cur(dict_rows=False) as cur:
-        cur.execute("UPDATE iv_responsibles SET role=%s WHERE id=%s",
-                    (role, rid))
+        cur.execute("UPDATE iv_responsibles SET roles=%s, role=%s WHERE id=%s",
+                    (norm, primary_role(norm), rid))
+
+
+def set_role(rid: int, role: str) -> None:
+    """Set a responsible to a SINGLE role (backward-compat shim over set_roles)."""
+    set_roles(rid, [role])
 
 
 def set_manager(rid: int, manager_id: int | None) -> None:
@@ -229,8 +287,9 @@ def subordinates(manager_id: int, active_only: bool = True) -> list[dict]:
 
 
 def list_managers(active_only: bool = True) -> list[dict]:
-    """All responsibles with role='manager'."""
-    sql = "SELECT * FROM iv_responsibles WHERE role='manager'"
+    """All responsibles who hold the 'manager' role (checks the full role SET, so an
+    admin+manager is listed too)."""
+    sql = "SELECT * FROM iv_responsibles WHERE 'manager' = ANY(roles)"
     if active_only:
         sql += " AND active=TRUE"
     sql += " ORDER BY id"
@@ -254,6 +313,30 @@ def delete_responsible(rid: int) -> None:
     so this raises psycopg2.IntegrityError when any interview still references them. Callers
     must check interview_count() first and deactivate such accounts instead of deleting."""
     with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("DELETE FROM iv_responsibles WHERE id=%s", (rid,))
+
+
+def delete_responsible_cascade(rid: int) -> None:
+    """Hard-delete ANY responsible (incl. deactivated / with interview history) by first
+    SAFELY clearing every FK that references them, in ONE transaction:
+      1. detach their subordinates (`iv_responsibles.manager_id` → NULL);
+      2. drop the delegation rows THEY manage (`iv_interviews.manager_id`=rid) — the
+         underlying interview mailbox returns to the free pool for re-allocation;
+      3. their still-managed ASSIGNED interviews (someone else's pool) go back to that
+         manager's pool (`responsible_id`→NULL, status='pool', time cleared, announced);
+      4. delete every remaining row that still references them as attendee (direct «Собес»
+         bookings + cancelled history) so the responsible_id FK no longer blocks the delete;
+      5. delete the account (iv_availability cascades).
+    All in one _cur() block → atomic (mail_db.conn commits on success, rolls back on error)."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET manager_id=NULL WHERE manager_id=%s", (rid,))
+        cur.execute("DELETE FROM iv_interviews WHERE manager_id=%s", (rid,))
+        cur.execute(
+            "UPDATE iv_interviews SET responsible_id=NULL, status='pool', start_ts=NULL, "
+            "end_ts=NULL, announced=TRUE "
+            "WHERE responsible_id=%s AND status <> 'cancelled' AND manager_id IS NOT NULL",
+            (rid,))
+        cur.execute("DELETE FROM iv_interviews WHERE responsible_id=%s", (rid,))
         cur.execute("DELETE FROM iv_responsibles WHERE id=%s", (rid,))
 
 

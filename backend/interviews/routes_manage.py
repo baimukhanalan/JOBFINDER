@@ -30,22 +30,24 @@ router = APIRouter()
 
 
 def _acting(me: dict, as_id: str | int | None):
-    """Resolve the manager whose portal is being acted on.
+    """Resolve the manager whose portal is being acted on (multi-role aware).
 
-    Returns (manager_row, is_admin_view) or (None, is_admin_view). A manager always acts on
-    himself (as_id ignored). An admin acts as the manager named by `as_id` (read-through);
-    without a valid manager target an admin gets (None, True) → the caller redirects."""
-    role = me.get("role")
-    if role == "manager":
+    Returns (manager_row, is_admin_view) or (None, is_admin_view). An ADMIN who passes a
+    valid `?as=<manager_id>` does a read-through of that manager. Otherwise a user who holds
+    the 'manager' role acts on his OWN portal (as_id ignored — a non-admin can't spoof it).
+    An admin with no valid manager target gets (None, True) → the caller redirects to /users."""
+    is_admin = db.has_role(me, "admin")
+    if as_id and is_admin:
+        try:
+            m = db.get_responsible(int(as_id))
+        except (TypeError, ValueError):
+            m = None
+        if m and db.has_role(m, "manager"):
+            return m, True
+        return None, True
+    if db.has_role(me, "manager"):
         return me, False
-    if role == "admin":
-        if as_id:
-            try:
-                m = db.get_responsible(int(as_id))
-            except (TypeError, ValueError):
-                m = None
-            if m and m.get("role") == "manager":
-                return m, True
+    if is_admin:
         return None, True
     return None, False
 

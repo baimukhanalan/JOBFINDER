@@ -103,25 +103,27 @@ def users_list():
 
 
 @router.post("/users/add", response_class=HTMLResponse)
-def users_add(name: str = Form(...), login: str = Form(...),
-              password: str = Form(""), role: str = Form("employee"),
-              manager_id: str = Form("")):
-    name, login = name.strip(), login.strip()
-    role = role if role in _ROLES else "employee"
+async def users_add(request: Request):
+    # MULTI-ROLE: the add form sends 0..N `role` checkboxes; default to a single interviewer.
+    form = await request.form()
+    name = (form.get("name") or "").strip()
+    login = (form.get("login") or "").strip()
+    password = (form.get("password") or "").strip()
+    roles = db.normalize_roles([r for r in form.getlist("role") if r in _ROLES])
     if not name or not login:
         return _render_list(("err", "Имя и логин обязательны."))
-    # a subordinate under a manager (only meaningful for an employee)
+    # a subordinate under a manager (only meaningful when they hold the interviewer role)
     mid = None
-    if role == "employee" and manager_id.strip():
+    if "employee" in roles and (form.get("manager_id") or "").strip():
         try:
-            mid = int(manager_id)
-        except ValueError:
+            mid = int(form.get("manager_id"))
+        except (ValueError, TypeError):
             mid = None
-    pw = password.strip() or secrets.token_urlsafe(9)
+    pw = password or secrets.token_urlsafe(9)
     try:
         # default to the team home zone; it auto-updates to their device zone on first
         # cabinet login (POST /cabinet/tz)
-        db.add_responsible(login, auth.hash_password(pw), name, role=role,
+        db.add_responsible(login, auth.hash_password(pw), name, roles=roles,
                            tz="Asia/Almaty", manager_id=mid)
     except Exception as e:
         return _render_list(("err", f"Не удалось создать (логин, возможно, занят): {escape(str(e))}"))
@@ -147,20 +149,30 @@ def users_passwd(rid: int, password: str = Form("")):
 _ROLE_LBL = {"admin": "админ", "manager": "управляющий", "employee": "интервьюер"}
 
 
-@router.post("/users/{rid}/role", response_class=HTMLResponse)
-def users_role(rid: int, role: str = Form(...)):
-    if not db.get_responsible(rid):
+@router.post("/users/{rid}/roles", response_class=HTMLResponse)
+async def users_roles(rid: int, request: Request):
+    """Set a user's MULTI-ROLE set from checkboxes (admin/manager/employee). Persisted
+    immediately. Used by BOTH the inline list editor and the edit page. `from_list=1` (a
+    hidden field the list editor sends) re-renders the whole list so the change shows in
+    place; otherwise the edit page is re-rendered."""
+    u = db.get_responsible(rid)
+    if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
-    if role not in _ROLES:
-        return _render_edit(rid, ("err", "Неизвестная роль."))
-    db.set_role(rid, role)
-    # a manager/admin is not anybody's subordinate — clear a stale manager link on promotion
-    if role in ("admin", "manager"):
+    form = await request.form()
+    roles = db.normalize_roles([r for r in form.getlist("role") if r in _ROLES])
+    db.set_roles(rid, roles)
+    # someone who no longer holds the interviewer role can't be a subordinate — clear a stale
+    # manager link (an admin/manager-only user is nobody's report)
+    if "employee" not in roles:
         try:
             db.set_manager(rid, None)
         except Exception:
             pass
-    return _render_edit(rid, ("ok", f"Роль изменена на «{_ROLE_LBL.get(role, role)}»."))
+    lbls = ", ".join(_ROLE_LBL.get(r, r) for r in roles)
+    notice = ("ok", f"Роли обновлены: {lbls}.")
+    if (form.get("from_list") or "") == "1":
+        return _render_list(notice)
+    return _render_edit(rid, notice)
 
 
 @router.post("/users/{rid}/manager", response_class=HTMLResponse)
@@ -181,7 +193,7 @@ def users_set_manager(rid: int, manager_id: str = Form("")):
     if mid_i == rid:
         return _render_edit(rid, ("err", "Нельзя назначить сотрудника управляющим самому себе."))
     m = db.get_responsible(mid_i)
-    if not m or m.get("role") != "manager":
+    if not m or not db.has_role(m, "manager"):
         return _render_edit(rid, ("err", "Выбранный пользователь не является управляющим."))
     db.set_manager(rid, mid_i)
     return _render_edit(rid, ("ok", f"Закреплён за управляющим «{escape(m.get('name') or '')}»."))
@@ -225,7 +237,7 @@ async def users_allocate_split(request: Request):
 def users_allocate_send(mailbox: str = Form(...), manager_id: int = Form(...)):
     """Send ONE specific pool interview (a persona mailbox) to a specific manager."""
     m = db.get_responsible(manager_id)
-    if not m or m.get("role") != "manager":
+    if not m or not db.has_role(m, "manager"):
         return _render_list(("err", "Выберите управляющего."))
     ok = False
     try:
@@ -262,6 +274,11 @@ def users_active(rid: int, active: str = Form(...)):
     return _render_edit(rid, ("ok", "Пользователь включён." if on else "Пользователь отключён (сессия отозвана)."))
 
 
+# The three REAL interviewers (Alan/Аружан/Нурбол) are protected from deletion — their logins
+# are literally "1"/"2"/"3". Do NOT delete them (see CLAUDE.md).
+_PROTECTED_LOGINS = {"1", "2", "3"}
+
+
 @router.post("/users/{rid}/delete", response_class=HTMLResponse)
 def users_delete(rid: int, me: dict = Depends(auth.current_responsible)):
     u = db.get_responsible(rid)
@@ -270,18 +287,19 @@ def users_delete(rid: int, me: dict = Depends(auth.current_responsible)):
     # Never let an admin delete the account they are signed in as (would lock themselves out).
     if me and me.get("id") == rid:
         return _render_edit(rid, ("err", "Нельзя удалить собственную учётную запись — вы под ней вошли."))
-    # The iv_interviews FK has no ON DELETE, so a user with any interview can't be hard-deleted
-    # (history is kept). Guide the operator to deactivate instead.
-    n = db.interview_count(rid)
-    if n:
+    # Protect the real interviewers 1/2/3.
+    if (u.get("login") or "") in _PROTECTED_LOGINS:
         return _render_edit(rid, ("err",
-            f"Нельзя удалить: за пользователем закреплено интервью — {n}. "
-            "Чтобы сохранить историю, отключите его (кнопка «Отключить») вместо удаления."))
+            "Этого пользователя удалять нельзя (штатный интервьюер). Можно только отключить."))
+    # Hard-delete ANY user (incl. deactivated / with interview history): the cascade returns
+    # their managed/assigned interviews to the pool and clears every FK before removing the row.
     try:
-        db.delete_responsible(rid)
+        db.delete_responsible_cascade(rid)
     except Exception as e:
         return _render_edit(rid, ("err", f"Не удалось удалить: {escape(str(e))}"))
-    return _render_list(("ok", f"Пользователь «{escape(str(u.get('name') or u.get('login') or rid))}» удалён."))
+    return _render_list(("ok",
+        f"Пользователь «{escape(str(u.get('name') or u.get('login') or rid))}» удалён. "
+        "Его собеседования (если были) возвращены в пул."))
 
 
 @router.post("/users/{rid}/availability", response_class=HTMLResponse)

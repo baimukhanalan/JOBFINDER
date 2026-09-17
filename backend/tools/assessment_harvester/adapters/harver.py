@@ -791,12 +791,15 @@ class HarverAdapter(Adapter):
         defer to the generic clicker."""
         if item.get("_harver_noa"):
             n = int(item.get("_noa_n") or 5)
-            pick = await self._vision_pick(page, n, item.get("question", ""))  # LIVE vision solve
-            src = "VISION"
-            if pick is None:               # vision unavailable/failed → rotating placeholder to keep moving
-                self._noa_i = getattr(self, "_noa_i", 0) + 1
-                pick = self._noa_i % n
-                src = "placeholder"
+            if isinstance(index, int) and 0 <= index < n:
+                pick, src = index, "answer_key"   # REPLAY: core resolved this from the pre-solved bank
+            else:
+                pick = await self._vision_pick(page, n, item.get("question", ""))  # LIVE vision solve
+                src = "VISION"
+                if pick is None:           # vision unavailable/failed → rotating placeholder to keep moving
+                    self._noa_i = getattr(self, "_noa_i", 0) + 1
+                    pick = self._noa_i % n
+                    src = "placeholder"
             clicked = await self._click_noa_option(page, pick)
             await page.wait_for_timeout(400)
             cont_ok = await self._click(page, "Continue")
@@ -806,12 +809,15 @@ class HarverAdapter(Adapter):
             return True
         if item.get("_harver_jk"):
             n = int(item.get("_jk_n") or 4)
-            pick = await self._vision_pick(page, n, item.get("question", ""), odd_one_out=False)
-            src = "VISION"
-            if pick is None:
-                self._jk_i = getattr(self, "_jk_i", 0) + 1
-                pick = self._jk_i % n
-                src = "placeholder"
+            if isinstance(index, int) and 0 <= index < n:
+                pick, src = index, "answer_key"   # REPLAY from the pre-solved bank
+            else:
+                pick = await self._vision_pick(page, n, item.get("question", ""), odd_one_out=False)
+                src = "VISION"
+                if pick is None:
+                    self._jk_i = getattr(self, "_jk_i", 0) + 1
+                    pick = self._jk_i % n
+                    src = "placeholder"
             clicked = await self._click_jk_option(page, pick)
             await page.wait_for_timeout(400)
             cont_ok = await self._click(page, "Continue")
@@ -838,13 +844,16 @@ class HarverAdapter(Adapter):
                 logger.info("[harver] CHAT giving up after %d turns (stuck=%d) exited=%s",
                             self._chat_turns, self._chat_stuck, exited)
                 return False
-            pick = await self._vision_pick(page, n, "customer-service chat: pick the BEST reply to send",
-                                           odd_one_out=False)
-            src = "VISION"
-            if pick is None:
-                self._chat_i = getattr(self, "_chat_i", 0) + 1
-                pick = self._chat_i % n
-                src = "placeholder"
+            if isinstance(index, int) and 0 <= index < n:
+                pick, src = index, "answer_key"   # REPLAY from the pre-solved bank
+            else:
+                pick = await self._vision_pick(page, n, "customer-service chat: pick the BEST reply to send",
+                                               odd_one_out=False)
+                src = "VISION"
+                if pick is None:
+                    self._chat_i = getattr(self, "_chat_i", 0) + 1
+                    pick = self._chat_i % n
+                    src = "placeholder"
             clicked = await self._click_chat_response(page, pick)
             await page.wait_for_timeout(500)
             # advance the conversation (Next/Send/Submit), else the module's generic forward

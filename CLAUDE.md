@@ -306,6 +306,23 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   "flush dense panel" rework was REVERTED). The `.cg-metaline` row is QUIET (`nowrap`, fixed `min-height` so a 0-badge card =
   a 5-badge card): stage dot · «Собес»/«Назначено» · assessment control · 📄 apps chip (`_apps_chip` maps `mailbox`→`cid` via
   `candidate_apps.id_for_email`) · «✉ N».
+- **Funnel «Действие» SPLIT into «Assessments» + «Действия»** (`mail_db._FUNNEL_STAGE_SQL`, dash-only, no reindex): the
+  `action_needed` furthest-stage bucket is split at QUERY time (per-message `kind` unchanged) — a candidate whose action mail
+  matches `_ASSESSMENT_SIGNAL_SQL` (`_TEST_SUBJECT_SQL` OR a known assessment SENDER: ttec/shl/talentcentral/hallo/maximus/
+  aspiringminds/amcat/conduent/harver/skillcheck) lands in `assessment`, else `action_needed`. The two are disjoint + sum to
+  the old total; `_FURTHEST_STAGE_SQL` is UNCHANGED (pool.py depends on it). `_FUNNEL_STAGE_SQL` carries the `%%` from
+  `_TEST_SUBJECT_SQL`, so a param-less query using it must `execute(sql, ())`. `_KIND['assessment']`=«Assessments» (owner-named,
+  English is intentional). The flat `/mail` inbox keeps ONE «Действие» chip whose count sums both (`render_inbox._n`).
+  «Тест сдан»/«Пропущенные» stay the assessment OUTCOME buckets. Tests: `test_candidates_inbox.py`.
+- **«Собес» = a PRIORITY surface** (`interview_priority.py`, route branch `eff=='interview'` → `candidates_inbox.render_interview_page`):
+  the whole interview set is loaded + enriched with a booking DEADLINE (parsed from the invite: «within N days»/«by <date>»/
+  «within 48 hours», else invite+5d ESTIMATED — `extract_deadline`, cached by msg hash), a potential SALARY («$Xk–$Yk/год»
+  chip: exact `job_catalog` comp, else the role-category MEDIAN via `est_comp.estimate`), and IT/non-IT `direction`. Split into
+  «IT-специальности» vs «Простые вакансии (не-IT)», sorted by salary (default) or urgency (`?sort=`); EXPIRED (deadline past)
+  собесы sink to the bottom, collapse into an «Истёкшие» `<details>`, dim, and their «Собес» control becomes a muted «бронь
+  истекла» (non-bookable). **Persona→jobid link is RECOVERED from the durable `status.json` (its `ts` is an ISO string — sort as
+  string, never `float()`) since `prefill_retention` prunes the per-job `persona.json` after 20d; the interview EMAIL role title
+  is the last-resort fallback for direction+salary.** Tests: `test_interview_priority.py`.
 - **Operator assessment control** on grouped cards (`_assessment_control` → `assessment_inner`): a pending TEST (matching
   `mail_db._TEST_SUBJECT_SQL` — any test/proctor/aptitude/amcat/harver/`video interview`/`magic link` subject) shows «✓
   Отметить»; marking re-tags rows `action_needed→assessment_done` so the item LEAVES «Действие» (shared helper
@@ -706,12 +723,23 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   from `uploads/prefill/<demo_id>/<jobid>/persona.json` `profile.sex`, else a fallback from the SYNTH name banks
   (`synth_persona._NAMES`, gendered first names — ~90% coverage); DIRECTION from the applied job's `role_category` (job_catalog,
   via the persona-dir `jobid`) mapped by `direction_of` → **it** (`IT_CATEGORIES`=Engineering/Data&ML/Product/Design) / **nonit**
-  / **other** (Other/unknown — NEVER dropped). `email→demo_id` = `data/demo_personas.json` (unique email key). NB direction
-  coverage is limited to personas whose prefill artifact still exists (retention prunes after 20d) → most are «other»; it grows
-  as fresh interviews arrive. `split({mid:N}, gender, direction)` blocks the MATCHING pool newest-first; `allocate_specific(
+  / **other** (Other/unknown — NEVER dropped). `email→demo_id` = `data/demo_personas.json` (unique email key). **jobid is
+  recovered from the DURABLE `status.json` when the per-job `persona.json` is gone (retention prunes after 20d) — `_base_meta` →
+  `_jobid_from_status`; `status.json`'s `ts` is an ISO string, sort as string; ~91% coverage now vs the old ~1%.** `_all_unallocated`
+  also runs `interview_priority.enrich_interview_groups(rows, hash_key='source_hash')` → each row gets a booking deadline +
+  salary + a refined direction (email-role fallback) + an **`expired`** flag. **EXPIRED (deadline strictly past) interviews are
+  NOT delegatable:** `unallocated`/`count_unallocated`/`facets`/`allocate_specific` + the /users email picker all exclude them
+  (`_match(...,include_expired=False)` default); pass `include_expired=True` only for the /users priority card that shows them
+  at the bottom. `split({mid:N}, gender, direction)` blocks the MATCHING (bookable) pool newest-first; `allocate_specific(
   mailbox, mid)` sends one by its unique e-mail; both store `jobid` on the row so the manager portal recomputes direction.
   Allocation = `db.allocate_interview` → `status='pool'`, `responsible_id` NULL, `manager_id`=mid, `jobid`, `announced=TRUE`.
-- **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): create (MULTI-ROLE checkboxes + optional
+- **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): **DELEGATION-FIRST layout** — the whole user
+  LIST + the «Добавить пользователя» form live in a right-side slide-out DRAWER (the «Список» header toggle → `uDrawer`; scrim +
+  Esc close; `#u-list` stays the auto-refresh swap target); the main column is the «Делегирование интервью» card + a
+  **«Приоритет интервью»** card beneath it (the SAME priority filter as the Собес surface: the free pool split IT / non-IT,
+  sorted by salary/urgency via `?pool_sort=`, each row `direction · $Xk/год · deadline`; EXPIRED collapse into «Истёкшие —
+  делегировать нельзя»). `routes_users` fetches `pool.unallocated(include_expired=True)` for the priority card but the
+  free-pool count/facets/picker use only bookable. Also: create (MULTI-ROLE checkboxes + optional
   supervising manager)/reset-password/link-telegram/toggle-active + **MULTI-ROLE edit** (`POST /users/{rid}/roles`, checkboxes
   admin/manager/employee; used by BOTH the INLINE per-card «Роли и доступ» editor — `from_list=1` re-renders the list in place —
   AND the edit page; `set_roles` normalises + mirrors primary) + **set a subordinate's manager** (`POST /users/{rid}/manager`) +

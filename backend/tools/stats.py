@@ -297,6 +297,11 @@ def compute_stats() -> dict:
         cc = outcome_c.get(comp, Counter())
         replied = sum(cc.values())
         interview = cc.get("interview", 0)
+        offer = cc.get("offer", 0)
+        # "invited" = jobs that reached the interview stage. An offer is downstream of
+        # an interview, so it counts here too. This is what «% собес.» / the focus lists
+        # rank on, so a company with offers but no interview-only jobs isn't buried last.
+        invited = interview + offer
         companies.append({
             "key": comp,
             "name": display.get(comp, comp),
@@ -307,9 +312,10 @@ def compute_stats() -> dict:
             "action_needed": cc.get("action_needed", 0),
             "interview": interview,
             "rejection": cc.get("rejection", 0),
-            "offer": cc.get("offer", 0),
+            "offer": offer,
+            "invited": invited,
             "reply_rate": round(100.0 * replied / n, 1) if n else 0.0,
-            "interview_rate": round(100.0 * interview / n, 1) if n else 0.0,
+            "interview_rate": round(100.0 * invited / n, 1) if n else 0.0,
         })
     companies.sort(key=lambda r: (r["interview"], r["applied"]), reverse=True)
 
@@ -323,6 +329,9 @@ def compute_stats() -> dict:
     total_interview = outcome_totals.get("interview", 0)
     total_offer = outcome_totals.get("offer", 0)
     total_rejection = outcome_totals.get("rejection", 0)
+    # jobs that reached the interview stage (offers included) — keeps the funnel
+    # monotonic (Собеседования ≥ Офферы) and drives «% собес.».
+    total_invited = total_interview + total_offer
 
     # daily trend (last 30 active days), inbound mail scoped to OUR applications
     days: dict[int, Counter] = defaultdict(Counter)
@@ -350,9 +359,10 @@ def compute_stats() -> dict:
             "interview": total_interview,
             "offer": total_offer,
             "rejection": total_rejection,
+            "invited": total_invited,
             "companies": len(companies),
             "reply_rate": round(100.0 * total_replied / total_applied, 1) if total_applied else 0.0,
-            "interview_rate": round(100.0 * total_interview / total_applied, 1) if total_applied else 0.0,
+            "interview_rate": round(100.0 * total_invited / total_applied, 1) if total_applied else 0.0,
         },
         "companies": companies,
         "roles": roles,

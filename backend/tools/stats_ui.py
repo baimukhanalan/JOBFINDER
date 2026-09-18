@@ -22,6 +22,10 @@ _OUTCOME_LABELS = {
     "offer": "Офферы", "interview": "Собеседования", "action_needed": "Требует действия",
     "rejection": "Отказы", "ack": "Заявка принята", "other": "Прочее",
 }
+# Region bars carry internal codes; localize the DISPLAY label only (US/CA/UK stay as-is).
+_REGION_LABELS = {
+    "UNKNOWN": "Не определён", "OTHER": "Другие", "Other": "Прочее", "other": "прочее",
+}
 
 
 def _fmt(n) -> str:
@@ -61,14 +65,23 @@ def _kpi_raw(label: str, value_str: str, sub: str = "", color: str = "") -> str:
 
 
 def _funnel(stages: list[tuple[str, int, str]], base: int) -> str:
-    """stages: [(label, value, color)]. Bar width ∝ value/base."""
+    """stages: [(label, value, color)]. Bar width ∝ value/base.
+
+    A funnel narrows monotonically: a later stage is never drawn wider than the one
+    above it (the bar is clamped) and the «↓ …% от пред.» drop marker is shown only
+    for a real decrease — never «↓ >100%» when a stage happens to exceed its
+    predecessor.
+    """
     rows = []
     prev = None
+    prev_w = None
     for label, val, color in stages:
         w = max(2.0, 100.0 * val / base) if base else 0.0
+        if prev_w is not None:
+            w = min(w, prev_w)   # never wider than the stage above
         pct = f"{100.0*val/base:.1f}%" if base else "—"
         step = ""
-        if prev is not None and prev:
+        if prev is not None and prev and val < prev:
             step = f'<span class="st-fn-step">↓ {100.0*val/prev:.1f}% от пред.</span>'
         rows.append(
             f'<div class="st-fn-row"><div class="st-fn-head"><b>{escape(label)}</b>'
@@ -76,6 +89,7 @@ def _funnel(stages: list[tuple[str, int, str]], base: int) -> str:
             f'<div class="st-fn-track"><div class="st-fn-bar" style="width:{w:.2f}%;'
             f'background:{color}"></div></div></div>')
         prev = val
+        prev_w = w
     return f'<div class="st-fn">{"".join(rows)}</div>'
 
 
@@ -222,7 +236,7 @@ def _role_section(b: dict) -> str:
 
 def _focus_lists(companies: list[dict]) -> str:
     invest = sorted(
-        [c for c in companies if c["applied"] >= 20 and c["interview"] > 0],
+        [c for c in companies if c["applied"] >= 20 and c["invited"] > 0],
         key=lambda c: c["interview_rate"], reverse=True)[:6]
     waste = sorted(
         [c for c in companies if c["applied"] >= 50 and c["reply_rate"] < 3.0],
@@ -232,7 +246,7 @@ def _focus_lists(companies: list[dict]) -> str:
         return (f'<div class="st-focus-row"><span class="st-focus-co">{escape(c["name"])}</span>'
                 f'<span class="st-mute">{_fmt(c["applied"])} подано</span>'
                 f'<span class="st-focus-r">{right}</span></div>')
-    inv = "".join(li(c, f'<b style="color:{_C["interview"]}">{c["interview"]} собес · {c["interview_rate"]:.0f}%</b>') for c in invest)
+    inv = "".join(li(c, f'<b style="color:{_C["interview"]}">{c["invited"]} собес · {c["interview_rate"]:.0f}%</b>') for c in invest)
     wst = "".join(li(c, f'<b style="color:{_C["rejection"]}">{c["reply_rate"]:.0f}% ответов</b>') for c in waste)
     return (
         '<div class="st-focus">'
@@ -277,7 +291,7 @@ def render_page(force: bool = False) -> str:
         _kpi("Подано", t["applied"], sub=f'{_fmt(t["attempts"])} попыток с повторами'),
         _kpi("Сабмиты", t["submitted"], color=_C["mute"]),
         _kpi("Ответили", t["replied"], sub=f'{t["reply_rate"]:.0f}% от поданных', color=_C["accent"]),
-        _kpi("Собеседования", t["interview"], sub=f'{t["interview_rate"]:.1f}% от поданных', color=_C["interview"]),
+        _kpi("Собеседования", t["invited"], sub=f'{t["interview_rate"]:.1f}% от поданных', color=_C["interview"]),
         _kpi("Отказы", t["rejection"], color=_C["rejection"]),
         _kpi("Офферы", t["offer"], color=_C["offer"]),
         _kpi_raw("Медиана вилки", _fmt_money(comp.get("median")), sub=comp_sub, color=_C["offer"]),
@@ -286,7 +300,7 @@ def render_page(force: bool = False) -> str:
     funnel = _funnel([
         ("Подано", t["applied"], _C["accent"]),
         ("Ответили", t["replied"], "#5b9bf0"),
-        ("Собеседования", t["interview"], _C["interview"]),
+        ("Собеседования", t["invited"], _C["interview"]),
         ("Офферы", t["offer"], _C["offer"]),
     ], base=t["applied"])
 
@@ -297,7 +311,8 @@ def render_page(force: bool = False) -> str:
 
     ats = _hbars([(r["ats"], r["applied"], r["interview"]) for r in b["ats"]],
                  _C["accent"], unit=" собес.")
-    regions = _hbars([(r["region"], r["applied"], 0) for r in b["regions"]], "#8a9099")
+    regions = _hbars([(_REGION_LABELS.get(r["region"], r["region"]), r["applied"], 0)
+                      for r in b["regions"]], "#8a9099")
 
     body = f"""
 <style>{_CSS}</style>
@@ -308,8 +323,9 @@ def render_page(force: bool = False) -> str:
 
 <div class="st-grid2">
   <section class="st-card"><h2 class="st-h">Воронка</h2>{funnel}
-    <p class="st-note">Подано → получили любой ответ → позвали на собеседование → оффер.
-    «Сабмит» ({_fmt(t['submitted'])}) — заявки, чья отправка подтверждена на стороне работодателя.</p>
+    <p class="st-note">Подано → получили любой ответ → позвали на собеседование (сюда входят и
+    дошедшие до оффера) → оффер. «Сабмит» ({_fmt(t['submitted'])}) — заявки, чья отправка
+    подтверждена на стороне работодателя.</p>
   </section>
   <section class="st-card"><h2 class="st-h">Состав ответов</h2>{donut}
     <p class="st-note">Здесь круговая диаграмма уместна — это доли одного целого (все ответы),
@@ -321,7 +337,9 @@ def render_page(force: bool = False) -> str:
 
 <section class="st-card"><div class="st-h-row"><h2 class="st-h">По компаниям</h2>
 <span class="st-mute">клик — сортировка · сейчас: Собес.</span></div>
-<div class="st-tbl-wrap">{_company_table(b['companies'])}</div></section>
+<div class="st-tbl-wrap">{_company_table(b['companies'])}</div>
+<p class="st-note">«% собес.» — доля поданных заявок, дошедших до собеседования или дальше;
+оффер входит сюда, поэтому у компании с «Собес.» = 0, но с офферами процент положительный.</p></section>
 
 <section class="st-card">{_role_section(b)}</section>
 
@@ -331,7 +349,9 @@ def render_page(force: bool = False) -> str:
   <section class="st-card"><h2 class="st-h">По регионам</h2>{regions}</section>
 </div>
 
-<section class="st-card"><h2 class="st-h">Динамика по дням</h2>{_trend(b['trend'])}</section>
+<section class="st-card"><h2 class="st-h">Динамика по дням</h2>{_trend(b['trend'])}
+<p class="st-note">Это объём входящих писем по дням (все сообщения), а не уникальные вакансии —
+поэтому значения здесь выше, чем в карточках вверху страницы, где каждая вакансия считается один раз.</p></section>
 {_JS}
 """
     return mailcrm_ui._page("stats", body)

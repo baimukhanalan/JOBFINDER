@@ -59,13 +59,16 @@ def test_company_aggregation_dedupes_retries(monkeypatch):
     assert acme["rejection"] == 1        # j2
     assert acme["ack"] == 1              # j3
     assert acme["offer"] == 0
+    assert acme["invited"] == 1          # interview + offer (no offers here)
     assert acme["reply_rate"] == 100.0
-    assert acme["interview_rate"] == 33.3
+    assert acme["interview_rate"] == 33.3  # invited(1) / applied(3)
 
     glx = by["globex"]
     assert glx["applied"] == 2
     assert glx["interview"] == 1
     assert glx["offer"] == 1
+    assert glx["invited"] == 2           # j4 interview + j5 offer
+    assert glx["interview_rate"] == 100.0  # invited(2) / applied(2), NOT interview/applied
 
 
 def test_totals_and_attempts(monkeypatch):
@@ -79,9 +82,11 @@ def test_totals_and_attempts(monkeypatch):
     assert t["interview"] == 2
     assert t["offer"] == 1
     assert t["rejection"] == 1
+    assert t["invited"] == 3             # interview(2) + offer(1)
     assert t["companies"] == 2
     assert sum(c["interview"] for c in b["companies"]) == t["interview"]
-    assert t["interview_rate"] == 40.0   # 2/5
+    assert sum(c["invited"] for c in b["companies"]) == t["invited"]
+    assert t["interview_rate"] == 60.0   # invited(3)/applied(5), NOT interview/applied
 
 
 def test_ats_region_share_the_base(monkeypatch):
@@ -154,3 +159,35 @@ def test_role_aggregation(monkeypatch):
     # global comp block ignores the two no-comp jobs
     assert b["comp"]["median"] == 150000     # median(120000, 150000, 200000)
     assert b["comp"]["coverage"] == 3
+
+
+def test_funnel_totals_are_monotonic(monkeypatch):
+    _install(monkeypatch)
+    b = stats.compute_stats()
+    t = b["totals"]
+    # "invited" = interview + offer, so the funnel never inverts: an offer stage can
+    # no longer exceed the interview stage above it.
+    assert t["invited"] == t["interview"] + t["offer"]
+    assert t["applied"] >= t["replied"] >= t["invited"] >= t["offer"]
+
+
+def test_funnel_render_guard_clamps_growth():
+    """_funnel must not draw a later stage wider than an earlier one, nor print a
+    «↓ >100%» drop marker when a stage exceeds its predecessor."""
+    from backend.tools import stats_ui
+    # deliberately non-monotonic: the last stage (10) is larger than the middle (5)
+    html = stats_ui._funnel(
+        [("Подано", 100, "#000"), ("Собеседования", 5, "#000"), ("Офферы", 10, "#000")],
+        base=100)
+    assert "width:10.00%" not in html         # later bar clamped, never wider than 5%
+    assert "↓ 200.0% от пред." not in html     # no down-arrow claiming growth
+    assert "↓" in html                         # a genuine drop still shows the marker
+
+
+def test_region_labels_localized():
+    """The «По регионам» bars must not surface raw English catch-all codes."""
+    from backend.tools import stats_ui
+    assert stats_ui._REGION_LABELS["UNKNOWN"] == "Не определён"
+    assert stats_ui._REGION_LABELS["OTHER"] == "Другие"
+    # the underlying stats keys are untouched (localization is display-only)
+    assert "UNKNOWN" not in stats_ui._REGION_LABELS.values()

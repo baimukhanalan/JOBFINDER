@@ -282,6 +282,7 @@ def _team_card(iv: dict, names: dict, as_id=None) -> str:
 
 def _filter_form(q: str, gender: str, direction: str, as_id=None) -> str:
     """Email-search + gender + direction filter over the managed pool (GET, preserves ?as=)."""
+    from backend.interviews import pool as iv_pool
     as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
     return (
         '<form class="mg-filter" method="get" action="/manage">'
@@ -289,7 +290,8 @@ def _filter_form(q: str, gender: str, direction: str, as_id=None) -> str:
         f'<input name="q" value="{escape(q or "", quote=True)}" autocomplete="off" '
         'placeholder="Поиск по e-mail" aria-label="Поиск по e-mail">'
         + _sel("gender", _GENDER_OPTS, gender, "Пол")
-        + _sel("direction", _DIR_OPTS, direction, "Направление") +
+        + _sel("direction", _DIR_OPTS, direction, "Направление")
+        + iv_pool.direction_legend_html("Что означает направление") +
         '<button class="hbtn" type="submit">Фильтр</button>'
         '</form>')
 

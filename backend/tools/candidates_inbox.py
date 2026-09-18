@@ -291,6 +291,11 @@ def _group_card(g: dict) -> str:
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
     card_cls = "cg-card unread" if unread else "cg-card"
+    # a Собес whose booking window has lapsed (and is not already booked) is dimmed — it sorts
+    # to the bottom and reads as "probably too late" without hiding it.
+    dd = g.get("deadline_days")
+    if dd is not None and dd < 0 and not g.get("assigned"):
+        card_cls += " cg-past"
 
     # ONE clean preview line: subject lead, then «· snippet» only when there's real snippet text.
     snip_txt = snip_prefix + snippet
@@ -492,6 +497,7 @@ _SORT_OPTS = [("salary", "Зарплата"), ("urgency", "Срочность")]
 
 
 def _sort_toggle(q: str, sort: str) -> str:
+    from backend.interviews import pool as iv_pool
     links = []
     for key, label in _SORT_OPTS:
         cls = "cg-sort-b active" if sort == key else "cg-sort-b"
@@ -500,8 +506,11 @@ def _sort_toggle(q: str, sort: str) -> str:
             params["q"] = q
         href = escape("/mail/candidates?" + urlencode(params), quote=True)
         links.append(f'<a class="{cls}" href="{href}">{escape(label)}</a>')
+    # ⓘ explains the IT / не-IT split of the two sections below (pool.direction_legend_html,
+    # ONE shared source of truth reused across every «направление» surface in the CRM).
     return ('<div class="cg-sortwrap"><span class="cg-sort-lbl">Приоритет</span>'
-            f'<div class="cg-sort" role="group" aria-label="Сортировка">{"".join(links)}</div></div>')
+            f'<div class="cg-sort" role="group" aria-label="Сортировка">{"".join(links)}</div>'
+            f'{iv_pool.direction_legend_html("Что означает IT / не-IT")}</div>')
 
 
 def _iv_section(title: str, groups: list) -> str:
@@ -568,6 +577,8 @@ _CG_CSS = """
 .cg-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.05);transition:border-color .16s,box-shadow .16s,transform .16s;}
 .cg-card:hover{border-color:var(--line-strong);transform:translateY(-1px);box-shadow:0 4px 14px rgba(16,24,40,.08);}
 .cg-card.open{border-color:var(--accent);box-shadow:0 2px 16px -8px rgba(26,115,232,.4);transform:none;}
+.cg-card.cg-past{opacity:.62;}
+.cg-card.cg-past:hover,.cg-card.cg-past.open{opacity:1;}
 .cg-head{display:flex;align-items:flex-start;gap:13px;padding:13px 16px;cursor:pointer;}
 .cg-head:hover{background:#f8fafd;}
 .cg-ava{width:38px;height:38px;font-size:15px;margin-top:1px;}

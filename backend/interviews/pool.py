@@ -17,6 +17,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+from html import escape
 
 from backend.interviews import db
 from backend.tools import mail_db
@@ -107,6 +108,32 @@ def direction_of(role_category: str | None) -> str:
     if role_category in NONIT_CATEGORIES:
         return "nonit"
     return "other"
+
+
+# ---- direction legend (ONE source of truth for the user-facing IT/Не-IT/Другое explainer) --
+# Reused by every surface that shows a «направление» filter or an IT/Не-IT/Другое cross-tab
+# (users_ui delegation card, candidates_inbox Собес priority surface, manage_ui filter). Keep
+# in sync with IT_CATEGORIES/NONIT_CATEGORIES above — update this text if those sets change.
+# Neutral RU, no stack disclosure.
+def direction_legend() -> str:
+    """Plain-text (no markup) explanation of the IT / Не-IT / Другое split, suitable for
+    dropping straight into a `_page_head(..., info=...)` popover or any other ⓘ tooltip."""
+    return (
+        "IT — сложные технические направления: Engineering, Data & ML, Product, Design. "
+        "Не-IT — Sales, Customer Support & Success (колл-центр/саппорт), Marketing, "
+        "People/Recruiting, Finance, Operations, Legal, Executive. "
+        "Другое — роль не распознана или не входит ни в один из бакетов выше."
+    )
+
+
+def direction_legend_html(aria_label: str = "Что означает направление") -> str:
+    """Ready-to-embed ⓘ popover for the legend text, reusing the same `.ph-info-d`/`.ph-pop`
+    markup+CSS as `mailcrm_ui._page_head`'s `info=` popover (that CSS ships globally on every
+    page via `mailcrm_ui._CSS`, so this renders correctly wherever it's dropped — no extra
+    styling needed). Use this directly next to a «направление» select/filter or an IT/Не-IT/
+    Другое cross-tab that ISN'T rendered through `_page_head`."""
+    return (f'<details class="ph-info-d dir-legend"><summary aria-label="{escape(aria_label, quote=True)}">ⓘ</summary>'
+            f'<div class="ph-pop">{escape(direction_legend())}</div></details>')
 
 
 def _registry() -> dict:

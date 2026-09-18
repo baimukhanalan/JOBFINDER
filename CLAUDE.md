@@ -99,6 +99,15 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   mail`) — AMCAT/TP harvest, paced 1 token/20min (bursts trip AMCAT **NE500**). Don't raise concurrency (parallel browsers
   fight the one virtual mic); don't enable `HARVEST_PROXY`. **MUST include `cd /home/projects/jobfinder` inside `sg mail -c`**
   (cron cwd is `$HOME`; `PYTHONPATH=.` alone → `No module named 'backend'`).
+- `*/15` `assessment_supervisor --max 8` (`flock -n logs/assess_supervisor.lock`, own fcntl lock too) — SELF-TERMINATING
+  Sutherland/Mac lane driver (`backend/tools/assessment_supervisor.py`): auto-STARTS the Mac CDP tunnel (socat →
+  `tailscale --socket=ts-egress/0 nc 100.86.135.112 9223` on `:9222`) ONLY when a FRESH Sutherland invite exists
+  (not CRM-done/skipped), drives it, and auto-STOPS (tears the tunnel down) when the queue drains OR the Mac is offline —
+  NEVER spins. A stuck (0-item, usually already-`evaluating`/submitted) invite is skipped ONLY after 3 cumulative low-yield
+  attempts (`data/sutherland_attempts.json`); a `proctor_camera` wall (Mac OBS down) is never skipped. Replaces the scratchpad
+  `mac_workers.sh` hack. The Mac must be AWAKE (no server-side lever — Chrome denies a CDP wake-lock; use caffeinate/pmset or
+  Remote-Login-then-caffeinate on the Mac). Health group «Ассессменты» (`health.assessment_lanes`) shows futile churn /
+  offline-Mac-while-running (a `down` row → `health --alert`) / idle-tunnel-still-up.
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
@@ -356,9 +365,13 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   **(3) `_is_nonaction_notification` demotes to `other`: Harver «Thanks for getting started» from `harver.com` with NO
   `journey.harver.com` link (a start NOTIFICATION — the real invite is a separate ttec/Taleo mail) + pure job-alert senders
   (`careeralerts`/`jobalerts`).** Do NOT widen scope — genuine NDA/identity/complete-application (iCIMS/TP/oracle/greenhouse)
-  and real test invites (ttec/shl/hallo/maximus) are KEPT (that's the residual ~398). Do NOT auto-skip via the stale
-  `_UNPASSABLE_TEST_SENDERS` (it lists ttec, which is PASSABLE now). One-time reclass = re-run `build_index_row` over the
-  action_needed rows → `mail_db.update_kinds` (`sg mail`); `CLASSIFIER_VERSION` bumped; **779 → 398, +272 → «Тест сдан».**
+  and real test invites (ttec/shl/hallo/maximus) are KEPT (that's the residual ~398). One-time reclass = re-run
+  `build_index_row` over the action_needed rows → `mail_db.update_kinds` (`sg mail`); `CLASSIFIER_VERSION` bumped;
+  **779 → 398, +272 → «Тест сдан».** **`_UNPASSABLE_TEST_SENDERS` = `('%conduent%',)` ONLY (2026-09-18): ttec (Harver) was
+  removed — Harver auto-passes now (8f7ce51), so `auto_skip_stale_assessments` must NOT park it. NEVER call a test with an
+  auto-pass lane «непроходимое» / auto-skip it: Maximus SHL-OPQ, Hallo, Harver/TTEC, Sutherland→AMCAT (Mac+OBS), banked-replay
+  ALL pass. Audit 2026-09-18: 711/743 currently-skipped mailboxes are from now-passable senders (mostly stale/`evaluating`
+  though — a re-queue of the FRESH ones is a data decision, not a blanket un-skip).**
 - **NEVER `TRUNCATE mail_index` to rebuild:** `mail_indexer.run_once()` only re-indexes CURRENT `candidates()`, so any
   mailbox whose registration was lost loses its rows permanently. Recover by re-registering every takhet.com maildir with
   mail, then re-index.

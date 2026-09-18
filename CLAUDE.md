@@ -331,7 +331,15 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   EXPLICIT-expired sink + collapse into «Истёкшие» + dim + get the muted «бронь истекла» (non-bookable) + are excluded from the
   delegatable pool. **Persona→jobid link is RECOVERED from the durable `status.json` (its `ts` is an ISO string — sort as string,
   never `float()`) since `prefill_retention` prunes the per-job `persona.json` after 20d; the interview EMAIL role title is the
-  last-resort fallback for direction+salary.** Tests: `test_interview_priority.py`.
+  last-resort fallback for direction+salary.** **SORT modes (`_SORT_OPTS` = Зарплата·Срочность·По давности; the /users
+  priority card mirrors them via `_pool_sort_toggle`/`?pool_sort=`):** `salary` (default, highest first) · `urgency` (booking-first:
+  EXPLICIT deadline soonest → then a live SELF-SCHEDULE link → then OLDEST invite «по старости»; estimated rows are ordered
+  oldest-first, NOT newest) · `age` (purely oldest application first). **SELF-SCHEDULE link** (`booking_link`, provider-scoped
+  regex — a bare `calendly.com`/`goodtime`/`modernloop` substring over-matches a privacy footer + a CDN image, verified) sets
+  `has_booking`/`booking_provider` → a «📅 запись» marker + the urgency boost. It's a PRESENCE signal only: the exact last
+  bookable SLOT/date is NOT read (Calendly/ModernLoop/GoodTime are JS SPAs behind bot-protection + the links soft-404 when the
+  window closes). Coverage is snippet-bound today (~2.6%); the enrichment reads subject+snippet (no body I/O), so full ~22%
+  coverage needs the booking URL extracted at INDEX time into a mail_index column (not yet wired). Tests: `test_interview_priority.py`.
 - **Operator assessment control** on grouped cards (`_assessment_control` → `assessment_inner`): a pending TEST (matching
   `mail_db._TEST_SUBJECT_SQL` — any test/proctor/aptitude/amcat/harver/`video interview`/`magic link` subject) shows «✓
   Отметить»; marking re-tags rows `action_needed→assessment_done` so the item LEAVES «Действие» (shared helper

@@ -126,6 +126,9 @@ _IC_MAIL = ('<svg class="cg-ic" viewBox="0 0 24 24"><rect x="2" y="4" width="20"
 _IC_CHECK = '<svg class="cg-ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
 _IC_CLOCK = ('<svg class="cg-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
              '<polyline points="12 7 12 12 15 14"/></svg>')
+_IC_CAL = ('<svg class="cg-ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/>'
+           '<line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/>'
+           '<line x1="16" y1="2" x2="16" y2="6"/></svg>')
 
 
 def _stage_dot(kind: str) -> str:
@@ -256,6 +259,17 @@ def _salary_chip(g: dict) -> str:
     return (f'<span class="cg-sal" title="{title}">{escape(lbl)}/год</span>')
 
 
+def _booking_chip(g: dict) -> str:
+    """Marker for a card whose invite carries a recruiter SELF-SCHEDULE link (Calendly/ModernLoop/
+    GoodTime/…): «📅 запись» — directly bookable now, so it's prioritised in the «Срочность» sort.
+    Presence signal only; the exact last-slot date isn't read from the scheduler (JS SPA + soft-404)."""
+    if not g.get("has_booking"):
+        return ""
+    prov = g.get("booking_provider") or ""
+    title = "есть ссылка записи" + (f" ({prov})" if prov else "") + " — можно бронировать"
+    return (f'<span class="cg-book" title="{escape(title, quote=True)}">{_IC_CAL}запись</span>')
+
+
 # --------------------------------------------------------------- group cards
 def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
     """One candidate card (collapsed). The header toggles the card open (cgToggle);
@@ -324,7 +338,7 @@ def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview">{preview}</div>'
-        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g), extra=_deadline_chip(g) + _salary_chip(g))}'
+        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g), extra=_booking_chip(g) + _deadline_chip(g) + _salary_chip(g))}'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -507,7 +521,7 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
 # whole interview set (small, ~hundreds) is loaded + enriched (interview_priority) with a
 # per-candidate scheduling deadline + potential salary + IT/non-IT direction, then split into
 # two sections and sorted. No infinite scroll (everything is loaded so the sort is global).
-_SORT_OPTS = [("salary", "Зарплата"), ("urgency", "Срочность")]
+_SORT_OPTS = [("salary", "Зарплата"), ("urgency", "Срочность"), ("age", "По давности")]
 
 
 def _sort_toggle(q: str, sort: str) -> str:
@@ -706,6 +720,7 @@ button.cg-ct:hover{color:var(--accent);}
 .cg-dl-urgent{color:var(--danger);background:#fce8e6;}
 .cg-dl-over{color:#fff;background:var(--danger);}
 .cg-sal{display:inline-flex;align-items:center;font-family:var(--ff-mono);font-size:11.5px;font-weight:700;line-height:1;white-space:nowrap;flex:0 0 auto;color:var(--ok);}
+.cg-book{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;line-height:1;white-space:nowrap;flex:0 0 auto;padding:3px 8px;border-radius:var(--r-full);color:var(--accent);background:var(--accent-soft,#e8f0fe);}
 /* message rows inside an expanded card */
 .cg-msg{border-bottom:1px solid var(--line);padding:10px 6px;cursor:pointer;}
 .cg-msg:last-child{border-bottom:0;}

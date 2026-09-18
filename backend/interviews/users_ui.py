@@ -160,6 +160,7 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-pri-dir{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--ink-soft);background:var(--panel-2);border-radius:var(--r-full);padding:2px 8px}
 .u-pri-sal{flex:0 0 auto;font-family:var(--ff-mono);font-size:12px;font-weight:700;color:var(--ok)}
 .u-pri-dl{flex:0 0 auto;font-size:11.5px;font-weight:700;border-radius:var(--r-full);padding:3px 9px;white-space:nowrap}
+.u-pri-bk{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--accent);background:var(--accent-soft,#e8f0fe);border-radius:var(--r-full);padding:2px 8px;white-space:nowrap}
 .u-pri-dl-ok{color:var(--ink-soft);background:var(--panel-2)}
 .u-pri-dl-soon{color:var(--warn);background:var(--warn-soft)}
 .u-pri-dl-urgent{color:var(--danger);background:#fce8e6}
@@ -407,7 +408,7 @@ _DIR_LBL = {"it": "IT", "nonit": "не‑IT", "other": "Другое"}
 
 def _pool_sort_toggle(sort: str) -> str:
     out = []
-    for k, l in (("salary", "Зарплата"), ("urgency", "Срочность")):
+    for k, l in (("salary", "Зарплата"), ("urgency", "Срочность"), ("age", "По давности")):
         cls = "u-pri-sortb active" if sort == k else "u-pri-sortb"
         out.append(f"<a class='{cls}' href='/users?pool_sort={k}#u-pri'>{escape(l)}</a>")
     return "<div class='u-pri-sort' role='group' aria-label='Сортировка'>" + "".join(out) + "</div>"
@@ -423,11 +424,13 @@ def _pool_row(r: dict) -> str:
     dir_html = f"<span class='u-pri-dir'>{escape(dir_lbl)}</span>" if dir_lbl else ""
     sal_html = f"<span class='u-pri-sal'>{escape(sal)}/год</span>" if sal else ""
     dl_html = f"<span class='u-pri-dl u-pri-dl-{dlvl}'>{escape(dtext)}</span>" if dtext else ""
+    bk_html = ("<span class='u-pri-bk' title='есть ссылка записи — можно бронировать'>📅 запись</span>"
+               if r.get("has_booking") else "")
     row_cls = "u-pri-row past" if dlvl == "over" else "u-pri-row"   # expired = dimmed + sorted last
     return (f"<div class='{row_cls}'>"
             f"<div class='u-pri-main'><span class='u-pri-nm'>{escape(nm)}</span>"
             f"<span class='u-pri-em'>{escape(mb)}</span></div>"
-            f"{dir_html}{sal_html}{dl_html}</div>")
+            f"{bk_html}{dir_html}{sal_html}{dl_html}</div>")
 
 
 def _pool_section(title: str, rows: list[dict]) -> str:
@@ -454,7 +457,7 @@ def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
     the admin can see what to delegate first. Read-only view; delegation itself is the card above.
     `pool_rows` must already be enriched by interview_priority.enrich_interview_groups."""
     from backend.tools import interview_priority as ip
-    sort = sort if sort in ("salary", "urgency") else "salary"
+    sort = sort if sort in ("salary", "urgency", "age") else "salary"
     rows = pool_rows or []
     if not rows:
         return ("<div class='u-card' id='u-pri'><h3>Приоритет интервью</h3>"
@@ -465,7 +468,7 @@ def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
     return ("<div class='u-card' id='u-pri'>"
             "<div class='u-pri-top'><h3>Приоритет интервью</h3>" + _pool_sort_toggle(sort) + "</div>"
             "<p class='u-chint'>Свободные интервью по приоритету — сложные (IT) и простые (не‑IT), "
-            "по зарплате или срочности брони слота.</p>"
+            "по зарплате, срочности брони слота или давности заявки.</p>"
             + _pool_section("IT-специальности", it)
             + _pool_section("Простые вакансии (не‑IT)", simple)
             + "</div>")

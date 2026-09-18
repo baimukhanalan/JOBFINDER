@@ -223,6 +223,45 @@ def deadline_text(g: dict) -> tuple[str, str]:
     return f"осталось {d} дн", lvl
 
 
+# ---- self-schedule / booking link ----------------------------------------------
+# The recruiter's SELF-SCHEDULE link (candidate picks a slot) — a strong "act NOW, it's directly
+# bookable" signal. Provider-specific + precise: the naive `calendly.com` / `goodtime` / `modernloop`
+# substring over-matches a privacy-policy footer link and a CDN image (a.goodtime.io/s3/…logo.png,
+# www.modernloop.io/privacy) — verified false positives — so each pattern pins the BOOKING path/host.
+_BOOKING_PROVIDERS = [
+    ("calendly", re.compile(
+        r"https?://calendly\.com/(?:d/[A-Za-z0-9\-]+"
+        r"|(?!assets|api|blog|help|integrations|app|features|pricing|about|event_types)"
+        r"[A-Za-z0-9._%\-]+/[A-Za-z0-9._%\-]+)[^\s\"'<>)\]]*", re.I)),
+    ("modernloop", re.compile(
+        r"https?://(?:app|scheduling)\.modernloop\.io/[^\s\"'<>)\]]+", re.I)),
+    ("goodtime", re.compile(
+        r"https?://(?:app|book|scheduling)\.goodtime\.io/[^\s\"'<>)\]]+"
+        r"|https?://goodtime\.io/(?:candidate|schedule|s)/[^\s\"'<>)\]]+", re.I)),
+    ("greenhouse", re.compile(
+        r"https?://(?:app\.greenhouse\.io/interviews|scheduling\.greenhouse\.io)/[^\s\"'<>)\]]+", re.I)),
+    ("cal.com", re.compile(
+        r"https?://cal\.com/[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+[^\s\"'<>)\]]*", re.I)),
+    ("savvycal", re.compile(
+        r"https?://savvycal\.com/[A-Za-z0-9._\-]+/[A-Za-z0-9._\-]+[^\s\"'<>)\]]*", re.I)),
+    ("google", re.compile(
+        r"https?://calendar\.google\.com/calendar/(?:u/\d+/)?appointments/[^\s\"'<>)\]]+", re.I)),
+]
+
+
+def booking_link(subject: str, body: str) -> tuple[str | None, str | None]:
+    """(url, provider) of a recruiter self-schedule link in the invite, or (None, None). Provider-
+    scoped so a marketing/CDN link never counts. This is a PRESENCE signal (the link is where the
+    candidate books the meeting); reading the last available slot from it is a separate async job
+    (schedulers are JS SPAs behind bot-protection + links soft-404 when the window closes)."""
+    text = f"{subject or ''}\n{body or ''}"
+    for prov, rx in _BOOKING_PROVIDERS:
+        m = rx.search(text)
+        if m:
+            return m.group(0).rstrip('.,)>"\'' ), prov
+    return None, None
+
+
 # ---- potential salary ------------------------------------------------------------
 def salary_value(job: dict) -> int:
     """A single comparable annual number for RANKING — the highest meaningful figure on the
@@ -345,6 +384,11 @@ def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") ->
         g["invite_ts"] = invite_ts or None
         g["invite_age_days"] = (int(math.floor((now - invite_ts) / _DAY))
                                 if invite_ts else None)
+        # self-schedule link (a "directly bookable now" signal; last-slot date is a separate job)
+        b_url, b_prov = booking_link(subj, body)
+        g["booking_url"] = b_url
+        g["booking_provider"] = b_prov
+        g["has_booking"] = bool(b_url)
         g.setdefault("direction", "other")
     return groups
 
@@ -363,19 +407,31 @@ _DEADLINE_FAR = 10 ** 12         # a deadline-less row sorts to the bottom of an
 
 def sort_groups(groups: list[dict], sort: str) -> list[dict]:
     """Order one section. An EXPIRED interview (a REALLY-PARSED past deadline — `is_expired`)
-    always sinks to the very bottom in both modes; an ESTIMATED-deadline row is NOT expired and
-    stays in the bookable set. Within the bookable set:
-      * sort='urgency' → rows with an EXPLICIT deadline first (soonest, most real urgency), then
-        ESTIMATED rows by FRESHNESS (newest invite first — most likely still open);
+    always sinks to the very bottom; an ESTIMATED-deadline row is NOT expired and stays bookable.
+    Within the bookable set:
+      * sort='urgency' → the owner's booking-first priority: rows with an EXPLICIT deadline first
+        (soonest), then rows carrying a live SELF-SCHEDULE link (directly bookable now), then the
+        rest — the last two BY APPLICATION AGE, OLDEST invite first («по старости» — the ones that
+        have waited longest are most at risk of going stale), since a booking-link's last-slot date
+        isn't reliably readable from the server (SPAs + soft-404). `deadline_ts` is used where it
+        IS explicit;
+      * sort='age' → purely oldest invite first (the «по старости» view);
       * sort='salary' (default) → highest potential salary first (then soonest deadline)."""
     if sort == "urgency":
         def _key(g):
             exp = 1 if is_expired(g) else 0
-            if g.get("deadline_estimated"):
-                # estimated: no real deadline → order by invite freshness (newest first)
-                return (exp, 1, -(g.get("invite_ts") or 0), -(g.get("salary_value") or 0))
-            return (exp, 0, g.get("deadline_ts") or _DEADLINE_FAR, -(g.get("salary_value") or 0))
+            age = g.get("invite_ts") or 0          # ASC ts == oldest first
+            if not g.get("deadline_estimated"):    # a REAL explicit deadline → soonest first
+                return (exp, 0, g.get("deadline_ts") or _DEADLINE_FAR, age)
+            # no explicit deadline: a live booking link ranks above one without, then OLDEST first
+            has_book = 0 if g.get("has_booking") else 1
+            return (exp, 1, has_book, age, -(g.get("salary_value") or 0))
         return sorted(groups, key=_key)
+    if sort == "age":                              # «по старости» — oldest application first
+        return sorted(groups, key=lambda g: (
+            1 if is_expired(g) else 0,
+            g.get("invite_ts") or _DEADLINE_FAR,   # ASC: oldest (smallest ts) first; unknown last
+            -(g.get("salary_value") or 0)))
     return sorted(groups, key=lambda g: (
         1 if is_expired(g) else 0,
         -(g.get("salary_value") or _SALARY_KEY_NA),

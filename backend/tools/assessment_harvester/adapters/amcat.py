@@ -46,7 +46,8 @@ logger = logging.getLogger("assessment_harvester")
 
 _TERMINAL_RE = re.compile(
     r"completed or submitted|no further action|message code tc|assessment time ?out|"
-    r"time allotted has expired|has expired|no longer available|link is invalid|"
+    r"time allotted ha(?:s|ve) expired|ha(?:s|ve) expired|error code lex\d*|"
+    r"no longer available|link is invalid|"
     r"session (has )?expired|been successfully logged out|"
     r"error code mic\d*|logged out because your mic|you have been logged out", re.I)
 

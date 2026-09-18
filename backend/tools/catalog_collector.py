@@ -25,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-from backend.applier import ats_boards
+from backend.applier import ats_boards, boards
 from backend.applier.regions import classify_with_source, open_anywhere
 from backend.applier.role_category import classify_role
 from backend.applier.comp_extract import extract_comp
@@ -38,12 +38,20 @@ _GH_ID = re.compile(r"(?:/jobs/|[?&]gh_jid=)(\d+)")
 
 
 def _slugs() -> dict:
-    """{ats: {slug: company_name}} from targets + discovered_slugs, supported ATS only."""
+    """{ats: {slug: company_name}} from targets + discovered_slugs, supported ATS only.
+
+    Applies the SAME junk-aggregator blocklist the discovery writer uses (`boards.blocked_slugs`,
+    e.g. nogigiddy) — discovery filters at write time but this path lacked the choke point, so a
+    blocked slug already in targets.json/discovered_slugs.json kept getting re-collected nightly."""
+    try:
+        blocked = boards.blocked_slugs()
+    except Exception:
+        blocked = set()
     out = {a: {} for a in ats_boards.SUPPORTED}
     try:
         for t in json.loads((DATA / "targets.json").read_text()):
             a = (t.get("ats") or "").lower()
-            if a in out and t.get("slug"):
+            if a in out and t.get("slug") and t["slug"] not in blocked:
                 out[a][t["slug"]] = t.get("company") or t["slug"]
     except Exception:
         pass
@@ -53,7 +61,8 @@ def _slugs() -> dict:
             for a, lst in disc.items():
                 if a in out:
                     for s in lst:
-                        out[a].setdefault(s, s)
+                        if s not in blocked:
+                            out[a].setdefault(s, s)
     except Exception:
         pass
     return out

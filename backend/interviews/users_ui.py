@@ -332,6 +332,7 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
     """The admin delegation tools: split the free interview pool across managers (filtered by
     gender + direction, N per manager), and send a specific interview (email search) to a
     specific manager. Rendered only when at least one manager exists."""
+    from backend.interviews import pool as iv_pool
     if not managers:
         return ("<div class='u-card'><h3>Делегирование интервью</h3>"
                 "<p class='u-chint'>Чтобы делить интервью, сначала добавьте хотя бы одного "
@@ -366,8 +367,10 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
         f"<datalist id='u-pool-emails'>{''.join(dl_opts)}</datalist>"
         f"<select name='manager_id' aria-label='Управляющий'>{manager_opts}</select>"
         "<button class='hbtn' type='submit'>Отправить</button></form></div>")
+    legend = iv_pool.direction_legend_html("Что означает IT / Не-IT / Другое")
     return (
-        "<div class='u-card'><h3>Делегирование интервью</h3>"
+        "<div class='u-card'>"
+        f"<div class='u-pri-top'><h3>Делегирование интервью</h3>{legend}</div>"
         f"<p class='u-chint'>В свободном пуле сейчас <b>{pool_count}</b> интервью "
         "(персоны с приглашением на собеседование, ещё не переданные никому). Разделите их "
         "между управляющими: выберите пол и направление, укажите сколько кому.</p>"

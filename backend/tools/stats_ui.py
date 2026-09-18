@@ -371,13 +371,13 @@ _CSS = """
 .st-lg{white-space:nowrap}
 .st-dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 /* hbars */
-.st-hb{display:grid;grid-template-columns:90px 1fr auto;align-items:center;gap:10px;margin-bottom:8px;font-size:12.5px}
+.st-hb{display:grid;grid-template-columns:minmax(90px,160px) 1fr auto;align-items:center;gap:10px;margin-bottom:8px;font-size:12.5px}
 .st-hb-l{font-weight:600;text-transform:capitalize;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .st-hb-track{height:12px;background:#f1f3f4;border-radius:5px;overflow:hidden}
 .st-hb-bar{height:100%;border-radius:5px}
 .st-hb-v{font-variant-numeric:tabular-nums;white-space:nowrap}
 /* focus */
-.st-focus{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.st-focus{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
 @media(max-width:760px){.st-focus{grid-template-columns:1fr}}
 .st-focus-card{border-radius:10px;padding:12px 14px}
 .st-focus-good{background:#e6f4ea;border:1px solid #ceead6}

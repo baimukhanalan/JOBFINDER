@@ -22,13 +22,22 @@
 }
 
 /* ---- scroll-reveal --------------------------------------------------------------
- * `.jfa-r` is the pending (about-to-reveal) state; anim.js adds it right before an
- * element scrolls into view, then flips `.jfa-in` on the next frame so the browser
- * actually animates the transition instead of snapping. Elements anim.js never
- * touches (no JS, or a selector miss) keep the page's normal, fully-visible layout. */
+ * Three-step so hiding is INSTANT and only the reveal animates:
+ *   1. `.jfa-r` alone sets the hidden state with no `transition` — applied
+ *      synchronously, so a from-visible element jumps to hidden on the same frame
+ *      instead of visibly fading out first (which a combined rule would do, since
+ *      any property present in a `transition:` list animates on ITS OWN first
+ *      value change too, including the very change that sets it up).
+ *   2. `.jfa-anim` (added a frame later) turns on the transition.
+ *   3. `.jfa-in` (added the frame after that) sets the revealed state, which now
+ *      animates because `.jfa-anim` was already in place before the value changed.
+ * anim.js drives this timing; elements it never touches (no JS, or a selector
+ * miss) keep the page's normal, fully-visible layout throughout. */
 .jfa-r{
   opacity: 0;
   transform: translateY(var(--jfa-dy));
+}
+.jfa-r.jfa-anim{
   transition: opacity var(--jfa-dur) var(--jfa-ease),
               transform var(--jfa-dur) var(--jfa-ease);
 }
@@ -38,7 +47,8 @@
 }
 /* opacity-only variant — for anything anim.js decides shouldn't receive a
  * transform (see the containing-block note above). */
-.jfa-ro{ opacity: 0; transition: opacity var(--jfa-dur) var(--jfa-ease); }
+.jfa-ro{ opacity: 0; }
+.jfa-ro.jfa-anim{ transition: opacity var(--jfa-dur) var(--jfa-ease); }
 .jfa-ro.jfa-in{ opacity: 1; }
 
 /* ---- shimmer skeleton (opt-in utility, not applied anywhere automatically —

@@ -92,6 +92,10 @@
     function markPending(el, i){
       if(el.hasAttribute('data-jfa-done')) return;
       el.setAttribute('data-jfa-done', '1');
+      // Step 1 (see anim.css): the hidden state ALONE, no transition class yet —
+      // applied synchronously so a from-visible element jumps to hidden on this
+      // same frame instead of visibly fading out (a combined class+transition
+      // rule animates its own first value change too).
       el.classList.add(isHeading(el) ? 'jfa-ro' : 'jfa-r');
       // small, capped stagger so a long list doesn't take forever to finish revealing
       var delay = Math.min((i || 0) * 40, 260);
@@ -99,15 +103,17 @@
     }
 
     function reveal(el){
-      // double-rAF: let the browser paint the hidden state first, then flip — a
-      // same-frame class swap wouldn't be seen as a transition at all.
+      // Step 2: turn on the transition (still no value change yet — nothing to
+      // animate this frame). Step 3, one frame later: flip to the revealed
+      // values, which now animates because the transition was already armed.
       requestAnimationFrame(function(){
+        el.classList.add('jfa-anim');
         requestAnimationFrame(function(){
           try{
             el.classList.add('jfa-in');
             setTimeout(function(){
               try{
-                el.classList.remove('jfa-r','jfa-ro');
+                el.classList.remove('jfa-r','jfa-ro','jfa-anim');
                 el.style.transitionDelay = '';
               }catch(_){}
             }, 900);

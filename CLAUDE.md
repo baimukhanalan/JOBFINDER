@@ -317,7 +317,11 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
 - **«Собес» = a PRIORITY surface** (`interview_priority.py`, route branch `eff=='interview'` → `candidates_inbox.render_interview_page`):
   the whole interview set is loaded + enriched with a booking DEADLINE, a potential SALARY («$Xk–$Yk/год» chip: exact
   `job_catalog` comp, else the role-category MEDIAN via `est_comp.estimate`), and IT/non-IT `direction`; split into «IT-специальности»
-  vs «Простые вакансии (не‑IT)» (non-breaking hyphen), sorted by salary (default) or urgency (`?sort=`). **Enrichment does ZERO
+  vs «Простые вакансии (не‑IT)» (non-breaking hyphen), sorted by salary (default) or urgency (`?sort=`). **The chip MUST agree
+  with the sort:** `salary_value` ranks on the highest figure (`est_total_max` first), so `salary_label` shows the posted range
+  PLUS «· ~est_total» when the total exceeds the posted ceiling (`comp_fmt._exceeds`) — else a lower-labelled card sorts above a
+  higher one for no visible reason. On this surface the redundant «• Собес» stage dot is suppressed
+  (`render_groups(hide_stage_dot=True)` — the «📅 Собес» action is the only stage cue needed). **Enrichment does ZERO
   file I/O — the interview subject/snippet/date come from `mail_index` (carried through the SQL as `iv_subject`/`iv_snippet`/`iv_ts`
   for grouped rows, `latest.snippet` for pool rows); a per-request 229-`.eml` MIME parse was ~26s cold and made the surface render
   IT=0/non-IT=229 until it warmed. `_msg_signals` is now a rare fallback only.** DEADLINE (`extract_deadline`): «within N days» /

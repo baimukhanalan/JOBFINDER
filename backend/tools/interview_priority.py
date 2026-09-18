@@ -242,11 +242,18 @@ def salary_value(job: dict) -> int:
 
 
 def salary_label(job: dict) -> str:
-    """A COMPACT comp string for a card chip: the posted range if present, else the estimated
-    total / base (prefixed «~»). '' when nothing. Uses comp_fmt so currency stays correct."""
+    """A COMPACT comp string for a card chip, CONSISTENT with `salary_value`'s RANKING: the posted
+    range, PLUS «· ~est_total» when the researched total EXCEEDS the posted ceiling — that total is
+    what `salary_value` ranks on, so without showing it a lower-labelled card sorts ABOVE a
+    higher-labelled one with no visible reason (same posted-vs-estimate convention as
+    `comp_fmt.comp_html`). No posted pay → the estimated total / base (prefixed «~»). '' when
+    nothing. Uses comp_fmt so currency stays correct."""
     from backend.tools import comp_fmt
-    s = comp_fmt.comp_summary(job or {})
+    j = job or {}
+    s = comp_fmt.comp_summary(j)
     if s["posted"]:
+        if s["est_total"] and comp_fmt._exceeds(j.get("est_total_max"), j.get("comp_max")):
+            return f'{s["posted"]} · ~{s["est_total"]}'
         return s["posted"]
     if s["est_total"]:
         return "~" + s["est_total"]

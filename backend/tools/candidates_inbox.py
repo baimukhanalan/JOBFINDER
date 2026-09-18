@@ -257,9 +257,10 @@ def _salary_chip(g: dict) -> str:
 
 
 # --------------------------------------------------------------- group cards
-def _group_card(g: dict) -> str:
+def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
     """One candidate card (collapsed). The header toggles the card open (cgToggle);
-    its body is filled lazily from /mail/candidates/thread on first open."""
+    its body is filled lazily from /mail/candidates/thread on first open. `hide_stage_dot`
+    drops the stage dot on a single-stage surface (see render_groups)."""
     mailbox = g.get("mailbox", "") or ""
     name = g.get("name") or (mailbox.split("@")[0] if mailbox else "?")
     avatar = (f'<span class="avatar cg-ava" style="background:{_avatar_color(name)}">'
@@ -275,7 +276,8 @@ def _group_card(g: dict) -> str:
     date = maildate(g.get("last_ts", 0))
 
     # Stage («Тихая строка»): colored dot + word, no pill. "" for the neutral «other» bucket.
-    stage_dot = _stage_dot(g.get("stage", "other"))
+    # Suppressed on a single-stage surface (the Собес page) where it only echoes the «📅 Собес» action.
+    stage_dot = "" if hide_stage_dot else _stage_dot(g.get("stage", "other"))
 
     n_msg = g.get("msg_count", 0)
     count_ct = (f'<span class="cg-ct" title="писем в переписке">{_IC_MAIL}{n_msg}</span>'
@@ -331,10 +333,12 @@ def _group_card(g: dict) -> str:
     )
 
 
-def render_groups(groups) -> str:
+def render_groups(groups, *, hide_stage_dot: bool = False) -> str:
     """Fragment: just the group cards. Used for the first page (inside #grouplist),
-    the /mail/candidates/more page fetches, and any AJAX list swap."""
-    return "".join(_group_card(g) for g in (groups or []))
+    the /mail/candidates/more page fetches, and any AJAX list swap. `hide_stage_dot`
+    drops the «• Собес» stage dot on a single-stage surface (the Собес priority page,
+    where every card is interview-stage and the dot only duplicates the «📅 Собес» action)."""
+    return "".join(_group_card(g, hide_stage_dot=hide_stage_dot) for g in (groups or []))
 
 
 # ------------------------------------------------------- expanded message rows
@@ -538,13 +542,13 @@ def _iv_section(title: str, groups: list) -> str:
     expired = [g for g in groups if _iv_expired(g)]
     head = (f'<div class="cg-sec"><span class="cg-sec-t">{escape(title)}</span>'
             f'<span class="cg-sec-n">{len(bookable)}</span></div>')
-    inner = (render_groups(bookable) if bookable else
+    inner = (render_groups(bookable, hide_stage_dot=True) if bookable else
              '<div class="cg-sec-empty">Нет собеседований в этой группе</div>')
     out = head + f'<div class="cg-sec-list">{inner}</div>'
     if expired:
         out += ('<details class="cg-exp"><summary>Истёкшие — бронь недоступна '
                 f'({len(expired)})</summary>'
-                f'<div class="cg-sec-list">{render_groups(expired)}</div></details>')
+                f'<div class="cg-sec-list">{render_groups(expired, hide_stage_dot=True)}</div></details>')
     return out
 
 
@@ -731,6 +735,7 @@ button.cg-ct:hover{color:var(--accent);}
   .cg-head{padding:14px;gap:12px;min-height:44px;}
   .cg-name{font-size:15px;}
   .cg-msg{padding:12px 6px;}
+  .cg-sort-b{height:40px;padding:0 18px;}   /* ≥40px tap target on phone (was 32px) */
 }
 """
 

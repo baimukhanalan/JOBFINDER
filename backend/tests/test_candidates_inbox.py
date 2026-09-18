@@ -320,6 +320,39 @@ def test_db_candidate_groups_sorted_by_last_ts_desc():
 
 
 @pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_candidate_groups_pagination_stable_no_duplicates():
+    # a UNIQUE tiebreaker (mailbox) makes LIMIT/OFFSET a total order → across infinite-scroll
+    # pages Postgres can no longer duplicate one row and skip another (last_ts alone is 1s-
+    # granular and 722 mailboxes share a timestamp). Page through a bounded window; expect no dup.
+    seen: list[str] = []
+    off = 0
+    for _ in range(12):
+        rows = mail_db.candidate_groups(limit=50, offset=off)
+        if not rows:
+            break
+        seen += [r["mailbox"] for r in rows]
+        off += 50
+    assert len(seen) == len(set(seen)), "candidate_groups pagination duplicated a mailbox"
+
+
+def test_mark_assessment_done_discards_from_skipped(tmp_path, monkeypatch):
+    # a passed test must leave the skipped-set (symmetry with mark_assessment_skipped) so the two
+    # on-disk sets can't disagree and leave a stale «Пропущен» membership for a passed persona.
+    import json
+    from backend.tools import mailcrm
+    email = "test_iv_done_skip_zzz@takhet.com"     # unique → the DB retag touches 0 real rows
+    done_p = tmp_path / "done.json"
+    skip_p = tmp_path / "skip.json"
+    skip_p.write_text(json.dumps([email]))
+    done_p.write_text(json.dumps([]))
+    monkeypatch.setattr(mailcrm, "_ASSESS_DONE_PATH", done_p)
+    monkeypatch.setattr(mailcrm, "_ASSESS_SKIPPED_PATH", skip_p)
+    mailcrm.mark_assessment_done(email)
+    assert email in json.loads(done_p.read_text())
+    assert email not in json.loads(skip_p.read_text())
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
 def test_mailcrm_candidate_groups_wrapper_adds_identity_keys():
     rows = mailcrm.candidate_groups(limit=2)
     for r in rows:

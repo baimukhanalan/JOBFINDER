@@ -150,6 +150,16 @@ def manage_assign(iid: int = Form(...), responsible_id: int = Form(...),
         rtz = target.get("tz") or slots.DEFAULT_TZ
         start_ts = naive.replace(second=0, microsecond=0, tzinfo=slots.zone(rtz)).astimezone(slots.UTC)
         end_ts = start_ts + timedelta(minutes=slots.DURATION_MIN)
+        # AVAILABILITY + OVERLAP gate (mirror service.assign): the manager UPDATE had ONLY the
+        # exact-start partial-unique guard, so an OVERLAPPING slot or one outside the interviewer's
+        # availability could double-book. Exclude this interview's own current booking (reassign).
+        avail = db.get_availability(responsible_id)
+        booked = db.booked_intervals(responsible_id, start_ts - timedelta(days=1),
+                                     start_ts + timedelta(days=1), exclude_id=iid)
+        if not slots.is_free_at(avail, rtz, booked, start_ts):
+            return _render(manager, is_admin_view,
+                           ("err", "Сотрудник недоступен в это время (нет окна или пересечение "
+                                   "с другим собесом) — выберите другое."))
 
     try:
         db.manager_assign_interview(iid, responsible_id, start_ts, end_ts)
@@ -168,7 +178,9 @@ def manage_unassign(iid: int = Form(...), as_: str = Form("", alias="as"),
     if manager is None:
         return RedirectResponse("/users", status_code=303)
     iv = db.interview_by_id(iid)
-    if not iv or iv.get("manager_id") != manager["id"]:
+    # reject a cancelled row too (mirror manage_assign) — else a crafted POST could resurrect a
+    # cancelled interview back into the pool.
+    if not iv or iv.get("manager_id") != manager["id"] or iv.get("status") == "cancelled":
         return _render(manager, is_admin_view, ("err", "Собес не из вашего пула."))
     db.manager_unassign_interview(iid)
     return _render(manager, is_admin_view, ("ok", "Собес возвращён в пул."))

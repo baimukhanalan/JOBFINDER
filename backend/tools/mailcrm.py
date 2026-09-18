@@ -295,16 +295,23 @@ def _write_assess_done(done: set) -> None:
 
 def _reclassify_assessment(email: str, to_done: bool) -> None:
     """Re-tag this mailbox's test/assessment rows in mail_index NOW so the CRM reflects the
-    change without waiting for a re-index — a marked test leaves «Действие» (action_needed →
-    assessment_done) immediately; un-marking reverses it. Any test kind (SHL/AMCAT/SkillCheck/
-    Harver/video), not just the SHL subject. Best-effort."""
-    frm, to = ("action_needed", "assessment_done") if to_done else ("assessment_done", "action_needed")
+    change without waiting for a re-index — a marked test leaves «Действие»/«Пропущен»
+    (→ assessment_done) immediately; un-marking reverses it. Any test kind (SHL/AMCAT/SkillCheck/
+    Harver/video), not just the SHL subject. Best-effort.
+
+    Marking DONE retags from BOTH 'action_needed' AND 'assessment_skipped', so a test marked done
+    AFTER it was skipped clears its stale assessment_skipped rows (the two on-disk sets overlap
+    heavily; done is the truthful outcome)."""
+    if to_done:
+        from_kinds, to = ["action_needed", "assessment_skipped"], "assessment_done"
+    else:
+        from_kinds, to = ["assessment_done"], "action_needed"
     try:
         with mail_db.conn() as c:
             cur = c.cursor()
-            cur.execute(f"UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind=%s "
+            cur.execute(f"UPDATE mail_index SET kind=%s WHERE mailbox=%s AND kind = ANY(%s) "
                         f"AND {mail_db._TEST_SUBJECT_SQL}",
-                        (to, email, frm))
+                        (to, email, from_kinds))
     except Exception:
         pass
 
@@ -326,6 +333,16 @@ def mark_assessment_done(name: str) -> None:
             _write_assess_done(done)
         except Exception:
             pass
+    # a PASSED test is not skipped — drop it from the skipped set too (symmetry with
+    # mark_assessment_skipped, which discards from the done set), so the two on-disk sets can't
+    # disagree and leave a stale «Пропущен» membership for a passed persona.
+    try:
+        skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
+        if email in skipped:
+            skipped.discard(email)
+            _write_assess_skipped(skipped)
+    except Exception:
+        pass
     _reclassify_assessment(email, to_done=True)
 
 

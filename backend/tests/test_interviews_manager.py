@@ -133,6 +133,57 @@ def test_iv_allocate_assign_and_load():
     assert "test_iv_m_p2@x.com" not in db.handled_pool_mailboxes()
 
 
+def test_iv_pool_delegation_is_not_an_assignment():
+    # M1: a status='pool' delegation row (responsible_id NULL) must NOT badge «Назначено» on the
+    # candidate card — only a truly-BOOKED interview (an attending responsible) is an assignment.
+    ids = _chain()
+    mb = "test_iv_m_pa@x.com"
+    iid = db.allocate_interview(mb, ids["mgrA"], subject="Interview P")
+    _mark_announced()
+    assert db.assignments_for_mailboxes([mb]) == {}      # pool row is NOT an assignment
+    db.manager_assign_interview(iid, ids["subS"])
+    _mark_announced()
+    a = db.assignments_for_mailboxes([mb])
+    assert mb in a and a[mb]["responsible_id"] == ids["subS"]   # booked → IS an assignment
+
+
+def test_iv_manage_assign_availability_gate():
+    # M2: a timed manager-assign must be gated on availability/overlap (not just the exact-start
+    # partial-unique) — an interviewer with no window can't be booked; one with a window can.
+    ids = _chain()
+    mb = "test_iv_m_av@x.com"
+    iid = db.allocate_interview(mb, ids["mgrA"], subject="Interview AV")
+    _login("test_iv_m_A")
+    start_local = "2026-12-15T10:00"
+    client.post("/manage/assign", data={"iid": iid, "responsible_id": ids["subS"],
+                                        "start_local": start_local}, follow_redirects=False)
+    _mark_announced()
+    row = db.interview_by_id(iid)
+    assert row["responsible_id"] is None and row["status"] == "pool"   # rejected: no availability
+    # give S a 24h window every weekday → the same slot is now bookable
+    db.set_availability(ids["subS"], [{"dow": d, "start_min": 0, "end_min": 0, "enabled": True}
+                                      for d in range(7)])
+    client.post("/manage/assign", data={"iid": iid, "responsible_id": ids["subS"],
+                                        "start_local": start_local}, follow_redirects=False)
+    _mark_announced()
+    row = db.interview_by_id(iid)
+    assert row["responsible_id"] == ids["subS"] and row["status"] == "assigned"
+
+
+def test_iv_manage_unassign_rejects_cancelled():
+    # M3: unassign must reject a cancelled row (mirror manage_assign) — no resurrection to pool.
+    ids = _chain()
+    mb = "test_iv_m_c@x.com"
+    iid = db.allocate_interview(mb, ids["mgrA"], subject="Interview C")
+    db.manager_assign_interview(iid, ids["subS"])
+    _mark_announced()
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_interviews SET status='cancelled' WHERE id=%s", (iid,))
+    _login("test_iv_m_A")
+    client.post("/manage/unassign", data={"iid": iid}, follow_redirects=False)
+    assert db.interview_by_id(iid)["status"] == "cancelled"   # NOT resurrected to pool
+
+
 # ---- auth routing (fail-closed) --------------------------------------------------
 def test_iv_manager_confined_to_manage_and_cabinet():
     ids = _chain()

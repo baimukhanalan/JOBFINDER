@@ -510,7 +510,7 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
           {where}
          GROUP BY mailbox
          {having}
-         ORDER BY last_ts DESC
+         ORDER BY last_ts DESC, mailbox DESC
          LIMIT %s OFFSET %s"""
     with _cur() as cur:
         cur.execute(agg_sql, tuple(wargs) + tuple(hargs) + (limit, offset))

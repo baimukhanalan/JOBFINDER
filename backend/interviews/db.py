@@ -473,8 +473,13 @@ def cancel_active_for_thread(mailbox: str, thread_key: str, exclude_id: int | No
 
 def assignments_for_mailboxes(mailboxes) -> dict:
     """{mailbox: {"id","responsible_id","responsible_name","start_ts","thread_key"}} — the
-    latest NON-cancelled interview each persona mailbox has, for badging «Назначено · <name>»
-    on the candidate cards. One row-query + one names-query; missing/empty input → {}."""
+    latest truly-BOOKED interview each persona mailbox has (an attending responsible), for
+    badging «Назначено · <name>» on the candidate cards. One row-query + one names-query;
+    missing/empty input → {}. **`responsible_id IS NOT NULL` is REQUIRED**: a `status='pool'`
+    delegation row (delegated to a manager but not yet booked — responsible_id NULL,
+    thread_key='') is NOT an assignment; counting it wrongly badged «Назначено» (green, no
+    name), hid the booking deadline, and let a «Собес» booking through its empty thread_key
+    skip the reassign-cancel in service.assign → a SECOND non-cancelled row (double-serve)."""
     mbs = [m for m in (mailboxes or []) if m]
     if not mbs:
         return {}
@@ -482,6 +487,7 @@ def assignments_for_mailboxes(mailboxes) -> dict:
         cur.execute(
             "SELECT DISTINCT ON (mailbox) mailbox, id, responsible_id, start_ts, thread_key "
             "FROM iv_interviews WHERE mailbox = ANY(%s) AND status <> 'cancelled' "
+            "AND responsible_id IS NOT NULL "
             "ORDER BY mailbox, created_at DESC", (mbs,))
         rows = [dict(r) for r in cur.fetchall()]
     rids = list({r["responsible_id"] for r in rows if r.get("responsible_id")})
@@ -594,15 +600,21 @@ def assigned_load(rids) -> dict:
         return {r[0]: int(r[1]) for r in cur.fetchall()}
 
 
-def booked_intervals(rid: int, since: datetime, until: datetime) -> list[tuple]:
+def booked_intervals(rid: int, since: datetime, until: datetime,
+                     exclude_id: int | None = None) -> list[tuple]:
     """(start_ts, end_ts) pairs of this responsible's non-cancelled interviews that
-    overlap [since, until)."""
+    overlap [since, until). `exclude_id` drops one interview row (its OWN current booking)
+    from the set — used when REASSIGNING that interview so its old slot doesn't self-conflict."""
+    sql = ("SELECT start_ts, end_ts FROM iv_interviews "
+           "WHERE responsible_id=%s AND status <> 'cancelled' "
+           "AND start_ts < %s AND end_ts > %s")
+    args: list = [rid, until, since]
+    if exclude_id is not None:
+        sql += " AND id <> %s"
+        args.append(exclude_id)
+    sql += " ORDER BY start_ts"
     with mail_db._cur(dict_rows=False) as cur:
-        cur.execute(
-            "SELECT start_ts, end_ts FROM iv_interviews "
-            "WHERE responsible_id=%s AND status <> 'cancelled' "
-            "AND start_ts < %s AND end_ts > %s ORDER BY start_ts",
-            (rid, until, since))
+        cur.execute(sql, tuple(args))
         return [(r[0], r[1]) for r in cur.fetchall()]
 
 

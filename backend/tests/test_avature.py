@@ -96,3 +96,18 @@ def test_screener_answer_supervisor_experience():
     # the CSR customer-service experience question still resolves
     vals2 = A("how much experience do you have in a customer service environment as a tier i csr?", {})
     assert vals2 and vals2[0] == "5+ years"   # ETALON: strongest tier first
+
+
+def test_employee_referral_screener_answered_no():
+    # Maximus added a REQUIRED "Were you referred by an existing employee?" step-1 select
+    # ~2026-09-12; unanswered, it was the lone required-empty field so the wizard never
+    # advanced and the whole Maximus/Avature lane went dead (clicked=0). A fresh synthetic
+    # persona was not referred -> No, on BOTH the step-1 select path (_SCREENERS) and the
+    # radio / later-step fallback (_screener_answer).
+    assert ("referred by", "No") in AvatureStrategy._SCREENERS
+    A = AvatureStrategy._screener_answer
+    assert A("were you referred by an existing employee?", {}) == ["No"]
+    assert A("employee referral - name of referring employee", {}) == ["No"]
+    # the substring must not steal the "preferred first name" identity field or unrelated Qs
+    assert A("preferred first name", {}) is None
+    assert A("are you legally authorized to work in the united states?", {}) == ["Yes"]

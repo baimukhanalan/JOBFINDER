@@ -589,6 +589,15 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   only UNANSWERED selects), Country-dependent State, select2 Languages/Skills; `_advance_wizard` walks the 3 steps declining
   demographics + answering truthfully + fills the final page before recording the Submit. `synth_persona` makes the persona
   LIVE at the job's city (`_city_from_title`). Tests: `test_avature.py`.
+  **DEAD-LANE INCIDENT 2026-09-12→18 (fixed): a NEW required step-1 select — "Were you referred by an existing employee?"
+  (`#6260`, No/Yes) — that Maximus added ~09-12 was the LONE required-empty field on step 1**, so `_rescan_required` reported
+  it, the wizard never advanced, and the co-pilot's submit gate refused every fill (`incomplete`) → `clicked=0/confirmed=0`
+  across ALL ~30 runs (starving the SHL-OPQ invite pipeline, since Maximus submits are its only fresh source). NO avature code
+  had changed — the whole break was this one added field. Fix: `_SCREENERS` now answers `("referred by","No")` (truthful — a
+  fresh synthetic persona was not referred) + a `_screener_answer` referral pattern for a radio/other-tenant rendering. When a
+  Maximus lane goes clicked=0 with the form otherwise loading, DIAGNOSE by driving one fill and reading `report["unfilled"]` —
+  a newly-required step-1 screener is the usual cause; add it to `_SCREENERS`. `"referred by"` is specific enough not to bind
+  the "Preferred First Name" text input (which isn't a `<select>`). Live-proven: step-1 unfilled 1→0, wizard advances again.
 - **Maximus SHL/OPQ assessment auto-completion** (`tools/shl_assessment.py`) — the one fully-passable assessment (personality,
   no right answer). REAL headful browser (SHL rejects headless — `DISPLAY=:98` + `sg mail`). `run_intro(link,
   persona, *, complete_scored=)` fills the intro + (with `SHL_COMPLETE_SCORED`, SYNTHETIC only) hands to `answer_scored`.

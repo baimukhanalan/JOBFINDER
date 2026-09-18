@@ -140,6 +140,13 @@ class AvatureStrategy(ApplyStrategy):
         ("previously worked for", "No"), ("18 years", "Yes"),
         ("authorized to work", "Yes"), ("require sponsor", "No"),
         ("is current position", "No"),
+        # "Were you referred by an existing employee?" — a REQUIRED step-1 select Maximus
+        # added ~2026-09-12; truthfully No for a fresh synthetic persona (nobody referred it).
+        # Left unanswered it was the LONE required-empty field on step 1, so the wizard never
+        # advanced and the co-pilot's submit gate refused (incomplete) → the lane went dead
+        # (clicked=0 across every run since 09-12). Substring "referred by" is specific enough
+        # not to bind the "Preferred First Name" text input (that isn't a <select> anyway).
+        ("referred by", "No"),
     )
 
     async def _fill_avature_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
@@ -181,6 +188,15 @@ class AvatureStrategy(ApplyStrategy):
                                      ["Customer Service", "Communication", "Data Entry",
                                       "Microsoft Office", "Call Center", "Telephone", "Typing"],
                                      allow_first=True)
+        except Exception:
+            pass
+        try:
+            # "How did you hear about us?" — a REQUIRED source-attribution select2 Maximus
+            # added ~2026-09-12 (the SECOND new step-1 field; see _SCREENERS note). Its native
+            # <select> carries no static options and is NOT marked required, so _rescan_required
+            # can't see it, yet Avature blocks the wizard until it's set — that silently killed
+            # every fill even after the referral field was answered.
+            await self._fill_hear_about_us(page)
         except Exception:
             pass
 
@@ -309,6 +325,63 @@ class AvatureStrategy(ApplyStrategy):
         except Exception:
             pass
         return picked
+
+    async def _fill_hear_about_us(self, page: Page) -> bool:
+        """Fill the REQUIRED "How did you hear about us?" source-attribution select2. Unlike the
+        Languages/Skills select2s this one LOADS all options on OPEN (no typing needed) and its
+        visible `.select2-selection` is 0-size (a Playwright `.click()` reports "not visible"),
+        so open it via a dispatched mousedown, then pick the company-website source — TRUTHFUL:
+        the synthetic persona found the posting on the Maximus careers site — else the first real
+        leaf option (any attribution beats a wizard-blocking empty required field). Idempotent."""
+        tagged = await page.evaluate(
+            """()=>{for(const l of document.querySelectorAll('label')){
+                if(!/how did you hear|hear about us/i.test(l.innerText||'')) continue;
+                const w=l.closest('div')||l.parentElement;
+                const c=w&&w.querySelector('.select2-container');
+                if(c){c.setAttribute('data-jfh','1');return true;}} return false;}""")
+        if not tagged:
+            return False
+        picked = ""
+        try:
+            # select2 opens on mousedown; dispatch it directly since the selection span can be
+            # 0-size (Playwright would refuse the click as "not visible").
+            await page.eval_on_selector(
+                ".select2-container[data-jfh='1'] .select2-selection",
+                "e=>e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}))")
+            await page.wait_for_timeout(1200)   # options load on open (grouped optgroups)
+            # Mark the chosen LEAF option (skip optgroup headers, which have a nested <ul>):
+            # prefer a company-website source, then a job-board, then any online source, else
+            # the first real leaf.
+            picked = await page.evaluate(
+                """()=>{const n=s=>(s||'').toLowerCase();
+                  const leaves=[...document.querySelectorAll('.select2-results__option')].filter(o=>
+                    (o.getAttribute('role')==='option') ||
+                    (!o.querySelector('ul') && !o.classList.contains('select2-results__group')
+                     && !o.classList.contains('select2-results__option--group')));
+                  const real=leaves.filter(o=>!/no results|searching|loading more/.test(n(o.innerText)));
+                  if(!real.length) return "";
+                  const pref=[/website/, /indeed|linkedin|ziprecruiter|glassdoor|career.?builder|job.?board/,
+                              /online|internet|google|search|social/];
+                  let pick=null;
+                  for(const re of pref){pick=real.find(o=>re.test(n(o.innerText)));if(pick)break;}
+                  if(!pick) pick=real[0];
+                  pick.setAttribute('data-jfhpick','1');
+                  return (pick.innerText||'').trim();}""")
+            if picked:
+                try:
+                    await page.click(".select2-results__option[data-jfhpick='1']", timeout=3000)
+                except Exception:
+                    # select2 commits on mouseup; dispatch it as a fallback for a 0-size result.
+                    await page.eval_on_selector(
+                        ".select2-results__option[data-jfhpick='1']",
+                        "e=>{e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click();}")
+                await page.wait_for_timeout(400)
+            else:
+                await page.keyboard.press("Escape")
+        except Exception as exc:
+            logger.debug("avature: hear-about-us fill raised: %s", exc)
+            return False
+        return bool(picked)
 
     async def _pick_first_option(self, page: Page, label_substr: str, prefer=()) -> bool:
         """For a required self-report select (e.g. Skills), pick a preferred option if present
@@ -637,6 +710,12 @@ class AvatureStrategy(ApplyStrategy):
             # ("Select an option") — pick the affirmative certification option.
             return ["I acknowledge", "I certify", "I agree", "I understand", "I accept",
                     "Acknowledge", "Yes"]
+        # Employee-referral screener ("Were you referred by an existing employee?" /
+        # "employee referral"): a fresh synthetic persona was NOT referred -> No. Handled on
+        # step 1 by _SCREENERS; this covers a radio / later-step / other-tenant rendering.
+        if re.search(r"referred by (an?|any|a current|an existing) (existing )?employee|"
+                     r"employee referral|were you referred\b", t):
+            return ["No"]
         # A bilingual-role Yes/No screener ("Are you able to speak, read, and translate in
         # <lang> and English?"). The synth persona is DESIGNED to fit the bilingual role
         # (owner policy — same as the Spanish-bilingual design), so answer Yes. MUST come

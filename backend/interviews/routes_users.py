@@ -49,16 +49,12 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
     pool_facets: dict = {}
     mgr_alloc: dict = {}
     try:
-        # the WHOLE free interview pool — drives the email-search datalist AND the new priority
-        # card (split IT/non-IT, sorted by salary/urgency). enrich adds deadline + salary; the
-        # deadline parse is cached by message hash so this stays cheap after the first render.
-        pool_rows = pool.unallocated(limit=None)
-        pool_count = len(pool_rows)
-        try:
-            from backend.tools import interview_priority
-            interview_priority.enrich_interview_groups(pool_rows, hash_key="source_hash")
-        except Exception:
-            pass
+        # The WHOLE free pool (incl. EXPIRED) — the priority card SHOWS expired at the bottom
+        # (dimmed, «делегировать нельзя»); pool.unallocated already enriched each row with
+        # deadline + salary + direction + an `expired` flag (cached by message hash, so cheap).
+        pool_rows = pool.unallocated(limit=None, include_expired=True)
+        # counts + facets reflect only STILL-BOOKABLE interviews (expired can't be delegated).
+        pool_count = pool.count_unallocated()
         managers = db.list_managers(active_only=True)
         if managers:
             pool_facets = pool.facets()

@@ -120,26 +120,57 @@ def extract_deadline(subject: str, body: str, invite_ts: int) -> tuple[int | Non
     return invite_ts + DEFAULT_DAYS * _DAY, True
 
 
-# cache the parsed deadline by the immutable message hash (email content never changes per hash)
-_DL_CACHE: dict[str, tuple[int | None, bool]] = {}
+# cache the parsed email signals by the immutable message hash (content never changes per hash)
+_MSG_CACHE: dict[str, dict] = {}
 
 
-def _deadline_for_hash(iv_hash: str) -> tuple[int | None, bool]:
-    if not iv_hash:
-        return None, True
-    if iv_hash in _DL_CACHE:
-        return _DL_CACHE[iv_hash]
-    res: tuple[int | None, bool] = (None, True)
+def _msg_signals(msg_hash: str) -> dict:
+    """{deadline_ts, estimated, subject, body} for one interview message hash — the file is
+    immutable, so it is read + parsed ONCE per hash and the whole-pool enrich pays each parse a
+    single time. Body truncated (role classification only needs the top)."""
+    if not msg_hash:
+        return {"deadline_ts": None, "estimated": True, "subject": "", "body": ""}
+    if msg_hash in _MSG_CACHE:
+        return _MSG_CACHE[msg_hash]
+    res = {"deadline_ts": None, "estimated": True, "subject": "", "body": ""}
     try:
         from backend.tools import mailcrm
-        m = mailcrm.get_message(iv_hash, mark=False)   # mark=False → never flips new/→cur/
+        m = mailcrm.get_message(msg_hash, mark=False)   # mark=False → never flips new/→cur/
         if m:
+            subj = m.get("subject") or ""
             body = m.get("plain") or m.get("html") or m.get("snippet") or ""
-            res = extract_deadline(m.get("subject") or "", body, m.get("date_ts") or 0)
+            dl, est = extract_deadline(subj, body, m.get("date_ts") or 0)
+            res = {"deadline_ts": dl, "estimated": est, "subject": subj, "body": body[:2000]}
     except Exception:
-        res = (None, True)
-    _DL_CACHE[iv_hash] = res
+        pass
+    _MSG_CACHE[msg_hash] = res
     return res
+
+
+def _deadline_for_hash(msg_hash: str) -> tuple[int | None, bool]:
+    s = _msg_signals(msg_hash)
+    return s["deadline_ts"], s["estimated"]
+
+
+def _role_from_email(subject: str, body: str) -> str | None:
+    """Recover an APPROXIMATE role_category from the interview invitation itself (the email is
+    never pruned, unlike the prefill artifact) — the durable fallback when the persona's jobid is
+    gone. Maps the invite's role title via the 13-bucket classifier; None when unclassifiable."""
+    try:
+        from backend.applier import role_category
+        cat, _ = role_category.classify_role(subject or "", "")
+        if (not cat or cat == "Other") and body:
+            cat, _ = role_category.classify_role(f"{subject} {body[:400]}", "")
+        return cat if (cat and cat != "Other") else None
+    except Exception:
+        return None
+
+
+def is_expired(g: dict) -> bool:
+    """True when the booking window has lapsed (deadline strictly in the past). A None deadline
+    (unknown) is NOT expired. Drives «делегировать нельзя» + sink-to-bottom + pool exclusion."""
+    d = g.get("deadline_days")
+    return d is not None and d < 0
 
 
 def days_left(deadline_ts: int | None, now: int | None = None) -> int | None:
@@ -204,10 +235,17 @@ def salary_label(job: dict) -> str:
 def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") -> list[dict]:
     """Add priority signals to each interview row (mutates + returns). Adds:
       deadline_ts, deadline_days (whole days left, may be negative), deadline_estimated,
-      direction (it|nonit|other), role_category, jobid, salary_value, salary_label.
+      direction (it|nonit|other), role_category, jobid, salary_value, salary_label,
+      salary_estimated (True when the salary is a category median, not the job's posted comp).
     `hash_key` is the row field holding the interview message hash the deadline is parsed from
-    ('iv_hash' for grouped-inbox rows, 'source_hash' for pool rows). Best-effort — any failure
-    just leaves the row without that signal."""
+    ('iv_hash' for grouped-inbox rows, 'source_hash' for pool rows).
+
+    Coverage: the persona→job link (prefill artifact) is pruned by retention after 20 days, so
+    for most of the (older) interview cohort the exact jobid/comp is gone. We recover it from the
+    durable status.json first (pool._base_meta), and where even that is missing OR the role is
+    unclassified, fall back to the interview EMAIL — its role title → role_category → direction +
+    the category's MEDIAN est-comp — so EVERY candidate gets a direction + an approximate salary.
+    Best-effort — any failure just leaves the row without that signal."""
     groups = groups or []
     if not groups:
         return groups
@@ -233,18 +271,43 @@ def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") ->
             jobs = catalog_db.jobs_by_ids(ids)
     except Exception:
         jobs = {}
+    try:
+        from backend.interviews.pool import direction_of as _direction_of
+    except Exception:
+        _direction_of = None
     now = int(time.time())
     for g in groups:
         job = {}
         jid = g.get("jobid")
         if jid and str(jid).isdigit():
             job = jobs.get(int(jid)) or {}
+        sig = _msg_signals(g.get(hash_key) or "")
+        # refine an unknown / «Other» direction from the interview email's role title
+        cat = g.get("role_category")
+        if (not cat or cat == "Other"):
+            ecat = _role_from_email(sig["subject"], sig["body"])
+            if ecat:
+                cat = ecat
+                g["role_category"] = cat
+                if _direction_of:
+                    g["direction"] = _direction_of(cat)
+        # salary: the job's exact comp when we have it, else the category MEDIAN (approximate)
+        has_comp = any(job.get(k) for k in ("comp_min", "comp_max", "est_total_min",
+                                            "est_total_max", "est_base_min", "est_base_max"))
+        if not has_comp:
+            try:
+                from backend.applier import est_comp
+                job = est_comp.estimate(cat, ["US"])
+                g["salary_estimated"] = True
+            except Exception:
+                pass
+        else:
+            g["salary_estimated"] = False
         g["salary_value"] = salary_value(job)
         g["salary_label"] = salary_label(job)
-        dl_ts, est = _deadline_for_hash(g.get(hash_key) or "")
-        g["deadline_ts"] = dl_ts
-        g["deadline_estimated"] = est
-        g["deadline_days"] = days_left(dl_ts, now)
+        g["deadline_ts"] = sig["deadline_ts"]
+        g["deadline_estimated"] = sig["estimated"]
+        g["deadline_days"] = days_left(sig["deadline_ts"], now)
         g.setdefault("direction", "other")
     return groups
 
@@ -261,13 +324,25 @@ _SALARY_KEY_NA = -1              # a jobless / no-comp row sorts to the bottom o
 _DEADLINE_FAR = 10 ** 12         # a deadline-less row sorts to the bottom of an urgency sort
 
 
+def _is_actionable(g: dict) -> bool:
+    """A booking deadline still in the future (or today) — i.e. one the operator can still act
+    on. An OVERDUE window (the invite lapsed) is not actionable and sinks in the urgency sort."""
+    d = g.get("deadline_days")
+    return d is not None and d >= 0
+
+
 def sort_groups(groups: list[dict], sort: str) -> list[dict]:
-    """Order one section. sort='urgency' → soonest deadline first (then higher salary);
-    sort='salary' (default) → highest potential salary first (then soonest deadline)."""
+    """Order one section. In BOTH modes a still-bookable interview always outranks an EXPIRED
+    one — a months-old lapsed booking window is no longer actionable, so it sinks to the very
+    bottom instead of burying (urgency) or being interleaved with (salary) the ones the operator
+    can still book. Within the still-bookable group: sort='urgency' → soonest deadline first
+    (then higher salary); sort='salary' (default) → highest salary first (then soonest deadline)."""
     if sort == "urgency":
         return sorted(groups, key=lambda g: (
+            0 if _is_actionable(g) else 1,
             g.get("deadline_ts") or _DEADLINE_FAR,
             -(g.get("salary_value") or 0)))
     return sorted(groups, key=lambda g: (
+        0 if _is_actionable(g) else 1,
         -(g.get("salary_value") or _SALARY_KEY_NA),
         g.get("deadline_ts") or _DEADLINE_FAR))

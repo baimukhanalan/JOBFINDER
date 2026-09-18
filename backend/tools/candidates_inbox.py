@@ -243,12 +243,14 @@ def _deadline_chip(g: dict) -> str:
 
 
 def _salary_chip(g: dict) -> str:
-    """Compact potential-salary chip for a Собес card (from the applied job's comp)."""
+    """Compact potential-salary chip for a Собес card — the applied job's comp, or (when the job
+    link was pruned) the role-category median. «~» already marks an estimate; «/год» = annual."""
     lbl = g.get("salary_label")
     if not lbl:
         return ""
-    return (f'<span class="cg-sal" title="потенциальная зарплата по вакансии">'
-            f'{escape(lbl)}</span>')
+    title = ("ориентировочная зарплата по направлению (год)" if g.get("salary_estimated")
+             else "потенциальная зарплата по вакансии (год)")
+    return (f'<span class="cg-sal" title="{title}">{escape(lbl)}/год</span>')
 
 
 # --------------------------------------------------------------- group cards
@@ -281,12 +283,18 @@ def _group_card(g: dict) -> str:
     # else «Собес» when the candidate has an interview mail, else nothing.
     sobes = ""
     asg = g.get("assigned")
+    dd = g.get("deadline_days")
     if asg:
         sobes = _iv_assigned(mailbox, asg.get("thread_key", "") or "",
                              asg.get("responsible_name") or "")
     elif g.get("iv_hash"):
-        sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
-                          as_span=True)
+        if dd is not None and dd < 0:
+            # booking window lapsed → not bookable/delegatable; a muted marker replaces «Собес»
+            sobes = ('<span class="cg-noassign" title="срок бронирования истёк — '
+                     'делегировать нельзя">бронь истекла</span>')
+        else:
+            sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
+                              as_span=True)
 
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
@@ -513,13 +521,27 @@ def _sort_toggle(q: str, sort: str) -> str:
             f'{iv_pool.direction_legend_html("Что означает IT / не-IT")}</div>')
 
 
+def _iv_expired(g: dict) -> bool:
+    d = g.get("deadline_days")
+    return d is not None and d < 0 and not g.get("assigned")
+
+
 def _iv_section(title: str, groups: list) -> str:
-    """One direction section (header + count + its cards)."""
+    """One direction section: still-bookable собесы shown, EXPIRED ones (booking window lapsed)
+    collapsed into an «Истёкшие» details at the bottom so the actionable list stays short. The
+    header count is the bookable count."""
+    bookable = [g for g in groups if not _iv_expired(g)]
+    expired = [g for g in groups if _iv_expired(g)]
     head = (f'<div class="cg-sec"><span class="cg-sec-t">{escape(title)}</span>'
-            f'<span class="cg-sec-n">{len(groups)}</span></div>')
-    inner = (render_groups(groups) if groups else
+            f'<span class="cg-sec-n">{len(bookable)}</span></div>')
+    inner = (render_groups(bookable) if bookable else
              '<div class="cg-sec-empty">Нет собеседований в этой группе</div>')
-    return head + f'<div class="cg-sec-list">{inner}</div>'
+    out = head + f'<div class="cg-sec-list">{inner}</div>'
+    if expired:
+        out += ('<details class="cg-exp"><summary>Истёкшие — бронь недоступна '
+                f'({len(expired)})</summary>'
+                f'<div class="cg-sec-list">{render_groups(expired)}</div></details>')
+    return out
 
 
 def render_interview_page(groups, *, q: str = "", sort: str = "salary",
@@ -653,6 +675,16 @@ button.cg-ct:hover{color:var(--accent);}
 .cg-sec-n{font-family:var(--ff-mono);font-size:11.5px;font-weight:700;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 9px;}
 .cg-sec-list{display:flex;flex-direction:column;gap:11px;}
 .cg-sec-empty{padding:14px;color:var(--ink-mute);font-size:13px;text-align:center;border:1px dashed var(--line-strong);border-radius:var(--r);}
+/* collapsed «Истёкшие» bucket (expired собесы) at the bottom of a section */
+.cg-exp{margin-top:10px;border-top:1px dashed var(--line-strong);padding-top:8px;}
+.cg-exp>summary{cursor:pointer;list-style:none;font-size:12.5px;font-weight:700;color:var(--ink-mute);display:flex;align-items:center;gap:7px;padding:8px 2px;user-select:none;}
+.cg-exp>summary::-webkit-details-marker{display:none;}
+.cg-exp>summary::before{content:'▸';font-size:11px;color:var(--ink-mute);}
+.cg-exp[open]>summary::before{content:'▾';}
+.cg-exp>summary:hover{color:var(--ink-soft);}
+.cg-exp .cg-sec-list{margin-top:8px;}
+/* muted «бронь истекла» marker (replaces «Собес» on an expired card) */
+.cg-noassign{display:inline-flex;align-items:center;font-size:12px;font-weight:700;color:var(--ink-mute);white-space:nowrap;flex:0 0 auto;}
 .cg-dl{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;line-height:1;white-space:nowrap;flex:0 0 auto;padding:3px 8px;border-radius:var(--r-full);}
 .cg-dl .cg-ic{width:12px;height:12px;}
 .cg-dl-ok{color:var(--ink-soft);background:var(--panel-2);}

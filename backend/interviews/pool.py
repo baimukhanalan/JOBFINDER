@@ -175,9 +175,38 @@ def _name_gender() -> dict:
     return _NAME_GENDER
 
 
+def _jobid_from_status(demo_id: str) -> str | None:
+    """Recover a persona's jobid from uploads/prefill/<demo_id>/status.json when its per-job
+    persona.json artifacts have been pruned by prefill_retention — status.json (a flat
+    {jobid: {status, ts}} map) SURVIVES that pruning, so it keeps the persona→job link durable
+    for the interview cohort (almost all older than the 20-day retention window). Prefer a
+    submitted job, else the most recent."""
+    try:
+        with open(os.path.join(_PREFILL, demo_id, "status.json"), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    rows = []
+    for jid, info in d.items():
+        if not str(jid).isdigit():
+            continue
+        info = info if isinstance(info, dict) else {}
+        # `ts` is an ISO-8601 STRING here ("2026-08-27T05:42:02+00:00"), so sort it as a string
+        # (ISO strings order chronologically) — never float() it, that raises + kills the fallback.
+        rows.append((1 if info.get("status") == "submitted" else 0,
+                     str(info.get("ts") or ""), str(jid)))
+    if not rows:
+        return None
+    rows.sort(reverse=True)
+    return rows[0][2]
+
+
 def _base_meta(email: str) -> dict:
     """{sex, jobid} for one persona email — prefill `profile.sex` first, else the name-bank
-    gender; jobid from the persona dir when its prefill artifact still exists."""
+    gender; jobid from the persona dir, else from the durable status.json (which outlives the
+    prefill artifacts prefill_retention prunes) so an older interview still resolves its job."""
     ent = _registry().get(email) or {}
     demo_id = ent.get("id")
     sex = None
@@ -195,6 +224,8 @@ def _base_meta(email: str) -> dict:
                 jobid = jd
             if sex and jobid:
                 break
+        if not jobid:                       # persona.json pruned → recover from status.json
+            jobid = _jobid_from_status(demo_id)
     if not sex:
         fn = (ent.get("name") or "").split(" ")[0].strip().lower()
         sex = _name_gender().get(fn)
@@ -220,7 +251,14 @@ def enrich(rows: list[dict]) -> list[dict]:
     job_catalog lookup for the misses."""
     missing = [r["mailbox"] for r in rows if r["mailbox"] not in _META]
     if missing:
-        base = {e: _base_meta(e) for e in missing}
+        # per-email try so one malformed prefill artifact can't abort the whole batch (which
+        # would empty the delegation + priority cards behind routes_users' blanket except).
+        def _safe_meta(e):
+            try:
+                return _base_meta(e)
+            except Exception:
+                return {"sex": "unknown", "jobid": None}
+        base = {e: _safe_meta(e) for e in missing}
         cats = _role_categories([b["jobid"] for b in base.values()])
         for email, b in base.items():
             cat = cats.get(int(b["jobid"])) if (b["jobid"] and b["jobid"].isdigit()) else None
@@ -251,7 +289,13 @@ def enrich_iv_rows(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def _match(row: dict, q: str | None, gender: str | None, direction: str | None) -> bool:
+def _match(row: dict, q: str | None, gender: str | None, direction: str | None,
+           include_expired: bool = False) -> bool:
+    # an EXPIRED booking window (deadline strictly past) is not delegatable — exclude it from
+    # the free pool / facets / split unless a caller explicitly wants the full set (the /users
+    # priority card, which still SHOWS them at the bottom, dimmed + «делегировать нельзя»).
+    if not include_expired and row.get("expired"):
+        return False
     if gender in GENDERS and row.get("sex") != gender:
         return False
     if direction in DIRECTIONS and row.get("direction") != direction:
@@ -291,17 +335,31 @@ def _all_unallocated() -> list[dict]:
     for r in rows:
         r["company"] = company_hint(r.get("from_email") or "", r.get("from_name") or "")
     enrich(rows)
+    # deadline + salary + refined direction + an `expired` flag (durable email parse, cached by
+    # message hash) so the DELEGATABLE pool reflects only still-bookable interviews and every row
+    # carries a salary/priority for the /users priority card.
+    try:
+        from backend.tools import interview_priority
+        interview_priority.enrich_interview_groups(rows, hash_key="source_hash")
+        for r in rows:
+            r["expired"] = interview_priority.is_expired(r)
+    except Exception:
+        for r in rows:
+            r.setdefault("expired", False)
     _POOL_CACHE.update(t=now, rows=rows)
     return rows
 
 
 def unallocated(limit: int | None = 500, offset: int = 0, q: str | None = None,
-                gender: str | None = None, direction: str | None = None) -> list[dict]:
+                gender: str | None = None, direction: str | None = None,
+                include_expired: bool = False) -> list[dict]:
     """The free interview pool, newest-invitation first, optionally FILTERED by email/name
     search `q` (email is the primary key), `gender` (male|female) and `direction`
-    (it|nonit|other). Each row: {mailbox, candidate, subject, from_email, from_name, date_ts,
-    source_hash, company, sex, jobid, role_category, direction}."""
-    rows = [r for r in _all_unallocated() if _match(r, q, gender, direction)]
+    (it|nonit|other). EXPIRED interviews are excluded by default (not delegatable); pass
+    include_expired=True for the priority view that shows them at the bottom. Each row:
+    {mailbox, candidate, subject, from_email, from_name, date_ts, source_hash, company, sex,
+    jobid, role_category, direction, deadline_ts, deadline_days, salary_label, expired}."""
+    rows = [r for r in _all_unallocated() if _match(r, q, gender, direction, include_expired)]
     if limit is not None:
         rows = rows[int(offset):int(offset) + int(limit)]
     return rows
@@ -309,15 +367,16 @@ def unallocated(limit: int | None = 500, offset: int = 0, q: str | None = None,
 
 def count_unallocated(q: str | None = None, gender: str | None = None,
                       direction: str | None = None) -> int:
-    """How many interviews match the filter in the free pool right now."""
+    """How many STILL-BOOKABLE interviews match the filter in the free pool right now (expired
+    ones are not counted — they can no longer be delegated)."""
     return sum(1 for r in _all_unallocated() if _match(r, q, gender, direction))
 
 
 def facets() -> dict:
     """Availability cross-tab for the split UI: {'total', 'gender':{male,female,unknown},
-    'direction':{it,nonit,other}, 'cross':{(gender,direction): n}} over the whole free pool —
-    so the admin can see e.g. how many IT female interviews are available before splitting."""
-    rows = _all_unallocated()
+    'direction':{it,nonit,other}, 'cross':{(gender,direction): n}} over the still-bookable free
+    pool (EXPIRED excluded) — so the admin splits only interviews that can actually be delegated."""
+    rows = [r for r in _all_unallocated() if not r.get("expired")]
     g = {"male": 0, "female": 0, "unknown": 0}
     d = {"it": 0, "nonit": 0, "other": 0}
     cross: dict = {}
@@ -334,7 +393,7 @@ def allocate_specific(mailbox: str, manager_id: int) -> bool:
     """Send ONE specific pool interview to a manager. No-op (returns False) if the mailbox
     is not currently in the free pool (already handled / not an interview)."""
     row = next((r for r in _all_unallocated() if r["mailbox"] == mailbox), None)
-    if row is None:
+    if row is None or row.get("expired"):   # an expired booking window is not delegatable
         return False
     db.allocate_interview(
         mailbox=row["mailbox"], manager_id=manager_id,

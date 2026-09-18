@@ -31,7 +31,8 @@ _CSS = """
 /* add-user form */
 .u-add{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px 12px;align-items:end}
 .u-add label{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:600;color:var(--ink-soft);margin:0}
-.u-add input,.u-add select{width:100%}
+/* explicit input size — else `font:inherit` shrinks the field to the 12px label caption above it */
+.u-add input,.u-add select{width:100%;font-size:14px}
 .u-add .u-go{grid-column:1/-1;justify-self:start}
 /* user cards */
 .u-list{display:flex;flex-direction:column;gap:10px}
@@ -151,6 +152,8 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-pri-empty{padding:11px;color:var(--ink-mute);font-size:12.5px;text-align:center;border:1px dashed var(--line-strong);border-radius:var(--r-sm)}
 .u-pri-list{display:flex;flex-direction:column;gap:7px}
 .u-pri-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel)}
+.u-pri-row.past{opacity:.6}
+.u-pri-row.past:hover{opacity:1}
 .u-pri-main{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:1px}
 .u-pri-nm{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u-pri-em{font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -161,7 +164,15 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-pri-dl-soon{color:var(--warn);background:var(--warn-soft)}
 .u-pri-dl-urgent{color:var(--danger);background:#fce8e6}
 .u-pri-dl-over{color:#fff;background:var(--danger)}
-@media(max-width:760px){.u-h1{font-size:23px}.u-drawer{width:100%;max-width:100%}}
+/* collapsible «Истёкшие» bucket inside a priority section (keeps the actionable list short) */
+.u-pri-exp{margin-top:8px;border-top:1px dashed var(--line);padding-top:8px}
+.u-pri-exp>summary{cursor:pointer;list-style:none;font-size:12px;font-weight:700;color:var(--ink-mute);display:flex;align-items:center;gap:6px;padding:6px 0;user-select:none}
+.u-pri-exp>summary::before{content:'▸';color:var(--ink-mute);font-size:11px}
+.u-pri-exp[open]>summary::before{content:'▾'}
+.u-pri-exp>summary:hover{color:var(--ink-soft)}
+.u-pri-exp .u-pri-list{margin-top:8px}
+/* the drawer keeps a tappable scrim edge on a phone (94vw, not full-bleed) so tap-outside closes it */
+@media(max-width:760px){.u-h1{font-size:23px}}
 </style>
 """
 
@@ -352,6 +363,8 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
     # send-one: email SEARCH (email is the unique key) via a native datalist + a manager picker
     dl_opts = []
     for r in pool_rows:
+        if r.get("expired"):        # expired interviews are not delegatable — keep them out of the picker
+            continue
         mb = r.get("mailbox") or ""
         nm = (r.get("candidate") or "").strip()
         sx = {"male": "М", "female": "Ж"}.get(r.get("sex"), "")
@@ -407,20 +420,30 @@ def _pool_row(r: dict) -> str:
     dtext, dlvl = ip.deadline_text(r)
     dir_lbl = _DIR_LBL.get(r.get("direction"), "")
     dir_html = f"<span class='u-pri-dir'>{escape(dir_lbl)}</span>" if dir_lbl else ""
-    sal_html = f"<span class='u-pri-sal'>{escape(sal)}</span>" if sal else ""
+    sal_html = f"<span class='u-pri-sal'>{escape(sal)}/год</span>" if sal else ""
     dl_html = f"<span class='u-pri-dl u-pri-dl-{dlvl}'>{escape(dtext)}</span>" if dtext else ""
-    return ("<div class='u-pri-row'>"
+    row_cls = "u-pri-row past" if dlvl == "over" else "u-pri-row"   # expired = dimmed + sorted last
+    return (f"<div class='{row_cls}'>"
             f"<div class='u-pri-main'><span class='u-pri-nm'>{escape(nm)}</span>"
             f"<span class='u-pri-em'>{escape(mb)}</span></div>"
             f"{dir_html}{sal_html}{dl_html}</div>")
 
 
 def _pool_section(title: str, rows: list[dict]) -> str:
+    # still-bookable interviews are shown; EXPIRED ones (can't be delegated) collapse into a
+    # «Истёкшие» details at the bottom so the actionable list stays short. The header count is
+    # the delegatable (bookable) count.
+    bookable = [r for r in rows if not r.get("expired")]
+    expired = [r for r in rows if r.get("expired")]
     head = (f"<div class='u-pri-sec'><span class='u-pri-sect'>{escape(title)}</span>"
-            f"<span class='u-pri-n'>{len(rows)}</span></div>")
-    if not rows:
-        return head + "<div class='u-pri-empty'>Нет интервью в этой группе</div>"
-    return head + "<div class='u-pri-list'>" + "".join(_pool_row(r) for r in rows) + "</div>"
+            f"<span class='u-pri-n'>{len(bookable)}</span></div>")
+    body = ("<div class='u-pri-list'>" + "".join(_pool_row(r) for r in bookable) + "</div>"
+            if bookable else "<div class='u-pri-empty'>Нет доступных интервью</div>")
+    if expired:
+        body += ("<details class='u-pri-exp'><summary>Истёкшие — делегировать нельзя ("
+                 f"{len(expired)})</summary><div class='u-pri-list'>"
+                 + "".join(_pool_row(r) for r in expired) + "</div></details>")
+    return head + body
 
 
 def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:

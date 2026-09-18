@@ -124,16 +124,15 @@ def _drive_one(lane: int, mbx: str, url: str, log, env: dict, hard_timeout: int)
         except Exception:
             pass
         return "timeout"
-    # harvest_runner already recorded the real status into harvest_state (--record-state) + marked the
-    # CRM done on a completion; grep the log's last SUMMARY line only for our own tally.
+    # harvest_runner recorded the real status into harvest_state (--record-state) + marked the CRM done
+    # on a completion. Read THAT for our tally — grepping the shared lane log's tail is unreliable (it
+    # accumulates every drive, so the tail can hold a prior drive's summary line).
     st = "other"
     try:
-        with open(log.name, "rb") as r:
-            r.seek(max(0, os.path.getsize(log.name) - 4000))
-            tail = r.read().decode("utf-8", "ignore")
-        if "status : completed" in tail:
+        rec = str(discover.load_state().get(url, ""))
+        if rec.startswith("completed"):
             st = "completed"
-        elif rc != 0:
+        elif rc != 0 and not rec:
             st = "error"
     except Exception:
         pass

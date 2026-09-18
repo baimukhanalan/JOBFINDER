@@ -31,15 +31,21 @@ from backend.tools.assessment_harvester.adapters.amcat import AmcatAdapter  # no
 from backend.tools.assessment_harvester.adapters.hallo import HalloAdapter  # noqa: E402
 from backend.tools.assessment_harvester.adapters.harver import HarverAdapter  # noqa: E402
 from backend.tools.assessment_harvester.adapters.shl import ShlAdapter  # noqa: E402
+from backend.tools.assessment_harvester.adapters.taleo import TaleoAdapter  # noqa: E402
 
 _DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 LOCK_PATH = os.path.join(_DATA, "harvest_runner.lock")
 
+# `taleo_ttec` = the TTEC "Required Assessments" sealedRequestId screening links (discover matcher of the
+# same name). Live-mapped 2026-09-18: they go Taleo Privacy → login (saved creds) → HARVER, so the driver
+# IS the Harver flow (TaleoAdapter subclasses HarverAdapter, platform='harver' → the pre-solved harver
+# answer bank replays). Registering it under the discover key makes `harvest_runner --platform taleo_ttec`
+# + the discover-drain path work for the ~309 pending invites.
 ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter, "hallo": HalloAdapter,
-            "harver": HarverAdapter}
+            "harver": HarverAdapter, "taleo_ttec": TaleoAdapter}
 
 # Adapters that need the persona email/name at construction (device-check name gate / saved-cred lookup).
-_MAILBOX_ADAPTERS = ("hallo", "harver")
+_MAILBOX_ADAPTERS = ("hallo", "harver", "taleo_ttec")
 
 
 def _adapter(platform: str, mailbox: str = ""):

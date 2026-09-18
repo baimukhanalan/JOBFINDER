@@ -650,7 +650,23 @@ with a fake mic/camera (`core._launch_args`). Package: `core.py` (harvest loop),
 `discover.py` (invites over `mail_index`, burned tokens via `harvest_state.json`), `mic.py` (pulseaudio virtual mic),
 `camera.py` (v4l2loopback virtual camera — the video twin of `mic.py`; feeds a dark `/dev/video0`),
 `asr.py` (faster-whisper venv `~/.venvs/asr`), `answer_key.py`, `writex.py`, `import_qa_snapshot.py`, `adapters/{base,shl,
-amcat}.py`. CLI `harvest_runner.py --platform amcat --limit 1` or `--url --mailbox`. Bank/media gitignored.
+amcat,hallo,harver,taleo}.py`. CLI `harvest_runner.py --platform amcat --limit 1` or `--url --mailbox`. Bank/media gitignored.
+- **`taleo_ttec` = TTEC "Required Assessments" → Harver (adapter `adapters/taleo.py`, live-mapped 2026-09-18).** The
+  `teletech.taleo.net/…/screening/controller/externalServiceController.jsp?sealedRequestId=…` links TTEC emails ("Your
+  Application - Required Assessments", `jobopportunities@ttec.com`; `discover.MATCHERS['taleo_ttec']`) are NOT a plain Taleo
+  questionnaire — they go Taleo **Privacy → login → HARVER** (`journey.harver.com/vacancy/…`). So **`TaleoAdapter` subclasses
+  `HarverAdapter` (platform=`harver`)**: `enter()` = Harver's `_taleo_handoff` (Privacy "I Accept" → Taleo login with the
+  SAVED creds — `taleo_accounts.json`, username = the persona email localpart — → externalPopup meta-refresh → Harver), the
+  battery + `is_done` are Harver's, and banking/replay use the pre-solved **harver** answer bank (a distinct `taleo` platform
+  would strand cognitive items with no key). Registered in `harvest_runner.ADAPTERS['taleo_ttec']` + `_MAILBOX_ADAPTERS`, so
+  `harvest_runner --platform taleo_ttec [--limit N | --url … --mailbox …]` + the discover-drain now work (the drain passes the
+  localpart → `TaleoAdapter.__init__` normalizes to `@takhet.com` for the cred lookup). Recon 2026-09-18: **309 pending
+  invites, 301 with saved creds**; live-proven end-to-end on `samantha.wheeler7586` (Privacy → login → Harver Consent →
+  Session-Monitoring → camera → SJT/Personality/Job-Knowledge all via `answer_key` replay). A native-Taleo screening
+  questionnaire (rare/unproven) is a FALLBACK: `read_item`/`answer_mcq` answer eligibility/availability/consent TRUTHFULLY via
+  the pure `truthful_answer()` (auth→Yes, sponsorship→No, EEO→decline) and a cognitive item → `needs_human` (NEVER guessed).
+  Tests: `test_taleo_adapter.py`. NB harvest is single-use — a burned token goes terminal; the 8 no-creds invites hit a login
+  wall (no recovery built — Taleo never emails the password). No cron yet (drive via the harver/harvest mass-run lane).
 - **Reachability:** the rich surface is **AMCAT/TP** (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com`, single-use
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
   → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment

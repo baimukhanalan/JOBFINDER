@@ -221,7 +221,10 @@ def _metaline(stage_dot: str, apps_ct: str, count_ct: str, sobes: str, asmt: str
     left = vsep.join(u for u in (extra, stage_dot, counts) if u)
     acts = sobes + asmt
     acts_html = f'<span class="cg-ml-acts">{acts}</span>' if acts else ""
-    return (f'<div class="cg-metaline"><span class="cg-ml-left">{left}'
+    # priority cards carry the extra deadline+salary chips → allow the row to WRAP on a phone so a
+    # long «~$194k–$312k/год» salary never clips (the plain inbox metaline stays nowrap fixed-height)
+    cls = "cg-metaline cg-metaline-pri" if extra else "cg-metaline"
+    return (f'<div class="{cls}"><span class="cg-ml-left">{left}'
             f'</span>{acts_html}</div>')
 
 
@@ -283,13 +286,12 @@ def _group_card(g: dict) -> str:
     # else «Собес» when the candidate has an interview mail, else nothing.
     sobes = ""
     asg = g.get("assigned")
-    dd = g.get("deadline_days")
     if asg:
         sobes = _iv_assigned(mailbox, asg.get("thread_key", "") or "",
                              asg.get("responsible_name") or "")
     elif g.get("iv_hash"):
-        if dd is not None and dd < 0:
-            # booking window lapsed → not bookable/delegatable; a muted marker replaces «Собес»
+        if _iv_expired(g):
+            # EXPLICIT booking window lapsed → not bookable/delegatable; muted marker replaces «Собес»
             sobes = ('<span class="cg-noassign" title="срок бронирования истёк — '
                      'делегировать нельзя">бронь истекла</span>')
         else:
@@ -299,10 +301,10 @@ def _group_card(g: dict) -> str:
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
     card_cls = "cg-card unread" if unread else "cg-card"
-    # a Собес whose booking window has lapsed (and is not already booked) is dimmed — it sorts
-    # to the bottom and reads as "probably too late" without hiding it.
-    dd = g.get("deadline_days")
-    if dd is not None and dd < 0 and not g.get("assigned"):
+    # a Собес whose EXPLICIT booking window has lapsed (and is not already booked) is dimmed — it
+    # sorts to the bottom and reads as "too late" without hiding it. (An estimated guess is NOT
+    # treated as expired, so an old invite with no stated deadline stays normal + bookable.)
+    if _iv_expired(g):
         card_cls += " cg-past"
 
     # ONE clean preview line: subject lead, then «· snippet» only when there's real snippet text.
@@ -522,8 +524,10 @@ def _sort_toggle(q: str, sort: str) -> str:
 
 
 def _iv_expired(g: dict) -> bool:
-    d = g.get("deadline_days")
-    return d is not None and d < 0 and not g.get("assigned")
+    # only a REALLY-PARSED past deadline is «expired» (an estimated guess is NOT — it stays
+    # bookable); a booked собес is never in the expired bucket.
+    from backend.tools import interview_priority
+    return interview_priority.is_expired(g) and not g.get("assigned")
 
 
 def _iv_section(title: str, groups: list) -> str:
@@ -569,7 +573,7 @@ def render_interview_page(groups, *, q: str = "", sort: str = "salary",
         + toolbar + funnel + _sort_toggle(q, sort)
         + '<div id="grouplist">'
         + (_iv_section("IT-специальности", it_rows)
-           + _iv_section("Простые вакансии (не-IT)", simple_rows) if groups else "")
+           + _iv_section("Простые вакансии (не‑IT)", simple_rows) if groups else "")
         + '</div>' + empty
         + _FAB_COMPOSE + _CG_JS
     )
@@ -645,6 +649,12 @@ button.cg-ct:hover{color:var(--accent);}
    (.cg-metaline is overflow:hidden). The bump is on EVERY metaline → the 0-badge==5-badge
    equal-height contract still holds; only vertical (no horizontal growth) so nowrap never
    truncates earlier. */
+/* priority (Собес) cards: let the metaline WRAP on a phone instead of clipping the salary chip */
+@media(max-width:760px){
+  .cg-metaline-pri{flex-wrap:wrap;min-height:auto;row-gap:4px;}
+  .cg-metaline-pri .cg-ml-left{flex-wrap:wrap;overflow:visible;row-gap:4px;}
+  .cg-metaline-pri .cg-ml-acts{margin-left:0;}
+}
 @media(max-width:760px){
   /* ≥40px phone tap targets for the quiet metaline controls (📄 apps chip, «Отметить»/
      «Пройдено» assessment action). The metaline min-height is bumped UNIFORMLY so the taller

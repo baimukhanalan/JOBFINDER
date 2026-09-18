@@ -141,10 +141,25 @@ def test_sort_urgency_overdue_sinks_below_actionable():
 
 
 def test_is_expired():
+    # only a REALLY-PARSED (explicit) past deadline is expired
     assert ip.is_expired({"deadline_days": -1}) is True
     assert ip.is_expired({"deadline_days": 0}) is False   # today = still bookable
     assert ip.is_expired({"deadline_days": 3}) is False
     assert ip.is_expired({"deadline_days": None}) is False  # unknown deadline is NOT expired
+    # an ESTIMATED (guessed) deadline is NEVER expired even if the guess is in the past
+    assert ip.is_expired({"deadline_days": -30, "deadline_estimated": True}) is False
+
+
+def test_deadline_text_estimated_shows_invite_age_not_expired():
+    # estimated rows never say «истёк» — they show the invite age, discriminated by actual age
+    t1, l1 = ip.deadline_text({"deadline_estimated": True, "deadline_ts": 1, "deadline_days": -40,
+                               "invite_age_days": 45})
+    assert "истёк" not in t1 and "инвайт" in t1 and "45" in t1 and l1 != "over"
+    t2, _ = ip.deadline_text({"deadline_estimated": True, "invite_age_days": 3})
+    assert "3" in t2 and "истёк" not in t2
+    # an EXPLICIT past deadline still reads «срок истёк»
+    t3, l3 = ip.deadline_text({"deadline_estimated": False, "deadline_ts": 1, "deadline_days": -2})
+    assert t3 == "срок истёк" and l3 == "over"
 
 
 def test_role_from_email_maps_title_to_category():

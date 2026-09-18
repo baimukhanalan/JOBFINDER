@@ -526,8 +526,11 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
             "ORDER BY mailbox, date_ts DESC, path_hash DESC", (mboxes,))
         last = {r["mailbox"]: dict(r) for r in cur.fetchall()}
 
+        # carry the interview message's subject/snippet/date so the Собес priority enrichment
+        # can parse the booking deadline + role WITHOUT reading the .eml file (a per-request
+        # 229-file MIME parse was ~26s on a cold cache — see interview_priority).
         cur.execute(
-            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key "
+            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key, subject, snippet, date_ts "
             "FROM mail_index WHERE mailbox = ANY(%s) AND kind='interview' AND NOT outbound "
             "ORDER BY mailbox, date_ts DESC, path_hash DESC", (mboxes,))
         iv = {r["mailbox"]: dict(r) for r in cur.fetchall()}
@@ -563,6 +566,9 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
             "has_att": bool(lm.get("has_att")),
             "iv_hash": im.get("path_hash", ""),
             "iv_thread": im.get("thread_key", ""),
+            "iv_subject": im.get("subject") or "",
+            "iv_snippet": im.get("snippet") or "",
+            "iv_ts": im.get("date_ts") or 0,
         })
     return groups
 

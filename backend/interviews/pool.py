@@ -40,12 +40,12 @@ WITH stage AS (
 ),
 latest AS (
     SELECT DISTINCT ON (mailbox)
-           mailbox, candidate, subject, from_email, from_name, date_ts, path_hash
+           mailbox, candidate, subject, snippet, from_email, from_name, date_ts, path_hash
       FROM mail_index
      WHERE kind='interview' AND NOT outbound
      ORDER BY mailbox, date_ts DESC, path_hash DESC
 )
-SELECT l.mailbox, l.candidate, l.subject, l.from_email, l.from_name, l.date_ts,
+SELECT l.mailbox, l.candidate, l.subject, l.snippet, l.from_email, l.from_name, l.date_ts,
        l.path_hash AS source_hash
   FROM stage s
   JOIN latest l ON l.mailbox = s.mailbox
@@ -120,7 +120,7 @@ def direction_legend() -> str:
     dropping straight into a `_page_head(..., info=...)` popover or any other ⓘ tooltip."""
     return (
         "IT — сложные технические направления: Engineering, Data & ML, Product, Design. "
-        "Не-IT — Sales, Customer Support & Success (колл-центр/саппорт), Marketing, "
+        "Не‑IT — Sales, Customer Support & Success (колл-центр/саппорт), Marketing, "
         "People/Recruiting, Finance, Operations, Legal, Executive. "
         "Другое — роль не распознана или не входит ни в один из бакетов выше."
     )

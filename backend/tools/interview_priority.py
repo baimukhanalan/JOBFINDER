@@ -25,9 +25,12 @@ import time
 
 _DAY = 86400
 _HOUR = 3600
-# When a mail gives no explicit deadline we still surface an ESTIMATED one so every Собес row
-# has an urgency signal; scheduling windows are typically a few days.
-DEFAULT_DAYS = 5
+# When a mail gives no explicit deadline we surface an ESTIMATED one — but an ESTIMATE is NEVER
+# grounds for «истёк» / pool-exclusion (only a REALLY-PARSED past deadline is; see is_expired).
+# For an estimated row the card shows the INVITE AGE instead of a fake countdown, so this value
+# only sanity-bounds the (mostly unused) estimated deadline_ts. A typical schedule-by window is
+# a few weeks, not days.
+DEFAULT_DAYS = 21
 
 # Relative windows: "within (the next) N (business) days", "N days to schedule", "next N days".
 _REL_DAYS = re.compile(
@@ -125,31 +128,38 @@ _MSG_CACHE: dict[str, dict] = {}
 
 
 def _msg_signals(msg_hash: str) -> dict:
-    """{deadline_ts, estimated, subject, body} for one interview message hash — the file is
-    immutable, so it is read + parsed ONCE per hash and the whole-pool enrich pays each parse a
-    single time. Body truncated (role classification only needs the top)."""
+    """FALLBACK-ONLY: {subject, body, invite_ts} read from the .eml when the row didn't carry the
+    indexed subject/snippet (the normal fast path passes those in via `_row_msg`, so no file is
+    read — a per-request 229-file MIME parse was ~26s cold). Cached by the immutable hash."""
     if not msg_hash:
-        return {"deadline_ts": None, "estimated": True, "subject": "", "body": ""}
+        return {"subject": "", "body": "", "invite_ts": 0}
     if msg_hash in _MSG_CACHE:
         return _MSG_CACHE[msg_hash]
-    res = {"deadline_ts": None, "estimated": True, "subject": "", "body": ""}
+    res = {"subject": "", "body": "", "invite_ts": 0}
     try:
         from backend.tools import mailcrm
         m = mailcrm.get_message(msg_hash, mark=False)   # mark=False → never flips new/→cur/
         if m:
-            subj = m.get("subject") or ""
             body = m.get("plain") or m.get("html") or m.get("snippet") or ""
-            dl, est = extract_deadline(subj, body, m.get("date_ts") or 0)
-            res = {"deadline_ts": dl, "estimated": est, "subject": subj, "body": body[:2000]}
+            res = {"subject": m.get("subject") or "", "body": body[:2000],
+                   "invite_ts": m.get("date_ts") or 0}
     except Exception:
         pass
     _MSG_CACHE[msg_hash] = res
     return res
 
 
-def _deadline_for_hash(msg_hash: str) -> tuple[int | None, bool]:
-    s = _msg_signals(msg_hash)
-    return s["deadline_ts"], s["estimated"]
+def _row_msg(g: dict, hash_key: str) -> tuple[str, str, int]:
+    """(subject, body, invite_ts) for an interview row — from the INDEXED fields the SQL already
+    carries (iv_subject/iv_snippet/iv_ts for grouped rows; subject/snippet/date_ts for pool rows),
+    so enrichment does NO file I/O. Falls back to a .eml read only if the row has no subject."""
+    subj = g.get("iv_subject") or g.get("subject") or ""
+    body = g.get("iv_snippet") or g.get("snippet") or ""
+    invite_ts = int(g.get("iv_ts") or g.get("date_ts") or 0)
+    if not subj:
+        s = _msg_signals(g.get(hash_key) or "")
+        return s["subject"], s["body"], int(s.get("invite_ts") or invite_ts)
+    return subj, body, invite_ts
 
 
 def _role_from_email(subject: str, body: str) -> str | None:
@@ -167,10 +177,13 @@ def _role_from_email(subject: str, body: str) -> str | None:
 
 
 def is_expired(g: dict) -> bool:
-    """True when the booking window has lapsed (deadline strictly in the past). A None deadline
-    (unknown) is NOT expired. Drives «делегировать нельзя» + sink-to-bottom + pool exclusion."""
+    """True ONLY when a REALLY-PARSED (explicit) booking deadline is strictly in the past — that
+    is a genuine «бронь недоступна» (collapse + pool-exclusion + no book control). An ESTIMATED
+    deadline (we guessed invite+N days because the invite stated none) is NEVER expired: a 6-day-
+    old invite with no stated window is very likely still bookable, so it stays delegatable and is
+    just sorted by freshness. A None deadline (unknown) is not expired either."""
     d = g.get("deadline_days")
-    return d is not None and d < 0
+    return d is not None and d < 0 and not g.get("deadline_estimated")
 
 
 def days_left(deadline_ts: int | None, now: int | None = None) -> int | None:
@@ -182,21 +195,32 @@ def days_left(deadline_ts: int | None, now: int | None = None) -> int | None:
 
 
 def deadline_text(g: dict) -> tuple[str, str]:
-    """(label, level) for an enriched row's booking deadline — the single source of the
-    urgency wording, reused by the Собес card chip AND the /users priority list. level ∈
-    {ok, soon, urgent, over}; «~» prefix + «(оценка)» when the deadline is an estimate. Returns
-    ('', 'ok') when the row has no deadline."""
+    """(label, level) for a row's booking signal — the single source of the wording, reused by the
+    Собес card chip AND the /users priority list. level ∈ {ok, soon, urgent, over}.
+
+    Two cases:
+      * EXPLICIT deadline (parsed from the invite): a real countdown — «осталось N дн» / «сегодня»
+        / «срок истёк» (over) — the only case that can read «истёк».
+      * ESTIMATED (no deadline stated → we guessed): NEVER «истёк». Show the INVITE AGE instead
+        («инвайт N дн назад») so the operator can judge freshness; muted level, discriminated by
+        actual age (the same «~осталось 1 дн» for everyone bug is gone)."""
+    if g.get("deadline_estimated"):
+        age = g.get("invite_age_days")
+        if age is None:
+            return "", "ok"
+        if age <= 0:
+            return "инвайт сегодня", "soon"
+        return f"инвайт {age} дн назад", ("soon" if age <= 7 else "ok")
     ts = g.get("deadline_ts")
     d = g.get("deadline_days")
     if not ts or d is None:
         return "", "ok"
-    pfx = "~" if g.get("deadline_estimated") else ""
     if d < 0:
         return "срок истёк", "over"
     if d == 0:
-        return f"{pfx}сегодня", "urgent"
+        return "сегодня", "urgent"
     lvl = "urgent" if d <= 1 else "soon" if d <= 3 else "ok"
-    return f"{pfx}осталось {d} дн", lvl
+    return f"осталось {d} дн", lvl
 
 
 # ---- potential salary ------------------------------------------------------------
@@ -281,11 +305,12 @@ def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") ->
         jid = g.get("jobid")
         if jid and str(jid).isdigit():
             job = jobs.get(int(jid)) or {}
-        sig = _msg_signals(g.get(hash_key) or "")
-        # refine an unknown / «Other» direction from the interview email's role title
+        # subject / body / invite date from the INDEXED fields the SQL carried — NO file read
+        subj, body, invite_ts = _row_msg(g, hash_key)
+        # refine an unknown / «Other» direction from the interview invite's role title
         cat = g.get("role_category")
         if (not cat or cat == "Other"):
-            ecat = _role_from_email(sig["subject"], sig["body"])
+            ecat = _role_from_email(subj, body)
             if ecat:
                 cat = ecat
                 g["role_category"] = cat
@@ -305,9 +330,14 @@ def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") ->
             g["salary_estimated"] = False
         g["salary_value"] = salary_value(job)
         g["salary_label"] = salary_label(job)
-        g["deadline_ts"] = sig["deadline_ts"]
-        g["deadline_estimated"] = sig["estimated"]
-        g["deadline_days"] = days_left(sig["deadline_ts"], now)
+        # deadline: explicit when the invite stated one, else an estimate (never «истёк»/expired)
+        dl_ts, est = extract_deadline(subj, body, invite_ts)
+        g["deadline_ts"] = dl_ts
+        g["deadline_estimated"] = est
+        g["deadline_days"] = days_left(dl_ts, now)
+        g["invite_ts"] = invite_ts or None
+        g["invite_age_days"] = (int(math.floor((now - invite_ts) / _DAY))
+                                if invite_ts else None)
         g.setdefault("direction", "other")
     return groups
 
@@ -324,25 +354,22 @@ _SALARY_KEY_NA = -1              # a jobless / no-comp row sorts to the bottom o
 _DEADLINE_FAR = 10 ** 12         # a deadline-less row sorts to the bottom of an urgency sort
 
 
-def _is_actionable(g: dict) -> bool:
-    """A booking deadline still in the future (or today) — i.e. one the operator can still act
-    on. An OVERDUE window (the invite lapsed) is not actionable and sinks in the urgency sort."""
-    d = g.get("deadline_days")
-    return d is not None and d >= 0
-
-
 def sort_groups(groups: list[dict], sort: str) -> list[dict]:
-    """Order one section. In BOTH modes a still-bookable interview always outranks an EXPIRED
-    one — a months-old lapsed booking window is no longer actionable, so it sinks to the very
-    bottom instead of burying (urgency) or being interleaved with (salary) the ones the operator
-    can still book. Within the still-bookable group: sort='urgency' → soonest deadline first
-    (then higher salary); sort='salary' (default) → highest salary first (then soonest deadline)."""
+    """Order one section. An EXPIRED interview (a REALLY-PARSED past deadline — `is_expired`)
+    always sinks to the very bottom in both modes; an ESTIMATED-deadline row is NOT expired and
+    stays in the bookable set. Within the bookable set:
+      * sort='urgency' → rows with an EXPLICIT deadline first (soonest, most real urgency), then
+        ESTIMATED rows by FRESHNESS (newest invite first — most likely still open);
+      * sort='salary' (default) → highest potential salary first (then soonest deadline)."""
     if sort == "urgency":
-        return sorted(groups, key=lambda g: (
-            0 if _is_actionable(g) else 1,
-            g.get("deadline_ts") or _DEADLINE_FAR,
-            -(g.get("salary_value") or 0)))
+        def _key(g):
+            exp = 1 if is_expired(g) else 0
+            if g.get("deadline_estimated"):
+                # estimated: no real deadline → order by invite freshness (newest first)
+                return (exp, 1, -(g.get("invite_ts") or 0), -(g.get("salary_value") or 0))
+            return (exp, 0, g.get("deadline_ts") or _DEADLINE_FAR, -(g.get("salary_value") or 0))
+        return sorted(groups, key=_key)
     return sorted(groups, key=lambda g: (
-        0 if _is_actionable(g) else 1,
+        1 if is_expired(g) else 0,
         -(g.get("salary_value") or _SALARY_KEY_NA),
         g.get("deadline_ts") or _DEADLINE_FAR))

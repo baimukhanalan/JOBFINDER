@@ -307,7 +307,7 @@ def _manager_options(managers: list[dict], selected=None, blank_label: str = "�
 
 # shared filter-select option groups (М/Ж + IT/не-IT/другое), neutral labels
 _GENDER_OPTS = (("", "Любой пол"), ("male", "Мужчины"), ("female", "Женщины"))
-_DIR_OPTS = (("", "Любое направление"), ("it", "IT"), ("nonit", "Не-IT"), ("other", "Другое"))
+_DIR_OPTS = (("", "Любое направление"), ("it", "IT"), ("nonit", "Не‑IT"), ("other", "Другое"))
 
 
 def _sel(name: str, opts, aria: str = "") -> str:
@@ -322,7 +322,7 @@ def _facet_table(f: dict) -> str:
     if not f:
         return ""
     cross = f.get("cross", {})
-    dcols = [("it", "IT"), ("nonit", "Не-IT"), ("other", "Другое")]
+    dcols = [("it", "IT"), ("nonit", "Не‑IT"), ("other", "Другое")]
     grows = [("female", "Женщины"), ("male", "Мужчины"), ("unknown", "Не указан")]
     head = "<tr><th></th>" + "".join(f"<th>{escape(l)}</th>" for _k, l in dcols) + "<th>Всего</th></tr>"
     body = []
@@ -368,7 +368,7 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
         mb = r.get("mailbox") or ""
         nm = (r.get("candidate") or "").strip()
         sx = {"male": "М", "female": "Ж"}.get(r.get("sex"), "")
-        di = {"it": "IT", "nonit": "не-IT"}.get(r.get("direction"), "")
+        di = {"it": "IT", "nonit": "не‑IT"}.get(r.get("direction"), "")
         hint = " · ".join(x for x in (nm, sx, di) if x)
         dl_opts.append(f"<option value='{escape(mb, quote=True)}'>{escape(hint)}</option>")
     send_block = (
@@ -402,7 +402,7 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
 
 # ---- interview priority (same signal as the Собес surface: urgency + salary, IT/non-IT) ----
 # every direction gets a tag (incl. 'other' → «Другое») so a priority row is never left tag-less
-_DIR_LBL = {"it": "IT", "nonit": "не-IT", "other": "Другое"}
+_DIR_LBL = {"it": "IT", "nonit": "не‑IT", "other": "Другое"}
 
 
 def _pool_sort_toggle(sort: str) -> str:
@@ -464,10 +464,10 @@ def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
     simple = ip.sort_groups(simple, sort)
     return ("<div class='u-card' id='u-pri'>"
             "<div class='u-pri-top'><h3>Приоритет интервью</h3>" + _pool_sort_toggle(sort) + "</div>"
-            "<p class='u-chint'>Свободные интервью по приоритету — сложные (IT) и простые (не-IT), "
+            "<p class='u-chint'>Свободные интервью по приоритету — сложные (IT) и простые (не‑IT), "
             "по зарплате или срочности брони слота.</p>"
             + _pool_section("IT-специальности", it)
-            + _pool_section("Простые вакансии (не-IT)", simple)
+            + _pool_section("Простые вакансии (не‑IT)", simple)
             + "</div>")
 
 

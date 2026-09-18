@@ -535,6 +535,291 @@ class HarverAdapter(Adapter):
             pass
         return False
 
+    # ---- Live-Chat driver (the WHOLE real-time sim, driven inside one answer_mcq call) ----
+    # Full state probe of the chat module: the pickable "Response 1..N" options, the countdown, whether a
+    # "Help another customer" switch is offered, and whether the chat DOM is present at ALL — so the driver
+    # can tell "the customer is typing" (wait) from "the module ended" (advance to the next module).
+    _CHAT_STATE_JS = r"""() => {
+      const T = e => (e.innerText||e.textContent||'').replace(/\s+/g,' ').trim();
+      const body = document.body.innerText || '';
+      const rEls = [...document.querySelectorAll('button,[role=button],div,li,label,a')]
+        .filter(e => /^\s*Response\s*\d+\b/i.test(T(e)));
+      const byNum = {};                                   // keep the LEAF element per "Response N"
+      for (const e of rEls) {
+        const m = T(e).match(/^\s*Response\s*(\d+)/i); if (!m) continue;
+        const k = m[1];
+        if (!byNum[k] || T(e).length < T(byNum[k]).length) byNum[k] = e;
+      }
+      const nums = Object.keys(byNum).map(Number).sort((a,b)=>a-b);
+      const responses = nums.map(n => T(byNum[n]).replace(/^\s*Response\s*\d+\s*/i,'').trim());
+      const tm = body.match(/(\d+)\s*:\s*(\d{2})/);        // "MM:SS Time remaining"
+      const helpA = [...document.querySelectorAll('a,button,[role=button]')]
+        .find(e => /help another customer/i.test(T(e)));
+      // A chat-SPECIFIC signal that persists between turns (while the customer 'types', no Response modal
+      // shows) AND is absent from the next module (the Internet Speed Test), so it cleanly bounds the sim.
+      // "Time remaining" alone is NOT chat-specific (cognitive/typing/speed-test modules are timed too).
+      const chatUi = !!helpA
+        || /using our live chat|live agent takeover|wait for .*response|customer id|help another customer/i.test(body);
+      // A GATE modal precedes the real timed sim: a "Practice step done → Begin Assessment" tutorial gate
+      // (its "Repeat Tutorial" sibling must NOT be clicked), a "Start the assessment" intro, etc. It sits
+      // OVER the (frozen) practice Response boxes, so it MUST be dismissed before answering — else a JS
+      // click lands on a covered Response and the sim never starts (the 12:00 timer stays frozen).
+      const gateBtn = [...document.querySelectorAll('button,[role=button],a')].some(e =>
+        /^(begin assessment|start assessment|begin the assessment|start the assessment|start chat)$/i.test(T(e)));
+      const gateTxt = /practice step done|you can now begin the assessment|ready to begin the assessment|repeat the tutorial/i.test(body);
+      return {
+        n_responses: nums.length,
+        responses,
+        has_chat_ui: chatUi,
+        has_gate: gateBtn || gateTxt,
+        has_time_remaining: /time remaining/i.test(body),
+        timer_secs: tm ? (parseInt(tm[1],10)*60 + parseInt(tm[2],10)) : null,
+        has_help_another: !!helpA,
+        typing: /typing\s*(?:\.\.\.|…)|wait for .*response/i.test(body),
+        body_len: body.length,
+      };
+    }"""
+
+    @staticmethod
+    def _chat_is_live(state: dict) -> bool:
+        """The chat-specific DOM is still present (a Response modal, the customer switcher, or a persistent
+        chat-UI marker). When it is gone the module has transitioned to the next step (Internet Speed Test
+        / completion). Keyed on CHAT-specific signals — NOT the bare countdown, which other timed modules
+        (and possibly the speed test) also show, and which would otherwise trap the driver past the sim."""
+        return bool(state.get("n_responses", 0) or state.get("has_chat_ui")
+                    or state.get("has_help_another"))
+
+    # Helpful/professional vs unhelpful customer-service phrasing — the FAST heuristic used when neither a
+    # banked answer key nor the vision solver picks a reply (the sim only needs to COMPLETE, so a plausible
+    # CS reply is enough).
+    _CHAT_POS = ("apolog", "sorry", "i'll", "i will", "let me", "happy to", "of course", "assist",
+                 "help", "resolve", "refund", "replace", "solution", "right away", "certainly",
+                 "absolutely", "understand", "i can", "provide", "arrange", "process your", "send you",
+                 "take care", "glad to", "look into", "check", "confirm", "of course", "thank you")
+    _CHAT_NEG = ("not sure", "web search", "other resellers", "unfortunately", "can't", "cannot",
+                 "no idea", "i don't know", "that's not my", "not my problem", "figure it out",
+                 "nothing i can do", "you should have", "too bad", "not possible", "deal with it")
+
+    def _heuristic_chat_pick(self, responses: list[str]) -> int | None:
+        if not responses:
+            return None
+        best, best_s = 0, None
+        for i, r in enumerate(responses):
+            t = (r or "").lower()
+            s = sum(w in t for w in self._CHAT_POS) - 2 * sum(w in t for w in self._CHAT_NEG)
+            if best_s is None or s > best_s:
+                best, best_s = i, s
+        return best
+
+    async def _pick_chat_response(self, page, q: str, responses: list[str], n: int) -> tuple[int, str]:
+        """Choose the reply for this turn: (1) REPLAY a pre-solved bank answer key (the standard scripted
+        customers are pre-solved), (2) LIVE vision solve, (3) the CS heuristic, (4) a rotating placeholder."""
+        try:
+            from backend.tools.assessment_harvester import bank as _bank
+            msig = _bank.media_sig(["chat"] * max(1, len(responses) or n))
+            opt_txt = [f"Response {i + 1}" for i in range(len(responses) or n)]
+            ak = _bank.answer_for(self.platform, q, opt_txt, msig)
+        except Exception:
+            ak = None
+        if ak:
+            m = re.match(r"\s*response\s*(\d+)", (ak.get("text") or "").strip(), re.I)
+            if m and 0 <= int(m.group(1)) - 1 < n:
+                return int(m.group(1)) - 1, "answer_key"
+            if isinstance(ak.get("index"), int) and 0 <= ak["index"] < n:
+                return ak["index"], "answer_key"
+        try:
+            pick = await self._vision_pick(
+                page, n, "You are a customer-service agent in a live chat. Choose the BEST reply to send "
+                         "to the customer.", odd_one_out=False)
+        except Exception:
+            pick = None
+        if pick is not None and 0 <= pick < n:
+            return pick, "VISION"
+        hp = self._heuristic_chat_pick(responses)
+        if hp is not None and 0 <= hp < n:
+            return hp, "heuristic"
+        self._chat_i = getattr(self, "_chat_i", 0) + 1
+        return self._chat_i % max(1, n), "placeholder"
+
+    async def _dismiss_chat_gate(self, page) -> bool:
+        """Click the chat intro/practice/tutorial GATE that blocks the real timed sim ('Practice step done →
+        Begin Assessment', a 'Start the assessment' intro, a between-step 'Continue'/'Next section'). NEVER
+        'Repeat Tutorial'/'Cancel'/'Decline'. The old per-turn handler got past this only by accident (its
+        post-answer `_forward` matched 'Begin'); the driver dismisses it explicitly, BEFORE answering."""
+        for rx in ("Begin Assessment", "Start Assessment", "Begin the Assessment", "Start the Assessment",
+                   "Start Chat", "Get Started", "Begin", "Start", "Continue", "Proceed", "Next section"):
+            if await self._click(page, rx, timeout=1200):
+                return True
+        try:
+            return bool(await page.evaluate(
+                "() => { const ok=/^(begin assessment|start assessment|begin the assessment|start the "
+                "assessment|start chat|get started|begin|start|continue|proceed|next section)$/i;"
+                " const b=[...document.querySelectorAll('button,[role=button],a')]"
+                "  .find(e=>{const t=(e.innerText||'').trim();"
+                "    return ok.test(t) && !/repeat|tutorial|cancel|decline|log ?out|back/i.test(t);});"
+                " if(!b) return false; b.click(); return true; }"))
+        except Exception:
+            return False
+
+    async def _click_help_another(self, page) -> bool:
+        """Switch to the next waiting customer ('Help another customer' link)."""
+        rx = re.compile("help another customer", re.I)
+        for loc in (page.get_by_role("link", name=rx), page.get_by_role("button", name=rx),
+                    page.get_by_text(rx)):
+            try:
+                if await loc.count():
+                    await loc.first.click(timeout=3000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _send_chat(self, page) -> bool:
+        """After picking a Response, some variants need an explicit Send/Next; most auto-send on click."""
+        for rx in ("Send", "Next", "Continue", "Submit"):
+            if await self._click(page, rx, timeout=1200):
+                return True
+        return False
+
+    async def _bank_chat_turn(self, page, q: str, responses: list[str], idx) -> None:
+        """Best-effort capture of this chat turn (a screenshot + the options) so NEW customer scenarios
+        keep landing in the bank. Guarded — a banking failure never breaks the walk."""
+        try:
+            from backend.tools.assessment_harvester import bank as _bank, media as _media
+            opt_txt = [f"Response {i + 1}" for i in range(len(responses))]
+            shot = await _media.capture(page, self.platform, q, opt_txt, page.url)
+            opts = [{"text": t, "image": "chat", "audio": None} for t in opt_txt]
+            chosen = {"text": (opt_txt[idx] if isinstance(idx, int) and 0 <= idx < len(opt_txt) else None),
+                      "index": idx, "value": None, "source": "chat_driver"}
+            _bank.record(platform=self.platform, item_type="unknown", question=q, options=opts,
+                         media={"image": shot, "audio": None, "prompt_text": None},
+                         chosen_answer=chosen, source={"mailbox": self.mailbox, "invite_url": None},
+                         kind_meta={"is_scored": True, "is_ability": False},
+                         msig=_bank.media_sig(["chat"] * max(1, len(opt_txt))))
+        except Exception:
+            pass
+
+    async def _drive_chat(self, page) -> bool:
+        """Drive the WHOLE Live-Chat Support Simulation to its end inside one call, then return True so
+        core polls + advances to the next module (Internet Speed Test → completion). Answer each Response
+        prompt (bank replay → vision → heuristic), tolerate the between-turn 'typing' gaps, switch to a
+        waiting customer when the current chat idles, and EXIT once the chat DOM is gone (module ended) or
+        the module's own countdown has expired. NEVER marks the assessment done — that stays with is_done,
+        so a stuck chat can't be reported «пройдено»."""
+        import time
+        # Cover a WHOLE pass in one call: the practice/tutorial (~60s) + the real sim's own ~12-min (720s)
+        # countdown + slack. A shorter budget still self-heals (core re-enters _drive_chat when the page
+        # advanced), but 900s finishes the common case in a single pass.
+        try:
+            budget = float(os.getenv("HARVER_CHAT_BUDGET", "900"))
+        except (TypeError, ValueError):
+            budget = 900.0
+        t0 = last_answer = time.monotonic()
+        turns = idle = switches = 0
+        logger.info("[harver] CHAT driver: start (budget=%ds)", int(budget))
+        while time.monotonic() - t0 < budget:
+            try:
+                st = await page.evaluate(self._CHAT_STATE_JS)
+            except Exception as e:
+                st = {}
+                logger.info("[harver] CHAT state probe err: %s", str(e)[:60])
+            if not self._chat_is_live(st):
+                # chat-specific DOM gone — likely the module transitioned. Re-confirm after a short settle
+                # so a transient blank/re-render between turns isn't mistaken for the end.
+                await page.wait_for_timeout(2000)
+                try:
+                    st = await page.evaluate(self._CHAT_STATE_JS)
+                except Exception:
+                    st = {}
+                if not self._chat_is_live(st):
+                    logger.info("[harver] CHAT driver: chat DOM gone → module ended (%d turns, %d switches)",
+                                turns, switches)
+                    await self._dump_controls(page, "chat_end", force_shot=True)
+                    return True
+            # A GATE modal (Practice step done → Begin Assessment / a tutorial-Start / a between-step
+            # Continue) sits OVER the frozen practice responses — dismiss it BEFORE answering, else every
+            # click lands on a covered Response and the real sim never starts (12:00 timer frozen).
+            if st.get("has_gate"):
+                if await self._dismiss_chat_gate(page):
+                    idle = 0
+                    last_answer = time.monotonic()
+                    logger.info("[harver] CHAT driver: dismissed intro/practice gate (timer=%s)",
+                                st.get("timer_secs"))
+                    await page.wait_for_timeout(1800)
+                    continue
+                logger.info("[harver] CHAT driver: gate present but no CTA clicked — dumping")
+                await self._dump_controls(page, "chat_gate_stuck", force_shot=True)
+            n = st.get("n_responses", 0)
+            if n >= 1:
+                try:
+                    probe = await page.evaluate(self._READ_CHAT_JS)
+                except Exception:
+                    probe = {}
+                responses = st.get("responses") or []
+                q = (probe.get("q") or "").strip() or ("chat: " + " | ".join(responses[:1]))[:220]
+                idx, src = await self._pick_chat_response(page, q, responses, n)
+                await self._bank_chat_turn(page, q, responses, idx)
+                clicked = await self._click_chat_response(page, idx)
+                await page.wait_for_timeout(500)
+                sent = await self._send_chat(page)
+                turns += 1
+                idle = 0
+                last_answer = time.monotonic()
+                logger.info("[harver] CHAT turn %d: %s pick=%d/%d clicked=%s sent=%s timer=%s q=%r",
+                            turns, src, idx + 1, n, clicked, sent, st.get("timer_secs"), q[:50])
+                # FROZEN-CHAT guard: if the SAME response OPTIONS + SAME countdown recur for many turns the
+                # sim is not advancing (a gate/overlay is eating the click, or the chat is wedged). Key on
+                # the RESPONSE texts, NOT the question — a live chat (even a multi-turn practice, where the
+                # reader keeps returning the transcript's first line as `q`) changes its reply options each
+                # turn, while a wedged/covered modal keeps the exact same options. Don't burn the whole
+                # budget clicking a covered Response — try a forward/gate CTA, then bail to core.
+                sig = (tuple((r or "")[:40] for r in responses), st.get("timer_secs"))
+                self._chat_stall = (getattr(self, "_chat_stall", 0) + 1
+                                    if sig == getattr(self, "_chat_prev_sig", None) else 0)
+                self._chat_prev_sig = sig
+                if self._chat_stall >= 8:
+                    logger.info("[harver] CHAT driver: FROZEN (same prompt+timer ×%d) — nudging then bailing",
+                                self._chat_stall)
+                    await self._dump_controls(page, "chat_frozen", force_shot=True)
+                    await self._dismiss_chat_gate(page) or await self._forward(page)
+                    await page.wait_for_timeout(1500)
+                    fresh = {}
+                    try:
+                        fresh = await page.evaluate(self._CHAT_STATE_JS)
+                    except Exception:
+                        pass
+                    if (fresh.get("timer_secs") == st.get("timer_secs")
+                            and fresh.get("n_responses") and not fresh.get("has_gate")):
+                        return True     # genuinely wedged — exit so core's is_done/advance can react
+                    self._chat_stall = 0
+                await page.wait_for_timeout(1200)          # let the customer 'type' the next line
+                continue
+            # No pickable response right now: the customer is typing, the current chat is done, or the
+            # module has ended. Be patient (don't let core's stale counter fire), then nudge forward.
+            idle += 1
+            if idle >= 2 and st.get("has_help_another") and await self._click_help_another(page):
+                switches += 1
+                idle = 0
+                last_answer = time.monotonic()
+                logger.info("[harver] CHAT driver: switched to another customer (#%d)", switches)
+                await page.wait_for_timeout(1500)
+                continue
+            if idle >= 2 and await self._forward(page):    # a between-module transition CTA, if any
+                logger.info("[harver] CHAT driver: clicked a forward CTA during idle")
+                idle = 0
+                last_answer = time.monotonic()
+                await page.wait_for_timeout(1200)
+                continue
+            if time.monotonic() - last_answer > 120 and not st.get("has_time_remaining"):
+                logger.info("[harver] CHAT driver: idle >120s + no countdown → exiting")
+                await self._dump_controls(page, "chat_idle_exit", force_shot=True)
+                return True
+            await page.wait_for_timeout(1500)
+        logger.info("[harver] CHAT driver: budget reached (%d turns, %d switches) → exiting to core",
+                    turns, switches)
+        await self._dump_controls(page, "chat_budget", force_shot=True)
+        return True
+
     async def read_item(self, page) -> dict:
         item = await super().read_item(page)
         try:
@@ -639,13 +924,26 @@ class HarverAdapter(Adapter):
                 item["_jk_n"] = n
                 item["_no_llm_solve"] = True
         # Live Chat Support Simulation — pick the best canned reply (Response 1..N) to the customer.
+        # TITLE-INDEPENDENT: some vacancies title the tab with the company name, not "chat", so a title
+        # gate missed the module entirely (→ core treated it as a dead landing → stuck). The "Response N"
+        # pick modal is chat-specific (SJT uses Best/Neutral/Worst, personality uses circles), so detecting
+        # by that modal (≥2 "Response N") is safe. answer_mcq then drives the WHOLE real-time sim.
         if (not item.get("_harver_sjt") and not item.get("_harver_pers") and not item.get("_harver_noa")
-                and not item.get("_harver_jk")
-                and ("chat" in tl or "simulation" in tl or "support" in tl)):
+                and not item.get("_harver_jk")):
             try:
                 chat = await page.evaluate(self._READ_CHAT_JS)
             except Exception:
                 chat = {"is_chat": False}
+            # Also treat the chat module as detected when its persistent chat-UI is present but the Response
+            # modal hasn't rendered yet (the customer is still 'typing' the opening line) — else core would
+            # stale-stuck at the chat ENTRY, before the driver engages.
+            if not chat.get("is_chat"):
+                try:
+                    _cs = await page.evaluate(self._CHAT_STATE_JS)
+                    if bool(_cs.get("has_chat_ui")):
+                        chat = {"is_chat": True, "n": _cs.get("n_responses") or 3, "q": "chat sim"}
+                except Exception:
+                    pass
             if chat.get("is_chat"):
                 n = chat.get("n") or 3
                 q = chat.get("q") or "chat sim"
@@ -828,44 +1126,14 @@ class HarverAdapter(Adapter):
             await page.wait_for_timeout(600)
             return True
         if item.get("_harver_chat"):
-            n = int(item.get("_chat_n") or 3)
-            # Clicking a reply doesn't always advance the sim to completion — it can cycle a few customer
-            # messages forever (core's signature keeps changing, so its no-advance guard never fires). Cap
-            # the module so a non-completing chat can't consume the whole session: after a ceiling (or a
-            # clearly-stuck same-prompt streak) STOP answering and try to LEAVE the module (Skip/Submit),
-            # then return False so core moves on instead of looping.
-            self._chat_turns = getattr(self, "_chat_turns", 0) + 1
-            q0 = (item.get("question") or "")[:40]
-            self._chat_stuck = (getattr(self, "_chat_stuck", 0) + 1
-                                if q0 and q0 == getattr(self, "_chat_prev_q", None) else 0)
-            self._chat_prev_q = q0
-            if self._chat_turns > 12 or self._chat_stuck >= 4:
-                exited = (await self._click(page, "Skip") or await self._click(page, "Submit")
-                          or await self._click(page, "Finish") or await self._click(page, "End")
-                          or await self._click(page, "Done") or await self._forward(page))
-                logger.info("[harver] CHAT giving up after %d turns (stuck=%d) exited=%s",
-                            self._chat_turns, self._chat_stuck, exited)
-                return False
-            if isinstance(index, int) and 0 <= index < n:
-                pick, src = index, "answer_key"   # REPLAY from the pre-solved bank
-            else:
-                pick = await self._vision_pick(page, n, "customer-service chat: pick the BEST reply to send",
-                                               odd_one_out=False)
-                src = "VISION"
-                if pick is None:
-                    self._chat_i = getattr(self, "_chat_i", 0) + 1
-                    pick = self._chat_i % n
-                    src = "placeholder"
-            clicked = await self._click_chat_response(page, pick)
-            await page.wait_for_timeout(500)
-            # advance the conversation (Next/Send/Submit), else the module's generic forward
-            cont_ok = await self._click(page, "Next") or await self._click(page, "Continue") \
-                or await self._click(page, "Send") or await self._click(page, "Submit") \
-                or await self._forward(page)
-            logger.info("[harver] CHAT %s response %d/%d clicked=%s next=%s turn=%d", src, pick + 1, n,
-                        clicked, cont_ok, self._chat_turns)
-            await page.wait_for_timeout(700)
-            return True
+            # The Live-Chat Support Simulation is a REAL-TIME, timer-bounded, multi-customer roleplay —
+            # not a one-shot MCQ. Driving it one core-turn at a time was fragile: core's signature-based
+            # advance detector (question+options) can't tell one chat turn from the next (the options are
+            # always "Response 1..N" and a recurring customer prompt reproduces the same question text), so
+            # it false-fires "no advance"; and the old 12-turn cap gave up by clicking Skip/Submit/Finish/
+            # End/Done — none of which exist in this DOM (only Help / Log out / "Help another customer" /
+            # ×) — so the whole session then stalled to max_steps. Drive the ENTIRE sim here instead.
+            return await self._drive_chat(page)
         if item.get("_harver_pers"):
             n = int(item.get("_pers_n") or 6)
             opts = item.get("options") or []

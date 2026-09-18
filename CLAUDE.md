@@ -676,6 +676,29 @@ amcat,hallo,harver,taleo}.py`. CLI `harvest_runner.py --platform amcat --limit 1
   the pure `truthful_answer()` (auth→Yes, sponsorship→No, EEO→decline) and a cognitive item → `needs_human` (NEVER guessed).
   Tests: `test_taleo_adapter.py`. NB harvest is single-use — a burned token goes terminal; the 8 no-creds invites hit a login
   wall (no recovery built — Taleo never emails the password). No cron yet (drive via the harver/harvest mass-run lane).
+- **Harver "Live Chat / Chat Proficiency" module = a real-time, timer-bounded, multi-customer roleplay — DRIVEN WHOLE inside
+  one `answer_mcq` call (`harver._drive_chat`, 2026-09-18).** It was the last barrier to auto-completing the server-side (no-Mac)
+  TTEC/Harver backlog: it is VACANCY-SPECIFIC (present for some `journey.harver.com/vacancy/<id>` reqs, absent for others —
+  e.g. present on portal `2060131726`'s CSR vacancy, ABSENT on `68ca1cfeb…` which ends at an Internet Speed Test; not
+  portal-deterministic, so run fresh invites to hit one). **The old per-turn handler STUCK the whole session** two ways: core's
+  signature-advance detector can't tell one chat turn from the next (options are always "Response 1..N"), and a 12-turn cap
+  "gave up" by clicking Skip/Submit/Finish/End/Done — none of which exist in this DOM (only Help / Log out / "Help another
+  customer" / ×) — so the run stalled to `max_items`. Now `read_item` flags the chat (TITLE-INDEPENDENT: the "Response N" modal
+  or a persistent chat-UI marker via `_CHAT_STATE_JS`), and `_drive_chat` runs the ENTIRE sim: **(1)** dismiss the intro/practice
+  GATE FIRST — a **"Practice step done → Begin Assessment"** modal sits OVER the frozen practice responses, so a JS click lands
+  on a covered Response and the 12:00 timer never starts (`_dismiss_chat_gate`, NEVER "Repeat Tutorial"); the old code only got
+  past it by accident (its post-answer `_forward` matched "Begin"). **(2)** answer each Response turn (bank `answer_key` replay
+  of the 14 pre-solved chat turns → vision → CS heuristic → placeholder). **(3)** EXIT when the chat-specific DOM is gone
+  (`_chat_is_live` = a Response modal / "Help another customer" / a chat-UI marker — NOT the bare countdown, which the cognitive/
+  typing/speed-test modules also show and which would trap the driver past the sim). The module **ALWAYS ends on its ~12-min
+  countdown regardless of play quality**, so completion is guaranteed even if a pending customer goes unanswered (the driver
+  idles to timer=0, then the chat transitions). `HARVER_CHAT_BUDGET` (default 900s) covers practice+timer in one pass; a shorter
+  budget self-heals (core re-enters `_drive_chat` because the page advanced). A FROZEN-CHAT guard (same prompt+timer ×8) bails
+  so a wedged chat can't burn the whole budget. `is_done` stays STRICT — a stuck chat is never «пройдено». For a vacancy where
+  the chat is the LAST module, is_done fires on the chat's own full-page "✓ Assessment completed". **LIVE-PROVEN 2026-09-18**:
+  `christian.callahan5024` (vacancy `693c2c34…`) walked practice→gate-dismiss→real sim (timer counted 719→613 across 10 turns,
+  multiple customers)→"Assessment completed"→`status: completed` + `mark_assessment_done`; `knox.ashford4056` completed a
+  no-chat vacancy unchanged. Tests: `test_harver_chat.py`.
 - **Reachability:** the rich surface is **AMCAT/TP** (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com`, single-use
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
   → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment

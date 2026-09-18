@@ -49,8 +49,45 @@ def test_resolve_job_campaign_applies_per_day_times(tmp_path, monkeypatch):
     _use_tmp(tmp_path, monkeypatch)
     ac.create(name="Z", target_kind="job", job_id=555, per_day=4, today="2026-09-09")
     c = ac.list_campaigns()[0]
-    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: [], submitted=set())
+    # a no-op velocity guard keeps the owner-requested [jid]*n (job 555 unknown company also passes
+    # through the real guard, so the historical behaviour is preserved for a fresh company)
+    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: [], submitted=set(),
+                             velocity_guard=lambda ids, **k: (list(ids), {}))
     assert got == [555, 555, 555, 555]     # N/day on the one job (owner-requested)
+
+
+def test_job_campaign_routes_through_velocity_cap(tmp_path, monkeypatch):
+    # the single-job branch must ALSO honour the per-company velocity cap — a drop-all guard (the
+    # company already over COMPANY_CAP_PER_DAY) yields NOTHING, closing the hole where [jid]*n used
+    # to fire up to per_day (≤100) applications at one company uncapped (the 149-fills cluster).
+    _use_tmp(tmp_path, monkeypatch)
+    ac.create(name="Cap", target_kind="job", job_id=555, per_day=6, today="2026-09-09")
+    c = ac.list_campaigns()[0]
+    got = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: [], submitted=set(),
+                             velocity_guard=lambda ids, **k: ([], {}))
+    assert got == []
+    # a guard that only permits the company's remaining budget (say 2) clamps the run to that
+    capped = ac.resolve_targets(c, "2026-09-09", list_jobs=lambda **k: [], submitted=set(),
+                                velocity_guard=lambda ids, **k: (list(ids)[:2], {}))
+    assert capped == [555, 555]
+
+
+def test_job_campaign_uses_one_stable_identity(tmp_path, monkeypatch):
+    # a job campaign pins ONE mailbox (email_mode='fixed') so the ATS dedupes the N/day repeats — a
+    # distinct identity per fill would defeat that dedup AND the velocity cap (the Salmon cluster).
+    _use_tmp(tmp_path, monkeypatch)
+    ac.create(name="Solo Job", target_kind="job", job_id=99, per_day=3, today="2026-09-09")
+    c = ac.list_campaigns()[0]
+    assert c["email_mode"] == "fixed"
+    e1, p1 = ac.next_identity(1, exists=lambda e: False)
+    e2, p2 = ac.next_identity(1, exists=lambda e: False)
+    assert (e1, p1) == (e2, p2) == (c["email"], c["pid"])   # same identity every fill
+    assert ac.list_campaigns()[0]["seq"] == 0               # a fixed campaign never mints a new seq
+    # search/jobs kinds are UNCHANGED — still a fresh identity per application
+    s = ac.create(name="Srch", target_kind="search", q="us", today="2026-09-09")
+    assert s["email_mode"] == "per_apply"
+    j = ac.create(name="J Set", target_kind="jobs", job_ids=[1, 2], today="2026-09-09")
+    assert j["email_mode"] == "per_apply"
 
 
 def test_resolve_search_excludes_applied_and_submitted(tmp_path, monkeypatch):

@@ -787,6 +787,9 @@ window.catSelectAll = async function(btn){
     (j.jobs||[]).forEach(function(x){ var id=parseInt(x.id,10); if(!(id>0)) return;
       S.ids.add(id); S.meta[id]={co:String(x.company||''), t:String(x.title||'')}; });
     catSaveSel(); syncPicks();
+    // /catalog/ids caps the result at 3000; without a cue a broad select-all silently drops the
+    // alphabetical tail (unfiltered catalog is ~9500). Tell the operator to narrow the search.
+    if(j.capped && window.catToast) catToast('Выбрано максимум 3000 — уточните поиск, чтобы захватить остальные');
   }catch(e){}
   finally{ btn.disabled=false; btn.textContent=old; }
 };

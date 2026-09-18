@@ -9,8 +9,10 @@ SEMANTICS (owner-approved 2026-09-09):
   * SEARCH campaign: `per_day` = N distinct NEW jobs/day (never re-applies a job it already did or one
     already submitted globally), and only auto-submittable ATSes (`_AUTO_ATS`).
   * SINGLE-job campaign: `per_day` applications/day to that ONE posting (owner-requested — same name,
-    fresh résumé each). NB the campaign's ONE stable mailbox means an ATS usually dedupes the repeats,
-    so the ATS — not us — decides how many actually land; the UI warns about this.
+    fresh résumé each) under ONE STABLE mailbox (`email_mode='fixed'`), so an ATS dedupes the repeats
+    — the ATS, not us, decides how many actually land; the UI warns about this. It is also routed
+    through the per-company velocity cap (like the other kinds) so it can't fire `per_day` (≤100)
+    applications at one company/run — the exact distinct-identity cluster the cap exists to prevent.
   * JOBS campaign (a checkbox selection on /catalog): `job_ids` is the owner's ordered pick, walked
     ROUND-ROBIN by a persisted `cursor` — up to `remaining_today` ids per run starting at the cursor,
     the same UN-LANDED job repeating only after every eligible one was hit (per_day > eligible count
@@ -358,8 +360,16 @@ def create(*, name: str, target_kind: str, job_id=None, job_ids=None, q: str = "
             "per_day": per_day,
             "email": _stable_email(name, cid),
             "pid": f"demo_camp{cid}_{re.sub(r'[^a-z0-9]+', '', name.lower())[:16] or 'x'}",
-            # owner 2026-09-09: a NEW mailbox per application (same name) — see next_identity()
-            "email_mode": "per_apply", "seq": 0, "seq_base": random.randint(120, 9000),
+            # owner 2026-09-09: a NEW mailbox per application (same name) — see next_identity().
+            # EXCEPTION: a single-`job` campaign keeps ONE stable mailbox ("fixed"). It applies
+            # `per_day` times to ONE posting, and a distinct identity per fill would (a) defeat the
+            # ATS dedup that keeps those repeats harmless and (b) — combined with the velocity-cap
+            # bypass the job branch used to have — reproduce the exact 149-distinct-identity cluster
+            # on one company the per-company cap exists to make impossible. The `[jid]*n` semantics
+            # stay; only the identity is pinned. search/jobs stay per_apply (they route through the
+            # velocity cap, so a fresh identity per fill is safe + intentional).
+            "email_mode": "fixed" if target_kind == "job" else "per_apply",
+            "seq": 0, "seq_base": random.randint(120, 9000),
             "active": True, "applied_jobids": [], "runs_today": 0, "attempts_today": 0,
             "last_run_date": today or "", "created": today or "",
         }
@@ -497,11 +507,14 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     applied = set(int(x) for x in (camp.get("applied_jobids") or []))
     kind = camp.get("target_kind")
     if kind == "job":
-        # single job: apply per_day times TODAY (owner-requested; same name, fresh résumé each).
-        # NB an ATS usually dedupes repeat applications from the campaign's one stable email, so the
-        # employer/ATS — not us — decides how many of the N/day actually land.
+        # single job: apply per_day times TODAY (owner-requested; same name, fresh résumé each)
+        # under ONE stable email (email_mode='fixed', pinned at create), so the ATS dedupes the
+        # repeats — the employer/ATS, not us, decides how many of the N/day actually land. Routed
+        # through the SAME per-company velocity cap as the other kinds so a job campaign can't fire
+        # `per_day` (≤100) uncapped applications at one company/run: `_capped` drops it to that
+        # company's remaining daily budget (and to [] once the company is over cap).
         jid = camp.get("job_id")
-        return [int(jid)] * n if jid else []
+        return _capped([int(jid)] * n) if jid else []
     if kind == "jobs":
         # owner-picked set: round-robin from the cursor. The applied/`submitted` exclusions of the
         # search kind do NOT apply (the owner chose these jobs), BUT a job this campaign already

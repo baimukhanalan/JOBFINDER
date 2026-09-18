@@ -30,17 +30,49 @@ LANES: dict[str, dict] = {
 _LOG = {"ttec": "taleo_apply.log", "teleperformance": "tp_apply.log", "centene": "workday_apply.log",
         "sutherland": "sr_apply.log", "kelly": "kelly_apply.log", "maximus": "mh_apply.log"}
 
-# crontab-cadence presets (the «частота» selector).
-SCHEDULES: dict[str, str | None] = {
-    "5x": "0 1,6,11,15,20 * * *",
-    "3x": "0 8,14,20 * * *",
-    "2x": "0 9,18 * * *",
-    "daily": "0 6 * * *",
-    "hourly": "0 * * * *",
-    "off": None,
-}
-SCHEDULE_LABELS = {"5x": "5×/день (по умолч.)", "3x": "3×/день", "2x": "2×/день",
+# crontab-cadence presets (the «частота» selector). A preset is applied PER-LANE with a distinct
+# minute + STAGGERED hours so the 6 mass-hiring lanes never pile headful Chromium onto the single
+# Xvfb `:98` at once. Re-creating the 2026-09-12 overload (all lanes at `1,6,11,15,20` → 46 chrome
+# procs, load ~7-10, fills dying mid-run with TargetClosedError) is exactly what one shared schedule
+# string did — so `set_schedule` derives each selected lane's OWN schedule from the tables below
+# (see `schedule_for`), and applying one preset to several lanes can NEVER un-stagger them.
+SCHEDULE_LABELS = {"5x": "5×/день", "3x": "3×/день", "2x": "2×/день",
                    "daily": "1×/день", "hourly": "каждый час", "off": "выключить"}
+SCHEDULES: tuple[str, ...] = tuple(SCHEDULE_LABELS)   # the valid preset ids
+
+# per-lane MINUTE offset (≥6 min apart, constant across cadences) so two lanes never collide on the
+# minute — mirrors the documented live crontab (Maximus 0 · TP 12 · Kelly 24 · SR 36 · Workday 48 ·
+# Taleo 54).
+_LANE_MIN = {"maximus": 0, "teleperformance": 12, "kelly": 24,
+             "sutherland": 36, "centene": 48, "ttec": 54}
+
+# per-lane HOURS for each cadence, spread so ≤2 lanes start any hour. `5x` mirrors the documented
+# live phases; the lower cadences keep the same staggering property.
+_LANE_HOURS: dict[str, dict[str, str]] = {
+    "5x": {"maximus": "0,5,10,15,20", "teleperformance": "1,6,11,16,21",
+           "kelly": "2,7,12,17,22", "ttec": "2,8,13,19,23",
+           "sutherland": "3,8,13,18,23", "centene": "4,9,14,19,0"},
+    "3x": {"maximus": "0,8,16", "teleperformance": "2,10,18", "kelly": "4,12,20",
+           "ttec": "6,14,22", "sutherland": "1,9,17", "centene": "3,11,19"},
+    "2x": {"maximus": "0,12", "teleperformance": "2,14", "kelly": "4,16",
+           "ttec": "6,18", "sutherland": "8,20", "centene": "10,22"},
+    "daily": {"maximus": "4", "teleperformance": "6", "kelly": "8",
+              "ttec": "10", "sutherland": "12", "centene": "14"},
+    "hourly": {"maximus": "*", "teleperformance": "*", "kelly": "*",
+               "ttec": "*", "sutherland": "*", "centene": "*"},
+}
+
+
+def schedule_for(lane: str, preset: str) -> str | None:
+    """The 5-field crontab schedule for ONE lane under a cadence preset. None → 'off' / unknown
+    (the caller comments the line out). Each lane gets its OWN minute + staggered hours, so applying
+    a preset to many lanes at once keeps them spread across the day (the anti-overload invariant)."""
+    if preset == "off" or preset not in _LANE_HOURS:
+        return None
+    hours = _LANE_HOURS[preset].get(lane)
+    if hours is None:
+        return None
+    return f"{_LANE_MIN.get(lane, 0)} {hours} * * *"
 
 _LOCK = threading.RLock()
 _RUN: dict = {"active": False, "started": 0, "count": None, "workers": 0, "lanes": {}}
@@ -154,20 +186,24 @@ def get_schedules() -> dict:
 
 
 def set_schedule(lanes, preset: str) -> dict:
-    """Rewrite ONLY the leading cron schedule of the selected lanes' lines (never add/remove lines).
-    'off' comments the line out; a real preset uncomments + sets the schedule. Backed up first."""
+    """Rewrite ONLY the leading cron schedule of the selected lanes' lines (never add/remove lines),
+    STAGGERED per lane: each matched line gets its OWN lane's `schedule_for(lane, preset)` — NOT one
+    shared string (that shared string re-created the 2026-09-12 `:98` overload). 'off' comments the
+    line out; a real preset uncomments + sets that lane's staggered schedule. Backed up first."""
     if preset not in SCHEDULES:
         return {"ok": False, "error": "unknown preset"}
     lanes = [l for l in (lanes or list(LANES)) if l in LANES]
     lines = _read_crontab()
     if not lines:
         return {"ok": False, "error": "empty crontab"}
-    targets = {_modbase(l) for l in lanes}
-    sched = SCHEDULES[preset]
+    # modbase -> lane, so a matched line is attributed to its lane and gets that lane's schedule.
+    # (modbases are mutually non-substring, so exactly one matches any lane line.)
+    mb_to_lane = {_modbase(l): l for l in lanes}
     changed = 0
     out = []
     for ln in lines:
-        if not any(mb in ln for mb in targets):
+        lane = next((la for mb, la in mb_to_lane.items() if mb in ln), None)
+        if lane is None:
             out.append(ln)
             continue
         m = _CRON_PREFIX.match(ln)
@@ -175,10 +211,11 @@ def set_schedule(lanes, preset: str) -> dict:
             out.append(ln)
             continue
         body = m.group(3)
+        sched = schedule_for(lane, preset)
         if sched is None:                       # off -> comment out (idempotent)
             out.append(ln if ln.lstrip().startswith("#") else "# " + ln)
         else:
-            out.append(f"{sched} {body}")       # set schedule + ensure uncommented
+            out.append(f"{sched} {body}")       # set THIS lane's staggered schedule + uncomment
         changed += 1
     try:
         LOG_DIR.mkdir(exist_ok=True)

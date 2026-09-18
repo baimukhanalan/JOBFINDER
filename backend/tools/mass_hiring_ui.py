@@ -353,12 +353,21 @@ async function mhSaveSpanish(cb){var fd=new FormData();fd.append('show_spanish',
 async function mhStartRun(){
   var lanes=[].slice.call(document.querySelectorAll('#mhm input[name=lane]:checked')).map(function(c){return c.value;});
   if(!lanes.length){alert('Выбери хотя бы один лейн');return;}
+  // Changing «Расписание запуска» rewrites the cron cadence of the selected lanes. It stays
+  // staggered per lane (each keeps its own time slot), but confirm the intent — it is a persistent
+  // change, not a one-off run.
+  var freq=document.getElementById('mhFreq').value||'';
+  if(freq){
+    var opt=document.querySelector('#mhFreq option[value="'+freq+'"]');
+    var lbl=opt?opt.textContent:freq;
+    if(!confirm('Изменить расписание автозапуска выбранных лейнов на «'+lbl+'»? Лейны останутся разнесены по времени.')) return;
+  }
   var fd=new FormData();
   fd.append('count',document.getElementById('mhCount').value||'');
   fd.append('workers',document.getElementById('mhWorkers').value||'2');
   fd.append('lanes',lanes.join(','));
   fd.append('show_spanish',document.getElementById('mhSpanish').checked?'1':'0');
-  fd.append('schedule',document.getElementById('mhFreq').value||'');
+  fd.append('schedule',freq);
   document.getElementById('mhStatus').textContent='Запускаю…';
   try{var r=await fetch('/mass-hiring/apply_all',{method:'POST',body:fd});mhRender(await r.json());mhStatusPoll();}
   catch(e){document.getElementById('mhStatus').textContent='Ошибка запуска';}

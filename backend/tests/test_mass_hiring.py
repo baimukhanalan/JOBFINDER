@@ -213,6 +213,42 @@ def test_working_solutions_canada_only_is_dropped():
     }) is None
 
 
+# ---- us_eligible: non-US remote must NOT leak in on the bare "remote" token --------
+# _US_SPECIFIC (explicit US) is checked first, then a non-US region-lock ANYWHERE (rejects before
+# the "remote" allow), then the generic anywhere/worldwide/global/bare-remote allow.
+
+def test_us_eligible_rejects_non_us_remote():
+    # every one of these used to return True because the broad allow (which included "remote")
+    # was tested FIRST, and the non-US regex was `^`-anchored (so it missed a trailing lock).
+    assert mh.us_eligible("India (Remote)") is False
+    assert mh.us_eligible("Philippines, Remote") is False
+    assert mh.us_eligible("EMEA remote") is False
+    assert mh.us_eligible("Remote UK") is False           # the real remoteok leak (trailing lock)
+    assert mh.us_eligible("Remote - Europe") is False
+    assert mh.us_eligible("Canada") is False
+    assert mh.us_eligible("Latin America (Remote)") is False
+
+
+def test_us_eligible_keeps_us_remote():
+    assert mh.us_eligible("") is True                     # unspecified → assume open
+    assert mh.us_eligible("Remote") is True               # bare remote, no country → open
+    assert mh.us_eligible("Anywhere") is True
+    assert mh.us_eligible("Worldwide") is True
+    assert mh.us_eligible("Remote, USA") is True
+    assert mh.us_eligible("Remote - United States") is True
+    assert mh.us_eligible("Remote (US)") is True
+    assert mh.us_eligible("Remote - North America") is True
+    assert mh.us_eligible("US or Canada") is True         # explicit US present → still eligible
+
+
+def test_mk_row_non_us_remote_marks_ineligible():
+    # a full row is still built (categorize passes), but flagged us_eligible=False so the
+    # us_only=True collect filter drops it (the remoteok "Remote UK" row that used to leak).
+    row = mh._mk_row("remoteok", "1", "Acme", "Customer Service Representative", "Remote UK", "u")
+    assert row is not None
+    assert row["us_eligible"] is False
+
+
 # ---- US-state / title helpers ---------------------------------------------------
 
 def test_has_us_state():

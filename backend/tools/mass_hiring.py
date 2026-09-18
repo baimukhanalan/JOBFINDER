@@ -424,22 +424,32 @@ def _ttec_detail_pay(url: str) -> tuple[float | None, float | None, str | None]:
         return (None, None, None)
 
 
-# US-eligibility from a free-text remote-location field. Accept when US is allowed (explicitly, or
-# via anywhere/worldwide/global/americas/north america). Reject region-locked non-US.
-_US_OK = re.compile(r"\b(usa?|united states|u\.s\.?|north america|americas|anywhere|worldwide|"
-                    r"global|remote)\b", re.I)
-_NON_US_ONLY = re.compile(r"^\s*(europe|emea|apac|uk|united kingdom|india|philippines|latam|"
+# US-eligibility from a free-text remote-location field. Three tiers, checked IN ORDER:
+#   1. an EXPLICIT US signal (usa / united states / north america / americas) → keep, even when a
+#      non-US word also appears ("US or Canada");
+#   2. a NON-US region-lock ANYWHERE in the string → reject BEFORE the bare-"remote" allow, so
+#      "India (Remote)" / "Philippines, Remote" / "EMEA remote" / "Remote UK" don't leak in on the
+#      "remote" token. (The old code tested one broad allow — which INCLUDED bare "remote" — FIRST,
+#      so every non-US remote string returned True before the non-US check ran. The non-US regex
+#      was also `^`-anchored, which missed a trailing lock like "Remote UK".)
+#   3. a generic open signal (anywhere / worldwide / global) or a bare "remote" with no country →
+#      keep (unspecified remote on a US-focused board → assume open).
+_US_SPECIFIC = re.compile(r"\b(usa?|united states|u\.s\.?|north america|americas)\b", re.I)
+_NON_US_ONLY = re.compile(r"\b(europe|emea|apac|uk|united kingdom|india|philippines|latam|"
                           r"latin america|canada|australia|africa|asia)\b", re.I)
+_OPEN_REMOTE = re.compile(r"\b(anywhere|worldwide|global|remote)\b", re.I)
 
 
 def us_eligible(location: str) -> bool:
     loc = (location or "").strip()
     if not loc:
         return True                      # unspecified remote → assume open
-    if _US_OK.search(loc):
-        return True
+    if _US_SPECIFIC.search(loc):
+        return True                      # explicit US → keep (wins over any co-occurring non-US word)
     if _NON_US_ONLY.search(loc):
-        return False
+        return False                     # region-locked non-US → reject before the bare-"remote" allow
+    if _OPEN_REMOTE.search(loc):
+        return True                      # anywhere / worldwide / global / bare remote (no country) → keep
     return False
 
 
@@ -1048,10 +1058,16 @@ def _kelly_row(j: dict) -> dict | None:
 
 
 def _pool_proxy_url() -> str | None:
-    """An httpx proxy URL from the rotating pool (scheme://user:pass@host:port), or None if empty."""
+    """An httpx proxy URL (scheme://user:pass@host:port) for the Kelly COLLECTOR, or None if the
+    pool is empty. DATACENTER-ONLY: uses proxy_pool._pool_pick() (the Bright Data datacenter pool
+    in data/proxies.json), NOT next_proxy(). next_proxy() short-circuits to a residential/phone
+    SOCKS slot first, whose carrier IP Akamai 403s (or which SOCKS-fails) — so mykelly.com's WP-REST
+    feed came back empty every collect. The BD datacenter egress is what actually clears Akamai
+    (verified: forcing it returned valid rows), matching the documented `mykelly.com ⇒
+    BD-datacenter / no-residential` contract."""
     try:
         from backend.tools import proxy_pool
-        p = proxy_pool.next_proxy()
+        p = proxy_pool._pool_pick()
     except Exception:
         return None
     if not p or not p.get("server"):

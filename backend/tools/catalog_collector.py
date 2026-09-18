@@ -21,6 +21,7 @@ import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -148,6 +149,10 @@ def run(remote_only: bool = True, with_questions: bool = True,
         workers: int = 8, q_workers: int = 6,
         ats_filter: str | None = None, limit: int = 0) -> dict:
     catalog_db.ensure_schema()
+    # Capture BEFORE any upsert stamps last_seen=now(), so the stale reaper can tell a row it
+    # re-saw this run (last_seen > run_start) from one it didn't (last_seen < run_start).
+    run_start = datetime.now(timezone.utc)
+    full_run = not ats_filter and not limit
     slugs = _slugs()
     if ats_filter:
         slugs = {ats_filter: slugs.get(ats_filter, {})}
@@ -158,6 +163,7 @@ def run(remote_only: bool = True, with_questions: bool = True,
           flush=True)
 
     all_rows: list[dict] = []
+    boards_seen: set[tuple[str, str]] = set()   # (ats, company_key) that returned >=1 row this run
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(collect_board, a, s, name, remote_only): (a, s)
                 for a, s, name in boards}
@@ -165,9 +171,12 @@ def run(remote_only: bool = True, with_questions: bool = True,
         for f in as_completed(futs):
             done += 1
             try:
-                all_rows.extend(f.result())
+                rows = f.result()
             except Exception:
-                pass
+                rows = []
+            if rows:
+                all_rows.extend(rows)
+                boards_seen.add(futs[f])         # a non-empty fetch = this board was really seen
             if done % 25 == 0:
                 print(f"  boards {done}/{len(boards)} | jobs so far {len(all_rows)}", flush=True)
 
@@ -201,9 +210,65 @@ def run(remote_only: bool = True, with_questions: bool = True,
             catalog_db.upsert_jobs(updated[i:i + B])
         print(f"questions attached to {len(updated)} jobs", flush=True)
 
+    # Reap disappeared postings — ONLY after a FULL (non-filtered, non-limited) collect, so a
+    # smoke/backfill run can never age the catalog. Both steps are per-source-success-gated and
+    # fully guarded (a failure here must never fail the collect).
+    if full_run:
+        try:
+            reaped = catalog_db.deactivate_stale(boards_seen, run_start, reason="stale")
+            print(f"stale reaper: marked {reaped} rows dead (board fetched OK but row unseen "
+                  f"this run) across {len(boards_seen)} boards", flush=True)
+        except Exception as e:
+            print(f"stale reaper skipped: {type(e).__name__}: {e}", flush=True)
+        try:
+            print(f"blocklist-gone sweep: {sweep_blocklist_gone()}", flush=True)
+        except Exception as e:
+            print(f"blocklist-gone sweep skipped: {type(e).__name__}: {e}", flush=True)
+
     c = catalog_db.counts()
     print(f"DONE. catalog counts -> {c}", flush=True)
     return c
+
+
+def sweep_blocklist_gone() -> dict:
+    """Reap catalog rows of BLOCKLISTED aggregator slugs (boards.blocked_slugs, e.g. nogigiddy)
+    that are GONE from a FRESH board fetch — marking ONLY the disappeared postings dead
+    (dead_reason='blocklist-gone'), never the ones still live on the board.
+
+    The blocklist stops FUTURE collection (`_slugs` excludes these slugs), but rows already in the
+    catalog persist forever. The owner's policy: KEEP the still-live ones (real human-apply jobs)
+    and reap ONLY the ones that vanished from the source. So we diff each blocked board's live
+    catalog rows against its current board JSON and dead only `catalog - fresh`. An empty/failed
+    fresh fetch is AMBIGUOUS (transient vs genuinely-empty), so that board is SKIPPED — a flap must
+    never mass-dead a whole aggregator."""
+    catalog_db.ensure_schema()
+    try:
+        blocked = boards.blocked_slugs()
+    except Exception:
+        blocked = set()
+    if not blocked:
+        return {"boards": 0, "dead": 0}
+    work = catalog_db.live_boards_for_slugs(list(blocked))
+    dead_keys: list[tuple] = []
+    checked = 0
+    for ats, slug in work:
+        try:
+            jobs = ats_boards.fetch_board(ats, slug)
+        except Exception:
+            continue
+        if not jobs:                     # ambiguous — never age a whole board on a flap/empty
+            continue
+        checked += 1
+        fresh = set()
+        for j in jobs:
+            url = j.get("applyUrl") or j.get("jobUrl") or ""
+            # match collect_board's external_id derivation exactly, so the diff is apples-to-apples
+            ext = str(j.get("id") or "").strip() or _ext_id(ats, url)
+            fresh.add(ext)
+        gone = catalog_db.live_external_ids(ats, slug) - fresh
+        dead_keys.extend((ats, slug, e) for e in gone)
+    n = catalog_db.mark_dead(dead_keys, "blocklist-gone") if dead_keys else 0
+    return {"boards": checked, "dead": n}
 
 
 def backfill_gh_questions(workers: int = 8, refresh_all: bool = False) -> int:
@@ -360,6 +425,9 @@ if __name__ == "__main__":
     ap.add_argument("--backfill-open", action="store_true",
                     help="compute open_anywhere (open to a remote applicant from any country) for "
                          "rows lacking it; with --all recompute EVERY row (after a rule change)")
+    ap.add_argument("--sweep-blocklist", action="store_true",
+                    help="mark dead the catalog rows of blocklisted aggregator slugs (nogigiddy) "
+                         "that have GONE from a fresh board fetch; keeps the still-live ones")
     ap.add_argument("--no-llm", action="store_true",
                     help="with --backfill-regions, skip the LLM fallback (deterministic only)")
     ap.add_argument("--limit", type=int, default=0,
@@ -382,6 +450,8 @@ if __name__ == "__main__":
         print(backfill_est_comp(limit=args.limit), flush=True)
     elif args.backfill_open:
         print(backfill_open(limit=args.limit, all_rows=args.all), flush=True)
+    elif args.sweep_blocklist:
+        print(sweep_blocklist_gone(), flush=True)
     else:
         run(remote_only=not args.all, with_questions=not args.no_questions,
             ats_filter=args.ats, limit=args.limit)

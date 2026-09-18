@@ -301,6 +301,51 @@ def mark_dead(keys: list[tuple], reason: str) -> int:
         return cur.rowcount
 
 
+def deactivate_stale(boards_seen, run_start, reason: str = "stale") -> int:
+    """Mark LIVE rows of SUCCESSFULLY-fetched boards that were NOT re-seen this run as dead
+    (disappeared at the source). MIRRORS mass_hiring.deactivate_stale, but per (ats, company_key)
+    board: `boards_seen` = the (ats, company_key) boards that returned >=1 row this run. A board
+    that raised or came back EMPTY is deliberately NOT in that set, so a transient failure/flap can
+    never age a live company (collect_board swallows exceptions -> [], indistinguishable from a
+    genuinely-empty board, so only a non-empty fetch is treated as "seen"). Only rows whose
+    `last_seen` predates `run_start` (i.e. the upsert did not refresh them this run) are marked
+    dead=TRUE + dead_reason — reversible, never deleted. `run_start` MUST be captured BEFORE the
+    collect's upserts (which stamp last_seen=now())."""
+    boards = sorted({(a, c) for (a, c) in (boards_seen or []) if a and c})
+    if not boards:
+        return 0
+    with _cur(False) as cur:
+        cur.execute(
+            "UPDATE job_catalog SET dead=TRUE, dead_reason=%s "
+            "WHERE NOT COALESCE(dead, FALSE) AND last_seen < %s "
+            "AND (ats, company_key) IN %s",
+            (reason, run_start, tuple(boards)))
+        return cur.rowcount
+
+
+def live_boards_for_slugs(company_keys) -> list:
+    """Distinct (ats, company_key) of LIVE (non-dead) rows whose company_key is one of these slugs
+    — the blocklist-gone sweep's work-list (which blocked aggregator slugs still carry live catalog
+    rows). Empty list when none match."""
+    keys = [c for c in (company_keys or []) if c]
+    if not keys:
+        return []
+    with _cur() as cur:
+        cur.execute("SELECT DISTINCT ats, company_key FROM job_catalog "
+                    "WHERE NOT COALESCE(dead, FALSE) AND company_key = ANY(%s)", (keys,))
+        return [(r["ats"], r["company_key"]) for r in cur.fetchall()]
+
+
+def live_external_ids(ats: str, company_key: str) -> set:
+    """external_id set of LIVE (non-dead) rows for one board — diffed against a fresh board fetch
+    so the blocklist-gone sweep reaps ONLY the postings that vanished, keeping the still-live ones."""
+    with _cur() as cur:
+        cur.execute("SELECT external_id FROM job_catalog "
+                    "WHERE ats=%s AND company_key=%s AND NOT COALESCE(dead, FALSE)",
+                    (ats, company_key))
+        return {r["external_id"] for r in cur.fetchall()}
+
+
 def rows_missing_questions(ats: str, missing_only: bool = True) -> list:
     """(external_id, company_key, url, title) for rows of this ATS. Default: only rows
     still missing questions (the backfill work-list). missing_only=False returns ALL

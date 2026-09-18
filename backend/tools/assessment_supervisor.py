@@ -113,11 +113,19 @@ def _tunnel_down() -> None:
 
 
 def _mac_online() -> bool:
-    try:
-        r = urllib.request.urlopen(f"http://127.0.0.1:{_PORT}/json/version", timeout=6)
-        return b"Browser" in r.read()
-    except Exception:
-        return False
+    # After a FRESH _tunnel_up(), the FIRST request through a cold `tailscale nc` egress hop can take
+    # well over 6s to establish the peer path to the Mac — a single short probe then false-negatives
+    # "Mac OFFLINE" and skips a perfectly reachable Mac (observed 2026-09-18: CDP :9222 answered
+    # instantly seconds later). RETRY a few times so a cold tunnel warms up before we give up.
+    for _ in range(5):
+        try:
+            r = urllib.request.urlopen(f"http://127.0.0.1:{_PORT}/json/version", timeout=8)
+            if b"Browser" in r.read():
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
 
 
 def _keep_mac_awake() -> str:

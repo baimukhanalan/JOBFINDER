@@ -401,7 +401,8 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
 
 
 # ---- interview priority (same signal as the Собес surface: urgency + salary, IT/non-IT) ----
-_DIR_LBL = {"it": "IT", "nonit": "не-IT"}
+# every direction gets a tag (incl. 'other' → «Другое») so a priority row is never left tag-less
+_DIR_LBL = {"it": "IT", "nonit": "не-IT", "other": "Другое"}
 
 
 def _pool_sort_toggle(sort: str) -> str:

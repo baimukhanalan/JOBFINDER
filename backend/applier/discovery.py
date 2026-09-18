@@ -39,6 +39,10 @@ _REMOTIVE = "https://remotive.com/api/remote-jobs?category=customer-service"
 _JOBICY = "https://jobicy.com/api/v2/remote-jobs?count=100&industry=supporting"
 _HIMALAYAS = "https://himalayas.app/jobs/api?limit=200&offset={off}"
 _HIMALAYAS_PAGES = 5  # most-recent 1000 postings, filtered to support titles
+# Working Nomads — public JSON, a rolling ~50-latest window (limit/page params are ignored). Its
+# inventory skews WORLDWIDE/CIS (Global/Europe-LATAM-APAC/CET), so it feeds the open_anywhere/
+# KZ-eligible segment the US-centric boards miss. Low yield (0-2 net-new companies/week) but cheap.
+_WORKINGNOMADS = "https://www.workingnomads.com/api/exposed_jobs/"
 
 # We Work Remotely publishes OPEN category RSS feeds (no auth). HTML/job pages are
 # Cloudflare+login-walled, so we consume RSS ONLY — never fetch a WWR job/apply page.
@@ -139,6 +143,32 @@ async def _aggregator_companies(client: httpx.AsyncClient) -> tuple[set[str], di
         except Exception as e:
             logger.warning("himalayas page %d failed: %s", page, e)
             break
+
+    # Working Nomads — public JSON array of {url, company_name, location, …}. The `url` is a
+    # `/job/go/<id>/` REDIRECT (raw-mining it yields nothing), so FOLLOW it to the real apply host
+    # and _mine_url that for an exact ashby/lever/greenhouse/workable slug (same trick Jobicy/
+    # Himalayas use on their applicationLink). Best-effort + per-row isolated: a dead feed or a slow
+    # redirect never blocks discovery.
+    try:
+        r = await client.get(_WORKINGNOMADS, headers=_UA)
+        rows = r.json() if r.status_code == 200 else []
+        if isinstance(rows, dict):
+            rows = rows.get("jobs") or rows.get("results") or []
+        for j in (rows or [])[:80]:
+            if not isinstance(j, dict):
+                continue
+            names.add(j.get("company_name", ""))
+            go = j.get("url", "") or ""
+            if "/job/go/" in go:
+                if go.startswith("/"):
+                    go = "https://www.workingnomads.com" + go
+                try:
+                    rr = await client.get(go, headers=_UA, follow_redirects=True, timeout=12)
+                    _mine_url(str(rr.url))
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("working nomads fetch failed: %s", e)
 
     # We Work Remotely — RSS-only, company names only, its own failure-isolated block
     # so a dead feed loses nothing (grow-only/start-from-load invariant preserved).

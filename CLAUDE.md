@@ -327,10 +327,15 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   every surface via `_page`/`_doc`/`dash_auth._doc` — one edit restyles the whole platform.
 - **Desktop rail is `position:fixed`, NOT sticky** (`mailcrm_ui._CSS` `.sidebar`): the global `html,body{overflow-x:hidden}`
   makes `body` the scroll container, under which `position:sticky` is unreliable — the rail scrolled AWAY with the content. Fix:
-  `.sidebar{position:fixed;top:0;left:0;height:100vh}` + `.layout{padding-left:var(--sidebar-w)}` to clear the main column; the
-  ≤760px block resets BOTH (`position:static` + `padding-left:0`) since the drawer/`_topbar` replace the rail there. Don't revert
-  the rail to `sticky` (same class of bug as the `.gm-topbar`/`.msg-toolbar` fixed toolbars). Verify by scrolling a tall admin
-  page: the rail's `getBoundingClientRect().top` stays 0.
+  `.sidebar{position:fixed;top:0;left:0;height:100vh;overflow-x:hidden}` + `.layout{padding-left:var(--sidebar-w)}` to clear the
+  main column. At ≤760px the rail is `display:none` (the `.gm-topbar`/`_drawer` replace it) and the mobile block ONLY resets
+  `.layout{padding-left:0}` — do NOT re-add dead `.sidebar{position:static;flex-direction:row…}` rules (they style a hidden
+  element). **Rail width `--sidebar-w:76px`** (widened from 64) so the longest RU nav label «Пользователи» FITS inside its pill —
+  nav items are `width:100%` (fill the rail) with `font-size:9px`; a narrower rail or bigger font overflows the label past the
+  pill/rail edge. Nav items + `.side-logout` share one shape (full-width, `border-radius:12px`, icon+label centred); tablet
+  (761–960px) trims `main` side-padding to 20px. Don't revert the rail to `sticky` (same bug class as the `.gm-topbar`/
+  `.msg-toolbar` fixed toolbars). Verify across 390/768/1280: no label overflow, `main` left == rail width (no overlap), rail
+  `getBoundingClientRect().top` stays 0 on scroll, drawer at ≤760.
 - **Brand / PWA:** mark = serif interlocked "JF" white on `#0c47c2` (`static/logo.svg` + maskable + PNGs; rebuild
   `rsvg-convert -w N -h N logo-maskable.svg -o icon-*.png`; keep `theme-color` `#0c47c2` in sync across `manifest.
   webmanifest` + `_HEAD_PWA`). Install = `_HEAD_PWA` + `_SW_REG`; `GET /sw.js` + `/static/*` on the dash_auth public allowlist.

@@ -191,7 +191,7 @@ def fulldate(ts: int) -> str:
 
 # ---------------------------------------------------------------- CSS (ported)
 _CSS = """
-:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#0c47c2;--accent-deep:#0a389c;--accent-soft:#e7edfb;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:64px;
+:root{--bg-app:#f6f8fc;--panel:#fff;--panel-2:#f1f3f4;--ink:#202124;--ink-soft:#5f6368;--ink-mute:#80868b;--line:#e8eaed;--line-strong:#dadce0;--accent:#0c47c2;--accent-deep:#0a389c;--accent-soft:#e7edfb;--danger:#d93025;--r:12px;--r-sm:8px;--r-full:999px;--ff:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--ff-mono:'JetBrains Mono',ui-monospace,monospace;--sidebar-w:76px;
 /* TWO sanctioned control-size scales — every button role maps onto one, never a bespoke size.
    FULL (buttons, icon-circles, filter pills): --ctl-h/px/fs. COMPACT inline metaline chips
    (📄 apps, assessment toggle, Собес): --chip-h/px/fs. Only two documented exceptions:
@@ -205,15 +205,23 @@ a{color:var(--accent);text-decoration:none;}a:hover{text-decoration:underline;}
    container, under which position:sticky is unreliable — the rail scrolled away with the
    content. position:fixed pins it to the viewport, full-height; .layout's padding-left keeps
    the main column clear of it. Reset both on mobile (the drawer/topbar replace the rail). */
-.sidebar{width:var(--sidebar-w);background:#fff;border-right:1px solid var(--line);padding:16px 0;display:flex;flex-direction:column;align-items:center;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;z-index:15;gap:6px;}
-.sidebar .brand{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;margin-bottom:6px;overflow:hidden;padding:0;}
+/* icon rail: brand at top, nav items fill the rail width (label contained in the pill — the
+   longest RU label «Пользователи» must NOT overflow), footer pinned to the bottom. Fixed +
+   full-height; overflow-x hidden so a short viewport never shows a horizontal scrollbar. */
+.sidebar{width:var(--sidebar-w);background:#fff;border-right:1px solid var(--line);padding:14px 5px 12px;display:flex;flex-direction:column;align-items:center;position:fixed;top:0;left:0;height:100vh;overflow-y:auto;overflow-x:hidden;z-index:15;}
+.sidebar .brand{width:38px;height:38px;border-radius:11px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;margin:0 0 14px;overflow:hidden;padding:0;flex:0 0 auto;}
 .jf-logo{width:100%;height:100%;object-fit:cover;display:block;}
 .gm-ava,.gm-drawer-head .brand{overflow:hidden;padding:0;}
-.sidebar .nav a{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-mute);padding:9px 6px;border-radius:var(--r-sm);font-size:9.5px;width:52px;text-align:center;}
+.sidebar .nav{display:flex;flex-direction:column;align-items:stretch;gap:3px;width:100%;}
+.sidebar .nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;width:100%;min-height:52px;padding:8px 2px;border-radius:12px;color:var(--ink-mute);font-size:9px;font-weight:600;line-height:1.1;text-align:center;letter-spacing:-.01em;transition:background .14s ease,color .14s ease;}
 .sidebar .nav a.active{color:var(--accent);background:var(--accent-soft);}
-.sidebar .nav a:hover{color:var(--ink);text-decoration:none;}
-.sidebar .nav a svg{width:20px;height:20px;}
+.sidebar .nav a:hover{color:var(--ink);background:var(--panel-2);text-decoration:none;}
+.sidebar .nav a.active:hover{color:var(--accent);background:var(--accent-soft);}
+.sidebar .nav a svg{width:21px;height:21px;}
 main{flex:1;padding:22px 30px;min-width:0;}
+/* tablet range (rail still shown): trim the wide desktop side-padding so content isn't cramped
+   between the fixed rail and the edge. Non-overlapping with the ≤760 drawer breakpoint. */
+@media(min-width:761px) and (max-width:960px){main{padding:20px 20px;}}
 .page-head{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px;position:sticky;top:0;z-index:10;background:var(--bg-app);padding-top:14px;transition:transform .25s;}
 .page-head.hide{transform:translateY(-130%);}
 .ph-left{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
@@ -442,7 +450,9 @@ button.primary:hover{background:var(--accent-deep);}
 .keyword-card textarea{min-height:220px;font-family:var(--ff-mono);font-size:12.5px;line-height:1.55;}
 .keyword-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:920px;margin-top:16px;}
 .keyword-note{background:var(--accent-soft);color:var(--accent-deep);border-radius:var(--r-sm);padding:10px 13px;margin:0 0 14px;max-width:920px;}
-@media(max-width:760px){.sidebar{width:auto;height:auto;position:static;flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:8px;}.sidebar .brand{margin:0 6px 0 0;}main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}.sidebar .nav a{font-size:10.5px;flex-direction:column;gap:2px;width:auto;flex:1;min-width:0;padding:6px 3px;text-align:center;line-height:1.15;}.sidebar .nav a svg{width:19px;height:19px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{flex-direction:column;padding-left:0;}.sidebar{position:static;height:auto;overflow:visible;justify-content:flex-start;padding:6px 8px;}.sidebar .nav{display:flex;flex:1;flex-direction:row;gap:2px;justify-content:space-around;align-items:stretch;}}
+/* ≤760px: the rail is display:none (see the .gm-topbar block below) — the ☰ drawer + top bar
+   replace it — so ONLY reset the layout's rail offset here; no dead .sidebar row styling. */
+@media(max-width:760px){main{padding:12px;}.seg-nav a{font-size:19px;}.toolbar{width:100%;}.toolbar input[type=search]{flex:1;min-width:0;}.msender{max-width:140px;}input,select,textarea{font-size:16px;}.modal textarea{min-height:110px;}.modal{padding:4vh 12px;}body{font-size:15px;}.msnip{font-size:13.5px;}.layout{padding-left:0;}}
 /* iOS auto-zooms the page when a focused input's font-size is < 16px. The generic
    `input,select,textarea{font-size:16px}` above is low-specificity, so a class rule
    (e.g. .cat-company input[list]) can shrink it back below 16 and re-trigger the zoom.
@@ -496,11 +506,12 @@ main.jf-enter-active{opacity:1;left:0;transition:opacity .2s ease,left .22s cubi
 .gm-logout{display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:var(--r-full);color:var(--danger);font-weight:600;font-size:15px;}
 .gm-logout svg{width:22px;height:22px;flex:0 0 auto;}
 .gm-logout:hover{background:#fce8e6;text-decoration:none;}
-/* desktop sidebar footer: admin marker + logout, pinned to the bottom of the rail */
-.side-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0 2px;width:100%;}
-.side-role{font-size:8px;font-weight:700;letter-spacing:.06em;color:var(--ink-mute);text-transform:uppercase;}
-.side-logout{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-mute);padding:8px 6px;border-radius:var(--r-sm);font-size:9.5px;width:52px;text-align:center;}
-.side-logout svg{width:20px;height:20px;}
+/* desktop sidebar footer: admin marker + logout, pinned to the bottom of the rail; the logout
+   mirrors the nav-item shape (same width/padding/radius) for a consistent rhythm. */
+.side-foot{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 0 2px;width:100%;}
+.side-role{font-size:8.5px;font-weight:700;letter-spacing:.05em;color:var(--ink-mute);text-transform:uppercase;}
+.side-logout{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:var(--ink-mute);padding:8px 2px;border-radius:12px;font-size:9px;font-weight:600;width:100%;min-height:48px;text-align:center;letter-spacing:-.01em;transition:background .14s ease,color .14s ease;}
+.side-logout svg{width:21px;height:21px;}
 .side-logout:hover{color:var(--danger);background:#fce8e6;text-decoration:none;}
 @media(max-width:760px){.gm-topbar{display:block;}.sidebar{display:none;}.toolbar{display:none;}}
 /* Mobile: the search pill hides on scroll down and reveals on scroll up (Gmail). It is FIXED

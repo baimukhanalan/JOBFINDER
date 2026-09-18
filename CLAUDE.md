@@ -315,14 +315,19 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   English is intentional). The flat `/mail` inbox keeps ONE «Действие» chip whose count sums both (`render_inbox._n`).
   «Тест сдан»/«Пропущенные» stay the assessment OUTCOME buckets. Tests: `test_candidates_inbox.py`.
 - **«Собес» = a PRIORITY surface** (`interview_priority.py`, route branch `eff=='interview'` → `candidates_inbox.render_interview_page`):
-  the whole interview set is loaded + enriched with a booking DEADLINE (parsed from the invite: «within N days»/«by <date>»/
-  «within 48 hours», else invite+5d ESTIMATED — `extract_deadline`, cached by msg hash), a potential SALARY («$Xk–$Yk/год»
-  chip: exact `job_catalog` comp, else the role-category MEDIAN via `est_comp.estimate`), and IT/non-IT `direction`. Split into
-  «IT-специальности» vs «Простые вакансии (не-IT)», sorted by salary (default) or urgency (`?sort=`); EXPIRED (deadline past)
-  собесы sink to the bottom, collapse into an «Истёкшие» `<details>`, dim, and their «Собес» control becomes a muted «бронь
-  истекла» (non-bookable). **Persona→jobid link is RECOVERED from the durable `status.json` (its `ts` is an ISO string — sort as
-  string, never `float()`) since `prefill_retention` prunes the per-job `persona.json` after 20d; the interview EMAIL role title
-  is the last-resort fallback for direction+salary.** Tests: `test_interview_priority.py`.
+  the whole interview set is loaded + enriched with a booking DEADLINE, a potential SALARY («$Xk–$Yk/год» chip: exact
+  `job_catalog` comp, else the role-category MEDIAN via `est_comp.estimate`), and IT/non-IT `direction`; split into «IT-специальности»
+  vs «Простые вакансии (не‑IT)» (non-breaking hyphen), sorted by salary (default) or urgency (`?sort=`). **Enrichment does ZERO
+  file I/O — the interview subject/snippet/date come from `mail_index` (carried through the SQL as `iv_subject`/`iv_snippet`/`iv_ts`
+  for grouped rows, `latest.snippet` for pool rows); a per-request 229-`.eml` MIME parse was ~26s cold and made the surface render
+  IT=0/non-IT=229 until it warmed. `_msg_signals` is now a rare fallback only.** DEADLINE (`extract_deadline`): «within N days» /
+  «by <date>» / «within 48 hours» → EXPLICIT; none stated → ESTIMATED (invite+`DEFAULT_DAYS`=21). **`is_expired` = an EXPLICIT past
+  deadline ONLY — an ESTIMATE is NEVER «истёк»** (a 6-day-old invite with no stated window is likely still bookable): estimated rows
+  stay bookable/delegatable and show the INVITE AGE («инвайт N дн назад», discriminated by real age), never a fake countdown. Only
+  EXPLICIT-expired sink + collapse into «Истёкшие» + dim + get the muted «бронь истекла» (non-bookable) + are excluded from the
+  delegatable pool. **Persona→jobid link is RECOVERED from the durable `status.json` (its `ts` is an ISO string — sort as string,
+  never `float()`) since `prefill_retention` prunes the per-job `persona.json` after 20d; the interview EMAIL role title is the
+  last-resort fallback for direction+salary.** Tests: `test_interview_priority.py`.
 - **Operator assessment control** on grouped cards (`_assessment_control` → `assessment_inner`): a pending TEST (matching
   `mail_db._TEST_SUBJECT_SQL` — any test/proctor/aptitude/amcat/harver/`video interview`/`magic link` subject) shows «✓
   Отметить»; marking re-tags rows `action_needed→assessment_done` so the item LEAVES «Действие» (shared helper
@@ -727,8 +732,8 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   recovered from the DURABLE `status.json` when the per-job `persona.json` is gone (retention prunes after 20d) — `_base_meta` →
   `_jobid_from_status`; `status.json`'s `ts` is an ISO string, sort as string; ~91% coverage now vs the old ~1%.** `_all_unallocated`
   also runs `interview_priority.enrich_interview_groups(rows, hash_key='source_hash')` → each row gets a booking deadline +
-  salary + a refined direction (email-role fallback) + an **`expired`** flag. **EXPIRED (deadline strictly past) interviews are
-  NOT delegatable:** `unallocated`/`count_unallocated`/`facets`/`allocate_specific` + the /users email picker all exclude them
+  salary + a refined direction (email-role fallback) + an **`expired`** flag (an EXPLICIT parsed past deadline ONLY — an ESTIMATED
+  guess is never expired). **EXPIRED interviews are NOT delegatable:** `unallocated`/`count_unallocated`/`facets`/`allocate_specific` + the /users email picker all exclude them
   (`_match(...,include_expired=False)` default); pass `include_expired=True` only for the /users priority card that shows them
   at the bottom. `split({mid:N}, gender, direction)` blocks the MATCHING (bookable) pool newest-first; `allocate_specific(
   mailbox, mid)` sends one by its unique e-mail; both store `jobid` on the row so the manager portal recomputes direction.

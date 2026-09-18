@@ -227,7 +227,10 @@ def _proxy_for(row: dict) -> dict | None:
         return None
     try:
         from backend.tools import proxy_pool
-        return proxy_pool.next_proxy()
+        # mykelly.com needs a BD DATACENTER IP to clear Akamai (documented «no residential»). Use
+        # _pool_pick() (BD pool) NOT next_proxy(), which short-circuits to a phone/residential SOCKS
+        # slot first → Akamai 403s the carrier IP (the same bug the Kelly COLLECTOR path had). R1-apply.
+        return proxy_pool._pool_pick() or proxy_pool.next_proxy()
     except Exception:
         return None
 

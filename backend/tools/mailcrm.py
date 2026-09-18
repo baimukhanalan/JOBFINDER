@@ -345,26 +345,27 @@ def mark_assessment_done(name: str) -> None:
     tag (build_index_row reads it), and (2) re-tag the already-indexed invite row now for an
     immediate CRM effect. Best-effort; never raises."""
     email = name if "@" in name else f"{name}@takhet.com"
-    try:
-        done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
-    except Exception:
-        done = set()
-    if email not in done:
-        done.add(email)
+    with _assess_file_lock():          # R8: serialise the cross-process RMW of both sets
         try:
-            _write_assess_done(done)
+            done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
+        except Exception:
+            done = set()
+        if email not in done:
+            done.add(email)
+            try:
+                _write_assess_done(done)
+            except Exception:
+                pass
+        # a PASSED test is not skipped — drop it from the skipped set too (symmetry with
+        # mark_assessment_skipped, which discards from the done set), so the two on-disk sets can't
+        # disagree and leave a stale «Пропущен» membership for a passed persona.
+        try:
+            skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
+            if email in skipped:
+                skipped.discard(email)
+                _write_assess_skipped(skipped)
         except Exception:
             pass
-    # a PASSED test is not skipped — drop it from the skipped set too (symmetry with
-    # mark_assessment_skipped, which discards from the done set), so the two on-disk sets can't
-    # disagree and leave a stale «Пропущен» membership for a passed persona.
-    try:
-        skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
-        if email in skipped:
-            skipped.discard(email)
-            _write_assess_skipped(skipped)
-    except Exception:
-        pass
     _reclassify_assessment(email, to_done=True)
 
 
@@ -444,24 +445,25 @@ def mark_assessment_skipped(name: str) -> None:
     re-index keeps the tag) + retag its rows now. A skipped test is NOT done — drop it from the done
     set if present. Best-effort; never raises."""
     email = name if "@" in name else f"{name}@takhet.com"
-    try:
-        skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
-    except Exception:
-        skipped = set()
-    if email not in skipped:
-        skipped.add(email)
+    with _assess_file_lock():          # R8: serialise the cross-process RMW of both sets
         try:
-            _write_assess_skipped(skipped)
+            skipped = set(json.loads(_ASSESS_SKIPPED_PATH.read_text())) if _ASSESS_SKIPPED_PATH.exists() else set()
+        except Exception:
+            skipped = set()
+        if email not in skipped:
+            skipped.add(email)
+            try:
+                _write_assess_skipped(skipped)
+            except Exception:
+                pass
+        # a skipped test must not also be marked done
+        try:
+            done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
+            if email in done:
+                done.discard(email)
+                _write_assess_done(done)
         except Exception:
             pass
-    # a skipped test must not also be marked done
-    try:
-        done = set(json.loads(_ASSESS_DONE_PATH.read_text())) if _ASSESS_DONE_PATH.exists() else set()
-        if email in done:
-            done.discard(email)
-            _write_assess_done(done)
-    except Exception:
-        pass
     _reclassify_assessment_skipped(email, to_skipped=True)
 
 
@@ -568,6 +570,35 @@ def _demo_file_lock():
             fcntl.flock(lf, fcntl.LOCK_EX)
         except OSError:
             pass          # a filesystem without flock — fall back to the in-process lock only
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
+@contextmanager
+def _assess_file_lock():
+    """Cross-PROCESS guard for the assessment done/skip sets' load-mutate-save. `mark_assessment_done`
+    and `mark_assessment_skipped` each read+write BOTH shl_assess_done.json and shl_assess_skipped.json
+    (they keep the two disjoint); ≥5 processes mutate them concurrently — the indexer-spawned
+    `shl_assess_runner --drain`, its `--watch` daemon, `assessment_supervisor`, the `auto_skip` cron,
+    `harvest_runner` completions, and the operator button — with only per-PID-tmp atomic writes and no
+    cross-process lock, so a concurrent write LOST an update (a dropped «done» flips a passed candidate
+    back into «Действие», since `_kind_with_done_override` reads the done-set at index time). One flock
+    over both files' RMW serialises them. Mirrors `_demo_file_lock`. (R8)"""
+    lock_path = _ASSESS_DONE_PATH.with_suffix(".lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    with open(lock_path, "w") as lf:
+        try:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+        except OSError:
+            pass
         try:
             yield
         finally:

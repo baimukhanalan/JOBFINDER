@@ -276,7 +276,7 @@ _CRONS = [
 ]
 # Why each lane is fragile + what to do (keyed by log filename; shown on tap).
 _CRON_HINTS = {
-    "catalog.log": ("Ночной сбор Ashby/Greenhouse/Lever/Workable в job_catalog (remote-only, регионы, "
+    "catalog.log": ("Ночной сбор Ashby/Greenhouse/Lever/Workable/Breezy в job_catalog (remote-only, регионы, "
                     "роли, comp). Если не отработал — каталог протухает, «Подать на все» бьёт по "
                     "мёртвым вакансиям. Ручной прогон: python3 -m backend.tools.catalog_collector."),
     "regions.log": "Дозаполнение regions у строк с NULL (остаток после правил). Некритично, но без него часть вакансий не попадает в фильтр по стране.",

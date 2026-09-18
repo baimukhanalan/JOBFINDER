@@ -2,7 +2,7 @@
 known ATS board into Postgres `job_catalog`.
 
 Boards come from backend/data/{targets.json, discovered_slugs.json}, restricted to
-the no-account ATS the app can read (ashby, greenhouse, lever, workable). Threaded +
+the no-account ATS the app can read (ashby, greenhouse, lever, workable, breezy). Threaded +
 resumable (upsert), so re-running just refreshes. Greenhouse job ids are pulled from
 the apply URL so we can fetch each posting's application questions via the public
 `?questions=true` endpoint (ashby/lever/workable questions are scraped separately,

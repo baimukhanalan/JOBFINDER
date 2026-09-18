@@ -99,8 +99,29 @@ async def fetch_workable(slug: str, client: httpx.AsyncClient) -> list[dict]:
     return out
 
 
+async def fetch_breezy(slug: str, client: httpx.AsyncClient) -> list[dict]:
+    r = await client.get(f"https://{slug}.breezy.hr/json", headers=_UA)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    if not isinstance(data, list):  # unknown slug 302s to an HTML shell
+        return []
+    out = []
+    for j in data:
+        loc = j.get("location") or {}
+        loc_str = loc.get("name") or ""
+        if loc.get("is_remote") and "remote" not in loc_str.lower():
+            loc_str = f"Remote — {loc_str}" if loc_str else "Remote"
+        out.append({"title": j.get("name", ""), "company": slug,
+                    # Breezy's board JSON has no JD; the salary string is the only text.
+                    "description": (j.get("salary") or ""),
+                    "apply_url": j.get("url", ""),
+                    "location": loc_str})
+    return out
+
+
 _FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby,
-             "workable": fetch_workable}
+             "workable": fetch_workable, "breezy": fetch_breezy}
 
 
 async def fetch_entry(entry: dict, client: httpx.AsyncClient) -> list[dict]:
@@ -361,7 +382,8 @@ async def collect_from_db(limit: int = 50, keywords: list[str] | None = None,
 _ATS_BASE = {"greenhouse": "https://boards.greenhouse.io/{}",
              "lever": "https://jobs.lever.co/{}",
              "ashby": "https://jobs.ashbyhq.com/{}",
-             "workable": "https://apply.workable.com/{}"}
+             "workable": "https://apply.workable.com/{}",
+             "breezy": "https://{}.breezy.hr"}
 
 # Curated companies known to hire remote CS on these ATSes (validated: API returns jobs).
 # The market only has ~20-40 open remote-CS roles across all of them at any moment, so this
@@ -386,8 +408,10 @@ _SLUG_RE = {
     "lever": r"lever\.co/([a-z0-9_-]+)",
     "ashby": r"ashbyhq\.com/([a-z0-9_.-]+)",
     "workable": r"apply\.workable\.com/([a-z0-9_-]+)",
+    # Breezy's slug is the SUBDOMAIN: https://<slug>.breezy.hr/p/<friendly_id>
+    "breezy": r"([a-z0-9][a-z0-9_-]*)\.breezy\.hr",
 }
-_SLUG_SKIP = {"embed", "job-boards", "boards", "j", "api"}
+_SLUG_SKIP = {"embed", "job-boards", "boards", "j", "api", "www", "assets-cdn"}
 
 # Ghost-job aggregators masquerading as employers on real ATSes — never fetch/queue.
 AGGREGATOR_EXCLUDE = {"nogigiddy"}
@@ -436,14 +460,16 @@ async def discover_ats_slugs_from_db() -> dict[str, set[str]]:
     from backend.models.job import Job, JobSource
     from sqlalchemy import select
 
-    out: dict[str, set[str]] = {"greenhouse": set(), "lever": set(), "ashby": set(), "workable": set()}
+    out: dict[str, set[str]] = {"greenhouse": set(), "lever": set(), "ashby": set(),
+                                "workable": set(), "breezy": set()}
     async with async_session() as session:
         rows = (await session.execute(
             select(Job.apply_url, Job.url).where(Job.source != JobSource.LINKEDIN))).all()
     for apply_url, url in rows:
         u = (apply_url or url or "").lower()
         for ats, host in (("greenhouse", "greenhouse.io"), ("lever", "lever.co"),
-                          ("ashby", "ashbyhq.com"), ("workable", "apply.workable.com")):
+                          ("ashby", "ashbyhq.com"), ("workable", "apply.workable.com"),
+                          ("breezy", "breezy.hr")):
             if host not in u:
                 continue
             m = re.search(_SLUG_RE[ats], u)

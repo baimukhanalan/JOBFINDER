@@ -61,7 +61,11 @@ uvicorn dashboard_app:app` is BROKEN).
 - **`jobfinder_crm` Postgres** — isolated CRM DB via `CRM_PG_DSN` (.env), psycopg2 (sync, pooled). NOT the shared `amasmail`
   MySQL, NOT the legacy `jobfinder` Postgres. Tables:
   - `mail_index` — fed live by `mail_indexer`.
-  - `job_catalog` — fed **nightly by cron** (`catalog_collector.py` over Ashby/Greenhouse/Lever/Workable, remote-only).
+  - `job_catalog` — fed **nightly by cron** (`catalog_collector.py` over Ashby/Greenhouse/Lever/Workable/Breezy, remote-only).
+    **Breezy HR** (`<slug>.breezy.hr/json`, 5th no-account ATS in `ats_boards.SUPPORTED`) is COLLECT-ONLY — its public
+    board JSON has an explicit `is_remote` + structured location but NO job description (only a `salary` string, surfaced
+    as the description so `comp_extract` reads it); region tagging is location-first so that's enough. No `strategies/breezy.py`
+    (no fill/auto-apply). `boards._SLUG_RE['breezy']` mines the `*.breezy.hr` subdomain so `discovery.py` auto-feeds slugs.
     Per-job cols: `regions text[]` ∈ `{US,CA,UK,OTHER}` + `region_source` (`applier/regions.py`); `open_anywhere BOOLEAN`
     (Kazakhstan-eligibility, `regions.open_anywhere`); `role_category` (13 buckets, `role_category.py`); posted `comp_*` +
     `comp_source` (`comp_extract.py`); RESEARCHED est comp `est_base_*`/`est_total_*`/`est_comp_source` (`est_comp.py`,

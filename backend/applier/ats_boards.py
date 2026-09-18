@@ -23,9 +23,16 @@ Supported today (all no-account, all with a similar prefill-and-submit form):
   * greenhouse  — https://boards-api.greenhouse.io/v1/boards/<slug>/jobs?content=true
   * lever       — https://api.lever.co/v0/postings/<slug>?mode=json
   * workable    — https://apply.workable.com/api/v1/widget/accounts/<slug>?details=true
+  * breezy      — https://<slug>.breezy.hr/json
 
 Deliberately EXCLUDED: Workday and iCIMS — they force candidates to create an
 account before applying, which breaks the "no registration" requirement.
+
+Breezy's public board JSON carries no job description (only structured fields +
+an explicit ``is_remote`` flag + a posted ``salary`` string). We surface the salary
+as the description text so the collector's comp extractor can read it; the region
+classifier is location-first, so Breezy's structured country/state is enough to tag
+eligibility without a JD. (A full-JD scrape and a Breezy fill strategy are out of scope.)
 """
 from __future__ import annotations
 
@@ -35,7 +42,7 @@ import httpx
 
 from backend.applier.boards import _strip_html
 
-SUPPORTED = ("ashby", "greenhouse", "lever", "workable")
+SUPPORTED = ("ashby", "greenhouse", "lever", "workable", "breezy")
 _TIMEOUT = 30
 
 
@@ -158,11 +165,62 @@ def _fetch_workable(slug: str) -> list[dict]:
     return out
 
 
+# ---- Breezy HR -----------------------------------------------------------------
+def _breezy_location(p: dict) -> tuple[str, bool]:
+    """('<place>', is_remote) from a Breezy position's location block.
+
+    Breezy exposes an explicit ``is_remote`` boolean (better than the text inference
+    the greenhouse fetcher needs). ``remote_details.value`` is 'remote' (open anywhere,
+    e.g. 'Worldwide'), 'remote-location' (remote but within the listed countries), or
+    absent (on-site). The location ``name`` ('Tampa, FL' / 'Pakistan' / 'Worldwide')
+    carries the country the region classifier keys on downstream.
+    """
+    loc = p.get("location") or {}
+    name = (loc.get("name") or "").strip()
+    if not name:  # compose from parts if the pre-joined name is missing
+        parts = [loc.get("city"),
+                 (loc.get("state") or {}).get("name"),
+                 (loc.get("country") or {}).get("name")]
+        name = ", ".join(x for x in parts if x)
+    return name, bool(loc.get("is_remote"))
+
+
+def _fetch_breezy(slug: str) -> list[dict]:
+    url = f"https://{slug}.breezy.hr/json"
+    r = httpx.get(url, timeout=_TIMEOUT)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list):  # unknown slug 302s to an HTML shell
+        return []
+    out = []
+    for p in data:
+        loc, remote = _breezy_location(p)
+        # The board JSON has NO description; the only text signal is the posted
+        # `salary` ('$115,000 – $145,000 / year'), surfaced so the collector's comp
+        # extractor can read it. Card display is a salary line at worst — honest, since
+        # that is genuinely all Breezy's public list endpoint gives us.
+        salary = (p.get("salary") or "").strip()
+        out.append({
+            "id": str(p.get("id") or ""),   # stable Breezy position id
+            "title": p.get("name", ""),
+            "applyUrl": p.get("url") or "",   # https://<slug>.breezy.hr/p/<friendly_id>
+            "jobUrl": p.get("url") or "",
+            "workplaceType": "Remote" if remote else "OnSite",
+            "isRemote": remote,
+            "location": loc,
+            "department": p.get("department") or "",
+            "descriptionHtml": f"<p>{html.escape(salary)}</p>" if salary else "",
+            "descriptionPlain": salary,
+        })
+    return out
+
+
 _FETCHERS = {
     "ashby": _fetch_ashby,
     "greenhouse": _fetch_greenhouse,
     "lever": _fetch_lever,
     "workable": _fetch_workable,
+    "breezy": _fetch_breezy,
 }
 
 

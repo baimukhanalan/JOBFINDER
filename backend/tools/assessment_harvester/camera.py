@@ -197,6 +197,20 @@ def ensure(video_path: str | None = None) -> bool:
     # do NOT touch the module/feeder (a second writer would collide and kill both).
     if _daemon_alive():
         return True
+    # PARALLEL SHARED-READER lane (CAMERA_SHARED_READER=1): the parallel Taleo/Harver drain runs ONE
+    # shared feeder (camera_daemon) and N reader browsers on the SAME /dev/video0 — v4l2loopback
+    # broadcasts one output stream to many capture openers (max_openers=10; verified live: 2+ concurrent
+    # Harver camera checks pass on the shared device). A reader lane must NEVER spawn its OWN ffmpeg
+    # feeder — two writers corrupt the single-writer v4l2loopback format (VIDIOC_G_FMT) and BOTH die.
+    # So here we only require the device to EXIST (the supervisor keeps it fed) and never write to it.
+    # Default (env unset) is unchanged: the single lane spawns its own feeder as before. This is also why
+    # per-lane video1..N devices are NOT created — that needs a `modprobe -r v4l2loopback` reload which
+    # would destroy /dev/video0 out from under the live Sutherland/AMCAT runs (not additive-safe).
+    if os.environ.get("CAMERA_SHARED_READER") == "1":
+        ok = _ensure_module()   # only load the device if wholly absent; never (re)start a feeder here
+        logger.info("[camera] shared-reader lane: device=%s present=%s (external feeder owns the feed)",
+                    DEVICE, ok)
+        return ok
     if not _ensure_module():
         logger.info("[camera] no /dev/video device (module load failed)")
         return False

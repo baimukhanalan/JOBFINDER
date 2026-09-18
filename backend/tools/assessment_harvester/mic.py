@@ -19,8 +19,15 @@ import subprocess
 logger = logging.getLogger("assessment_harvester")
 
 PULSE_SERVER = f"/run/user/{os.getuid()}/pulse/native"
-SINK = "virtmic"
-SOURCE = "virtmic_src"
+
+# PER-LANE virtual mic (parallel harvester lanes): a lane sets HARVEST_MIC_SUFFIX (e.g. "l0") so it
+# gets its OWN null-sink `virtmic_<suffix>` + remap-source `virtmic_<suffix>_src`. That way N concurrent
+# headful browsers each play into a SEPARATE sink — a speaking/SVAR module in one lane never garbles
+# another's captured audio. The DEFAULT (no suffix) is byte-identical to the original single lane
+# (`virtmic`/`virtmic_src`), so the AMCAT cron + Sutherland/Mac supervisor are unchanged.
+_SUFFIX = (os.environ.get("HARVEST_MIC_SUFFIX") or "").strip()
+SINK = f"virtmic_{_SUFFIX}" if _SUFFIX else "virtmic"
+SOURCE = f"virtmic_{_SUFFIX}_src" if _SUFFIX else "virtmic_src"
 
 
 def _env() -> dict:

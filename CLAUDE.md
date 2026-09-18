@@ -690,6 +690,26 @@ amcat,hallo,harver,taleo}.py`. CLI `harvest_runner.py --platform amcat --limit 1
   the pure `truthful_answer()` (auth→Yes, sponsorship→No, EEO→decline) and a cognitive item → `needs_human` (NEVER guessed).
   Tests: `test_taleo_adapter.py`. NB harvest is single-use — a burned token goes terminal; the 8 no-creds invites hit a login
   wall (no recovery built — Taleo never emails the password). No cron yet (drive via the harver/harvest mass-run lane).
+- **PARALLEL Taleo/Harver drain (`tools/parallel_taleo_drain.py`, 2026-09-18) — N lanes on ONE `:98` for ~N× throughput.**
+  The single sequential `harvest_runner --platform taleo_ttec --limit N` did ~2-3/hr (each Harver battery is 20-30 min of
+  timed modules). Run `DISPLAY=:98 sg mail -c 'PYTHONPATH=. python3 -m backend.tools.parallel_taleo_drain --lanes 4'` (start
+  4, up to ~6; each lane → `logs/taleo_lane_<i>.log`, driver progress to stdout; stop with `pkill -f parallel_taleo_drain`).
+  **The two shared-device singletons are handled WITHOUT per-lane hardware:** (1) **CAMERA is SHARED** — v4l2loopback
+  `/dev/video0` broadcasts ONE feed to MANY capture openers (`max_openers=10`; **PROVEN 2026-09-18: 2+ concurrent Harver
+  "Test your camera" checks pass on the shared device**), so the ONLY hazard is multiple *writers* — the driver starts ONE
+  shared feeder (`camera_daemon`) and every lane runs `CAMERA_SHARED_READER=1` so `camera.ensure` never spawns a competing
+  ffmpeg (two writers corrupt the single-writer format). **Per-lane video1..N devices are NOT created** — adding them needs a
+  `modprobe -r v4l2loopback` reload that would destroy `/dev/video0` under the live Sutherland/AMCAT runs (not additive-safe).
+  (2) **MIC is per-lane** — `HARVEST_MIC_SUFFIX=tl<i>` gives each lane its OWN pulse null-sink (`mic.py`) + a getUserMedia
+  audio-source pin (`core._MIC_PIN_JS`, matches the source by label; fail-open to the shared default) so concurrent speaking
+  modules never garble; `--shared-mic` disables it (Harver barely mic-checks, so shared also works). **NO DOUBLE-DRIVE:** a
+  flock'd claim file (`logs/taleo_drain_claimed.tsv`, adapted from the scratchpad `mac_workers.sh` pattern) hands each still-
+  pending invite to exactly one lane; each drive is `harvest_runner --url … --mailbox <full@takhet.com> --record-state`
+  (the new `--record-state` flag writes the outcome to `harvest_state.json` so a single-use token is never re-served + a
+  restart resumes cleanly; the full email marks the CRM «пройдено» on a real completion). Default per-drive wall-clock
+  `HARVEST_SESSION_SECS=2100` (a full battery ~20-30 min), hard-kill 2400s → `discover.mark(url,'lane_timeout')`.
+  `mic.py`/`camera.py` defaults (no env) are byte-identical, so the AMCAT `*/20` cron + the Sutherland/Mac supervisor are
+  unchanged. NOT cron-wired — operator-launched for a backlog drain.
 - **Harver "Live Chat / Chat Proficiency" module = a real-time, timer-bounded, multi-customer roleplay — DRIVEN WHOLE inside
   one `answer_mcq` call (`harver._drive_chat`, 2026-09-18).** It was the last barrier to auto-completing the server-side (no-Mac)
   TTEC/Harver backlog: it is VACANCY-SPECIFIC (present for some `journey.harver.com/vacancy/<id>` reqs, absent for others —

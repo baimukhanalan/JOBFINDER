@@ -313,6 +313,32 @@ _CAM_SPOOF_JS = r"""
 })();
 """
 
+# PER-LANE MIC PIN (parallel harvester lanes). A lane runs its own pulse null-sink (mic.SOURCE =
+# virtmic_<HARVEST_MIC_SUFFIX>_src) but Chromium's getUserMedia({audio:true}) otherwise grabs the pulse
+# SERVER default source (shared across lanes). This init-script pins the audio input to THIS lane's own
+# remap-source by matching its device.description label, so N concurrent browsers each capture only their
+# OWN sink → no cross-lane speaking garble. Fail-open: if the labelled source isn't enumerable it leaves
+# the constraints untouched (falls back to the pulse default, which every lane also sets, so a miss can't
+# silence the mic). Injected ONLY when HARVEST_MIC_SUFFIX is set → the default single lane is unchanged.
+_MIC_PIN_JS = r"""
+(() => {
+  const md = navigator.mediaDevices; if (!md || !md.getUserMedia) return;
+  const rGUM = md.getUserMedia.bind(md), rEnum = md.enumerateDevices.bind(md);
+  const WANT = "__SRC__";
+  let srcId = null;
+  const find = async () => { try { const ds = await rEnum();
+    const o = ds.find(d => d.kind === 'audioinput' && (d.label || '').includes(WANT));
+    return o ? o.deviceId : null; } catch (e) { return null; } };
+  md.getUserMedia = async (c) => { c = c || {};
+    try {
+      if (c.audio) { if (srcId === null) srcId = await find();
+        if (srcId) { const a = (typeof c.audio === 'object') ? c.audio : {};
+          a.deviceId = {exact: srcId}; c.audio = a; } }
+    } catch (e) {}
+    return rGUM(c); };
+})();
+"""
+
 
 async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                       min_delay: float = 0.8, max_delay: float = 2.2,
@@ -496,6 +522,15 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                           permissions=["microphone", "camera"],
                                           proxy=res.get("_proxy") or None,
                                           ignore_https_errors=bool(res.get("_proxy")))
+            # PER-LANE MIC PIN: a parallel lane (HARVEST_MIC_SUFFIX set) captures ONLY its own pulse
+            # null-sink source, so N concurrent speaking modules don't garble each other. Camera stays
+            # the SHARED /dev/video0 (v4l2loopback broadcasts one feed to many readers, verified). Guarded
+            # on mic_ready + the suffix so the default single lane / AMCAT cron is byte-identical.
+            if mic_ready and os.getenv("HARVEST_MIC_SUFFIX"):
+                try:
+                    await ctx.add_init_script(_MIC_PIN_JS.replace("__SRC__", mic.SOURCE))
+                except Exception:
+                    pass
             # CAM_SPOOF=1: make the v4l2loopback camera's getCapabilities()/getSettings() mimic a real
             # integrated webcam (non-empty facingMode + exposure/whiteBalance/focus/brightness controls).
             # Our virtual device exposes a BARE capability set (facingMode:[], no image controls) which is

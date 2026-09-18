@@ -126,6 +126,9 @@ def main() -> None:
     ap.add_argument("--list", action="store_true", help="show pending invites + bank stats and exit")
     ap.add_argument("--url", default=None, help="harvest ONE explicit invite URL (bypass discovery — for a just-arrived fresh token)")
     ap.add_argument("--mailbox", default="", help="mailbox label for --url mode")
+    ap.add_argument("--record-state", action="store_true",
+                    help="in --url mode, record the outcome into harvest_state.json (like the discover "
+                         "drain) so a restart / the parallel drain won't re-serve this single-use token")
     args = ap.parse_args()
 
     if args.url:
@@ -144,6 +147,15 @@ def main() -> None:
                 print("marked assessment done (пройдено):", args.mailbox)
             except Exception as exc:
                 print("mark_assessment_done failed:", str(exc)[:100])
+        # Record the single-use token's outcome so the discover drain / a restart won't re-serve it
+        # (the --url path otherwise leaves no harvest_state trace). Opt-in — a manual --url probe stays
+        # side-effect-free unless asked. Any non-error status marks it terminal (a burned token is dead
+        # regardless of how far the walk got), mirroring discover.discover's include_done exclusion.
+        if args.record_state:
+            try:
+                discover.mark(args.url, f"{res.get('status', 'error')}:banked{res.get('banked', 0)}")
+            except Exception as exc:
+                print("record-state failed:", str(exc)[:100])
         print("\n==== SINGLE-URL HARVEST ====")
         print("status :", res.get("status"))
         print("banked :", res.get("banked"), "by_type:", res.get("by_type"))

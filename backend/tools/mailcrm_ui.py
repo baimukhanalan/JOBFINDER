@@ -715,6 +715,11 @@ _LOGO_IMG = "<img src='/static/logo.svg' alt='JobFinder' class='jf-logo'>"
 
 # PWA install (manifest + icons + theme) + a service worker registration. Injected into
 # every page's <head> / end-of-body; the assets are on the dash_auth public allowlist.
+# The premium-animation layer (scroll-reveal + micro-interactions, backend/static/
+# anim.{css,js}) rides along here too — this is the ONE place every doc builder
+# (_page, dash_auth._doc, manage_ui, cabinet_ui) already includes, so it reaches the
+# whole platform from a single edit. Both files are additive/self-contained (see their
+# own headers): no-JS or prefers-reduced-motion users see the exact unanimated markup.
 _HEAD_PWA = (
     "<link rel='manifest' href='/static/manifest.webmanifest'>"
     "<meta name='theme-color' content='#0c47c2'>"
@@ -723,7 +728,9 @@ _HEAD_PWA = (
     "<meta name='apple-mobile-web-app-title' content='JobFinder'>"
     "<link rel='apple-touch-icon' href='/static/apple-touch-icon.png'>"
     "<link rel='icon' type='image/png' sizes='32x32' href='/static/favicon-32.png'>"
-    "<link rel='icon' href='/static/logo.svg' type='image/svg+xml'>")
+    "<link rel='icon' href='/static/logo.svg' type='image/svg+xml'>"
+    "<link rel='stylesheet' href='/static/anim.css'>"
+    "<script src='/static/anim.js' defer></script>")
 _SW_REG = ("<script>if('serviceWorker' in navigator){window.addEventListener('load',function(){"
            "navigator.serviceWorker.register('/sw.js').catch(function(){});});}</script>")
 

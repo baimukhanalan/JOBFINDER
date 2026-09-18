@@ -1,0 +1,86 @@
+/* JobFinder — premium animation layer (additive, opt-in via classes anim.js assigns
+ * at runtime; nothing here is applied by default, so a no-JS / reduced-motion user
+ * gets the exact same baseline markup, fully visible, with zero delay).
+ *
+ * Scope discipline (see backend/static/anim.js for why): only opacity + transform
+ * are ever animated (GPU-cheap, never triggers layout). `<main>`, `.page-head`, the
+ * sidebar/topbar/drawer and any modal are never given a CSS `transform` here — a
+ * `transform` on an ancestor of a `position:fixed` element (the FAB, the toast)
+ * makes IT the fixed element's containing block and breaks its anchoring to the
+ * viewport (see the jfSwap gotcha noted in mailcrm_ui.py / CLAUDE.md). anim.js only
+ * ever targets cards/rows/list-items/headings *inside* <main>, never <main> itself.
+ */
+
+:root{
+  --jfa-dur: 480ms;
+  --jfa-dur-fast: 200ms;
+  --jfa-ease: cubic-bezier(.16,.84,.44,1);
+  --jfa-dy: 10px;
+}
+@media (max-width: 480px){
+  :root{ --jfa-dy: 8px; --jfa-dur: 380ms; }
+}
+
+/* ---- scroll-reveal --------------------------------------------------------------
+ * `.jfa-r` is the pending (about-to-reveal) state; anim.js adds it right before an
+ * element scrolls into view, then flips `.jfa-in` on the next frame so the browser
+ * actually animates the transition instead of snapping. Elements anim.js never
+ * touches (no JS, or a selector miss) keep the page's normal, fully-visible layout. */
+.jfa-r{
+  opacity: 0;
+  transform: translateY(var(--jfa-dy));
+  transition: opacity var(--jfa-dur) var(--jfa-ease),
+              transform var(--jfa-dur) var(--jfa-ease);
+}
+.jfa-r.jfa-in{
+  opacity: 1;
+  transform: none;
+}
+/* opacity-only variant — for anything anim.js decides shouldn't receive a
+ * transform (see the containing-block note above). */
+.jfa-ro{ opacity: 0; transition: opacity var(--jfa-dur) var(--jfa-ease); }
+.jfa-ro.jfa-in{ opacity: 1; }
+
+/* ---- shimmer skeleton (opt-in utility, not applied anywhere automatically —
+ * available for a loading area to add server- or client-side: class="jf-skeleton") */
+.jf-skeleton{
+  position: relative;
+  overflow: hidden;
+  background: var(--panel-2, #eef0f2);
+  border-radius: var(--r-sm, 8px);
+}
+.jf-skeleton::after{
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  transform: translateX(-100%);
+  animation: jfa-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes jfa-shimmer{ 100%{ transform: translateX(100%); } }
+
+/* ---- micro-interactions ----------------------------------------------------------
+ * The shell (mailcrm_ui._CSS) already gives buttons/chips a hover lift + focus ring;
+ * this only fills the one gap it doesn't cover — a tap/press feel on cards + rows,
+ * which today only get a hover border/shadow with no `:active` state. Transform-only,
+ * scoped to elements this file already treats as reveal candidates. */
+.cg-card:active,.cat-card:active,.mh-card:active,.tcard:active,.capp-card:active,
+.u-user:active,.mbxrow:active,.mitem:active,.mrow:active{
+  transform: scale(.99);
+  transition: transform .12s var(--jfa-ease);
+}
+
+/* soft focus-ring polish (additive offset/transition only — never removes or
+ * recolors the shell's existing outline). */
+:focus-visible{ outline-offset: 3px; transition: outline-offset .15s ease; }
+
+@media (prefers-reduced-motion: reduce){
+  .jfa-r,.jfa-ro,.jfa-r.jfa-in,.jfa-ro.jfa-in{
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .jf-skeleton::after{ animation: none !important; }
+  .cg-card:active,.cat-card:active,.mh-card:active,.tcard:active,.capp-card:active,
+  .u-user:active,.mbxrow:active,.mitem:active,.mrow:active{ transform: none !important; }
+}

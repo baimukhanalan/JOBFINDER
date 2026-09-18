@@ -97,6 +97,24 @@ def _mac_online() -> bool:
         return False
 
 
+def _keep_mac_awake() -> str:
+    """Prevent the Mac from idle-sleeping WHILE we drive tests (Chrome denies a CDP screen-wake-lock, so
+    SSH `caffeinate` is the only automatable path). Best-effort + env-gated: set `MAC_SSH` to the Mac's
+    login (e.g. 'alan@100.86.135.112') AFTER enabling Remote Login on the Mac; a no-op otherwise. Runs a
+    bounded `caffeinate -dimsu -t 1800` so it self-releases after 30 min even if we die. Returns a status
+    line for the log/Health. (Simplest alternative, no SSH: set the Mac to never-sleep in Energy/pmset.)"""
+    target = os.environ.get("MAC_SSH", "").strip()
+    if not target:
+        return "no-sleep NOT auto-managed — enable Remote Login + set MAC_SSH, or set the Mac to never-sleep (pmset/Energy)"
+    try:
+        subprocess.Popen(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+                          "-o", "StrictHostKeyChecking=accept-new", target, "caffeinate -dimsu -t 1800"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        return f"caffeinate started on the Mac via {target} (30-min window)"
+    except Exception as e:
+        return f"caffeinate SSH failed ({str(e)[:50]}) — check Remote Login / MAC_SSH"
+
+
 def _load_attempts() -> dict:
     try:
         with open(_ATTEMPTS) as f:
@@ -150,6 +168,7 @@ def run(dry: bool, max_jobs: int) -> None:
     if not _mac_online():
         _log("Mac OFFLINE/asleep — not driving (Health shows «down» + alerts). Tunnel left up briefly.")
         return
+    _log("Mac no-sleep: " + _keep_mac_awake())    # keep the Mac awake for the duration of the drives
     attempts = _load_attempts()
     passed = skipped = partial = 0
     for mbx, url in fresh[:max_jobs]:

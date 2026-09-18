@@ -67,19 +67,25 @@ def _save() -> None:
     bank = _load()
     try:
         _os.makedirs(_os.path.dirname(_BANK_PATH), exist_ok=True)
-        # PRESERVE answer_keys another process wrote since we cached our copy. Each candidate subprocess
-        # holds a module-level `_BANK` loaded at its start; without this, saving that stale copy would
-        # DELETE answer_keys added on disk afterwards (e.g. an offline Sonnet-agent pre-solve merge) —
-        # exactly the clobber that wiped a merge mid-run. A key is only ever ADDED back, never removed.
+        # MERGE the on-disk bank into our copy so a CONCURRENT process's writes are never dropped. Each
+        # candidate subprocess holds a module-level `_BANK` loaded at its start; a plain save of that
+        # stale copy is last-writer-wins and would DELETE any ITEM or answer_key a sibling appended to
+        # disk after we cached (the mass run has many concurrent lanes). Grow-only UNION: add every disk
+        # item we lack (a sibling's new question), and adopt a disk answer_key when our copy has none.
+        # We only ever ADD, never remove. (Residual: the tiny read→os.replace window can still lose a
+        # write that lands in between — acceptable + far smaller than the previous drop-everything bug;
+        # an flock would close it fully if concurrency ever grows.)
         try:
             with open(_BANK_PATH, encoding="utf-8") as f:
                 disk = _json.load(f)
             ditems = disk.get("items", {}) if isinstance(disk, dict) else {}
-            mitems = bank.get("items", {})
+            mitems = bank.setdefault("items", {})
             for k, de in ditems.items():
-                dk = de.get("answer_key")
-                if dk and k in mitems and not mitems[k].get("answer_key"):
-                    mitems[k]["answer_key"] = dk
+                me = mitems.get(k)
+                if me is None:
+                    mitems[k] = de                         # a sibling's new item we don't have — keep it
+                elif de.get("answer_key") and not me.get("answer_key"):
+                    me["answer_key"] = de["answer_key"]     # a sibling keyed it — adopt the key
         except Exception:
             pass
         tmp = f"{_BANK_PATH}.{_os.getpid()}.tmp"

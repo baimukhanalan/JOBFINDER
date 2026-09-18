@@ -963,7 +963,8 @@ class HarverAdapter(Adapter):
     # A REAL Harver end-of-battery signal only — NOT a generic "thank you for your ...".
     _DONE_RE = re.compile(
         r"you have (now )?(successfully )?(completed|finished|submitted) (the|your|this) assessment|"
-        r"assessment (is |has been )?(now )?complete(d)?\b|thank you for completing (the|your|this)|"
+        r"assessment (is |has been )?(now )?complete(d)?\b|"
+        r"thank you for completing (the|your|this) (assessment|evaluation|application|process)|"
         r"you'?re all done|there are no (more|further) (steps|assessments|tasks|sections)|"
         r"you have completed all|we have received your (results|application|answers)|"
         r"received your results so hang tight", re.I)

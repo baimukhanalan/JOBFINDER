@@ -26,6 +26,28 @@ _FORWARD_DENY_RE = re.compile(
 _DISMISS_NAMES = ("Close", "OK", "Okay", "Got it", "Got It", "Dismiss", "I understand",
                   "Acknowledge", "Continue", "Proceed", "Allow", "Accept", "Accept All")
 
+# WHOLE-assessment completion — strict. A completion string only counts as DONE when it refers to the
+# whole assessment/battery/application (or is an unambiguous end-of-flow signal). The old broad regex
+# ("all done", "thank you for taking", "test completed", "no more questions") ALSO matched a per-SECTION
+# interstitial ("Thank you for completing this section", "Section complete — no more questions"), which
+# false-fired is_done -> the core sets status='completed' -> harvest_runner calls
+# mailcrm.mark_assessment_done -> a PREMATURE, FALSE «пройдено» that hides a still-pending test. Erring
+# strict is the safe direction: a missed genuine end just yields 'stuck' and re-runs (idempotent), never
+# a false pass. SHL/Harver keep their own guarded completion checks; this is the generic default that
+# AMCAT (direct) and Hallo (via super) inherit.
+_WHOLE_DONE_RE = re.compile(
+    r"(?:completed|finished|submitted)\s+(?:the\s+|your\s+|this\s+|all\s+)?"
+    r"(?:assessment|assessments|evaluation|test\s+battery|application|process)\b|"
+    r"(?:assessment|evaluation|application)\s+(?:is\s+|has\s+been\s+)?(?:now\s+)?"
+    r"(?:complete|completed|finished|submitted)\b|"
+    r"thank\s+you\s+for\s+(?:completing|taking|finishing)\s+(?:the\s+|your\s+|this\s+)?"
+    r"(?:assessment|evaluation|application|process)\b|"
+    r"you\s+have\s+completed\s+all\b|"
+    r"we(?:'ve|\s+have)?\s+received\s+your\s+(?:results|responses|answers|application|submission)\b|"
+    r"no\s+(?:more|further)\s+(?:assessments|tasks|steps|sections)\s+(?:remain|left|to\s+complete)|"
+    r"you\s+may\s+now\s+(?:close|exit|log\s*out)\b",
+    re.I)
+
 # Generic item reader: question text + visible options (radio labels / role=radio / list items /
 # clickable option divs), question images, and media / free-response flags. Returns raw signals;
 # classification happens in core.
@@ -192,16 +214,19 @@ class Adapter:
         except Exception:
             return False
 
+    @staticmethod
+    def whole_assessment_done(body: str) -> bool:
+        """True only when `body` shows a WHOLE-assessment completion (not a per-section interstitial).
+        Shared strict check so a section-boundary 'thank you for completing this section' can never
+        false-mark the CRM invite «пройдено»."""
+        return bool(_WHOLE_DONE_RE.search(body or ""))
+
     async def is_done(self, page) -> bool:
         try:
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:
             body = ""
-        return bool(re.search(
-            r"you have (completed|finished)|assessment (complete|finished|submitted)|"
-            r"thank you for (completing|taking)|successfully (completed|submitted)|"
-            r"test (completed|finished|submitted)|all done|you may now close|"
-            r"no (further|more) questions", body))
+        return self.whole_assessment_done(body)
 
     async def wall(self, page) -> str | None:
         """A GENUINE, unbreachable wall the harvester should stop and report (a terminal token, a

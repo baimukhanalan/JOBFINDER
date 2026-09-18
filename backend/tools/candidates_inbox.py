@@ -39,11 +39,18 @@ PAGE = 40
 # in stage_counts). Order mirrors the existing mail funnel. Each single-kind chip counts
 # candidates whose FURTHEST inbound stage is that kind (mail_db.stage_counts, furthest-based),
 # so a progressed candidate is counted only once under its latest stage.
+# The action_needed bucket is now SPLIT (mail_db._FUNNEL_STAGE_SQL): «Assessments» = candidates
+# whose pending action is a test/assessment (SHL/AMCAT/Harver/…), «Действия» = a genuine non-test
+# recruiter action (NDA / identity / complete-application). «Тест сдан» + «Пропущенные» stay as
+# the assessment OUTCOME buckets. The two split chips are disjoint and sum to the old «Действие».
 _FUNNEL = [
     ("", "Все"),
     ("sent", "Отправлено"),
     ("ack", "Принято"),
-    ("action_needed", "Действие"),
+    ("assessment", "Assessments"),
+    ("assessment_done", "Тест сдан"),
+    ("assessment_skipped", "Пропущенные"),
+    ("action_needed", "Действия"),
     ("interview", "Собес"),
     ("offer", "Оффер"),
     ("rejection", "Отказ"),

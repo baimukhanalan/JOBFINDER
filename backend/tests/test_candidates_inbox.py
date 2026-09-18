@@ -328,6 +328,59 @@ def test_mailcrm_candidate_groups_wrapper_adds_identity_keys():
         assert _WRAPPER_KEYS <= set(r.keys()), sorted(_WRAPPER_KEYS - set(r.keys()))
 
 
+# ---- «Действие» split into «Assessments» + «Действия» -------------------------------------
+def test_funnel_has_split_assessment_and_action_chips():
+    # the old single «Действие» is replaced by two disjoint chips + the outcome buckets
+    keys = [k for k, _l in ci._FUNNEL]
+    labels = [l for _k, l in ci._FUNNEL]
+    assert "assessment" in keys and "action_needed" in keys
+    assert "Assessments" in labels and "Действия" in labels
+    # the assessment OUTCOME buckets are kept
+    assert "assessment_done" in keys and "assessment_skipped" in keys
+
+
+def test_funnel_renders_split_chip_counts():
+    page = ci.render_page([], tab="all",
+                          stage_counts={"all": 10, "assessment": 4, "action_needed": 6})
+    assert "Assessments" in page and "Действия" in page
+    assert "<b>4</b>" in page and "<b>6</b>" in page
+
+
+def test_assessment_stage_dot_renders():
+    # a candidate whose furthest stage is a pending assessment gets the «Assessments» badge
+    out = ci.render_groups([_g(stage="assessment")])
+    assert "Assessments" in out
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_action_needed_splits_into_assessment_and_action():
+    # «Assessments» + «Действия» must be DISJOINT and sum to the pre-split action_needed total
+    sc = mail_db.stage_counts()
+    # the pre-split total = every candidate whose furthest inbound stage is action_needed
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute(f"""
+            SELECT COUNT(*) FROM (
+                SELECT mailbox, {mail_db._FURTHEST_STAGE_SQL} AS s
+                  FROM mail_index GROUP BY mailbox
+            ) f WHERE s = 'action_needed'""")
+        pre = cur.fetchone()[0]
+    assert sc.get("assessment", 0) + sc.get("action_needed", 0) == pre
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_assessment_filter_rows_badge_assessment():
+    for r in mail_db.candidate_groups(stage="assessment", limit=5):
+        assert r["stage"] == "assessment"
+        assert r.get("n_asmt_pending")   # the split is driven by a pending assessment signal
+
+
+@pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
+def test_db_action_filter_rows_are_genuine_actions():
+    for r in mail_db.candidate_groups(stage="action_needed", limit=5):
+        assert r["stage"] == "action_needed"
+        assert not r.get("n_asmt_pending")   # a genuine (non-test) action, no pending assessment
+
+
 # ---- assessment action (right slot, «Тихая строка» — no «Осталось» chip) ----------------
 def test_assessment_inner_done_shows_passed_and_revert():
     h = ci.assessment_inner("x@takhet.com", done=True)

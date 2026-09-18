@@ -335,15 +335,55 @@ _TEST_SUBJECT_SQL = (
     "OR subject ILIKE '%%video interview%%' OR subject ILIKE '%%magic link%%')"
 )
 
+# Assessment SENDERS whose post-apply mail is a TEST/assessment even when the subject is
+# generic (SHL/TalentCentral, TTEC/Harver, Maximus, Hallo, AMCAT/AspiringMinds, Conduent/
+# SkillCheck). A POSIX regex (no % wildcards), so it de-doubles cleanly whether the embedding
+# query binds params or not.
+_ASSESSMENT_SENDER_SQL = (
+    "from_email ~* "
+    "'(ttec|talentcentral|shl\\.com|hallo\\.ai|maximus|aspiringminds|amcat|conduent|harver|skillcheck)'"
+)
+# «Is an assessment» = a test-looking SUBJECT (SHL/AMCAT/SkillCheck/Harver/video…) OR a known
+# assessment SENDER. This is the signal that splits the `action_needed` funnel bucket into
+# «Assessments» (a pending test the human must complete) vs «Действия» (a genuine non-test
+# recruiter action: NDA / identity / complete-application). Contains the %% from
+# _TEST_SUBJECT_SQL, so any query using it must bind params or pass an empty () to execute().
+_ASSESSMENT_SIGNAL_SQL = f"(({_TEST_SUBJECT_SQL}) OR ({_ASSESSMENT_SENDER_SQL}))"
+
+# The candidate-funnel stage — IDENTICAL ranking to _FURTHEST_STAGE_SQL, except the single
+# 'action_needed' bucket is SPLIT: a candidate whose furthest inbound stage is action_needed
+# lands in 'assessment' when any of its action mail is a test/assessment (subject or sender),
+# else in 'action_needed'. So «Assessments» and «Действия» count and filter to disjoint sets
+# that sum to the old «Действие» total. (_FURTHEST_STAGE_SQL itself is left UNCHANGED —
+# pool.py's interview pool depends on it and its exact ranking.)
+_FUNNEL_STAGE_SQL = f"""
+        CASE
+          WHEN bool_or(kind='offer'         AND NOT outbound) THEN 'offer'
+          WHEN bool_or(kind='interview'     AND NOT outbound) THEN 'interview'
+          WHEN bool_or(kind='action_needed' AND NOT outbound) THEN
+            CASE WHEN bool_or(kind='action_needed' AND NOT outbound AND {_ASSESSMENT_SIGNAL_SQL})
+                 THEN 'assessment' ELSE 'action_needed' END
+          WHEN bool_or(kind='assessment_done' AND NOT outbound) THEN 'assessment_done'
+          WHEN bool_or(kind='rejection'     AND NOT outbound) THEN 'rejection'
+          WHEN bool_or(kind='ack'           AND NOT outbound) THEN 'ack'
+          WHEN bool_or(kind='assessment_skipped' AND NOT outbound) THEN 'assessment_skipped'
+          WHEN bool_or(kind='code'          AND NOT outbound) THEN 'code'
+          WHEN bool_or(NOT outbound)                          THEN 'other'
+          ELSE NULL
+        END"""
+
 
 def _furthest_stage_counts(cur) -> dict:
     """{stage: number of DISTINCT candidate mailboxes whose FURTHEST inbound kind is that
-    stage}. Pure read; the caller supplies a plain (non-dict) cursor."""
+    stage}. The action_needed bucket is split into 'assessment' (a pending test/assessment)
+    and 'action_needed' (a genuine non-test action) — see _FUNNEL_STAGE_SQL. Pure read; the
+    caller supplies a plain (non-dict) cursor. The empty () lets psycopg2 de-double the %% the
+    embedded assessment signal carries even though there are no bound params."""
     cur.execute(f"""
         SELECT stage, COUNT(*) FROM (
-            SELECT mailbox, {_FURTHEST_STAGE_SQL} AS stage
+            SELECT mailbox, {_FUNNEL_STAGE_SQL} AS stage
               FROM mail_index GROUP BY mailbox
-        ) f WHERE stage IS NOT NULL GROUP BY stage""")
+        ) f WHERE stage IS NOT NULL GROUP BY stage""", ())
     return {k: n for k, n in cur.fetchall()}
 
 
@@ -400,7 +440,7 @@ def mailboxes_with_kind(kind: str) -> set:
     with _cur(dict_rows=False) as cur:
         cur.execute(f"""
             SELECT mailbox FROM (
-                SELECT mailbox, {_FURTHEST_STAGE_SQL} AS stage
+                SELECT mailbox, {_FUNNEL_STAGE_SQL} AS stage
                   FROM mail_index GROUP BY mailbox
             ) f WHERE stage = %s""", (kind,))
         return {r[0] for r in cur.fetchall()}
@@ -414,16 +454,18 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
     interview message, so the «Собес» control links the right thread).
 
     Row keys: mailbox, last_ts, msg_count, unread, n_interview, n_offer, n_rejection,
-      n_action, n_assessment_done, n_asmt_pending (open, not-yet-passed test/assessment
-      items — any kind: SHL/AMCAT/SkillCheck/Harver/video, see _TEST_SUBJECT_SQL),
-      n_ack, has_sent, stage (furthest inbound kind), last_hash, last_thread,
+      n_action, n_assessment_done, n_assessment_skipped, n_code, n_asmt_pending (open,
+      not-yet-passed test/assessment items — any kind: SHL/AMCAT/SkillCheck/Harver/video,
+      see _ASSESSMENT_SIGNAL_SQL), n_ack, has_sent, stage (funnel stage — furthest inbound
+      kind, with the action_needed → 'assessment' split), last_hash, last_thread,
       last_subject, last_snippet, last_from, last_candidate, last_kind, last_outbound,
       has_att, iv_hash, iv_thread.
 
     stage: '' / None → every mailbox; 'sent' → has an outbound message; 'priority' →
-      has an inbound interview OR action_needed (the «Приоритетные» tab); a single kind
-      ('interview'|'offer'|'rejection'|'action_needed'|'ack'|'other') → has ≥1 inbound
-      message of that kind. q → group-level search (mailbox / candidate / subject).
+      has an inbound interview OR action_needed (the «Приоритетные» tab); a funnel stage
+      ('interview'|'offer'|'rejection'|'assessment'|'action_needed'|'assessment_done'|
+      'assessment_skipped'|'ack'|'code'|'other') → the candidate's FURTHEST inbound stage is
+      that one. q → group-level search (mailbox / candidate / subject).
     Pagination is a plain LIMIT/OFFSET over the last-activity order (matches the roster's
     existing offset pagination)."""
     stage = (stage or "").strip().lower()
@@ -440,12 +482,12 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
     elif stage == "priority":
         having = ("HAVING COUNT(*) FILTER (WHERE kind='interview' AND NOT outbound) > 0 "
                   "OR COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) > 0")
-    elif stage in _STAGE_RANK:
+    elif stage == "assessment" or stage in _STAGE_RANK:
         # FURTHEST-outcome membership: a candidate is in a single-kind bucket only when that
         # kind is the furthest inbound stage it reached — so a progressed candidate leaves the
         # earlier bucket (e.g. no longer under 'action_needed' once an interview/offer landed).
-        # Mirrors furthest_stage() / stage_counts() exactly.
-        having = f"HAVING ({_FURTHEST_STAGE_SQL}) = %s"
+        # Mirrors _FUNNEL_STAGE_SQL / stage_counts() exactly (incl. the assessment ⇄ action split).
+        having = f"HAVING ({_FUNNEL_STAGE_SQL}) = %s"
         hargs = [stage]
 
     agg_sql = f"""
@@ -458,9 +500,11 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
                COUNT(*) FILTER (WHERE kind='rejection' AND NOT outbound) AS n_rejection,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound) AS n_action,
                COUNT(*) FILTER (WHERE kind='assessment_done' AND NOT outbound) AS n_assessment_done,
+               COUNT(*) FILTER (WHERE kind='assessment_skipped' AND NOT outbound) AS n_assessment_skipped,
                COUNT(*) FILTER (WHERE kind='action_needed' AND NOT outbound
-                   AND {_TEST_SUBJECT_SQL}) AS n_asmt_pending,
+                   AND {_ASSESSMENT_SIGNAL_SQL}) AS n_asmt_pending,
                COUNT(*) FILTER (WHERE kind='ack' AND NOT outbound) AS n_ack,
+               COUNT(*) FILTER (WHERE kind='code' AND NOT outbound) AS n_code,
                bool_or(outbound) AS has_sent
           FROM mail_index
           {where}
@@ -489,13 +533,19 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
         iv = {r["mailbox"]: dict(r) for r in cur.fetchall()}
 
     def _furthest(g) -> str:
-        # Same ranking as furthest_stage()/_FURTHEST_STAGE_SQL, from the group's per-kind
-        # inbound counts, so the badge on each row matches the stage FILTER it appears under.
+        # Same ranking as furthest_stage()/_FUNNEL_STAGE_SQL, from the group's per-kind inbound
+        # counts, so the badge on each row matches the stage FILTER it appears under — including
+        # the action_needed → 'assessment' split when a pending test/assessment is present.
         present = {k for k, col in (("offer", "n_offer"), ("interview", "n_interview"),
                                     ("action_needed", "n_action"),
                                     ("assessment_done", "n_assessment_done"),
-                                    ("rejection", "n_rejection"), ("ack", "n_ack")) if g[col]}
-        return furthest_stage(present)
+                                    ("rejection", "n_rejection"), ("ack", "n_ack"),
+                                    ("assessment_skipped", "n_assessment_skipped"),
+                                    ("code", "n_code")) if g[col]}
+        st = furthest_stage(present)
+        if st == "action_needed" and g.get("n_asmt_pending"):
+            return "assessment"
+        return st
 
     for g in groups:
         lm = last.get(g["mailbox"], {})

@@ -17,6 +17,7 @@ _KIND = {
     "offer": ("🎉", "Оффер", "#188038", "#e6f4ea"),
     "rejection": ("✕", "Отказ", "#d93025", "#fce8e6"),
     "action_needed": ("⚠️", "Действие", "#b06000", "#feefc3"),
+    "assessment": ("📝", "Assessments", "#6d28d9", "#ede9fe"),
     "assessment_done": ("🤖", "Тест сдан", "#188038", "#e6f4ea"),
     "assessment_skipped": ("⏭️", "Пропущен", "#80868b", "#f1f3f4"),
     "ack": ("✅", "Принято", "#5f6368", "#f1f3f4"),
@@ -1063,6 +1064,11 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
             params["mailbox"] = mailbox
         return "/mail" + ("?" + urlencode(params) if params else "")
     def _n(key: str) -> int:
+        # The candidates funnel now SPLITS action_needed into 'assessment' + 'action_needed'
+        # (mail_db._FUNNEL_STAGE_SQL). This flat inbox keeps ONE «Действие» chip whose filter
+        # still returns ALL action mail, so show the combined total (count == filtered list).
+        if key == "action_needed":
+            return sc.get("action_needed", 0) + sc.get("assessment", 0)
         return sc.get("all" if not key else key, 0)
     stage_rows = [{"label": l, "href": _href(k), "count": _n(k), "active": stage == k}
                   for k, l in _stages]

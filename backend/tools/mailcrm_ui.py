@@ -196,7 +196,7 @@ _CSS = """
 /* TWO sanctioned control-size scales — every button role maps onto one, never a bespoke size.
    FULL (buttons, icon-circles, filter pills): --ctl-h/px/fs. COMPACT inline metaline chips
    (📄 apps, assessment toggle, Собес): --chip-h/px/fs. Only two documented exceptions:
-   the mobile compose FAB (52px) and the Собес calendar cell (30px). */
+   the mobile compose FAB (52px) and the Собес calendar cell (40px). */
 --ctl-h:40px;--ctl-px:16px;--ctl-fs:13.5px;--chip-h:32px;--chip-px:12px;--chip-fs:12.5px;--chip-sm-h:20px;--chip-sm-fs:11px;--ok:#0b8043;--ok-hover:#0a7038;--warn:#b06000;--warn-soft:#feefc3;}
 *{box-sizing:border-box;}html,body{margin:0;overflow-x:hidden;max-width:100%;touch-action:manipulation;-webkit-text-size-adjust:100%;}
 body{font-family:var(--ff);font-size:13.5px;line-height:1.5;color:var(--ink);background:var(--bg-app);-webkit-font-smoothing:antialiased;}

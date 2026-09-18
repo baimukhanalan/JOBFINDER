@@ -2526,15 +2526,28 @@ def _attach_iv_assignments(groups) -> None:
 
 
 @app.get("/mail/candidates", response_class=HTMLResponse)
-def mail_candidates(tab: str = "all", stage: str = "", q: str = ""):
+def mail_candidates(tab: str = "all", stage: str = "", q: str = "", sort: str = "salary"):
     from backend.tools import mailcrm, candidates_inbox
     eff = _eff_stage(tab, stage)
-    groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=0)
-    _attach_iv_assignments(groups)
     try:
         scounts = mailcrm.stage_counts()
     except Exception:
         scounts = {}
+    # «Собес» = a dedicated priority surface: load the WHOLE interview set (small), enrich each
+    # candidate with a scheduling deadline + potential salary + IT/non-IT direction, then split
+    # + sort. No offset pagination (the sort is global over all interviews).
+    if eff == "interview":
+        from backend.tools import interview_priority
+        groups = mailcrm.candidate_groups(stage="interview", q=q, limit=500, offset=0)
+        _attach_iv_assignments(groups)
+        try:
+            interview_priority.enrich_interview_groups(groups)
+        except Exception:
+            pass
+        return HTMLResponse(candidates_inbox.render_interview_page(
+            groups, q=q, sort=sort, stage_counts=scounts))
+    groups = mailcrm.candidate_groups(stage=eff, q=q, limit=candidates_inbox.PAGE, offset=0)
+    _attach_iv_assignments(groups)
     return HTMLResponse(candidates_inbox.render_page(
         groups, tab=tab, stage=stage, q=q, stage_counts=scounts,
         has_more=(len(groups) == candidates_inbox.PAGE), offset=0))

@@ -179,6 +179,7 @@ def grid_fragment(mailbox: str, monday: date,
         f'<input type="hidden" id="ivCompany" value="{escape(company, quote=True)}">'
         f'<input type="hidden" id="ivJobid" value="{escape(jobid, quote=True)}">'
         + ctx_line
+        + '<div class="iv-swipe" aria-hidden="true">Таблицу можно листать вбок →</div>'
         + '<div class="iv-grid">' + "".join(header) + "".join(body) + '</div>'
         + f'<p class="iv-note">Ось — по <b>{escape(viewer_label)}</b> (вашему устройству). '
           'Зелёная ячейка — свободный час; число — сколько человек свободно. При выборе '
@@ -207,7 +208,9 @@ _IV_STYLE = """<style>
 .iv-hcell.iv-corner{left:0;z-index:3}
 .iv-hcell .iv-dd{font-family:var(--ff-mono,monospace);font-weight:500;font-size:10px;color:var(--ink-mute)}
 .iv-hourcell{font-family:var(--ff-mono,monospace);font-size:10px;color:var(--ink-mute);display:flex;align-items:center;justify-content:flex-end;padding-right:5px;position:sticky;left:0;z-index:1;background:var(--panel)}
-.iv-cell{border:1px solid var(--line);border-radius:var(--r-sm);min-height:30px;font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
+.iv-cell{border:1px solid var(--line);border-radius:var(--r-sm);min-height:40px;font-size:11px;font-weight:700;cursor:pointer;padding:0;line-height:1}
+.iv-swipe{display:none}
+@media(max-width:760px){.iv-swipe{display:block;font-size:11px;color:var(--ink-mute);margin:0 0 6px;text-align:right}}
 .iv-cell.iv-free{background:#e7f6ec;border-color:#bcdfc4;color:#188038}
 .iv-cell.iv-free:hover{background:#d3efdc;border-color:#188038}
 .iv-cell.iv-sel{background:var(--accent);border-color:var(--accent);color:#fff}

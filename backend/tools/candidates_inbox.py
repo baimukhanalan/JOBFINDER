@@ -124,6 +124,8 @@ _IC_FILE = ('<svg class="cg-ic" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2
 _IC_MAIL = ('<svg class="cg-ic" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" '
             'rx="2"/><polyline points="22,6 12,13 2,6"/></svg>')
 _IC_CHECK = '<svg class="cg-ic" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>'
+_IC_CLOCK = ('<svg class="cg-ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/>'
+             '<polyline points="12 7 12 12 15 14"/></svg>')
 
 
 def _stage_dot(kind: str) -> str:
@@ -206,18 +208,56 @@ def _iv_assigned(mailbox: str, thread: str, name: str) -> str:
         return ""
 
 
-def _metaline(stage_dot: str, apps_ct: str, count_ct: str, sobes: str, asmt: str) -> str:
-    """The «Тихая строка» control row under the preview. Left group = stage dot+word, a thin
-    vertical separator, then the quiet icon+digit counts; it shrinks/ellipsis-clips as one
-    unit. Right group = the slim text-actions («Собес»/«Назначено» first — the primary — then
-    the assessment action), pinned by margin-left:auto so it NEVER clips. Always rendered
+def _metaline(stage_dot: str, apps_ct: str, count_ct: str, sobes: str, asmt: str,
+              extra: str = "") -> str:
+    """The «Тихая строка» control row under the preview. Left group = optional priority chips
+    (`extra`: Собес deadline + salary — placed FIRST so they never ellipsis-clip), the stage
+    dot+word, a thin vertical separator, then the quiet icon+digit counts; it shrinks/clips as
+    one unit. Right group = the slim text-actions («Собес»/«Назначено» first — the primary —
+    then the assessment action), pinned by margin-left:auto so it NEVER clips. Always rendered
     (min-height keeps every card the same height, badges or not)."""
     counts = apps_ct + count_ct
-    vsep = '<span class="cg-vsep"></span>' if stage_dot and counts else ""
+    vsep = '<span class="cg-vsep"></span>'
+    left = vsep.join(u for u in (extra, stage_dot, counts) if u)
     acts = sobes + asmt
     acts_html = f'<span class="cg-ml-acts">{acts}</span>' if acts else ""
-    return (f'<div class="cg-metaline"><span class="cg-ml-left">{stage_dot}{vsep}{counts}'
+    return (f'<div class="cg-metaline"><span class="cg-ml-left">{left}'
             f'</span>{acts_html}</div>')
+
+
+def _deadline_chip(g: dict) -> str:
+    """The «осталось ~N дн» scheduling-deadline chip for a Собес card (interview_priority sets
+    the keys). Colour escalates as the booking window closes; «~» + a title note when the
+    deadline is an estimate (no explicit due date in the invite). "" when not enriched."""
+    # once the interview is BOOKED («Назначено») the booking window is moot — the «Назначено ·
+    # name» control already shows in the right slot, so drop the urgency chip.
+    if g.get("assigned"):
+        return ""
+    ts = g.get("deadline_ts")
+    d = g.get("deadline_days")
+    if not ts or d is None:
+        return ""
+    est = bool(g.get("deadline_estimated"))
+    pfx = "~" if est else ""
+    if d < 0:
+        text, lvl = "срок истёк", "over"
+    elif d == 0:
+        text, lvl = f"{pfx}сегодня", "urgent"
+    else:
+        lvl = "urgent" if d <= 1 else "soon" if d <= 3 else "ok"
+        text = f"{pfx}осталось {d} дн"
+    title = "срок брони собеседования" + (" (оценка)" if est else "")
+    return (f'<span class="cg-dl cg-dl-{lvl}" title="{escape(title, quote=True)}">'
+            f'{_IC_CLOCK}{escape(text)}</span>')
+
+
+def _salary_chip(g: dict) -> str:
+    """Compact potential-salary chip for a Собес card (from the applied job's comp)."""
+    lbl = g.get("salary_label")
+    if not lbl:
+        return ""
+    return (f'<span class="cg-sal" title="потенциальная зарплата по вакансии">'
+            f'{escape(lbl)}</span>')
 
 
 # --------------------------------------------------------------- group cards
@@ -276,7 +316,7 @@ def _group_card(g: dict) -> str:
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview">{preview}</div>'
-        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g))}'
+        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g), extra=_deadline_chip(g) + _salary_chip(g))}'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -452,6 +492,69 @@ def render_page(groups, *, tab: str = "all", stage: str = "", q: str = "",
     return _page("candidates", body, modal)
 
 
+# ------------------------------------------------------- Собес priority surface
+# The «Собес» funnel stage renders a DEDICATED priority layout instead of the flat list: the
+# whole interview set (small, ~hundreds) is loaded + enriched (interview_priority) with a
+# per-candidate scheduling deadline + potential salary + IT/non-IT direction, then split into
+# two sections and sorted. No infinite scroll (everything is loaded so the sort is global).
+_SORT_OPTS = [("salary", "Зарплата"), ("urgency", "Срочность")]
+
+
+def _sort_toggle(q: str, sort: str) -> str:
+    links = []
+    for key, label in _SORT_OPTS:
+        cls = "cg-sort-b active" if sort == key else "cg-sort-b"
+        params = {"stage": "interview", "sort": key}
+        if q:
+            params["q"] = q
+        href = escape("/mail/candidates?" + urlencode(params), quote=True)
+        links.append(f'<a class="{cls}" href="{href}">{escape(label)}</a>')
+    return ('<div class="cg-sortwrap"><span class="cg-sort-lbl">Приоритет</span>'
+            f'<div class="cg-sort" role="group" aria-label="Сортировка">{"".join(links)}</div></div>')
+
+
+def _iv_section(title: str, groups: list) -> str:
+    """One direction section (header + count + its cards)."""
+    head = (f'<div class="cg-sec"><span class="cg-sec-t">{escape(title)}</span>'
+            f'<span class="cg-sec-n">{len(groups)}</span></div>')
+    inner = (render_groups(groups) if groups else
+             '<div class="cg-sec-empty">Нет собеседований в этой группе</div>')
+    return head + f'<div class="cg-sec-list">{inner}</div>'
+
+
+def render_interview_page(groups, *, q: str = "", sort: str = "salary",
+                          stage_counts: dict | None = None) -> str:
+    """The «Собес» surface: interview candidates split into IT vs simple (non-IT) sections,
+    each sorted by potential salary (default) or urgency (soonest deadline). `groups` must be
+    ALREADY enriched by interview_priority.enrich_interview_groups."""
+    from backend.tools import interview_priority as ip
+    groups = groups or []
+    sort = sort if sort in {k for k, _l in _SORT_OPTS} else "salary"
+
+    total = (stage_counts or {}).get("all")
+    toolbar = ('<div class="cg-toolbar">' + _title(total)
+               + '<div class="cg-actions">' + _filter_btn("interview") + _COMPOSE_BTN
+               + _search("all", "interview", q) + '</div></div>')
+    funnel = _funnel("all", "interview", q, stage_counts)
+
+    it_rows, simple_rows = ip.partition(groups)
+    it_rows = ip.sort_groups(it_rows, sort)
+    simple_rows = ip.sort_groups(simple_rows, sort)
+
+    empty = '' if groups else '<div class="cg-empty">Собеседований нет</div>'
+    body = (
+        f'<style>{_CG_CSS}</style>'
+        + toolbar + funnel + _sort_toggle(q, sort)
+        + '<div id="grouplist">'
+        + (_iv_section("IT-специальности", it_rows)
+           + _iv_section("Простые вакансии (не-IT)", simple_rows) if groups else "")
+        + '</div>' + empty
+        + _FAB_COMPOSE + _CG_JS
+    )
+    modal = _COMPOSE_MODAL + _iv_modal() + _filter_modal("all", "interview", q, stage_counts)
+    return _page("candidates", body, modal)
+
+
 # ------------------------------------------------------------------------ CSS
 # Scoped, all classes prefixed `cg-`, reusing the shell design tokens so the screen matches
 # the rest of the app in both padding and palette. Mobile-first with a single 760px break.
@@ -519,8 +622,13 @@ button.cg-ct:hover{color:var(--accent);}
    equal-height contract still holds; only vertical (no horizontal growth) so nowrap never
    truncates earlier. */
 @media(max-width:760px){
-  .cg-metaline{min-height:36px;}
-  .cg-act,button.cg-ct{padding:9px 0;}
+  /* ≥40px phone tap targets for the quiet metaline controls (📄 apps chip, «Отметить»/
+     «Пройдено» assessment action). The metaline min-height is bumped UNIFORMLY so the taller
+     buttons sit centred without a clip (.cg-metaline is overflow:hidden) — the 0-badge ==
+     N-badge equal-height contract still holds; growth is vertical only, so nowrap never
+     truncates earlier. */
+  .cg-metaline{min-height:46px;}
+  .cg-act,button.cg-ct{padding:14px 2px;}
 }
 .cg-right{display:flex;align-items:center;gap:10px;flex:0 0 auto;align-self:center;}
 .cg-cnt{font-family:var(--ff-mono);font-size:11px;color:#fff;background:var(--accent);border-radius:var(--r-full);padding:1px 8px;min-width:20px;text-align:center;}
@@ -530,6 +638,26 @@ button.cg-ct:hover{color:var(--accent);}
 .cg-load,.cg-thread-empty{padding:16px;text-align:center;color:var(--ink-mute);font-size:13px;}
 .cg-empty{text-align:center;padding:48px;color:var(--ink-mute);}
 #grpmore{min-height:1px;}
+/* Собес priority: sort toggle + IT/non-IT section headers + deadline/salary card chips */
+.cg-sortwrap{display:flex;align-items:center;gap:10px;margin:0 0 16px;flex-wrap:wrap;}
+.cg-sort-lbl{font-size:12px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-mute);}
+.cg-sort{display:inline-flex;gap:2px;padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);}
+.cg-sort-b{display:inline-flex;align-items:center;height:calc(var(--ctl-h) - 8px);padding:0 15px;border-radius:var(--r-full);font-size:var(--ctl-fs);font-weight:600;color:var(--ink-mute);text-decoration:none;white-space:nowrap;}
+.cg-sort-b:hover{color:var(--ink-soft);text-decoration:none;}
+.cg-sort-b.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.cg-sec{display:flex;align-items:center;gap:9px;margin:20px 0 11px;}
+.cg-sec:first-child{margin-top:0;}
+.cg-sec-t{font-size:12.5px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-soft);}
+.cg-sec-n{font-family:var(--ff-mono);font-size:11.5px;font-weight:700;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 9px;}
+.cg-sec-list{display:flex;flex-direction:column;gap:11px;}
+.cg-sec-empty{padding:14px;color:var(--ink-mute);font-size:13px;text-align:center;border:1px dashed var(--line-strong);border-radius:var(--r);}
+.cg-dl{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;line-height:1;white-space:nowrap;flex:0 0 auto;padding:3px 8px;border-radius:var(--r-full);}
+.cg-dl .cg-ic{width:12px;height:12px;}
+.cg-dl-ok{color:var(--ink-soft);background:var(--panel-2);}
+.cg-dl-soon{color:var(--warn);background:var(--warn-soft);}
+.cg-dl-urgent{color:var(--danger);background:#fce8e6;}
+.cg-dl-over{color:#fff;background:var(--danger);}
+.cg-sal{display:inline-flex;align-items:center;font-family:var(--ff-mono);font-size:11.5px;font-weight:700;line-height:1;white-space:nowrap;flex:0 0 auto;color:var(--ok);}
 /* message rows inside an expanded card */
 .cg-msg{border-bottom:1px solid var(--line);padding:10px 6px;cursor:pointer;}
 .cg-msg:last-child{border-bottom:0;}

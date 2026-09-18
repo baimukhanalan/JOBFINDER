@@ -23,7 +23,7 @@ router = APIRouter()
 _ROLES = ("admin", "manager", "employee")
 
 
-def _render_list(notice=None, me_id: int | None = None) -> HTMLResponse:
+def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary") -> HTMLResponse:
     users = db.list_responsibles(active_only=False)
     avail = {u["id"]: db.get_availability(u["id"]) for u in users}
     # This week's booked interviews per responsible — the weekly load view, so the operator
@@ -49,11 +49,19 @@ def _render_list(notice=None, me_id: int | None = None) -> HTMLResponse:
     pool_facets: dict = {}
     mgr_alloc: dict = {}
     try:
+        # the WHOLE free interview pool — drives the email-search datalist AND the new priority
+        # card (split IT/non-IT, sorted by salary/urgency). enrich adds deadline + salary; the
+        # deadline parse is cached by message hash so this stays cheap after the first render.
+        pool_rows = pool.unallocated(limit=None)
+        pool_count = len(pool_rows)
+        try:
+            from backend.tools import interview_priority
+            interview_priority.enrich_interview_groups(pool_rows, hash_key="source_hash")
+        except Exception:
+            pass
         managers = db.list_managers(active_only=True)
         if managers:
             pool_facets = pool.facets()
-            pool_count = pool_facets.get("total", 0)
-            pool_rows = pool.unallocated(limit=400)   # for the email-search datalist
             for m in managers:
                 ivs = db.manager_interviews(m["id"])
                 mgr_alloc[m["id"]] = {
@@ -65,7 +73,7 @@ def _render_list(notice=None, me_id: int | None = None) -> HTMLResponse:
     return HTMLResponse(users_ui.list_page(
         users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
         managers=managers, pool_count=pool_count, pool_rows=pool_rows,
-        pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id))
+        pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id, pool_sort=pool_sort))
 
 
 def _week_window():
@@ -101,8 +109,8 @@ def _render_edit(rid: int, notice=None, me_id: int | None = None) -> HTMLRespons
 
 
 @router.get("/users", response_class=HTMLResponse)
-def users_list(me: dict = Depends(auth.current_responsible)):
-    return _render_list(me_id=(me or {}).get("id"))
+def users_list(pool_sort: str = "salary", me: dict = Depends(auth.current_responsible)):
+    return _render_list(me_id=(me or {}).get("id"), pool_sort=pool_sort)
 
 
 @router.post("/users/add", response_class=HTMLResponse)

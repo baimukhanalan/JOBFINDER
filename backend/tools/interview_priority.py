@@ -150,6 +150,24 @@ def days_left(deadline_ts: int | None, now: int | None = None) -> int | None:
     return int(math.floor((deadline_ts - now) / _DAY))
 
 
+def deadline_text(g: dict) -> tuple[str, str]:
+    """(label, level) for an enriched row's booking deadline — the single source of the
+    urgency wording, reused by the Собес card chip AND the /users priority list. level ∈
+    {ok, soon, urgent, over}; «~» prefix + «(оценка)» when the deadline is an estimate. Returns
+    ('', 'ok') when the row has no deadline."""
+    ts = g.get("deadline_ts")
+    d = g.get("deadline_days")
+    if not ts or d is None:
+        return "", "ok"
+    pfx = "~" if g.get("deadline_estimated") else ""
+    if d < 0:
+        return "срок истёк", "over"
+    if d == 0:
+        return f"{pfx}сегодня", "urgent"
+    lvl = "urgent" if d <= 1 else "soon" if d <= 3 else "ok"
+    return f"{pfx}осталось {d} дн", lvl
+
+
 # ---- potential salary ------------------------------------------------------------
 def salary_value(job: dict) -> int:
     """A single comparable annual number for RANKING — the highest meaningful figure on the
@@ -183,24 +201,28 @@ def salary_label(job: dict) -> str:
 
 
 # ---- enrichment ------------------------------------------------------------------
-def enrich_interview_groups(groups: list[dict]) -> list[dict]:
-    """Add priority signals to each interview candidate group (mutates + returns). Adds:
+def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") -> list[dict]:
+    """Add priority signals to each interview row (mutates + returns). Adds:
       deadline_ts, deadline_days (whole days left, may be negative), deadline_estimated,
       direction (it|nonit|other), role_category, jobid, salary_value, salary_label.
-    Best-effort — any failure just leaves the group without that signal."""
+    `hash_key` is the row field holding the interview message hash the deadline is parsed from
+    ('iv_hash' for grouped-inbox rows, 'source_hash' for pool rows). Best-effort — any failure
+    just leaves the row without that signal."""
     groups = groups or []
     if not groups:
         return groups
     # direction / jobid / role_category (reuses the pool's per-email cache + one batched
-    # job_catalog lookup); safe if the interviews package is degraded.
-    try:
-        from backend.interviews import pool
-        pool.enrich(groups)
-    except Exception:
-        for g in groups:
-            g.setdefault("direction", "other")
-            g.setdefault("jobid", None)
-            g.setdefault("role_category", None)
+    # job_catalog lookup); safe if the interviews package is degraded. Pool rows already carry
+    # direction (pool.enrich ran when they were listed) — skip the extra pass for them.
+    if any("direction" not in g for g in groups):
+        try:
+            from backend.interviews import pool
+            pool.enrich(groups)
+        except Exception:
+            for g in groups:
+                g.setdefault("direction", "other")
+                g.setdefault("jobid", None)
+                g.setdefault("role_category", None)
     # potential salary from job_catalog (one batched query for all jobids)
     jobs: dict = {}
     try:
@@ -219,7 +241,7 @@ def enrich_interview_groups(groups: list[dict]) -> list[dict]:
             job = jobs.get(int(jid)) or {}
         g["salary_value"] = salary_value(job)
         g["salary_label"] = salary_label(job)
-        dl_ts, est = _deadline_for_hash(g.get("iv_hash") or "")
+        dl_ts, est = _deadline_for_hash(g.get(hash_key) or "")
         g["deadline_ts"] = dl_ts
         g["deadline_estimated"] = est
         g["deadline_days"] = days_left(dl_ts, now)

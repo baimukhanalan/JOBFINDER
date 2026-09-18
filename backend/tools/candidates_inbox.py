@@ -233,20 +233,11 @@ def _deadline_chip(g: dict) -> str:
     # name» control already shows in the right slot, so drop the urgency chip.
     if g.get("assigned"):
         return ""
-    ts = g.get("deadline_ts")
-    d = g.get("deadline_days")
-    if not ts or d is None:
+    from backend.tools import interview_priority
+    text, lvl = interview_priority.deadline_text(g)
+    if not text:
         return ""
-    est = bool(g.get("deadline_estimated"))
-    pfx = "~" if est else ""
-    if d < 0:
-        text, lvl = "срок истёк", "over"
-    elif d == 0:
-        text, lvl = f"{pfx}сегодня", "urgent"
-    else:
-        lvl = "urgent" if d <= 1 else "soon" if d <= 3 else "ok"
-        text = f"{pfx}осталось {d} дн"
-    title = "срок брони собеседования" + (" (оценка)" if est else "")
+    title = "срок брони собеседования" + (" (оценка)" if g.get("deadline_estimated") else "")
     return (f'<span class="cg-dl cg-dl-{lvl}" title="{escape(title, quote=True)}">'
             f'{_IC_CLOCK}{escape(text)}</span>')
 

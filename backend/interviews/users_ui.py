@@ -92,7 +92,7 @@ _CSS = """
 /* multi-role checkboxes — `label.u-rolechk` (0,1,1) beats `.u-add label` (0,1,1) by source
    order so the checkbox+label stay inline «☑ label», not stacked, inside the add form. */
 .u-rolechecks{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center}
-label.u-rolechk{display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:13.5px;font-weight:600;color:var(--ink);margin:0;cursor:pointer;white-space:nowrap}
+label.u-rolechk{display:inline-flex;flex-direction:row;align-items:center;gap:6px;font-size:13.5px;font-weight:600;color:var(--ink);margin:0;cursor:pointer;white-space:nowrap;min-height:40px;padding:4px 2px}
 label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-add-roles{grid-column:1/-1}
 /* inline per-user role editor + delete in the list */
@@ -125,7 +125,43 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-alloc-send{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .u-alloc-send select,.u-alloc-send input{flex:1 1 200px;min-width:0;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
 @media(max-width:560px){.u-alloc-send select,.u-alloc-send input{flex:1 1 100%}.u-alloc-send button{flex:1 1 100%}}
-@media(max-width:760px){.u-h1{font-size:23px}}
+/* header actions (drawer toggle + logout) */
+.u-top-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.u-top-actions .hbtn svg{width:16px;height:16px}
+/* right slide-out drawer: the user list + add-user form live here now */
+.u-drawer-scrim{position:fixed;inset:0;background:rgba(32,33,36,.5);z-index:60;opacity:0;visibility:hidden;transition:opacity .2s}
+.u-drawer-scrim.open{opacity:1;visibility:visible}
+.u-drawer{position:fixed;top:0;right:0;bottom:0;width:min(480px,94vw);background:var(--bg-app);z-index:61;transform:translateX(102%);transition:transform .24s ease;box-shadow:0 0 40px -8px rgba(32,33,36,.45);display:flex;flex-direction:column}
+.u-drawer.open{transform:translateX(0)}
+.u-drawer-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+.u-drawer-head b{font-size:17px}
+.u-drawer-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 18px}
+.u-drawer-body .u-card:first-child{margin-top:0}
+@media(prefers-reduced-motion:reduce){.u-drawer{transition:none}.u-drawer-scrim{transition:none}}
+/* interview-priority card (free pool, split IT/non-IT, sorted by salary/urgency) */
+.u-pri-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 2px}
+.u-pri-top h3{margin:0}
+.u-pri-sort{display:inline-flex;gap:2px;padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full)}
+.u-pri-sortb{display:inline-flex;align-items:center;height:32px;padding:0 13px;border-radius:var(--r-full);font-size:12.5px;font-weight:600;color:var(--ink-mute);text-decoration:none;white-space:nowrap}
+.u-pri-sortb:hover{color:var(--ink-soft);text-decoration:none}
+.u-pri-sortb.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.u-pri-sec{display:flex;align-items:center;gap:9px;margin:16px 0 9px}
+.u-pri-sect{font-size:12px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-soft)}
+.u-pri-n{font-family:var(--ff-mono);font-size:11px;font-weight:700;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 8px}
+.u-pri-empty{padding:11px;color:var(--ink-mute);font-size:12.5px;text-align:center;border:1px dashed var(--line-strong);border-radius:var(--r-sm)}
+.u-pri-list{display:flex;flex-direction:column;gap:7px}
+.u-pri-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel)}
+.u-pri-main{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:1px}
+.u-pri-nm{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-pri-em{font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u-pri-dir{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--ink-soft);background:var(--panel-2);border-radius:var(--r-full);padding:2px 8px}
+.u-pri-sal{flex:0 0 auto;font-family:var(--ff-mono);font-size:12px;font-weight:700;color:var(--ok)}
+.u-pri-dl{flex:0 0 auto;font-size:11.5px;font-weight:700;border-radius:var(--r-full);padding:3px 9px;white-space:nowrap}
+.u-pri-dl-ok{color:var(--ink-soft);background:var(--panel-2)}
+.u-pri-dl-soon{color:var(--warn);background:var(--warn-soft)}
+.u-pri-dl-urgent{color:var(--danger);background:#fce8e6}
+.u-pri-dl-over{color:#fff;background:var(--danger)}
+@media(max-width:760px){.u-h1{font-size:23px}.u-drawer{width:100%;max-width:100%}}
 </style>
 """
 
@@ -348,11 +384,79 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
         "</div>")
 
 
+# ---- interview priority (same signal as the Собес surface: urgency + salary, IT/non-IT) ----
+_DIR_LBL = {"it": "IT", "nonit": "не-IT"}
+
+
+def _pool_sort_toggle(sort: str) -> str:
+    out = []
+    for k, l in (("salary", "Зарплата"), ("urgency", "Срочность")):
+        cls = "u-pri-sortb active" if sort == k else "u-pri-sortb"
+        out.append(f"<a class='{cls}' href='/users?pool_sort={k}#u-pri'>{escape(l)}</a>")
+    return "<div class='u-pri-sort' role='group' aria-label='Сортировка'>" + "".join(out) + "</div>"
+
+
+def _pool_row(r: dict) -> str:
+    from backend.tools import interview_priority as ip
+    mb = r.get("mailbox") or ""
+    nm = (r.get("candidate") or "").strip() or (mb.split("@")[0] if mb else "—")
+    sal = r.get("salary_label") or ""
+    dtext, dlvl = ip.deadline_text(r)
+    dir_lbl = _DIR_LBL.get(r.get("direction"), "")
+    dir_html = f"<span class='u-pri-dir'>{escape(dir_lbl)}</span>" if dir_lbl else ""
+    sal_html = f"<span class='u-pri-sal'>{escape(sal)}</span>" if sal else ""
+    dl_html = f"<span class='u-pri-dl u-pri-dl-{dlvl}'>{escape(dtext)}</span>" if dtext else ""
+    return ("<div class='u-pri-row'>"
+            f"<div class='u-pri-main'><span class='u-pri-nm'>{escape(nm)}</span>"
+            f"<span class='u-pri-em'>{escape(mb)}</span></div>"
+            f"{dir_html}{sal_html}{dl_html}</div>")
+
+
+def _pool_section(title: str, rows: list[dict]) -> str:
+    head = (f"<div class='u-pri-sec'><span class='u-pri-sect'>{escape(title)}</span>"
+            f"<span class='u-pri-n'>{len(rows)}</span></div>")
+    if not rows:
+        return head + "<div class='u-pri-empty'>Нет интервью в этой группе</div>"
+    return head + "<div class='u-pri-list'>" + "".join(_pool_row(r) for r in rows) + "</div>"
+
+
+def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
+    """Prioritised view of the free interview pool — the SAME filter as the Собес surface:
+    split into complex (IT) vs simple (non-IT) sections, each sorted by potential salary
+    (default) or urgency (soonest booking deadline). Sits directly under the delegation card so
+    the admin can see what to delegate first. Read-only view; delegation itself is the card above.
+    `pool_rows` must already be enriched by interview_priority.enrich_interview_groups."""
+    from backend.tools import interview_priority as ip
+    sort = sort if sort in ("salary", "urgency") else "salary"
+    rows = pool_rows or []
+    if not rows:
+        return ("<div class='u-card' id='u-pri'><h3>Приоритет интервью</h3>"
+                "<p class='u-chint'>В свободном пуле сейчас нет интервью.</p></div>")
+    it, simple = ip.partition(rows)
+    it = ip.sort_groups(it, sort)
+    simple = ip.sort_groups(simple, sort)
+    return ("<div class='u-card' id='u-pri'>"
+            "<div class='u-pri-top'><h3>Приоритет интервью</h3>" + _pool_sort_toggle(sort) + "</div>"
+            "<p class='u-chint'>Свободные интервью по приоритету — сложные (IT) и простые (не-IT), "
+            "по зарплате или срочности брони слота.</p>"
+            + _pool_section("IT-специальности", it)
+            + _pool_section("Простые вакансии (не-IT)", simple)
+            + "</div>")
+
+
+_LIST_ICON = ("<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' "
+              "stroke-linecap='round'><line x1='8' y1='6' x2='21' y2='6'/>"
+              "<line x1='8' y1='12' x2='21' y2='12'/><line x1='8' y1='18' x2='21' y2='18'/>"
+              "<circle cx='3.5' cy='6' r='.8'/><circle cx='3.5' cy='12' r='.8'/>"
+              "<circle cx='3.5' cy='18' r='.8'/></svg>")
+
+
 def list_page(users: list[dict], avail_by_id: dict, notice=None,
               week_by_id: dict | None = None, monday=None, week_sig: str = "",
               managers: list[dict] | None = None, pool_count: int = 0,
               pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None,
-              pool_facets: dict | None = None, me_id: int | None = None) -> str:
+              pool_facets: dict | None = None, me_id: int | None = None,
+              pool_sort: str = "salary") -> str:
     week_by_id = week_by_id or {}
     managers = managers or []
     pool_rows = pool_rows or []
@@ -404,18 +508,10 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
     listing = ("<div class='u-list' id='u-list'>" + "".join(cards) + "</div>") if cards else (
         "<div class='u-empty' id='u-list'>Пока нет пользователей — добавьте первого выше.</div>")
 
-    body = (
-        _CSS +
-        "<div class='u-wrap'>"
-        "<div class='u-top'><h1 class='u-h1'>Пользователи"
-        f"<b>{len(users)}</b></h1>"
-        "<a class='hbtn u-logout' href='/logout'>Выход</a></div>"
-        "<p class='u-lead'>Ответственные, которым можно назначать интервью по кнопке «Собес». "
-        "Они входят в кабинет и видят почту персоны только после назначения. "
-        "Роли: <b>админ</b> (всё) · <b>управляющий</b> (свой пул интервью + сотрудники) · "
-        "<b>интервьюер</b> (свой кабинет). Чтобы человека можно было назначить — задайте доступность.</p>"
-        + _note(notice) +
-
+    # The add-user form + the whole user list now live in a right-side slide-out DRAWER (opened
+    # from the «Список» toggle in the header), so the main column is the delegation + priority
+    # workflow. #u-list stays the swap target the auto-refresh JS updates in place.
+    add_card = (
         "<div class='u-card'><h3>Добавить пользователя</h3>"
         "<form class='u-add' method='post' action='/users/add'>"
         "<label>Имя<input name='name' required placeholder='Иван Петров'></label>"
@@ -426,11 +522,34 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<label id='u-add-mgr-wrap'>Управляющий (для интервьюера)"
         f"<select name='manager_id'>{_manager_options(managers)}</select></label>"
         "<div class='u-go'><button class='primary' type='submit'>Добавить</button></div>"
-        "</form></div>"
+        "</form></div>")
 
+    drawer = (
+        "<div class='u-drawer-scrim' id='u-drawer-scrim' onclick='uDrawer(false)'></div>"
+        "<aside class='u-drawer' id='u-drawer' aria-hidden='true' aria-label='Пользователи'>"
+        "<div class='u-drawer-head'><b>Пользователи</b>"
+        "<button type='button' class='iconbtn' onclick='uDrawer(false)' aria-label='Закрыть'>"
+        "&#10005;</button></div>"
+        "<div class='u-drawer-body'>" + add_card + listing + "</div></aside>")
+
+    body = (
+        _CSS +
+        "<div class='u-wrap'>"
+        "<div class='u-top'><h1 class='u-h1'>Пользователи"
+        f"<b>{len(users)}</b></h1>"
+        "<div class='u-top-actions'>"
+        "<button type='button' class='hbtn' onclick='uDrawer(true)' aria-haspopup='dialog'>"
+        f"{_LIST_ICON}<span>Список <b>{len(users)}</b></span></button>"
+        "<a class='hbtn u-logout' href='/logout'>Выход</a></div></div>"
+        "<p class='u-lead'>Ответственные, которым можно назначать интервью по кнопке «Собес». "
+        "Они входят в кабинет и видят почту персоны только после назначения. "
+        "Роли: <b>админ</b> (всё) · <b>управляющий</b> (свой пул интервью + сотрудники) · "
+        "<b>интервьюер</b> (свой кабинет). Список пользователей и добавление — в правой панели «Список».</p>"
+        + _note(notice)
         + _allocate_card(managers, pool_count, pool_rows, mgr_alloc, pool_facets)
-        + listing +
-        "</div>"
+        + _pool_priority_card(pool_rows, pool_sort)
+        + "</div>"
+        + drawer
         + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))
     return mailcrm_ui._page("users", body)
 
@@ -458,6 +577,15 @@ document.addEventListener('keydown',function(e){
     e.preventDefault(); uCalToggle(e.target);
   }
 });
+// right slide-out drawer holding the add-user form + the whole user list
+function uDrawer(open){
+  var d=document.getElementById('u-drawer'), s=document.getElementById('u-drawer-scrim');
+  if(!d) return;
+  d.classList.toggle('open', open); if(s) s.classList.toggle('open', open);
+  d.setAttribute('aria-hidden', open?'false':'true');
+  document.body.style.overflow = open?'hidden':'';
+}
+document.addEventListener('keydown',function(e){ if(e.key==='Escape') uDrawer(false); });
 // Auto-refresh the interviewer cards (+ their weekly calendars) when a собес is assigned/
 // reassigned/cancelled elsewhere — so a second admin tab checking load updates itself.
 // Poll a cheap signature; on change, fetch /users and swap just the #u-list cards.

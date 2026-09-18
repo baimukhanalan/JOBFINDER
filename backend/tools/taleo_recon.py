@@ -23,6 +23,7 @@ import asyncio
 import glob
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -185,7 +186,6 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
     profile_dir = os.getenv("TALEO_PROFILE_DIR") or os.path.join(
         tempfile.gettempdir(), f"taleo_prof_{job_id}_{os.getpid()}")
     if fresh:
-        import shutil
         shutil.rmtree(profile_dir, ignore_errors=True)
     os.makedirs(profile_dir, exist_ok=True)
 
@@ -247,6 +247,10 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
                 await ctx.close()
             except Exception:
                 pass
+            # Reclaim the per-run isolated profile dir (was leaking to /tmp/taleo_prof_* every run —
+            # 449 dirs = 6.3 GB before this). The `if fresh` rmtree above only wipes it at START,
+            # with the CURRENT unique pid, so it never matched a prior subprocess's dir.
+            shutil.rmtree(profile_dir, ignore_errors=True)
     print("=== taleo apply done", flush=True)
 
 

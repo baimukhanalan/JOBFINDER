@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -65,30 +66,35 @@ def apply_one(jobid: int, keep: int) -> dict:
     isolated profile dir). Returns the recon's own {jobid, persona, ack, subject, ...}. Never raises."""
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":98")
-    env.update({"SMARTRECRUITERS_ADVANCE": "1",
-                "SR_PROFILE_DIR": os.path.join(REPO, "backend", "data", f"sr_stealth_profile_{os.getpid()}_{jobid}")})
+    profile_dir = os.path.join(REPO, "backend", "data", f"sr_stealth_profile_{os.getpid()}_{jobid}")
+    env.update({"SMARTRECRUITERS_ADVANCE": "1", "SR_PROFILE_DIR": profile_dir})
     out = ""
     try:
-        proc = subprocess.run(
-            [sys.executable, "-m", "backend.tools.smartrecruiters_recon", "--job", str(jobid), "--keep", str(keep)],
-            cwd=REPO, env=env, capture_output=True, text=True, timeout=keep * 60 + 180)
-        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "") if isinstance(e.stdout, str) else ""
         try:
-            subprocess.run(["pkill", "-f", f"smartrecruiters_recon --job {jobid}"], timeout=20)
-        except Exception:
-            pass
-        return {"jobid": jobid, "persona": None, "ack": False, "error": "timeout"}
-    except Exception as e:
-        return {"jobid": jobid, "persona": None, "ack": False, "error": f"{type(e).__name__}: {e}"}
-    m = _RESULT_RE.search(out or "")
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except Exception:
-            pass
-    return {"jobid": jobid, "persona": None, "ack": False, "error": "no result line"}
+            proc = subprocess.run(
+                [sys.executable, "-m", "backend.tools.smartrecruiters_recon", "--job", str(jobid), "--keep", str(keep)],
+                cwd=REPO, env=env, capture_output=True, text=True, timeout=keep * 60 + 180)
+            out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        except subprocess.TimeoutExpired as e:
+            out = (e.stdout or "") if isinstance(e.stdout, str) else ""
+            try:
+                subprocess.run(["pkill", "-f", f"smartrecruiters_recon --job {jobid}"], timeout=20)
+            except Exception:
+                pass
+            return {"jobid": jobid, "persona": None, "ack": False, "error": "timeout"}
+        except Exception as e:
+            return {"jobid": jobid, "persona": None, "ack": False, "error": f"{type(e).__name__}: {e}"}
+        m = _RESULT_RE.search(out or "")
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except Exception:
+                pass
+        return {"jobid": jobid, "persona": None, "ack": False, "error": "no result line"}
+    finally:
+        # The recon reclaims its own SR_PROFILE_DIR in a finally, but on a timeout-kill (pkill above)
+        # that finally can't run — reclaim the per-run stealth profile here too so it never leaks.
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def _do_one(jobid: int, keep: int) -> dict:

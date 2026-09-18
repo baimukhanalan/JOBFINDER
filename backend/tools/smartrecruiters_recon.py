@@ -25,6 +25,7 @@ import asyncio
 import glob
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -108,73 +109,80 @@ async def apply_job(jobid: int, keep_min: int = 8) -> dict:
             locale="en-US", timezone_id="America/New_York", args=["--start-maximized"] + ext)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         try:
-            key = os.getenv("NOPECHA_KEY", "").strip()
-            cfg = ("input_method=javascript|enabled=true|hcaptcha_auto_solve=true|recaptcha_auto_solve=true|"
-                   "turnstile_auto_solve=true|awswaf_auto_solve=true|datadome_auto_solve=true"
-                   + (f"|key={key}" if key else ""))
-            sp = await ctx.new_page()
-            await sp.goto("https://nopecha.com/setup#" + cfg, wait_until="domcontentloaded", timeout=45000)
-            await sp.wait_for_timeout(3000)
-            await sp.close()
-        except Exception as e:
-            print(f"[nopecha {type(e).__name__}]", flush=True)
-
-        since = time.time()
-        await page.goto(url, wait_until="domcontentloaded", timeout=90000)
-        await page.wait_for_timeout(3500)
-        strat = SmartRecruitersStrategy()
-        await strat.open_form(page)
-        await page.wait_for_timeout(2500)
-        result = await strat.prefill(page, form, resume_pdf,
-                                     job={"title": row["title"], "company": row["company"]},
-                                     draft=True, known_answers=known, facts=facts, profile_id=profile_id)
-        unfilled = result.get("unfilled") or []
-        result_out["unfilled"] = unfilled
-        result_out["page_type"] = result.get("page_type")
-        print(f"[prefill] page_type={result.get('page_type')} wizard_at_submit={result.get('wizard_at_submit')} "
-              f"unfilled={unfilled}", flush=True)
-        if result.get("page_type") in ("captcha", "login_required", "expired"):
-            print(f"[WALL] page_type={result.get('page_type')} — cannot proceed", flush=True)
-            await ctx.close()
-            return result_out
-
-        if not unfilled:
-            # The strategy walked to the final screen (SMARTRECRUITERS_ADVANCE=1). Press the REAL
-            # SmartRecruiters submit via its shadow-piercing finder — NOT a raw `button:has-text`
-            # locator, which matches the "Apply With Indeed" integration and never submits.
             try:
-                clicked = await strat.click_submit(page)
-                if clicked:
-                    print("[submit] clicked the SmartRecruiters primary submit", flush=True)
-                    result_out["clicked"] = True
-                    await page.wait_for_timeout(5000)
-                    body = (await page.evaluate("() => document.body ? document.body.innerText : ''"))[:400]
-                    print(f"[post-submit body] {body!r}", flush=True)
-                else:
-                    # Not yet at the submit screen — one guarded advance, then retry the submit.
-                    info = await strat._tag_primary_button(page)
-                    print(f"[submit] primary is {info!r} — not a submit; leaving for the human", flush=True)
+                key = os.getenv("NOPECHA_KEY", "").strip()
+                cfg = ("input_method=javascript|enabled=true|hcaptcha_auto_solve=true|recaptcha_auto_solve=true|"
+                       "turnstile_auto_solve=true|awswaf_auto_solve=true|datadome_auto_solve=true"
+                       + (f"|key={key}" if key else ""))
+                sp = await ctx.new_page()
+                await sp.goto("https://nopecha.com/setup#" + cfg, wait_until="domcontentloaded", timeout=45000)
+                await sp.wait_for_timeout(3000)
+                await sp.close()
             except Exception as e:
-                print(f"[submit err {type(e).__name__}: {e}]", flush=True)
-        else:
-            print(f"[not submitting] {len(unfilled)} required unfilled: {unfilled}", flush=True)
+                print(f"[nopecha {type(e).__name__}]", flush=True)
 
-        if result_out["clicked"]:
-            print(f"[watch] polling Maildir up to {keep_min} min for ack…", flush=True)
-            for i in range(keep_min * 6):
-                await page.wait_for_timeout(10000)
-                hits = _maildir_ack(email, since)
-                fresh = [h for h in hits if any(k in (h[1] or "").lower() for k in _ACK_HINTS)]
-                if fresh:
-                    result_out["ack"] = True
-                    result_out["subject"] = fresh[0][1]
-                    print(f"[ACK] {email}", flush=True)
-                    for frm, subj in fresh:
-                        print(f"   FROM {frm} | SUBJ {subj}", flush=True)
-                    break
+            since = time.time()
+            await page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            await page.wait_for_timeout(3500)
+            strat = SmartRecruitersStrategy()
+            await strat.open_form(page)
+            await page.wait_for_timeout(2500)
+            result = await strat.prefill(page, form, resume_pdf,
+                                         job={"title": row["title"], "company": row["company"]},
+                                         draft=True, known_answers=known, facts=facts, profile_id=profile_id)
+            unfilled = result.get("unfilled") or []
+            result_out["unfilled"] = unfilled
+            result_out["page_type"] = result.get("page_type")
+            print(f"[prefill] page_type={result.get('page_type')} wizard_at_submit={result.get('wizard_at_submit')} "
+                  f"unfilled={unfilled}", flush=True)
+            if result.get("page_type") in ("captcha", "login_required", "expired"):
+                print(f"[WALL] page_type={result.get('page_type')} — cannot proceed", flush=True)
+                return result_out
+
+            if not unfilled:
+                # The strategy walked to the final screen (SMARTRECRUITERS_ADVANCE=1). Press the REAL
+                # SmartRecruiters submit via its shadow-piercing finder — NOT a raw `button:has-text`
+                # locator, which matches the "Apply With Indeed" integration and never submits.
+                try:
+                    clicked = await strat.click_submit(page)
+                    if clicked:
+                        print("[submit] clicked the SmartRecruiters primary submit", flush=True)
+                        result_out["clicked"] = True
+                        await page.wait_for_timeout(5000)
+                        body = (await page.evaluate("() => document.body ? document.body.innerText : ''"))[:400]
+                        print(f"[post-submit body] {body!r}", flush=True)
+                    else:
+                        # Not yet at the submit screen — one guarded advance, then retry the submit.
+                        info = await strat._tag_primary_button(page)
+                        print(f"[submit] primary is {info!r} — not a submit; leaving for the human", flush=True)
+                except Exception as e:
+                    print(f"[submit err {type(e).__name__}: {e}]", flush=True)
             else:
-                print("[no ack within keep window]", flush=True)
-        await ctx.close()
+                print(f"[not submitting] {len(unfilled)} required unfilled: {unfilled}", flush=True)
+
+            if result_out["clicked"]:
+                print(f"[watch] polling Maildir up to {keep_min} min for ack…", flush=True)
+                for i in range(keep_min * 6):
+                    await page.wait_for_timeout(10000)
+                    hits = _maildir_ack(email, since)
+                    fresh = [h for h in hits if any(k in (h[1] or "").lower() for k in _ACK_HINTS)]
+                    if fresh:
+                        result_out["ack"] = True
+                        result_out["subject"] = fresh[0][1]
+                        print(f"[ACK] {email}", flush=True)
+                        for frm, subj in fresh:
+                            print(f"   FROM {frm} | SUBJ {subj}", flush=True)
+                        break
+                else:
+                    print("[no ack within keep window]", flush=True)
+        finally:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+            # The per-run stealth profile dir is disposable (fresh persona/session per apply). Reclaim
+            # it so it can't leak — 269 dirs = 4.4 GB had accumulated in backend/data/ before this.
+            shutil.rmtree(STEALTH_PROFILE, ignore_errors=True)
     return result_out
 
 

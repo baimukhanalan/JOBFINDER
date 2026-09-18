@@ -44,7 +44,13 @@ _SOCK = f"backend/data/ts-egress/{_SLOT}/tailscaled.sock"
 _LOCK = "/tmp/jf_assess_supervisor.lock"
 _ATTEMPTS = os.path.join(_ROOT, "backend", "data", "sutherland_attempts.json")
 _SKIP_AFTER = 3                # low-yield attempts before a stuck invite is skipped
-_PER_JOB_TIMEOUT = 1500        # 25 min hard cap per drive
+# Sutherland's AMCAT battery is personality-heavy (AMPI/OPQ forced-choice, ~140-160 items at ~8s each);
+# the harvester's 1200s (20-min) default session cap left a real battery UNFINISHED at ~141 items
+# (`partial_timeout`). Only ONE invite is live at a time (the rest expire), so a longer per-drive budget
+# is the right trade: `_SESSION_SECS` (the walk wall-clock) lets a ~180-item battery COMPLETE in one
+# session; `_PER_JOB_TIMEOUT` (the subprocess cap) stays ABOVE it so the post-walk ASR banking finishes.
+_SESSION_SECS = 1500           # HARVEST_SESSION_SECS for the walk (25 min)
+_PER_JOB_TIMEOUT = 1800        # 30 min hard subprocess cap (must exceed _SESSION_SECS)
 # A drive that reached NOTHING for an INFRA reason (CDP/Mac/proxy hiccup) — NOT a verdict on the invite,
 # so it must never accrue toward the skip cap (a camera wall + a partial hang are handled separately).
 _TRANSIENT_RE = re.compile(
@@ -169,7 +175,8 @@ def _drive(mbx: str, url: str) -> tuple[bool, int, bool, bool, bool]:
     that skipped genuinely-live invites. `adapter.enter` now hard-reloads (about:blank first) so the fresh
     autologin token is processed even when the tab is parked on a same-origin talentcentral route."""
     env = {**os.environ, "HARVEST_CDP_URL": f"http://127.0.0.1:{_PORT}",
-           "HARVEST_CDP_TAB_INDEX": "0", "DISPLAY": ":98", "PYTHONPATH": ".", "HARVEST_FAST": "1"}
+           "HARVEST_CDP_TAB_INDEX": "0", "DISPLAY": ":98", "PYTHONPATH": ".", "HARVEST_FAST": "1",
+           "HARVEST_SESSION_SECS": str(_SESSION_SECS)}
     env.pop("HARVEST_CDP_RESUME", None)
     try:
         r = subprocess.run(

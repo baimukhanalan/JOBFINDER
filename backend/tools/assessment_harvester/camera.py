@@ -26,12 +26,25 @@ are paced sequential, so one browser reads the one device at a time. No PII (loc
 """
 from __future__ import annotations
 
+import ctypes as _ctypes
 import logging
 import os
+import signal as _signal
 import subprocess
 from shutil import which
 
 logger = logging.getLogger("assessment_harvester")
+
+
+def pdeathsig() -> None:
+    """preexec_fn for a feeder ffmpeg: ask the kernel to SIGKILL this child if its parent (the harvest
+    process or the camera daemon) dies for ANY reason (crash / SIGKILL / OOM), before any cleanup can
+    run. Without it a killed session leaks its ffmpeg to init (ppid=1), where they pile up fighting over
+    the single /dev/video0 — 10 stale orphans (1-2.5 days old) were seen accumulating this way."""
+    try:
+        _ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, _signal.SIGKILL)  # PR_SET_PDEATHSIG=1
+    except Exception:
+        pass
 
 DEVICE = os.environ.get("CAMERA_DEVICE", "/dev/video0")
 CARD_LABEL = "Integrated Camera"
@@ -137,7 +150,7 @@ def feed(video_path: str | None = None) -> bool:
 
     def _spawn() -> bool:
         global _FEEDER
-        _FEEDER = subprocess.Popen(_feed_cmd(video_path),
+        _FEEDER = subprocess.Popen(_feed_cmd(video_path), preexec_fn=pdeathsig,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(2.5)  # let it fill the device before a reader opens it
         return _FEEDER.poll() is None

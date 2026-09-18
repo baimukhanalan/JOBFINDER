@@ -68,7 +68,7 @@ def main() -> None:
             # start and after a feeder death — never while a healthy feeder is streaming, so a reader
             # (Chromium) mid-check is not disturbed during steady state.
             camera._reload_module()
-            proc = subprocess.Popen(camera._feed_cmd(_source),
+            proc = subprocess.Popen(camera._feed_cmd(_source), preexec_fn=camera.pdeathsig,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _CUR_FEEDER = proc
             time.sleep(3)

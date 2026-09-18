@@ -38,8 +38,13 @@ def _key() -> str | None:
     return None
 
 
+# Set once the account proves permanently unusable (out of credit / bad key) so the vision cascade
+# stops paying the per-item retry/backoff tax for the rest of the run — mirrors openai/openrouter.
+_DEAD = False
+
+
 def available() -> bool:
-    return bool(_key())
+    return bool(_key()) and not _DEAD
 
 
 def _post(content, max_tokens: int = 12, timeout: float = 60.0) -> str | None:
@@ -68,6 +73,19 @@ def _post(content, max_tokens: int = 12, timeout: float = 60.0) -> str | None:
             return r.json()["content"][0]["text"]
         except httpx.HTTPStatusError as e:
             sc = getattr(e.response, "status_code", None)
+            body = ""
+            try:
+                body = (e.response.text or "").lower()
+            except Exception:
+                pass
+            # Permanent failures: out of credit (400 "credit balance is too low") or a bad/expired key
+            # (401/403). Disable for the rest of the run instead of retrying every item.
+            if sc in (401, 403) or "credit balance is too low" in body or "credit_balance" in body:
+                global _DEAD
+                if not _DEAD:
+                    log.info("[anthropic] disabled: %s", ("out of credit" if "credit" in body else f"auth {sc}"))
+                _DEAD = True
+                return None
             if sc == 429 and attempt < 5:
                 time.sleep(min(2 ** attempt, 30) + random.uniform(0, 1.5))
                 continue

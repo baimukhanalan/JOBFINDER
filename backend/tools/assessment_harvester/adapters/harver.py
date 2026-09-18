@@ -191,10 +191,12 @@ class HarverAdapter(Adapter):
             wav = (assets.ensure_assets() or {}).get("audio")
             if not wav or not os.path.exists(wav):
                 return
+            from backend.tools.assessment_harvester import camera as _cam
             self._mic_feed = subprocess.Popen(
                 ["ffmpeg", "-hide_banner", "-loglevel", "error", "-stream_loop", "-1", "-re",
                  "-i", wav, "-f", "pulse", "-device", mic.SINK, "harver_devcheck"],
-                env=mic._env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                env=mic._env(), preexec_fn=_cam.pdeathsig,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             self._mic_feed = None
 

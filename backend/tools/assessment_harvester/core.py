@@ -921,11 +921,22 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                             if live_idx is not None:
                                 idx, pick_src, live_cache = live_idx, "live_llm", True
                                 cache_src = "dialog_llm" if listen_ctx else "live_llm"
-                    if idx is None:
+                    # If core couldn't key/solve the item AND the adapter has its OWN vision cascade
+                    # (Harver `_vision_pick`), DON'T fabricate a random click: a random idx is a valid
+                    # int, so the adapter's `isinstance(index,int) and 0<=index<n` replay branch would
+                    # TRUST it and never run vision — blind-clicking a coin-flip on a scored cognitive
+                    # item. Pass idx=None so the adapter's cascade decides. Adapters WITHOUT a vision
+                    # cascade (AMCAT/base) keep the random fallback (byte-identical behavior).
+                    delegate_vision = idx is None and hasattr(adapter, "_vision_pick")
+                    if idx is None and not delegate_vision:
                         idx = random.randint(0, len(opts) - 1)
                         pick_src = "random"
-                    chosen = {"text": opt_txt[idx] if idx < len(opt_txt) else opts[idx].get("text"),
-                              "index": idx, "value": None, "source": pick_src}
+                    if idx is None:
+                        pick_src = "vision_adapter"
+                        chosen = {"text": None, "index": None, "value": None, "source": pick_src}
+                    else:
+                        chosen = {"text": opt_txt[idx] if idx < len(opt_txt) else opts[idx].get("text"),
+                                  "index": idx, "value": None, "source": pick_src}
                     _bank(item, item_type, is_ability, chosen, shot, audio_url=audio_url)
                     if live_cache:  # persist the live-solved answer so a recurrence replays it (after _bank)
                         try:
@@ -936,7 +947,8 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                             pass
                     logger.info("[%s] #%d %s%s q=%r opts=%d pick=%d (%s)",
                                 mailbox, res["banked"], item_type,
-                                " IMG" if item.get("qimgs") else "", q[:60], len(opts), idx, pick_src)
+                                " IMG" if item.get("qimgs") else "", q[:60], len(opts),
+                                idx if idx is not None else -1, pick_src)
 
                     prev = (q, tuple(o.get("text", "") for o in opts), item.get("progress"))
                     await asyncio.sleep(random.uniform(min_delay, max_delay))

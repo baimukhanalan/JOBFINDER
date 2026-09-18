@@ -1164,14 +1164,17 @@ def assessment_lanes() -> list[dict]:
     rows.append(_row("Сдано тестов (всего)", "ok" if done_n else "info",
                      f"{done_n} · последнее «пройдено» "
                      + (_age_str(done_age) if done_age is not None else "?")))
-    # running lanes + Mac tunnel reachability
+    # running lanes + Mac tunnel reachability. The reachability curl MUST fit the gather() probe
+    # deadline (_PROBE_TIMEOUT=3s + 0.5 grace) — an unresponsive Mac blocks a 5s curl PAST it, so the
+    # whole group degrades to «нет ответа за 3с» AND the down-alert is suppressed. Cap at 2s, and only
+    # probe when a LANE is running (an idle tunnel-up needs no reachability, just the «лишний расход» row).
     n_mac = _pgrep("mac_workers.sh") + _pgrep("harvest_runner --platform shl_sutherland")
     tunnel_up = _pgrep("socat TCP-LISTEN:9222") > 0
     mac_online = False
-    if tunnel_up:
+    if tunnel_up and n_mac:
         try:
             mac_online = "Browser" in _run(
-                ["curl", "-s", "--max-time", "5", "http://127.0.0.1:9222/json/version"], timeout=7)
+                ["curl", "-s", "--max-time", "2", "http://127.0.0.1:9222/json/version"], timeout=2.5)
         except Exception:
             mac_online = False
     stale = done_age is not None and done_age > 1800   # >30 min with no new completion

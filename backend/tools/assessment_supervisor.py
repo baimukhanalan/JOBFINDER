@@ -52,7 +52,11 @@ def _fresh() -> list[tuple[str, str]]:
     skip = set(mailcrm.assessment_skipped_mailboxes())
     out = []
     for mbx, url in discover.discover("shl_sutherland", limit=800, include_done=True):
-        if mbx not in done and mbx not in skip:
+        # discover() yields the mailbox LOCAL-PART; the done/skip sets store FULL emails
+        # (name@takhet.com). Compare on the full form — else the exclusion is a total no-op and the
+        # lane re-drives already-done/skipped invites forever + never converges (never auto-stops).
+        full = mbx if "@" in mbx else f"{mbx}@takhet.com"
+        if full not in done and full not in skip:
             out.append((mbx, url))
     return out
 
@@ -176,7 +180,15 @@ def run(dry: bool, max_jobs: int) -> None:
         if completed:
             passed += 1
             attempts.pop(mbx, None)
-            _log(f"PASSED {mbx}")
+            # harvest_runner's --url path only marks the CRM «пройдено» when --mailbox has an '@'
+            # (we pass the local-part), and core/adapters never mark done — so the supervisor MUST
+            # record the completion itself, else a real Mac-lane pass stays in «Действие» + is re-driven.
+            try:
+                from backend.tools import mailcrm
+                mailcrm.mark_assessment_done(mbx)   # normalizes local-part → name@takhet.com
+            except Exception:
+                pass
+            _log(f"PASSED {mbx} — marked «пройдено»")
         elif camera:
             _log(f"camera-wall {mbx} — Mac OBS down, NOT skipping (retry later)")
         elif items < 3:

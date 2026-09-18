@@ -886,7 +886,7 @@ _CG_JS = """
             list.insertAdjacentHTML('beforeend', html);
             sentinel.dataset.offset = String(off + PAGE);
           }
-          var added = (html.match(/class="cg-card"/g) || []).length;
+          var added = (html.match(/class="cg-card[ "]/g) || []).length;
           if(added < PAGE){ done = true; sentinel.hidden = true; }
           loading = false;
         })

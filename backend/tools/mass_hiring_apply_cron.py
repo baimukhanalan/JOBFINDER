@@ -31,7 +31,10 @@ LOCK_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mh_apply_cron
 def maximus_ids() -> list[int]:
     with mail_db.conn() as c:
         cur = c.cursor()
-        cur.execute("SELECT id FROM mass_hiring_jobs WHERE apply_url ILIKE %s ORDER BY id", ("%avature%",))
+        # `active` guard mirrors every other lane (Kelly/SR/Taleo/TP/Workday) — without it the lane
+        # applied to DELISTED jobs, minting a fresh persona+mailbox per dead id (~50 wasted/day).
+        cur.execute("SELECT id FROM mass_hiring_jobs WHERE active AND apply_url ILIKE %s ORDER BY id",
+                    ("%avature%",))
         from backend.tools import mh_settings
         return mh_settings.drop_spanish([r[0] for r in cur.fetchall()])
 

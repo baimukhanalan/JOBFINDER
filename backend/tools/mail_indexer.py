@@ -55,10 +55,57 @@ def _iter_candidate_files():
 
 
 # ---- full reconcile --------------------------------------------------------
+def _db_paths_for(path_hashes) -> dict[str, str]:
+    """{path_hash: stored path} for the given hashes, straight from mail_index. Used by the prune
+    step to decide whether a row's FILE is actually gone before deleting it."""
+    hs = [h for h in (path_hashes or []) if h]
+    if not hs:
+        return {}
+    try:
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute("SELECT path_hash, path FROM mail_index WHERE path_hash = ANY(%s)", (hs,))
+            return {r[0]: r[1] for r in cur.fetchall()}
+    except Exception as e:
+        print(f"db path lookup error: {e}", flush=True)
+        return {}
+
+
+def _file_present(db_path: str | None, path_hash: str) -> bool:
+    """True if the message FILE is still on disk. Checks the stored path, then (because a
+    new/ -> cur/ read-rename changes the path but NOT the _pid hash) re-scans the mailbox's
+    new/ + cur/ leaves for any file with the same hash. Conservative: a missing/unreadable
+    mailbox dir returns False only when the exact stored path is also gone."""
+    if db_path and os.path.isfile(db_path):
+        return True
+    if not db_path:
+        return False
+    mbox = os.path.dirname(os.path.dirname(db_path))     # .../<domain>/<local>
+    for sub in ("new", "cur"):
+        d = os.path.join(mbox, sub)
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for fn in names:
+            if fn.startswith("."):
+                continue
+            if _pid(os.path.join(d, fn)) == path_hash:
+                return True
+    return False
+
+
 def run_once():
-    """Reconcile the whole index against disk. Insert files not yet indexed, prune
-    rows whose files disappeared. When the classifier version changes, refresh all
-    rows once so old false positives are corrected too. Returns (updated, pruned)."""
+    """Reconcile the whole index against disk. Insert files not yet indexed, prune rows whose
+    FILES actually disappeared from disk. When the classifier version changes, refresh all rows
+    once so old false positives are corrected too. Returns (updated, pruned).
+
+    PRUNE SAFETY: `on_disk` is built by walking mailcrm.candidates() only, so a mailbox that drops
+    out of the registry (a lost register_demo_persona write) leaves ALL its rows out of `on_disk`.
+    We must NOT delete those rows just because the mailbox vanished from candidates() — their .eml
+    files still exist and the mailbox may be re-registered. So a stale hash is pruned ONLY when its
+    stored file is confirmed GONE from disk (`_file_present`); a genuinely-deleted/moved file (the
+    real prune case) still has no file → still pruned."""
     known = mail_db.all_path_hashes()
     try:
         refresh_kinds = mail_db.get_meta("classifier_version") != mailcrm.classifier_version()
@@ -87,7 +134,16 @@ def run_once():
         except Exception as e:
             print(f"upsert error {path}: {e}", flush=True)
             refresh_failed = refresh_failed or refresh_kinds
-    pruned = mail_db.delete_paths(known - on_disk)
+    # Prune ONLY rows whose file is genuinely gone from disk — never a row that merely fell out of
+    # candidates() with its Maildir file intact (see the PRUNE SAFETY note above).
+    stale = known - on_disk
+    gone = []
+    if stale:
+        db_paths = _db_paths_for(stale)
+        for h in stale:
+            if not _file_present(db_paths.get(h), h):
+                gone.append(h)
+    pruned = mail_db.delete_paths(gone)
     if refresh_kinds and not refresh_failed:
         mail_db.set_meta("classifier_version", mailcrm.classifier_version())
     mail_health.heartbeat()   # a full reconcile completed -> the backstop is alive

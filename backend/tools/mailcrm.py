@@ -11,6 +11,7 @@ Opening a message marks it read (Maildir new/ -> cur/:2,S), like every webmail.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ import re
 import smtplib
 import ssl
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from email import policy
 from email.message import EmailMessage
@@ -269,6 +271,26 @@ def _is_nonaction_notification(subject: str, body: str, from_email: str) -> bool
     return False
 
 
+# Known recruiter MASS-OUTREACH blasts that classify() over-catches as an interview INVITATION but
+# that are NOT a 1:1 invite — they pollute the Собес delegation pool and fire a false owner Telegram
+# interview alert (`mail_indexer._maybe_notify_mail_event`). Scoped TIGHT (2026-09-18) to the
+# Teleperformance «...DIRECT HIRE JOB OPPORTUNITY» blast from teleperformanceusa.com (body «...get
+# you hired today!» / «join zoom so that we can get you hired today») — a same-body-to-everyone
+# recruiter mailshot, NOT an ATS interview scheduler. The sender+subject pair is specific to this
+# blast, so a genuine 1:1 recruiter interview invite is never demoted. Add a new blast here only
+# when it is provably a template mailshot; do NOT widen to a bare domain or a bare keyword.
+_BULK_OUTREACH_SENDER = "teleperformanceusa.com"
+_BULK_OUTREACH_SUBJECT_RE = re.compile(r"direct hire job opportunity", re.I)
+
+
+def _is_bulk_outreach(subject: str, from_email: str) -> bool:
+    """True for a recruiter mass-outreach blast (TP «DIRECT HIRE JOB OPPORTUNITY» from
+    teleperformanceusa.com) that must never be classified as an interview invitation."""
+    fe = (from_email or "").strip().lower()
+    dom = fe.split("@")[-1] if "@" in fe else fe
+    return dom.endswith(_BULK_OUTREACH_SENDER) and bool(_BULK_OUTREACH_SUBJECT_RE.search(subject or ""))
+
+
 def assessment_done_mailboxes() -> frozenset:
     try:
         m = _ASSESS_DONE_PATH.stat().st_mtime
@@ -484,6 +506,12 @@ def auto_skip_stale_assessments(days: int = 7) -> int:
 
 def _kind_with_done_override(subject: str, body: str, mailbox: str, from_email: str = "") -> str:
     kind = classify(subject, body)
+    # A known recruiter BULK-OUTREACH blast (TP «DIRECT HIRE JOB OPPORTUNITY») is never a 1:1
+    # interview/offer — demote to 'other' so it can't pollute the Собес delegation pool or fire a
+    # false owner interview alert. Belt-and-braces behind removing «get you hired today» from the
+    # interview keyword bucket; scoped tight to the one sender+subject (see _is_bulk_outreach).
+    if kind in ("interview", "offer") and _is_bulk_outreach(subject, from_email):
+        return "other"
     if kind == "action_needed":
         # (1) A PASSED persona (done-set): ALL its residual action rows resolve to
         # assessment_done — INCLUDING the non-test Harver «Thanks for getting started»
@@ -524,19 +552,48 @@ DEMO_FILE = ROOT / "backend" / "data" / "demo_personas.json"  # synthetic demo p
 _DEMO_LOCK = threading.Lock()
 
 
+@contextmanager
+def _demo_file_lock():
+    """Cross-PROCESS guard for register_demo_persona's load-mutate-save. Three OS processes register
+    demo personas concurrently — the live dash, `apply_campaign_cron`, and the five mass-hiring apply
+    lane crons — and a `threading.Lock` only serialises threads WITHIN one process. So cross-process
+    registrations were LOST to a read-modify-write race: a persona clobbered out of `demo_personas.json`
+    disappears from `candidates()`, its Maildir stops being indexed, and (worse) the indexer's prune
+    then DELETES its already-indexed rows. An fcntl flock on a sidecar serialises the processes; the
+    write itself stays atomic (per-PID tmp + os.replace). Mirrors apply_campaigns._file_lock."""
+    DEMO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = DEMO_FILE.with_suffix(".lock")
+    with open(lock_path, "w") as lf:
+        try:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+        except OSError:
+            pass          # a filesystem without flock — fall back to the in-process lock only
+        try:
+            yield
+        finally:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+            except OSError:
+                pass
+
+
 def register_demo_persona(email: str, name: str, pid: str = "") -> None:
     """Add a synthetic demo persona (synth_persona) to the candidate registry so its mailbox
     is scanned + shown in the CRM inbox — demo personas aren't in profiles.json. Idempotent.
 
-    THREAD-SAFE (locked + atomic write): the parallel bulk lane runs N dashboard threads that
-    each call this concurrently; the old bare read-modify-write raced and CLOBBERED entries —
-    real leads (gulmira's Salmon HR-interview thread) silently vanished from the registry, so
-    their mail stopped surfacing. The lock + tmp-replace keep every registration."""
+    THREAD- AND PROCESS-SAFE (in-process lock + cross-process fcntl flock + atomic write): the
+    parallel bulk lane runs N dashboard threads AND several independent OS processes (the dash, the
+    apply-campaign cron, the mass-hiring lane crons) that each call this concurrently. The old bare
+    read-modify-write under a `threading.Lock` alone raced ACROSS PROCESSES and CLOBBERED entries —
+    real leads (gulmira's Salmon HR-interview thread) silently vanished from the registry and 260
+    provisioned Maildirs went un-indexed. `_demo_file_lock` (flock) + per-PID tmp-replace keep every
+    registration; the fixed shared `.json.tmp` name it used to write also raced two processes onto
+    the same tmp path."""
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         return
     entry = {"id": pid or email.split("@")[0], "name": name or email.split("@")[0]}
-    with _DEMO_LOCK:
+    with _DEMO_LOCK, _demo_file_lock():
         reg = _load(DEMO_FILE, {})
         if not isinstance(reg, dict):
             reg = {}
@@ -544,7 +601,7 @@ def register_demo_persona(email: str, name: str, pid: str = "") -> None:
             return
         reg[email] = entry
         try:
-            tmp = DEMO_FILE.with_suffix(".json.tmp")
+            tmp = DEMO_FILE.with_suffix(f".json.tmp.{os.getpid()}")
             tmp.write_text(json.dumps(reg, ensure_ascii=False, indent=2), encoding="utf-8")
             os.replace(tmp, DEMO_FILE)
         except Exception:

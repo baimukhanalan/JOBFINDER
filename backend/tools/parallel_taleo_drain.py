@@ -200,6 +200,10 @@ def main() -> None:
                     help="truncate the claim file first (re-partition the whole current pending set)")
     args = ap.parse_args()
 
+    # Run from the repo root so config.py's .env + every module-relative data path resolve to THIS
+    # checkout (harvest_state / assessment_bank / taleo_accounts), regardless of the launch cwd. Guards
+    # the `-m backend…` foot-gun where the shell cwd's own (empty) backend package would shadow this one.
+    os.chdir(REPO)
     os.makedirs(LOG_DIR, exist_ok=True)
     if args.fresh_claims or not os.path.exists(CLAIM_FILE):
         open(CLAIM_FILE, "w").close()

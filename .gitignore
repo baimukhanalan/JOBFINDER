@@ -26,6 +26,8 @@ backend/data/assessment_media/
 # it feeds import_qa_snapshot.py into the (also gitignored) assessment_bank.json.
 backend/data/qa_snapshot/
 backend/data/harvest_state.json
+# discovery.py's already-probed company-name cache (best-effort optimization, grows via cron)
+backend/data/discovery_probed_names.json
 backend/tools/assessment_harvester/assets/*.wav
 backend/tools/assessment_harvester/assets/*.y4m
 backend/data/*stealth_profile*/

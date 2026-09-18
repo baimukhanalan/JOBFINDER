@@ -4,11 +4,16 @@ The Mac's real camera is the only way past the AMCAT WCI200 proctor, reached ove
 socat CDP tunnel. This tool makes that lane SELF-MANAGING + OBSERVABLE (owner ask 2026-09-18):
 
   * AUTO-START the tunnel ONLY when there is FRESH work (a Sutherland invite not already done/skipped).
-  * DRIVE the fresh invites through the Mac (harvest_runner marks CRM «пройдено» on a real completion).
-  * A genuinely STUCK invite (0 items) — almost always one already in the SHL «evaluating» (submitted)
-    state, so there is nothing left to answer — is marked SKIPPED, but ONLY after `_SKIP_AFTER`
-    cumulative low-yield attempts (persisted), so a transient miss never skips a real one. A
-    proctor-camera wall (Mac OBS down) is NEVER skipped — it's a temporary Mac issue, retry later.
+  * DRIVE each fresh invite through the Mac by FRESH-NAV (its own autologin link, `adapter.enter` hard-
+    reloads first so the shared Mac tab can't re-read a stale parked page) — harvest_runner marks CRM
+    «пройдено» on a real completion. Keeps the Mac awake WHILE driving via `MAC_SSH` (`caffeinate`,
+    30-min bounded, self-releases) — set MAC_SSH (e.g. 'macalan'); no-op otherwise.
+  * SKIP policy — a skip must mean the invite is genuinely dead, never an infra miss:
+      - camera wall (Mac OBS not feeding) → NEVER skipped (temporary Mac issue, retry later);
+      - Mac/CDP hiccup / partial hang (`transient`) → NEVER skipped (retry later);
+      - `link-expired` (dead SHL token) → skipped in ONE pass (unrecoverable);
+      - reached-but-empty (0 items, «evaluating»/submitted) → skipped after `_SKIP_AFTER` cumulative
+        low-yield attempts (persisted `sutherland_attempts.json`).
   * AUTO-STOP: when no fresh work remains (or the Mac is offline), tear the tunnel DOWN and EXIT. Never
     spins — the Health «Ассессменты» group + `health --alert` surface an offline Mac / futile churn.
 
@@ -22,6 +27,8 @@ import argparse
 import fcntl
 import json
 import os
+import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -38,6 +45,12 @@ _LOCK = "/tmp/jf_assess_supervisor.lock"
 _ATTEMPTS = os.path.join(_ROOT, "backend", "data", "sutherland_attempts.json")
 _SKIP_AFTER = 3                # low-yield attempts before a stuck invite is skipped
 _PER_JOB_TIMEOUT = 1500        # 25 min hard cap per drive
+# A drive that reached NOTHING for an INFRA reason (CDP/Mac/proxy hiccup) — NOT a verdict on the invite,
+# so it must never accrue toward the skip cap (a camera wall + a partial hang are handled separately).
+_TRANSIENT_RE = re.compile(
+    r"connect_over_cdp|targetclos|target closed|browser has been closed|websocket|disconnected|"
+    r"connection refused|econnrefused|net::err|\berr_[a-z_]+|read timed out|"
+    r"traceback \(most recent", re.I)
 
 
 def _log(msg: str) -> None:
@@ -109,12 +122,20 @@ def _keep_mac_awake() -> str:
     line for the log/Health. (Simplest alternative, no SSH: set the Mac to never-sleep in Energy/pmset.)"""
     target = os.environ.get("MAC_SSH", "").strip()
     if not target:
-        return "no-sleep NOT auto-managed — enable Remote Login + set MAC_SSH, or set the Mac to never-sleep (pmset/Energy)"
+        return ("no-sleep NOT auto-managed — enable Remote Login + set MAC_SSH (e.g. an ssh-config host "
+                "like 'macalan' whose ProxyCommand tunnels the egress slot), or set the Mac to "
+                "never-sleep (pmset/Energy)")
+    # MAC_SSH may be a single ssh alias ('macalan', which self-heals via its config ProxyCommand — no
+    # long-lived socat tunnel to die) OR a full multi-token target ('-p 2222 alan@127.0.0.1'). shlex so
+    # either works. Popen is fire-and-forget with start_new_session: ssh holds `caffeinate -dimsu -t
+    # 1800` (30-min bounded — self-releases even if we crash), so the Mac stays awake only while a drive
+    # window is open, then sleeps again (the owner's ask: awake WHILE driving, else sleep).
     try:
+        ssh_target = shlex.split(target)
         subprocess.Popen(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                          "-o", "StrictHostKeyChecking=accept-new", target, "caffeinate -dimsu -t 1800"],
+                          "-o", "StrictHostKeyChecking=accept-new", *ssh_target, "caffeinate -dimsu -t 1800"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        return f"caffeinate started on the Mac via {target} (30-min window)"
+        return f"caffeinate started on the Mac via '{target}' (30-min window)"
     except Exception as e:
         return f"caffeinate SSH failed ({str(e)[:50]}) — check Remote Login / MAC_SSH"
 
@@ -137,10 +158,19 @@ def _save_attempts(d: dict) -> None:
         pass
 
 
-def _drive(mbx: str, url: str) -> tuple[bool, int, bool]:
-    """Run one harvest_runner drive on the Mac. Returns (completed, items, camera_wall)."""
-    env = {**os.environ, "HARVEST_CDP_URL": f"http://127.0.0.1:{_PORT}", "HARVEST_CDP_RESUME": "1",
+def _drive(mbx: str, url: str) -> tuple[bool, int, bool, bool, bool]:
+    """Run one harvest_runner drive on the Mac's Chrome (CDP).
+    Returns (completed, items, camera_wall, transient, expired).
+
+    FRESH-NAV (no HARVEST_CDP_RESUME): the supervisor drains a QUEUE of DIFFERENT invites through the ONE
+    reused Mac tab, so each drive MUST navigate to ITS OWN invite link. RESUME=1 skipped the nav whenever
+    the tab was already on an assessment URL, so every invite re-read whatever single page happened to be
+    parked there (typically a prior invite's `/evaluating` or `link-expired`) → a MASS false «low-yield»
+    that skipped genuinely-live invites. `adapter.enter` now hard-reloads (about:blank first) so the fresh
+    autologin token is processed even when the tab is parked on a same-origin talentcentral route."""
+    env = {**os.environ, "HARVEST_CDP_URL": f"http://127.0.0.1:{_PORT}",
            "HARVEST_CDP_TAB_INDEX": "0", "DISPLAY": ":98", "PYTHONPATH": ".", "HARVEST_FAST": "1"}
+    env.pop("HARVEST_CDP_RESUME", None)
     try:
         r = subprocess.run(
             [sys.executable, "-m", "backend.tools.harvest_runner", "--platform", "shl_sutherland",
@@ -148,11 +178,21 @@ def _drive(mbx: str, url: str) -> tuple[bool, int, bool]:
             cwd=_ROOT, env=env, capture_output=True, text=True, timeout=_PER_JOB_TIMEOUT)
         out = (r.stdout or "") + (r.stderr or "")
     except subprocess.TimeoutExpired:
-        return False, 0, False
-    completed = ("status : completed" in out) or ("marked assessment done" in out)
+        # a hung drive is a Mac/CDP hiccup, NOT a property of the invite → transient, never a skip signal
+        return False, 0, False, True, False
+    low = out.lower()
+    completed = ("status : completed" in low) or ("marked assessment done" in low)
     items = len([ln for ln in out.splitlines() if " #" in ln and " q=" in ln])
-    camera = "proctor_camera" in out.lower()
-    return completed, items, camera
+    # camera wall (Mac OBS momentarily not feeding / real webcam not detected) — NEVER a skip signal
+    camera = ("proctor_camera" in low) or ("wci200" in low) or ("unable to detect a camera" in low)
+    # the emailed SHL autologin token is DEAD (SPA redirected to `#/link-expired`) — a terminal state
+    expired = ("link-expired" in low) or ("link expired" in low)
+    m = re.search(r"status\s*:\s*(\S+)", low)
+    status = m.group(1) if m else ""
+    # TRANSIENT = reached nothing for an INFRA reason (CDP/Mac/proxy hiccup or a partial hang), not
+    # because the invite is stuck/submitted → must NOT accrue toward the skip cap.
+    transient = (status in {"error", "partial_timeout"}) or bool(_TRANSIENT_RE.search(out))
+    return completed, items, camera, transient, expired
 
 
 def run(dry: bool, max_jobs: int) -> None:
@@ -176,7 +216,7 @@ def run(dry: bool, max_jobs: int) -> None:
     attempts = _load_attempts()
     passed = skipped = partial = 0
     for mbx, url in fresh[:max_jobs]:
-        completed, items, camera = _drive(mbx, url)
+        completed, items, camera, transient, expired = _drive(mbx, url)
         if completed:
             passed += 1
             attempts.pop(mbx, None)
@@ -190,8 +230,21 @@ def run(dry: bool, max_jobs: int) -> None:
                 pass
             _log(f"PASSED {mbx} — marked «пройдено»")
         elif camera:
-            _log(f"camera-wall {mbx} — Mac OBS down, NOT skipping (retry later)")
+            # Mac OBS momentarily not feeding — a TEMPORARY Mac issue, NEVER counts toward a skip.
+            _log(f"camera-wall {mbx} — Mac OBS/webcam not detected, NOT skipping (retry later)")
+        elif transient:
+            # a CDP/Mac/proxy hiccup or a partial hang — retry, do NOT accrue toward the skip cap.
+            _log(f"transient {mbx} — Mac/CDP hiccup, NOT skipping (retry later)")
+        elif expired:
+            # the SHL autologin token is dead (link-expired) — a real, unrecoverable terminal state, so
+            # retire it in ONE pass (no value re-driving a dead link every run; not a camera/infra miss).
+            from backend.tools import mailcrm
+            mailcrm.mark_assessment_skipped(mbx)
+            attempts.pop(mbx, None)
+            skipped += 1
+            _log(f"SKIP {mbx} (link-expired — dead SHL token, unrecoverable)")
         elif items < 3:
+            # reached the assessment but nothing to answer — genuinely stuck (submitted/«evaluating»).
             attempts[mbx] = int(attempts.get(mbx, 0)) + 1
             if attempts[mbx] >= _SKIP_AFTER:
                 from backend.tools import mailcrm

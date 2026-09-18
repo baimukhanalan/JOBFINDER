@@ -103,15 +103,29 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   mail`) — AMCAT/TP harvest, paced 1 token/20min (bursts trip AMCAT **NE500**). Don't raise concurrency (parallel browsers
   fight the one virtual mic); don't enable `HARVEST_PROXY`. **MUST include `cd /home/projects/jobfinder` inside `sg mail -c`**
   (cron cwd is `$HOME`; `PYTHONPATH=.` alone → `No module named 'backend'`).
-- `*/15` `assessment_supervisor --max 8` (`flock -n logs/assess_supervisor.lock`, own fcntl lock too) — SELF-TERMINATING
-  Sutherland/Mac lane driver (`backend/tools/assessment_supervisor.py`): auto-STARTS the Mac CDP tunnel (socat →
-  `tailscale --socket=ts-egress/0 nc 100.86.135.112 9223` on `:9222`) ONLY when a FRESH Sutherland invite exists
-  (not CRM-done/skipped), drives it, and auto-STOPS (tears the tunnel down) when the queue drains OR the Mac is offline —
-  NEVER spins. A stuck (0-item, usually already-`evaluating`/submitted) invite is skipped ONLY after 3 cumulative low-yield
-  attempts (`data/sutherland_attempts.json`); a `proctor_camera` wall (Mac OBS down) is never skipped. Replaces the scratchpad
-  `mac_workers.sh` hack. The Mac must be AWAKE (no server-side lever — Chrome denies a CDP wake-lock; use caffeinate/pmset or
-  Remote-Login-then-caffeinate on the Mac). Health group «Ассессменты» (`health.assessment_lanes`) shows futile churn /
-  offline-Mac-while-running (a `down` row → `health --alert`) / idle-tunnel-still-up.
+- `*/15` `assessment_supervisor --max 8` (`flock -n logs/assess_supervisor.lock`, own fcntl lock too; **`MAC_SSH=macalan` in
+  the cron env**) — SELF-TERMINATING Sutherland/Mac lane driver (`backend/tools/assessment_supervisor.py`): auto-STARTS the Mac
+  CDP tunnel (socat → `tailscale --socket=ts-egress/0 nc 100.86.135.112 9223` on `:9222`; the LIVE tunnel is currently served
+  by slot 1 — any live egress slot routes to the Mac tailnet IP) ONLY when a FRESH Sutherland invite exists (not
+  CRM-done/skipped), drives it, and auto-STOPS (tears the tunnel down) when the queue drains OR the Mac is offline — NEVER
+  spins. **FRESH-NAV per invite (2026-09-18): the supervisor NO LONGER passes `HARVEST_CDP_RESUME=1`** — it drains a QUEUE of
+  DIFFERENT invites through ONE reused Mac tab, so each drive must navigate to its OWN link; RESUME=1 skipped the nav whenever
+  the tab was on an assessment URL, so every invite re-read the ONE parked page (a mass false «low-yield» that skipped LIVE
+  invites — e.g. it accrued the sole live `ian.coleman5067` to 2/3). `ShlAdapter.enter` now HARD-RELOADS (about:blank → link)
+  so the fresh autologin token is processed even on a same-origin parked tab (talentcentral is a hash-router: `goto()` of a
+  `#/link/<token>` URL on a same-origin tab is a same-document nav that WON'T reload). **SKIP policy — a skip means the invite
+  is genuinely dead, never an infra miss:** camera wall (`proctor_camera`/`wci200`, Mac OBS not feeding) → NEVER skipped;
+  Mac/CDP hiccup / partial hang (`transient`) → NEVER skipped; `link-expired` (dead SHL token) → skipped in ONE pass; only
+  reached-but-empty (0 items, `evaluating`/submitted) accrues → skipped after 3 low-yield attempts
+  (`data/sutherland_attempts.json`). **`_keep_mac_awake()` runs `caffeinate -dimsu -t 1800` on the Mac via `MAC_SSH`** (SSH
+  target, `shlex`-split; `macalan` = ssh-config host `100.86.135.112` user `alanbaimukhan` key `id_ed25519` ProxyCommand
+  `tailscale --socket=ts-egress/0 nc %h %p`, which self-heals per-call — no long-lived tunnel). Mac keeps awake ONLY while a
+  drive window is open (30-min bounded, self-releases), then sleeps. Remote Login already ON (macOS 26; `sw_vers`); if it ever
+  refuses, `sudo systemsetup -setremotelogin on` on the Mac. **NOTE (2026-09-18): SHL autologin links EXPIRE within ~a day —
+  only the NEWEST fresh invite is usually live (31/32 fresh were link-expired); invites MUST be driven promptly while live, so
+  the Mac must stay reachable+awake (OBS + caffeinate) and the event-driven `mail_indexer` trigger matters.** Health group
+  «Ассессменты» (`health.assessment_lanes`) shows futile churn / offline-Mac-while-running (a `down` row → `health --alert`) /
+  idle-tunnel-still-up.
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals

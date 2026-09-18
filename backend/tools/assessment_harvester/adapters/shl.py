@@ -172,9 +172,28 @@ class ShlAdapter(Adapter):
         return ticked
 
     async def enter(self, page, url: str) -> None:
+        # HARD-RELOAD before the autologin link. talentcentral is a hash-router: goto()ing a
+        # `#/link/<token>` URL while the tab is ALREADY on a same-origin talentcentral route (a parked
+        # `#/link-expired` / an earlier invite's page — the norm when the supervisor reuses ONE Mac tab)
+        # is a SAME-DOCUMENT navigation. Playwright just updates the hash WITHOUT reloading, so the SPA
+        # never re-runs autologin and the stale page sticks (every invite then reads the same page → the
+        # supervisor's mass false "low-yield"). A blank load first forces a full document boot so the
+        # fresh token IS processed. Fail-open on a flaky blank nav.
+        try:
+            await page.goto("about:blank", wait_until="domcontentloaded", timeout=20000)
+        except Exception:
+            pass
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         # No timing/speed check on the SHL intro — load fast. FAST (default) trims the settle wait.
         await page.wait_for_timeout(1200 if os.getenv("HARVEST_FAST", "1") != "0" else 5000)
+        # SHL invalidates the emailed autologin token after ~a day (or once its assessment session has
+        # gone terminal): the SPA redirects to `#/link-expired`. Emit a stable marker so the supervisor
+        # retires a DEAD invite in one pass instead of re-driving it every run.
+        try:
+            if "link-expired" in (page.url or "").lower():
+                logger.info("shl: invite LINK-EXPIRED (redirected to link-expired) — dead token")
+        except Exception:
+            pass
         for _ in range(3):
             if await self._accept_cookies(page):
                 await page.wait_for_timeout(500)

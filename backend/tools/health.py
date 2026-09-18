@@ -1145,6 +1145,61 @@ def incidents() -> list[dict]:
 # ---- gather (parallel, bounded) ------------------------------------------------------------------
 # (section key, section title, [(probe label, probe fn), ...]) — every probe runs in its own thread
 # under the shared deadline; a probe may return one row (dict) or many (list).
+def assessment_lanes() -> list[dict]:
+    """Assessment AUTO-PASS lanes: how many tests are passed, which lanes run, and — the case the owner
+    flagged — whether the Mac/Sutherland lane is spinning FUTILELY (running while the Mac is asleep, or
+    churning on already-submitted/«evaluating» invites with 0 completions). A truly-idle lane with the
+    Mac tunnel still up is «лишний расход». `down` rows alert via `health --alert`; churn is a `warn`."""
+    rows: list[dict] = []
+    now = time.time()
+    # «пройдено» truth + freshness (the done-set; a completion bumps its mtime)
+    done_path = os.path.join(_ROOT, "backend", "data", "shl_assess_done.json")
+    done_n, done_age = 0, None
+    try:
+        with open(done_path) as f:
+            done_n = len(json.load(f) or [])
+        done_age = now - os.path.getmtime(done_path)
+    except Exception:
+        pass
+    rows.append(_row("Сдано тестов (всего)", "ok" if done_n else "info",
+                     f"{done_n} · последнее «пройдено» "
+                     + (_age_str(done_age) if done_age is not None else "?")))
+    # running lanes + Mac tunnel reachability
+    n_mac = _pgrep("mac_workers.sh") + _pgrep("harvest_runner --platform shl_sutherland")
+    tunnel_up = _pgrep("socat TCP-LISTEN:9222") > 0
+    mac_online = False
+    if tunnel_up:
+        try:
+            mac_online = "Browser" in _run(
+                ["curl", "-s", "--max-time", "5", "http://127.0.0.1:9222/json/version"], timeout=7)
+        except Exception:
+            mac_online = False
+    stale = done_age is not None and done_age > 1800   # >30 min with no new completion
+    if n_mac:                                            # a Mac/Sutherland lane is running
+        if not mac_online:
+            rows.append(_row("Лэйн Mac/Sutherland", "down",
+                             "лэйн запущен, но Mac НЕ отвечает (спит/офлайн) — прогон впустую",
+                             "разбуди Mac (caffeinate/Energy) или останови лэйн"))
+        elif stale:
+            rows.append(_row("Лэйн Mac/Sutherland", "warn",
+                             f"крутится, но 0 завершений {_age_str(done_age)} — вероятно очередь в "
+                             "«evaluating» (холостой прогон)",
+                             "лэйн гоняет уже-сданные тесты; авто-стоп должен его погасить"))
+        else:
+            rows.append(_row("Лэйн Mac/Sutherland", "ok",
+                             f"крутится, Mac онлайн, «пройдено» {_age_str(done_age)}"))
+    else:                                                # not running → the tunnel should be down too
+        rows.append(_row("Лэйн Mac/Sutherland",
+                         "warn" if tunnel_up else "ok",
+                         ("лэйн не запущен, но туннель к Mac поднят — лишний расход" if tunnel_up
+                          else "не запущен (нет свежих Sutherland-инвайтов) — норм"),
+                         "туннель должен подниматься только под задачу"))
+    # server-side lanes (no Mac needed)
+    rows.append(_row("Демон Maximus SHL-OPQ", "ok" if _pgrep("shl_assess_runner") else "info",
+                     "работает" if _pgrep("shl_assess_runner") else "не запущен (поднимается по инвайту)"))
+    return rows
+
+
 _GROUPS = [
     ("pm2", "Сервисы (pm2)", [("pm2", pm2_services)]),
     ("crons", "Кроны", [("crontab", cron_lanes)]),
@@ -1156,6 +1211,7 @@ _GROUPS = [
                                      ("Postfix/Dovecot", mail_daemons), ("DNS takhet.com", dns_takhet),
                                      ("Дисплей :98", display_stack), ("Ко-пилот :8102", copilot),
                                      ("nginx", nginx)]),
+    ("assessments", "Ассессменты (авто-проход)", [("Лэйны ассессментов", assessment_lanes)]),
     ("system", "Система", [("Система", system)]),
     ("incidents", "Инциденты и хрупкие места", [("Инциденты", incidents)]),
 ]

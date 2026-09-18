@@ -292,6 +292,27 @@ class HarverAdapter(Adapter):
         real "noise" is the cookie banner; dismiss THAT and return False so control passes to advance(),
         which ticks the consent boxes BEFORE clicking Continue."""
         await self._dismiss_cookie(page)
+        # Camera-test "Image capture failed / reload your browser" is a TRANSIENT device read glitch —
+        # it appears when several parallel lanes grab a still photo off the SHARED /dev/video0 at the
+        # same instant (the page itself tells you to reload). Reload to re-run the capture instead of
+        # letting core stall it as `stuck` (which would burn a perfectly good invite). Bounded so a
+        # genuinely-dead camera still surfaces after a few tries.
+        try:
+            body = (await page.inner_text("body", timeout=1500)).lower()
+        except Exception:
+            body = ""
+        if ("image capture failed" in body or "reload your browser" in body
+                or "couldn't capture" in body or "unable to capture" in body):
+            n = getattr(self, "_cam_retry", 0)
+            if n < 4:
+                self._cam_retry = n + 1
+                logger.info("[harver] camera image-capture failed — reloading to retry (%d/4)", n + 1)
+                try:
+                    await page.reload(wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(2500)
+                except Exception:
+                    pass
+                return True   # handled → core re-reads the reloaded camera test
         return False
 
     # ---- Situational-Judgement (rate-each) module ----

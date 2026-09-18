@@ -189,9 +189,13 @@ def _drive(mbx: str, url: str) -> tuple[bool, int, bool, bool, bool]:
     expired = ("link-expired" in low) or ("link expired" in low)
     m = re.search(r"status\s*:\s*(\S+)", low)
     status = m.group(1) if m else ""
-    # TRANSIENT = reached nothing for an INFRA reason (CDP/Mac/proxy hiccup or a partial hang), not
-    # because the invite is stuck/submitted → must NOT accrue toward the skip cap.
-    transient = (status in {"error", "partial_timeout"}) or bool(_TRANSIENT_RE.search(out))
+    # TRANSIENT = reached nothing for an INFRA reason (CDP/Mac/proxy hiccup or an EARLY hang) — must NOT
+    # accrue toward the skip cap. A `partial_timeout` that already banked items (>=3) is NOT an infra
+    # miss — it's a long-battery partial (the AMPI battery outlasts the harvester's session cap; the
+    # assessment RESUMES server-side next run) → let it fall to the `partial` branch so it's logged
+    # accurately as progress, not a "hiccup". Both paths retry; neither skips.
+    transient = ((status == "error") or bool(_TRANSIENT_RE.search(out))
+                 or (status == "partial_timeout" and items < 3))
     return completed, items, camera, transient, expired
 
 
@@ -255,9 +259,11 @@ def run(dry: bool, max_jobs: int) -> None:
             else:
                 _log(f"low-yield {mbx} (attempt {attempts[mbx]}/{_SKIP_AFTER})")
         else:
+            # made real progress (banked items) but didn't finish — a long battery that outran the
+            # session cap RESUMES server-side next run; clear any accrued low-yield attempts.
             partial += 1
             attempts.pop(mbx, None)
-            _log(f"partial {mbx} ({items} items) — retry next run")
+            _log(f"partial {mbx} ({items} items) — retry/resume next run")
         _save_attempts(attempts)
     if not _fresh():
         _tunnel_down()

@@ -142,6 +142,11 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 /* interview-priority card (free pool, split IT/non-IT, sorted by salary/urgency) */
 .u-pri-top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 2px}
 .u-pri-top h3{margin:0}
+/* right-anchor the direction-legend ⓘ popover when the ⓘ sits at the far right of a card
+   header (the delegation card), else the shared left-anchored `.ph-pop` overflows off the
+   right screen edge. Desktop-only (min-width:761px) so it never overrides the mobile
+   viewport-pinned `.ph-pop` from mailcrm_ui._CSS (which handles the phone case at ≤760px). */
+@media(min-width:761px){.ph-pop-right{left:auto;right:0}}
 .u-pri-sort{display:inline-flex;gap:2px;padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full)}
 .u-pri-sortb{display:inline-flex;align-items:center;height:32px;padding:0 13px;border-radius:var(--r-full);font-size:12.5px;font-weight:600;color:var(--ink-mute);text-decoration:none;white-space:nowrap}
 .u-pri-sortb:hover{color:var(--ink-soft);text-decoration:none}
@@ -213,12 +218,22 @@ def _role_tags(roles) -> str:
     return "".join(_role_tag(r) for r in _ROLE_ORDER if r in have)
 
 
-def _role_checks(roles, name: str = "role") -> str:
+def _role_checks(roles, name: str = "role", lock_admin: bool = False) -> str:
     """The admin/manager/interviewer checkbox trio, pre-ticked from `roles` — the multi-role
-    editor reused by the add form, the inline list editor, and the edit page."""
+    editor reused by the add form, the inline list editor, and the edit page.
+
+    `lock_admin=True` (used on the ACTING admin's OWN card) renders the «админ» box checked +
+    DISABLED and submits it via a hidden field, so the admin can still toggle their other roles
+    but can never strip their own admin role (a self-lockout the server also refuses)."""
     have = set(roles or [])
     out = []
     for val, lbl in _ROLE_CHECK_LABELS:
+        if lock_admin and val == "admin":
+            # a disabled checkbox is NOT posted → back it with a hidden field so «admin» persists
+            out.append(f"<label class='u-rolechk' title='Свою роль «админ» снять нельзя'>"
+                       f"<input type='checkbox' checked disabled> {escape(lbl)}</label>"
+                       f"<input type='hidden' name='{name}' value='admin'>")
+            continue
         chk = " checked" if val in have else ""
         out.append(f"<label class='u-rolechk'><input type='checkbox' name='{name}' "
                    f"value='{val}'{chk}> {escape(lbl)}</label>")
@@ -379,9 +394,12 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
         "<input name='mailbox' list='u-pool-emails' required autocomplete='off' "
         "placeholder='e-mail персоны' aria-label='E-mail интервью'>"
         f"<datalist id='u-pool-emails'>{''.join(dl_opts)}</datalist>"
-        f"<select name='manager_id' aria-label='Управляющий'>{manager_opts}</select>"
+        f"<select name='manager_id' aria-label='Управляющий' required>{manager_opts}</select>"
         "<button class='hbtn' type='submit'>Отправить</button></form></div>")
-    legend = iv_pool.direction_legend_html("Что означает IT / Не-IT / Другое")
+    # the ⓘ sits at the far right of the card header (justify-content:space-between), so its
+    # popover must be RIGHT-anchored — else the left-anchored default overflows off the right
+    # screen edge (clipped by overflow-x:hidden) at desktop widths. `.ph-pop-right` is in _CSS.
+    legend = iv_pool.direction_legend_html("Что означает IT / Не-IT / Другое", align="right")
     return (
         "<div class='u-card'>"
         f"<div class='u-pri-top'><h3>Делегирование интервью</h3>{legend}</div>"
@@ -518,7 +536,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
             "<details class='u-rolebox'><summary>Роли и доступ</summary>"
             f"<form method='post' action='/users/{rid}/roles' class='u-roleedit'>"
             "<input type='hidden' name='from_list' value='1'>"
-            f"<div class='u-rolechecks'>{_role_checks(roles)}</div>"
+            f"<div class='u-rolechecks'>{_role_checks(roles, lock_admin=(rid == me_id))}</div>"
             "<button class='hbtn' type='submit'>Сохранить роли</button></form>"
             f"{del_form}</details>")
         cards.append(
@@ -655,7 +673,7 @@ def edit_page(u: dict, availability: list[dict], notice=None, interview_count: i
     # the union; persisted immediately by /users/{rid}/roles.
     role_form = (
         f"<form class='u-roleform' method='post' action='/users/{rid}/roles'>"
-        f"<div class='u-rolechecks'>{_role_checks(roles)}</div>"
+        f"<div class='u-rolechecks'>{_role_checks(roles, lock_admin=is_self)}</div>"
         "<button class='hbtn' type='submit'>Сохранить роли</button></form>")
 
     # manager assignment — only meaningful when they hold the interviewer role. Which

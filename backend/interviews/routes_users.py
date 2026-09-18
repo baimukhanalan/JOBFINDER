@@ -171,7 +171,17 @@ async def users_roles(rid: int, request: Request,
     if not u:
         return HTMLResponse("<h1>404</h1>", status_code=404)
     form = await request.form()
+    from_list = (form.get("from_list") or "") == "1"
     roles = db.normalize_roles([r for r in form.getlist("role") if r in _ROLES])
+    # SELF-LOCKOUT GUARD (mirrors the delete self-guard): the acting admin must NOT drop their
+    # OWN «admin» role — they would instantly lose access to /users and lock themselves out.
+    # The inline editor renders the admin box locked (checked+disabled + a hidden field), but a
+    # crafted POST could still omit it, so refuse it server-side too. Since this route is
+    # admin-only, an admin demoting ANOTHER account always leaves at least themselves as admin —
+    # so this self-guard alone guarantees the last admin can never be removed here.
+    if rid == me_id and db.has_role(u, "admin") and "admin" not in roles:
+        notice = ("err", "Нельзя снять роль «админ» с самого себя.")
+        return _render_list(notice, me_id=me_id) if from_list else _render_edit(rid, notice, me_id=me_id)
     db.set_roles(rid, roles)
     # someone who no longer holds the interviewer role can't be a subordinate — clear a stale
     # manager link (an admin/manager-only user is nobody's report)
@@ -182,7 +192,7 @@ async def users_roles(rid: int, request: Request,
             pass
     lbls = ", ".join(_ROLE_LBL.get(r, r) for r in roles)
     notice = ("ok", f"Роли обновлены: {lbls}.")
-    if (form.get("from_list") or "") == "1":
+    if from_list:
         return _render_list(notice, me_id=me_id)
     return _render_edit(rid, notice, me_id=me_id)
 
@@ -262,16 +272,25 @@ async def users_allocate_split(request: Request,
 
 
 @router.post("/users/allocate/send", response_class=HTMLResponse)
-def users_allocate_send(mailbox: str = Form(...), manager_id: int = Form(...),
+def users_allocate_send(mailbox: str = Form(""), manager_id: str = Form(""),
                         me: dict = Depends(auth.current_responsible)):
-    """Send ONE specific pool interview (a persona mailbox) to a specific manager."""
+    """Send ONE specific pool interview (a persona mailbox) to a specific manager. `manager_id`
+    is read as a string + int-validated in-body, so a blank pick (the select's empty first
+    option, or a crafted POST) returns the friendly notice instead of a raw 422 JSON body."""
     me_id = (me or {}).get("id")
-    m = db.get_responsible(manager_id)
+    mailbox = (mailbox or "").strip()
+    if not mailbox:
+        return _render_list(("err", "Укажите интервью (e-mail персоны)."), me_id=me_id)
+    try:
+        mid = int((manager_id or "").strip())
+    except (ValueError, TypeError):
+        return _render_list(("err", "Выберите управляющего."), me_id=me_id)
+    m = db.get_responsible(mid)
     if not m or not db.has_role(m, "manager"):
         return _render_list(("err", "Выберите управляющего."), me_id=me_id)
     ok = False
     try:
-        ok = pool.allocate_specific(mailbox.strip(), manager_id)
+        ok = pool.allocate_specific(mailbox, mid)
     except Exception as e:
         return _render_list(("err", f"Не удалось выделить: {escape(str(e))}"), me_id=me_id)
     if not ok:

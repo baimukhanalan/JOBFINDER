@@ -49,6 +49,19 @@ def _reply_links(msg: dict) -> list[str]:
     return out
 
 
+def _not_found() -> HTMLResponse:
+    """A small styled cabinet-shell 404 (reuses cabinet_ui._doc) instead of a bare `<h1>404</h1>`.
+    Reachable by a legit interviewer via a stale/reassigned link (a thread they no longer own),
+    so it must look like the rest of the cabinet and offer a way back to their inbox."""
+    body = (
+        '<div style="max-width:520px;margin:56px auto 0;text-align:center">'
+        '<div style="font-size:44px;font-weight:800;letter-spacing:-.02em;color:var(--ink)">404</div>'
+        '<p style="color:var(--ink-soft);font-size:14px;line-height:1.55;margin:8px 0 20px">'
+        'Переписка недоступна — возможно, собеседование переназначено или ссылка устарела.</p>'
+        '<a class="hbtn" href="/cabinet/inbox">← К списку</a></div>')
+    return HTMLResponse(cabinet_ui._doc(body, "Не найдено"), status_code=404)
+
+
 @router.get("", response_class=HTMLResponse)
 def dashboard(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     interviews = db.interviews_for_responsible(responsible["id"], upcoming_only=True)
@@ -150,12 +163,12 @@ def thread(hash: str, responsible: dict = Depends(auth.current_responsible)):
     except Exception as e:
         log.warning("get_row failed: %s", e)
     if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
-        return HTMLResponse("<h1>404</h1>", status_code=404)
+        return _not_found()
     # READ-ONLY: mark=False so opening a thread never flips the persona's messages to
     # seen (which would also move them in the OPERATOR's inbox).
     thread = mailcrm.get_thread(hash, mark=False)
     if not thread:
-        return HTMLResponse("<h1>404</h1>", status_code=404)
+        return _not_found()
     return HTMLResponse(cabinet_ui.thread_page(responsible, thread, hash=hash))
 
 
@@ -172,7 +185,7 @@ def reply(hash: str = Form(...), body: str = Form(...),
     except Exception as e:
         log.warning("reply get_row failed: %s", e)
     if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
-        return HTMLResponse("<h1>404</h1>", status_code=404)
+        return _not_found()
 
     thread = mailcrm.get_thread(hash, mark=False) or {}
     msgs = thread.get("messages") or []

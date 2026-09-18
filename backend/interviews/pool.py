@@ -126,14 +126,22 @@ def direction_legend() -> str:
     )
 
 
-def direction_legend_html(aria_label: str = "Что означает направление") -> str:
+def direction_legend_html(aria_label: str = "Что означает направление",
+                          align: str = "left") -> str:
     """Ready-to-embed ⓘ popover for the legend text, reusing the same `.ph-info-d`/`.ph-pop`
     markup+CSS as `mailcrm_ui._page_head`'s `info=` popover (that CSS ships globally on every
     page via `mailcrm_ui._CSS`, so this renders correctly wherever it's dropped — no extra
     styling needed). Use this directly next to a «направление» select/filter or an IT/Не-IT/
-    Другое cross-tab that ISN'T rendered through `_page_head`."""
+    Другое cross-tab that ISN'T rendered through `_page_head`.
+
+    `align='right'` adds the `.ph-pop-right` modifier so the popover is anchored to the ⓘ's
+    RIGHT edge (`left:auto;right:0`) instead of its left — for an ⓘ that sits near the right
+    screen edge (e.g. a card-header at `justify-content:space-between`), where the default
+    left-anchored popover would overflow off-screen. The page carrying such an ⓘ must define
+    `.ph-pop-right` (the /users page does, in `users_ui._CSS`)."""
+    pop_cls = "ph-pop ph-pop-right" if align == "right" else "ph-pop"
     return (f'<details class="ph-info-d dir-legend"><summary aria-label="{escape(aria_label, quote=True)}">ⓘ</summary>'
-            f'<div class="ph-pop">{escape(direction_legend())}</div></details>')
+            f'<div class="{pop_cls}">{escape(direction_legend())}</div></details>')
 
 
 def _registry() -> dict:

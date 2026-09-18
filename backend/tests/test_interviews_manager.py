@@ -441,6 +441,84 @@ def test_iv_manager_portal_two_sections():
     assert "Назначено команде" in r.text               # subordinate assignment is visible too
 
 
+# ---- role editor: self-lockout guard (audit finding 3) ---------------------------
+def test_iv_role_self_demote_admin_refused():
+    # the acting admin must NOT be able to strip their OWN «admin» role (self-lockout). A
+    # crafted POST that omits `admin` (the inline card renders it locked, but the server is the
+    # real gate) is refused with a friendly notice and the account stays admin.
+    _chain()
+    _login("test_iv_m_admin")
+    me = db.get_responsible_by_login("test_iv_m_admin")
+    r = client.post(f"/users/{me['id']}/roles",
+                    data={"role": ["manager"], "from_list": "1"}, follow_redirects=False)
+    assert r.status_code == 200
+    assert "самого себя" in r.text                                  # friendly refusal shown
+    assert db.has_role(db.get_responsible(me["id"]), "admin")       # unchanged, still admin
+    # the admin CAN still ADD roles to himself (admin retained) — the guard only blocks dropping it
+    r = client.post(f"/users/{me['id']}/roles",
+                    data={"role": ["admin", "manager"], "from_list": "1"}, follow_redirects=False)
+    assert r.status_code == 200
+    u = db.get_responsible(me["id"])
+    assert db.has_role(u, "admin") and db.has_role(u, "manager")
+
+
+def test_iv_role_demote_other_admin_allowed():
+    # control: the self-guard is SELF-only — an admin may still demote a DIFFERENT account.
+    ids = _chain()
+    other = db.add_responsible("test_iv_m_adm2", auth.hash_password(_PW), "Adm2", role="admin")
+    _login("test_iv_m_admin")
+    r = client.post(f"/users/{other}/roles",
+                    data={"role": ["manager"], "from_list": "1"}, follow_redirects=False)
+    assert r.status_code == 200
+    u = db.get_responsible(other)
+    assert not db.has_role(u, "admin") and db.has_role(u, "manager")
+
+
+# ---- allocate-send: blank manager is friendly, not a raw 422 (audit finding 1) ----
+def test_iv_allocate_send_blank_manager_is_friendly():
+    _chain()
+    _login("test_iv_m_admin")
+    # a blank manager pick (the select's empty first option) must yield the friendly notice
+    r = client.post("/users/allocate/send",
+                    data={"mailbox": "test_iv_x@takhet.com", "manager_id": ""},
+                    follow_redirects=False)
+    assert r.status_code == 200 and "Выберите управляющего" in r.text
+    # a non-numeric manager_id is likewise friendly (int-validated in-body), never a 422
+    r = client.post("/users/allocate/send",
+                    data={"mailbox": "test_iv_x@takhet.com", "manager_id": "abc"},
+                    follow_redirects=False)
+    assert r.status_code == 200 and "Выберите управляющего" in r.text
+    # a blank mailbox is friendly too
+    r = client.post("/users/allocate/send",
+                    data={"mailbox": "", "manager_id": "1"}, follow_redirects=False)
+    assert r.status_code == 200 and "Укажите интервью" in r.text
+
+
+# ---- distribute route wired to the portal button (audit finding 5) ---------------
+def test_iv_manage_distribute_round_robin():
+    ids = _chain()
+    i1 = db.allocate_interview("test_iv_m_rr1@x.com", ids["mgrA"], subject="rr1")
+    i2 = db.allocate_interview("test_iv_m_rr2@x.com", ids["mgrA"], subject="rr2")
+    _login("test_iv_m_A")
+    r = client.post("/manage/distribute", data={}, follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    got = [db.interview_by_id(i)["responsible_id"] for i in (i1, i2)]
+    # team = {manager A, active subordinate S}; 2 interviews round-robin one to each, none left
+    assert set(got) == {ids["mgrA"], ids["subS"]}
+    assert all(db.interview_by_id(i)["status"] == "assigned" for i in (i1, i2))
+
+
+def test_iv_manage_distribute_button_rendered():
+    # the previously-orphan POST /manage/distribute now has a UI trigger in the portal.
+    ids = _chain()
+    _login("test_iv_m_A")
+    r = client.get("/manage", follow_redirects=False)
+    assert r.status_code == 200
+    assert 'action="/manage/distribute"' in r.text
+    assert "Распределить всё поровну" in r.text
+
+
 def test_iv_delete_protects_real_interviewers_and_self():
     from backend.interviews import routes_users
     assert routes_users._PROTECTED_LOGINS == {"1", "2", "3"}

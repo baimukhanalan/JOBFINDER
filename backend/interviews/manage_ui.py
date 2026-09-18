@@ -352,7 +352,8 @@ def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: 
     dist = (
         '<div class="mg-card"><h3>Раздать команде</h3>'
         '<p class="mg-hint">Выдать N собесов из пула конкретному человеку (себе или сотруднику), '
-        'по текущему фильтру пола/направления ниже.</p>'
+        'по текущему фильтру пола/направления ниже. Либо распределить весь пул поровну между '
+        'вами и всеми сотрудниками одной кнопкой.</p>'
         '<form method="post" action="/manage/distribute_to" class="mg-dist">'
         f'{as_field}'
         f'<input type="hidden" name="gender" value="{escape(gender or "", quote=True)}">'
@@ -360,6 +361,13 @@ def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: 
         f'<select name="member_id" aria-label="Кому">{member_opts}</select>'
         '<input type="number" name="count" min="1" step="1" value="1" inputmode="numeric" aria-label="Сколько">'
         '<button class="primary btn" type="submit">Раздать</button>'
+        '</form>'
+        # one-tap round-robin of the WHOLE pool across the manager + his active team (no time set,
+        # ignores the gender/direction filter) → POST /manage/distribute (was unwired before).
+        '<form method="post" action="/manage/distribute" class="mg-dist" style="margin-top:10px" '
+        'onsubmit="return confirm(\'Распределить весь пул поровну между вами и сотрудниками?\');">'
+        f'{as_field}'
+        '<button class="hbtn btn" type="submit">Распределить всё поровну</button>'
         '</form></div>')
 
     # SECTION A — managed pool (to distribute), filtered

@@ -364,17 +364,21 @@ def unmark_assessment_done(name: str) -> None:
     _reclassify_assessment(email, to_done=False)
 
 
-# «Пропущенные» — the sibling of assessment_done for tests we are NOT going to complete (structurally
-# un-passable by automation: AMCAT camera-proctor, Harver, SkillCheck) or that have simply gone stale.
-# Same persisted-set + immediate-retag mechanism as done, so a skipped test LEAVES the active «Действие»
-# list into a separate «Пропущен» bucket and stays out across a re-index. Auto-routed by
-# auto_skip_stale_assessments; reversible by unmark_assessment_skipped.
+# «Пропущенные» — the sibling of assessment_done for tests that have NO automated pass path at all, or
+# that have simply gone stale. Same persisted-set + immediate-retag mechanism as done, so a skipped test
+# LEAVES the active «Действие» list into a separate «Пропущен» bucket and stays out across a re-index.
+# Auto-routed by auto_skip_stale_assessments; reversible by unmark_assessment_skipped.
+#
+# WHAT HAS AN AUTO-PASS (never label these «непроходимые» / never auto-skip): Maximus SHL-OPQ (server
+# etalon), Hallo.ai, Harver/TTEC (commit 8f7ce51, full end-to-end), Sutherland→AMCAT (Mac+OBS camera
+# lane), and any banked-replay MCQ. WHAT GENUINELY HAS NO AUTO-LANE (the only thing we skip): Conduent
+# SkillCheck, and pure cognitive/knowledge items with no bank entry.
 _ASSESS_SKIPPED_PATH = Path(__file__).resolve().parent.parent / "data" / "shl_assess_skipped.json"
 _assess_skipped_cache = {"mtime": None, "set": frozenset()}
-# Senders whose post-apply test is un-passable by automation (a human / a physical webcam is required):
-# talentcentral@shl.com = TP-AMCAT + Sutherland-AMCAT (WCI200 camera + cognitive), ttec = Harver,
-# conduent = SkillCheck. Maximus (maximus.com) SHL-OPQ and Hallo (hallo.ai) are PASSABLE — never skipped.
-_UNPASSABLE_TEST_SENDERS = ("%ttec%", "%conduent%")  # shl.com (Sutherland) is now passable via the Mac+OBS lane — do NOT auto-skip it
+# Senders whose post-apply test has NO automated pass path (skip when stale). ttec (Harver) was REMOVED
+# 2026-09-18 — Harver auto-passes now (8f7ce51), so it must NOT be auto-skipped. talentcentral@shl.com
+# (Sutherland→AMCAT) is passable via the Mac+OBS lane; Maximus + Hallo are passable — none are skipped.
+_UNPASSABLE_TEST_SENDERS = ("%conduent%",)
 
 
 def assessment_skipped_mailboxes() -> frozenset:

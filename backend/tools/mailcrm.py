@@ -40,7 +40,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-09-14-assessment-skipped"
+CLASSIFIER_VERSION = "2026-09-18-notification-demote"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be
@@ -242,6 +242,33 @@ def _is_test_subject(subject: str) -> bool:
     return bool(_TEST_SUBJECT_RE.search(subject or ""))
 
 
+# Non-actionable NOTIFICATIONS that classify() over-catches as `action_needed` but require NO
+# candidate action — demoted to 'other' so «Действие» = genuine pending items only. Scoped
+# TIGHT (2026-09-18): (a) Harver's «Thanks for getting started» WELCOME from harver.com — a
+# start notification with NO assessment link (`journey.harver.com`); the REAL Harver invite is a
+# separate ttec/Taleo email, so demoting the welcome never hides a pending test. (b) pure
+# job-alert senders (careeralerts/jobalerts — recruiter spam, never an action item). Does NOT
+# touch a genuine invite (the link check keeps a linked Harver mail) nor NDA/identity/complete-
+# application asks (different senders/subjects). 266 Harver welcomes + ~26 job-alerts were
+# inflating «Действие».
+_HARVER_WELCOME_RE = re.compile(r"thanks for getting started", re.I)
+_HARVER_LINK_RE = re.compile(r"journey\.harver\.com", re.I)
+_JOBALERT_SENDER_RE = re.compile(r"@(?:careeralerts|jobalerts)\.", re.I)
+
+
+def _is_nonaction_notification(subject: str, body: str, from_email: str) -> bool:
+    """True for a mail that classify() calls action_needed but that needs NO candidate action —
+    a Harver «Thanks for getting started» welcome (no assessment link) or a job-alert sender."""
+    fe = (from_email or "").strip().lower()
+    dom = fe.split("@")[-1] if "@" in fe else fe
+    if dom.endswith("harver.com") and _HARVER_WELCOME_RE.search(subject or "") \
+            and not _HARVER_LINK_RE.search(body or ""):
+        return True
+    if _JOBALERT_SENDER_RE.search(fe):
+        return True
+    return False
+
+
 def assessment_done_mailboxes() -> frozenset:
     try:
         m = _ASSESS_DONE_PATH.stat().st_mtime
@@ -434,13 +461,25 @@ def auto_skip_stale_assessments(days: int = 7) -> int:
     return len(mbxs)
 
 
-def _kind_with_done_override(subject: str, body: str, mailbox: str) -> str:
+def _kind_with_done_override(subject: str, body: str, mailbox: str, from_email: str = "") -> str:
     kind = classify(subject, body)
-    if kind == "action_needed" and _is_test_subject(subject):
-        if mailbox in assessment_skipped_mailboxes():
-            return "assessment_skipped"
+    if kind == "action_needed":
+        # (1) A PASSED persona (done-set): ALL its residual action rows resolve to
+        # assessment_done — INCLUDING the non-test Harver «Thanks for getting started»
+        # notification — so a passed candidate leaves «Действие» entirely (furthest_stage ranks
+        # action_needed ABOVE assessment_done, so ONE stray action row otherwise keeps them
+        # flagged). PASSED WINS over a stale skipped-set membership: the two on-disk sets overlap
+        # heavily (631/748) and the done-set is the truthful "passed" outcome.
         if mailbox in assessment_done_mailboxes():
             return "assessment_done"
+        # (2) A SKIPPED test invite (won't-complete): its TEST row moves to «Пропущен». Kept
+        # TEST-subject-scoped so a genuinely-different pending action for a skipped persona
+        # stays visible.
+        if _is_test_subject(subject) and mailbox in assessment_skipped_mailboxes():
+            return "assessment_skipped"
+        # (3) A non-actionable NOTIFICATION (Harver welcome w/o link, job-alert) → not action.
+        if _is_nonaction_notification(subject, body, from_email):
+            return "other"
     return kind
 
 
@@ -723,7 +762,7 @@ def build_index_row(path: str, seen: int) -> dict | None:
         "path": path, "path_hash": _pid(path),
         "from_name": _display_name(frm), "from_email": from_email,
         "subject": subj, "snippet": snip,
-        "kind": _kind_with_done_override(subj, full_text, box["email"]),
+        "kind": _kind_with_done_override(subj, full_text, box["email"], from_email),
         "thread_key": _norm_subject(subj),
         "has_att": any(_is_attachment(p) for p in msg.walk()),
         "outbound": from_email.lower() == box["email"],

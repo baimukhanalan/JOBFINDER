@@ -312,6 +312,19 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   `mailcrm.mark_assessment_done`/`unmark_...` writes `shl_assess_done.json` + `_reclassify_assessment`). **`mailcrm._TEST_
   SUBJECT_RE` (Python) MUST stay in sync with `mail_db._TEST_SUBJECT_SQL`.** Changing `_kind_with_done_override` needs BOTH
   dash + indexer restart. Routes `POST /mail/assessment/mark`/`/unmark`.
+- **«Действие» (action_needed) accuracy (2026-09-18, `_kind_with_done_override(subj,body,mailbox,from_email)`):** the count was
+  inflated ~2× (779) by NON-actionable mail. THREE rules, applied at classify time so they STICK across a re-index: **(1) a
+  PASSED persona (`shl_assess_done.json`) → ALL its residual `action_needed` rows resolve to `assessment_done`** (not just
+  `_TEST_SUBJECT` ones — a single-app synthetic persona's action rows are all its assessment flow; `furthest_stage` ranks
+  action_needed ABOVE assessment_done so ONE stray row otherwise keeps a passed candidate flagged). **PASSED WINS over the
+  skipped-set** (the two on-disk sets overlap 631/748 — done is the truthful outcome; done is checked FIRST now). **(2)** the
+  SKIPPED override stays `_TEST_SUBJECT`-scoped (a genuinely-different pending action of a skipped persona stays visible).
+  **(3) `_is_nonaction_notification` demotes to `other`: Harver «Thanks for getting started» from `harver.com` with NO
+  `journey.harver.com` link (a start NOTIFICATION — the real invite is a separate ttec/Taleo mail) + pure job-alert senders
+  (`careeralerts`/`jobalerts`).** Do NOT widen scope — genuine NDA/identity/complete-application (iCIMS/TP/oracle/greenhouse)
+  and real test invites (ttec/shl/hallo/maximus) are KEPT (that's the residual ~398). Do NOT auto-skip via the stale
+  `_UNPASSABLE_TEST_SENDERS` (it lists ttec, which is PASSABLE now). One-time reclass = re-run `build_index_row` over the
+  action_needed rows → `mail_db.update_kinds` (`sg mail`); `CLASSIFIER_VERSION` bumped; **779 → 398, +272 → «Тест сдан».**
 - **NEVER `TRUNCATE mail_index` to rebuild:** `mail_indexer.run_once()` only re-indexes CURRENT `candidates()`, so any
   mailbox whose registration was lost loses its rows permanently. Recover by re-registering every takhet.com maildir with
   mail, then re-index.

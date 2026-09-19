@@ -100,15 +100,27 @@ def _build_persona(row: dict) -> dict:
     facts = persona.get("facts") or {}
     name = prof.get("full_name") or prof.get("name") or ""
     parts = name.split()
+    # PHONE — OWNER POLICY CONFLICT. synth_persona mints a reserved-fiction 555-01xx number so a
+    # persona can never be submitted as a real person; Oracle's libphonenumber rejects it ("Enter a
+    # valid number") and blocks Submit. A number can't be both guaranteed-fake AND format-valid, so
+    # this is the owner's call: set ORC_PHONE to a VALID US number the owner controls (a DID / Google
+    # Voice line) to let the lane pass phone validation; unset, the 555-01xx number stays and the
+    # strategy surfaces "Phone Number (invalid)" as a blocker (no ack) rather than silently overriding.
+    phone = os.getenv("ORC_PHONE", "").strip() or (prof.get("phone") or "")
     profile_form = {
         "full_name": name,
         "first_name": prof.get("first_name") or (parts[0] if parts else ""),
         "last_name": prof.get("last_name") or (parts[-1] if len(parts) > 1 else ""),
         "email": prof.get("email") or "",
-        "phone": prof.get("phone") or "",
+        "phone": phone,
         "street_address": prof.get("street_address") or "1200 Market Street",
         "address": prof.get("street_address") or "1200 Market Street",
-        "city": city, "state": full, "zip": zc, "postal_code": zc,
+        # City typeaheads on Oracle CX resolve to a STATE (selecting "Columbus" auto-sets its state
+        # + county), and a bare city name collides across states ("Columbus City, IA" vs Columbus,
+        # OH). Pass the 2-letter code so the fill can pick the option in the RIGHT state, and strip a
+        # spurious trailing " City" the roster picker sometimes appends (→ a wrong-state match).
+        "city": re.sub(r"\s+City$", "", city).strip() or city,
+        "state": full, "state_code": code, "zip": zc, "postal_code": zc,
         "country": "United States",
     }
     return {"profile_form": profile_form, "facts": facts,

@@ -4,6 +4,8 @@ Pure logic only — NO network, NO browser, NO submission. Covers URL routing, t
 ORC_ADVANCE gate (must be OFF by default so a plain fill is side-effect-free), the
 deterministic truthful screener answers, option matching, and strategy registration.
 """
+import asyncio
+
 import pytest
 
 from backend.applier.runner import STRATEGIES, _pick_strategy
@@ -136,6 +138,49 @@ def test_screener_answer_unknown_returns_none():
     # an unrecognized/behavioral question is LEFT for the human, never guessed
     assert OracleORCStrategy._screener_answer("describe a time you resolved a conflict", {}) is None
     assert OracleORCStrategy._screener_answer("what is your favorite color?", {}) is None
+
+
+def test_screener_answer_alorica_questions():
+    # The exact Alorica (Oracle CX) application-question set that was previously left unanswered.
+    A = OracleORCStrategy._screener_answer
+    # "Do you HAVE a High School Diploma, GED or equivalent?" is a Yes/No (not a level tier)
+    assert A("do you have a high school diploma, ged or equivalent?", {}) == ["Yes"]
+    # relatives / other members employed with the company → No (fresh synthetic persona)
+    assert A("for security/confidentiality reasons, do you have other members currently "
+             "employed with the company?", {}) == ["No"]
+    # worked-for / provided-services-before → No
+    assert A("have you ever worked for or provided services for alorica?", {}) == ["No"]
+    # willing to undergo a background check → Yes
+    assert A("upon job offer, are you willing to undergo a background check?", {}) == ["Yes"]
+    # legally authorized to work → Yes
+    assert A("are you legally authorized to work in the country where this job is located?",
+             {}) == ["Yes"]
+
+
+def test_screener_diploma_yesno_does_not_shadow_education_level():
+    # the education-LEVEL tier question must still return a tier (not the diploma Yes/No), since it
+    # is checked first — the diploma rule only catches the "do you HAVE a diploma" Yes/No form.
+    A = OracleORCStrategy._screener_answer
+    assert A("what is your highest level of education?", {})[0] == "Bachelor"
+    assert A("highest level of education achieved?", {"education_level": "Associate"})[0] == "Associate"
+
+
+def test_handle_wotc_optout_off_by_default(monkeypatch):
+    # The WOTC opt-out navigates SAME-TAB to the flaky ADP partner; it is OPT-IN, so with no
+    # ORC_WOTC_OPTOUT it must short-circuit BEFORE any page use (page=None would raise otherwise) —
+    # the WOTC then stays a pending step in `unfilled` (harmless: the phone already blocks Submit).
+    monkeypatch.delenv("ORC_WOTC_OPTOUT", raising=False)
+    strat = OracleORCStrategy()
+    assert asyncio.run(strat._handle_wotc(None, {})) is False
+
+
+def test_handle_wotc_runs_once_per_fill(monkeypatch):
+    # Even OPTED-IN, WOTC runs AT MOST once per fill (it navigates the tab; the form step + the
+    # review step both call it, and a 2nd nav would stall) — the guard short-circuits the 2nd call.
+    monkeypatch.setenv("ORC_WOTC_OPTOUT", "1")
+    strat = OracleORCStrategy()
+    strat._wotc_attempted = True
+    assert asyncio.run(strat._handle_wotc(None, {})) is False
 
 
 def test_opt_match_boundary():

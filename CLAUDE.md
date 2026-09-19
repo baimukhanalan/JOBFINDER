@@ -686,9 +686,37 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   events — `_sign_in` submits several ways (Enter, JS `.click()` on the div then the button) stopping when the URL leaves
   `/login`; the generic submit is SKIPPED on `/login`/captcha/expired. cigna/humana/cvs/concentrix stay `_BLOCKED` (register
   reCAPTCHA needs a solver key + US residential IP). Tests: `test_workday.py`.
-- **Oracle ORC / Alorica** (`strategies/oracle_orc.py`, driver `tools/orc_recon.py`, gated `ORC_ADVANCE`) — REACHABLE but NOT
-  yet reaching an ack (NOT cron-wired). Redwood JET single-page; submit returns "15 issues" (fill doesn't commit). Blockers:
-  the 555-01xx phone fails Oracle's libphonenumber (OWNER POLICY) + an unbuilt WOTC "Tax Credit Assessment". Higher-value next lane.
+- **Oracle ORC / Alorica** (`strategies/oracle_orc.py`, driver `tools/orc_recon.py`, cron `mass_hiring_apply_orc_cron.py`,
+  gated `ORC_ADVANCE`) — now REACHES the full Redwood form + Submit (at_submit=True); **live-proven Alorica job 153: 15 submit
+  issues → 4.** Correctly fills Title, all 8 Yes/No screeners, EEO decline (Veteran="Declines to Self-Identify"), name/address,
+  and the address cascade (City=Columbus, State=OH, County=Delaware — consistent). Two residuals remain: **(1) the reserved-
+  fiction phone — the HARD OWNER-POLICY blocker (no ack without a valid number, see ORC_PHONE below); (2) Postal Code — a CX
+  postal-typeahead SCOPE quirk: the persona ZIP (43215/Franklin) isn't offered once the City auto-cascades a different-county
+  default (Columbus→Delaware), and a prefix retry (`_pick_combobox shorten`) didn't surface options either → needs more live
+  iteration on that one widget (a synthetic persona only needs any valid local ZIP).** WOTC is auto-opt-outable (opt-in flag, no
+  SSN). Flow:
+  job page → Apply → guest EMAIL/AUTH step → **Next** → the full Redwood/Knockout SINGLE-PAGE form. **The auth step was the
+  actual "15 issues" root cause** — the earlier build never got past it, so the form never rendered. **NOT classic JET `oj-*`:
+  radios are `<button role=radio class=cx-select-pill>`, selects are `<input role=combobox aria-haspopup=grid>`.** Auth step =
+  email + a Terms AGREEMENT DIALOG whose country links are info-only `target=_blank`; acceptance is the **"Agree"** button
+  (`_tick_terms` clicks `#legal-disclaimer-link`→`Agree`, NEVER a country link) — plus a cookie-consent modal (**Accept/Decline**,
+  now dismissed by `_dismiss_cookie_banner`) and the "Are You Still With Us?" idle modal. `_advance_wizard` completes the auth
+  step, `_wait_for_form_render` polls for the form widgets, then `_fill_current_step` fills it. Form: Title radio, phone, address
+  comboboxes (Country→City/State/Postal/County cascade), 7 Yes/No screener radios (diploma/GED→Yes · customer-svc→Yes ·
+  background-check→Yes · relatives-employed→No · worked-for-Alorica→No · 18→Yes · authorized→Yes; `_screener_answer`),
+  Veteran/Disability EEO decline, and a **WOTC "Take Tax Credit Assessment"** that SAME-TAB-navigates to the ADP
+  **jobcredits.com** partner survey → `_handle_wotc` clicks **Opt Out** (`#OptOutVisibleLink`→`#OptOutConfirmYesButton`→the J-1
+  visa "No" confirm) so **no SSN is fabricated** (WOTC is voluntary — "will NOT negatively impact consideration"). **The WOTC
+  opt-out is OPT-IN via `ORC_WOTC_OPTOUT=1`** — the opt-out clicks work but jobcredits' ASP.NET postback redirect back to the
+  Oracle SPA is slow/flaky and STALLED the fill in testing, so by DEFAULT WOTC is left as a pending step in `unfilled` (harmless
+  — the phone already blocks Submit). When enabled it runs ONCE per fill (`_wotc_attempted` guard) + `go_back`s to the Oracle SPA
+  if the partner didn't redirect. **HARD BLOCKER (OWNER POLICY): the reserved-fiction 555-01xx persona phone fails Oracle's libphonenumber ("Enter a
+  valid number") → `_invalid_fields` surfaces "Phone Number (invalid)" in `unfilled` so the co-pilot's submit gate refuses.** A
+  real ACK needs a VALID US number the owner controls: set **`ORC_PHONE`** (`orc_recon._build_persona` reads it, overrides the
+  555 number for the ORC fill only). Cron `mass_hiring_apply_orc_cron.py` is **INERT until `ORC_PHONE` is set** (safe to wire
+  now; refuses + exits otherwise so it never spams un-completable attempts). Cron line (report-only, HEADFUL on :98):
+  `36 6 * * * cd /home/projects/jobfinder && flock -n logs/orc_apply.lock env DISPLAY=:98 ORC_PHONE='<valid#>' sg mail -c 'ORC_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_orc_cron --limit 4' >> logs/orc_apply.log 2>&1`.
+  Tests: `test_oracle_orc.py`.
 
 ## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`)
 A separate engine (manual/cron, `DISPLAY=:98 sg mail`, nothing live imports it → no pm2 restart): enters a post-apply

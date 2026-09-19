@@ -380,6 +380,106 @@ def test_humana_onsite_is_dropped():
         "country": "United States of America", "isRemote": "No", "city": "Louisville"}) is None
 
 
+# ---- Foundever (SuccessFactors / Jobs2Web results table) ------------------------
+# Location format is "<workplace>, <city|Any Location>, <ISO2>" — the LAST comma-token is the
+# country code and a leading "Remote"/"Virtual" is the remote signal (both read off the string).
+
+def test_foundever_us_remote_is_kept():
+    row = mh._foundever_row("1232025900", "Bilingual Spanish Customer Service Associate",
+                            "Remote, Any Location, US",
+                            "/job/Remote-Bilingual-Spanish-Customer-Service-Associate-Any/1232025900/",
+                            "Sep 17, 2026")
+    assert row is not None
+    assert row["source"] == "foundever"
+    assert row["source_id"] == "1232025900"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == ("https://jobs.foundever.com/job/"
+                                "Remote-Bilingual-Spanish-Customer-Service-Associate-Any/1232025900/")
+    assert row["posted_at"] > 0
+
+
+def test_foundever_state_coded_remote_is_kept():
+    # a state-tagged remote row: "Remote, Mississippi, US" (misspelled cities happen too)
+    row = mh._foundever_row("1413906900", "Remote Licensed Customer Service Representative",
+                            "Remote, Mississippi, US", "/job/x/1413906900/")
+    assert row is not None
+    assert row["us_eligible"] is True
+    assert row["category"] == "customer_support"
+
+
+def test_foundever_full_country_name_is_kept():
+    # some rows carry the full country name instead of the ISO2 code
+    row = mh._foundever_row("1", "Customer Service Associate - Remote",
+                            "Remote, Any Location, United States of America", "/job/x/1/")
+    assert row is not None
+    assert row["us_eligible"] is True
+
+
+def test_foundever_onsite_us_is_dropped():
+    # a physical US city with no remote workplace token → not remote → dropped
+    assert mh._foundever_row("2", "Customer Service Representative",
+                             "Las Vegas, Nevada, US", "/job/x/2/") is None
+
+
+def test_foundever_non_us_remote_is_dropped():
+    assert mh._foundever_row("3", "Customer Service Associate",
+                             "Remote, Any Location, IN", "/job/x/3/") is None      # India
+    assert mh._foundever_row("4", "Bilingual Customer Service Associate",
+                             "Remote, Any Province, CA", "/job/x/4/") is None      # Canada
+
+
+def test_foundever_senior_and_dev_us_remote_are_dropped():
+    assert mh._foundever_row("5", "VP Global Operations", "Remote, Any Location, US", "/job/x/5/") is None
+    assert mh._foundever_row("6", "Director Procurement - Technology Tower Lead",
+                             "Remote, Texas, US", "/job/x/6/") is None
+    assert mh._foundever_row("7", "Conversational AI Engineer",
+                             "Remote, Any Location, US", "/job/x/7/") is None
+
+
+def test_foundever_missing_id_or_title_is_dropped():
+    assert mh._foundever_row(None, "Customer Service Representative", "Remote, Any Location, US", "/x") is None
+    assert mh._foundever_row("8", "", "Remote, Any Location, US", "/x") is None
+
+
+def test_foundever_date_parse():
+    assert mh._foundever_date("Sep 2, 2026") > 0
+    assert mh._foundever_date("") == 0
+    assert mh._foundever_date("garbage") == 0
+
+
+def test_foundever_country_and_us_helpers():
+    assert mh._foundever_country("Remote, Any Location, US") == "US"
+    assert mh._foundever_country("Cairo, Cairo, Egypt, EG") == "EG"
+    assert mh._foundever_is_us("Remote, Mississippi, US") is True
+    assert mh._foundever_is_us("Remote, Any Location, United States of America") is True
+    assert mh._foundever_is_us("Remote, Any Location, GB") is False
+
+
+def test_foundever_parse_extracts_rows():
+    # the exact results-table row shape (td.colTitle / td.colLocation / span.jobDate)
+    html = """
+    <table><tbody>
+      <tr class="data-row">
+        <td class="colTitle"><span class="jobTitle"><a class="jobTitle-link"
+            href="/job/Remote-Customer-Service-Associate-Any/999888/">Customer Service Associate - Remote</a></span>
+          <div class="jobdetail-phone"><span class="jobDate visible-phone">Sep 2, 2026</span></div></td>
+        <td class="colLocation"><span class="jobLocation">Remote, Any Location, US</span></td>
+        <td class="colDepartment"><span class="jobDepartment">Customer Service</span></td>
+      </tr>
+    </tbody></table>"""
+    parsed = mh._foundever_parse(html)
+    assert len(parsed) == 1
+    jid, title, loc, href, date = parsed[0]
+    assert jid == "999888"
+    assert title == "Customer Service Associate - Remote"
+    assert loc == "Remote, Any Location, US"
+    assert date == "Sep 2, 2026"
+    # and it round-trips through the row builder
+    row = mh._foundever_row(jid, title, loc, href, date)
+    assert row is not None and row["category"] == "customer_support"
+
+
 # ---- category: health-insurer entry roles + clinical drop -----------------------
 
 def test_care_and_member_roles_categorize():

@@ -312,6 +312,9 @@ _AUTO_STATUS = {
     "kelly": "needs_laptop", "concentrix": "needs_laptop", "cvshealth": "needs_laptop",
     "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
     "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
+    # foundever: SuccessFactors careersection, account-creation apply with NO register captcha
+    # (verified live 2026-09-19) — auto-apply is BUILDABLE server-side, strategy not yet wired.
+    "foundever": "needs_laptop",
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
 }
 
@@ -1347,13 +1350,121 @@ def fetch_humana() -> list[dict]:
     return rows
 
 
+# Foundever (formerly Sitel Group / SYKES) — SuccessFactors Recruiting Marketing (Jobs2Web / "j2w")
+# career site at jobs.foundever.com. There is no structured JSON/JSON-LD feed and no server-side
+# US-country facet URL, so we read the RESULTS TABLE (/search-jobs/results): each posting is a
+# <tr class="data-row"> with the title link (td.colTitle a.jobTitle-link, href /job/<slug>/<id>/),
+# a location cell (td.colLocation span.jobLocation, format "<workplace>, <city|Any Location>, <ISO2>"
+# e.g. "Remote, Mississippi, US") and a posted-date span. Remote-ness AND US both come off that
+# location string: the LAST comma-token is the country code (US/USA or the full "United States…"),
+# and a leading "Remote"/"Virtual"/"Work at Home" workplace is the remote signal. The results page
+# paginates via the URL query param ?q=<kw>&startrow=N (the /go/ landing pages do NOT), so we query
+# a couple of remote keywords, page by startrow, and filter US+remote client-side (like Sutherland).
+# One job is PINNED on every page, so end-of-results is detected when a page repeats the previous
+# page's id set (not by counting "new" ids, which the pinned/overlapping rows would poison).
+_FOUNDEVER_HOST = "https://jobs.foundever.com"
+
+
+def _foundever_country(loc: str) -> str:
+    parts = [p.strip() for p in (loc or "").split(",") if p.strip()]
+    return parts[-1] if parts else ""
+
+
+def _foundever_is_us(loc: str) -> bool:
+    return _foundever_country(loc).upper() in ("US", "USA") or "united states" in (loc or "").lower()
+
+
+def _foundever_date(s: str) -> int:
+    """'Sep 2, 2026' (the results-table posted date) -> epoch, or 0 on any parse miss."""
+    s = (s or "").strip()
+    if not s:
+        return 0
+    try:
+        from datetime import datetime
+        return int(datetime.strptime(s, "%b %d, %Y").timestamp())
+    except Exception:
+        return 0
+
+
+def _foundever_row(jid, title, loc, href, date="") -> dict | None:
+    """One SuccessFactors results-table row → normalized row or None. US+remote decided from the
+    location string (country code + workplace); categorize() then enforces the mass-hiring rule."""
+    if not jid or not title:
+        return None
+    if not _foundever_is_us(loc):
+        return None                                   # US-only (last-token country code)
+    if not _is_remote(loc):
+        return None                                   # remote-only (workplace token)
+    url = (_FOUNDEVER_HOST + href) if (href or "").startswith("/") else (href or "")
+    row = _mk_row("foundever", jid, "Foundever", title, loc, url, posted_at=_foundever_date(date))
+    if row:
+        # US already confirmed from the location's country code (authoritative) — force the flag so
+        # a state-coded "Remote, Mississippi, US" row isn't dropped by collect(us_only=True).
+        row["us_eligible"] = True
+    return row
+
+
+def _foundever_parse(html: str) -> list[tuple]:
+    """(jid, title, location, href, date) for every job row in a /search-jobs/results page."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for tr in soup.select("tr.data-row"):
+        a = tr.select_one("td.colTitle a.jobTitle-link")
+        if not a:
+            continue
+        href = a.get("href") or ""
+        m = re.search(r"/job/[^/]+/(\d+)/", href)
+        loc = tr.select_one("td.colLocation span.jobLocation")
+        dt = tr.select_one("span.jobDate")
+        out.append((m.group(1) if m else None, a.get_text(" ", strip=True),
+                    loc.get_text(" ", strip=True) if loc else "",
+                    href, dt.get_text(" ", strip=True) if dt else ""))
+    return out
+
+
+def fetch_foundever() -> list[dict]:
+    rows, seen = [], set()
+    headers = {"User-Agent": _BROWSER_UA, "Accept": "text/html,application/xhtml+xml,*/*",
+               "Referer": _FOUNDEVER_HOST + "/search-jobs/"}
+    try:
+        with httpx.Client(timeout=30, headers=headers, follow_redirects=True) as c:
+            for kw in ("remote", "work from home"):
+                startrow, prev_ids = 0, None
+                while startrow < 1000:
+                    try:
+                        r = c.get(_FOUNDEVER_HOST + "/search-jobs/results",
+                                  params={"q": kw, "startrow": startrow})
+                        parsed = _foundever_parse(r.text)
+                    except Exception as e:
+                        print(f"[foundever kw={kw!r} startrow={startrow}] {type(e).__name__}: {e}",
+                              file=sys.stderr)
+                        break
+                    ids = tuple(p[0] for p in parsed)
+                    if not parsed or ids == prev_ids:      # empty OR the page repeated → end of results
+                        break
+                    prev_ids = ids
+                    for jid, title, loc, href, date in parsed:
+                        if not jid or jid in seen:
+                            continue
+                        seen.add(jid)
+                        row = _foundever_row(jid, title, loc, href, date)
+                        if row:
+                            rows.append(row)
+                    startrow += 10
+    except Exception as e:
+        print(f"[foundever] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
             "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
             "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
-            "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana}
+            "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
+            "foundever": fetch_foundever}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

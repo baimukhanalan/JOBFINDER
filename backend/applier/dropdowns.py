@@ -117,8 +117,15 @@ MAX_RS_OPTIONS = 50  # cap options read per dropdown (huge country lists etc.)
 
 # EEOC/demographic survey questions are intentionally left blank (same policy as
 # the analyzer's `_skip` rule) — never auto-answered, never reported as unfilled.
+# `serve(d) in the military|armed forces` = a protected-veteran self-ID whose label carries
+# NO 'veteran' token (Coalition: "Have you ever served in the military?"). Deliberately NARROW
+# (not bare 'military'/'armed forces', which false-gated Axon's criminal 'Prohibited Possessor'
+# screeners — "member of the military", "discharged from the Armed Forces", "military court" —
+# that must be ANSWERED, not left blank). Kept in sync with catalog_drafts._DEMOGRAPHIC_LABEL_RE
+# / analyzer._skip. Tests: test_dropdowns.py, test_catalog_drafts.py.
 _DEMOGRAPHIC = re.compile(
-    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|"
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|serve(?:d)? in the (?:u\.?s\.? )?(?:military|armed forces|armed services)|"
+    r"disabilit|demographic|"
     r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|"
     r"under-?represented|marginali[sz]ed (?:group|communit)|"
     r"your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")

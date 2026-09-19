@@ -554,9 +554,24 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   but a FINAL reCAPTCHA on the code step blocks the submit from a datacenter IP — no ack ever (samsara/fivetran/calendly =
   un-completable; standard `job-boards.greenhouse.io` companies complete fine). A human at noVNC can't finish one either.
   Follow-up: a per-company completion-rate SKIP.
-- **Two live-DOM GH fill bugs (root-caused, NOT fixed — need live iteration + `dry_run` so working fills don't regress):**
-  natera «End date month» react-select stays unfilled; coalition «served in the military?» react-select is missed by
-  `_DEMOGRAPHIC` (no `military`/`served` keyword). Both live-only. natera (standard board) is the higher-value fix.
+- **Two live-DOM GH fill bugs — FIXED 2026-09-19 (live-proven, both live-only / not in scraped questions).**
+  **(1) coalition «Have you ever served in the military?»** — a protected-veteran self-ID whose label carries NO
+  `veteran` token, so `_DEMOGRAPHIC` skipped it → left blank → the REQUIRED react-select blocked auto-submit. Fixed by
+  adding a NARROW `serve(?:d)? in the (?:u\.?s\.? )?(?:military|armed forces|armed services)` alternative to the THREE synced
+  regexes (`dropdowns._DEMOGRAPHIC`, `analyzer._skip` FIELD_PATTERN, `catalog_drafts._DEMOGRAPHIC_LABEL_RE`). Deliberately NOT
+  bare `military`/`armed forces` — that false-gated Axon's criminal «Prohibited Possessor» screeners («member of the
+  military», «discharged from the Armed Forces», «military court») which must be ANSWERED (the reason the earlier broad token
+  was removed). Live-proven: `fill_demographics_decline` now picks «Prefer not to say». Tests: `test_dropdowns.py`,
+  `test_catalog_drafts.py`. **(2) natera «End date month*»** — the Employment-block react-select stayed EMPTY + REQUIRED →
+  blocked submit. ROOT CAUSE (live 2026-09-19): `materialize_prefill` ticked the «Current role» checkbox for a `…-Present`
+  role, but natera does NOT waive its still-`*`-required «End date month*» when Current role is checked — it makes that
+  react-select INERT, so `apply_react_select_choice` cannot select any option (proven: check→then-fill leaves it EMPTY;
+  fill→then-check keeps the value; the co-pilot order is check-first). Fix: `materialize_prefill` NO LONGER emits «Current
+  role»=Yes — it ALWAYS supplies a concrete, fillable Start+End date instead (a synthetic current role reads as ending
+  "today"; harmless, and fillable on EVERY GH form since the standard "Current-role hides End date" only kicks in when the box
+  is ticked). The react-select apply path itself was never broken — the conflict was the ticked checkbox. `_SCRAPE_V` 10→11.
+  Test: `test_catalog_drafts.py::test_present_role_does_not_tick_current_role_but_supplies_end_date`. **Both fixes need a
+  `pm2 restart jobfinder-alan-copilot`** (the single 8102 co-pilot holds old `dropdowns.py`/apply code in memory).
 
 **Catalog / collector / regions / personas**
 - **Custom-ATS form scrape: WAIT for the React form, then RETRY** (`tools/catalog_forms.py`): `_scrape`→`_wait_for_fields`→

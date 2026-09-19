@@ -97,6 +97,30 @@ def test_decline_re_matches_do_not_want_to_answer():
     assert _DEMOGRAPHIC.search("are you latinx?")
 
 
+def test_served_in_military_is_demographic_but_not_axon_screeners():
+    """A protected-veteran self-ID whose label lacks the 'veteran' token — Coalition's
+    live EEO react-select "Have you ever served in the military?" — must be treated as a
+    demographic (declined/blank), so a REQUIRED one no longer blocks the submit. It must NOT
+    catch Axon's criminal 'Prohibited Possessor' / experience screeners (bare 'military'/
+    'armed forces' did — false-gated required firearms-eligibility questions)."""
+    from backend.applier.dropdowns import _DEMOGRAPHIC
+    for demo in ("Have you ever served in the military?",
+                 "Have you served in the U.S. Armed Forces?",
+                 "Did you serve in the armed services?"):
+        assert _DEMOGRAPHIC.search(demo.lower()), demo
+    for screener in (
+        "Are you subject to a court order, including a Military Protection Order issued by a "
+        "military judge or magistrate, restraining you from harassing an intimate partner?",
+        "Have you ever been convicted in any court of a misdemeanor crime of domestic violence, "
+        "or are you or have you ever been a member of the military under a suspended sentence?",
+        "Have you ever been convicted in any court, including a military court, of a felony?",
+        "Have you ever been discharged from the Armed Forces under dishonorable conditions?",
+        "Do you have experience working in public safety, law enforcement, corrections, "
+        "military, or another mission-critical environment?",
+    ):
+        assert not _DEMOGRAPHIC.search(screener.lower()), screener
+
+
 def test_consent_regex_matches_required_not_marketing():
     """fill_required_consent must tick a REQUIRED legal/privacy consent but NEVER a marketing opt-in."""
     from backend.applier.dropdowns import _CONSENT_RE, _CONSENT_SKIP_RE

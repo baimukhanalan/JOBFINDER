@@ -2264,6 +2264,17 @@ except Exception:
     logging.getLogger(__name__).warning("interview manager routes unavailable", exc_info=True)
 
 
+# «События найма» surface under /hiring-events: TP live Zoom hiring events (join → hired
+# on the spot, no test), captured straight from mail_index by sender+subject. Distinct
+# from the «Собес» interview pool. Guarded like the other interview routers so a broken
+# import degrades to "no surface", never a boot fail.
+try:
+    from backend.interviews.routes_hiring_events import router as iv_hiring_router
+    app.include_router(iv_hiring_router)
+except Exception:
+    logging.getLogger(__name__).warning("hiring-events routes unavailable", exc_info=True)
+
+
 # In-app admin login + a fail-closed auth gate over every non-allowlisted route
 # (redirects to /login without a valid admin session). ADDITIVE; nginx basic-auth still
 # sits in front for now.

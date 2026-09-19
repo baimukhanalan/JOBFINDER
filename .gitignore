@@ -35,6 +35,9 @@ backend/data/apply_campaigns.json
 backend/data/apply_campaign_events.json
 backend/data/mh_apply_cron.lock
 backend/data/*.lock
+# per-lane harvest_runner runtime locks (harvest_runner.lock.<suffix> — the .lock is
+# NOT the extension, so backend/data/*.lock above does not catch them)
+backend/data/harvest_runner.lock.*
 backend/data/facts/*
 !backend/data/facts/sample.json
 backend/data/etalons/*

@@ -527,7 +527,15 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   later lap, never killed. A slow phone-SOCKS load had permanently killed the LIVE Render job 20282 (re-collected live that
   same morning) under the old bare-`no_form` test; ~440 catalog rows were killed via the two no_form paths and an unknown
   fraction are spurious — a targeted re-verify-and-revive is the cleanup (the new fill logic re-marks a genuinely-gone one dead
-  on its next load, so reviving is self-correcting; the nightly collector's upsert does NOT reset `dead`). Tests: `test_apply_campaigns.py`.
+  on its next load, so reviving is self-correcting; the nightly collector's upsert does NOT reset `dead`). **CLEANUP TOOL:
+  `tools/revive_dead_catalog.py`** (`catalog_db.revive`/`dead_rows_by_reason`) — one-shot, idempotent, conservative. Selects
+  dead rows in the no_form-reason family (NOT `stale`/`blocklist-gone`/`greenhouse 404`), does a LIGHT liveness re-check (one
+  public-board-API fetch per company, no fill/browser) and un-marks `dead` ONLY on POSITIVE proof of life (posting id still on
+  the board, or a board-fetch failure + a within-`--fresh-days` collector re-sighting); a gone id / 404 board / stale row stays
+  dead. `--apply` writes (default dry-run), backoff+paced per host. First live run 2026-09-19: 403 candidates → 2 revived
+  (salmon-group + jamf, both confirmed on-board), 401 kept dead (all `gone_from_board` — the ~13-day-old wrongly-killed backlog
+  had genuinely closed since; the board-fetch verdict AGREED with the frozen `last_seen`). Tests: `test_revive_dead_catalog.py`,
+  `test_apply_campaigns.py`.
 - **`_SUBMIT_BLOCK_RE` must catch the real ATS rejection wordings** (`copilot.py`): captcha / "is required" / "please enter" /
   "flagged as possible spam" / "we couldn't submit" / "missing entry" / "needs corrections" / "please accept the terms" — a
   missed one is mislabeled `blocked=None` + burns the full `WAIT_SUBMIT_MAX`=300s. **Ashby anti-spam flags the DATACENTER IP

@@ -301,6 +301,33 @@ def mark_dead(keys: list[tuple], reason: str) -> int:
         return cur.rowcount
 
 
+def revive(keys: list[tuple]) -> int:
+    """Reverse mark_dead: clear dead=FALSE + dead_reason=NULL for the given
+    (ats, company_key, external_id) keys, so a wrongly-blacklisted LIVE posting re-enters
+    list_jobs / jobs_for_drafting. Idempotent — the guard only touches rows still marked dead,
+    so a re-run (or a row already revived by the nightly collect) is a no-op."""
+    if not keys:
+        return 0
+    with _cur(False) as cur:
+        cur.executemany(
+            "UPDATE job_catalog SET dead=FALSE, dead_reason=NULL "
+            "WHERE ats=%s AND company_key=%s AND external_id=%s AND COALESCE(dead, FALSE)",
+            [(a, c, e) for (a, c, e) in keys])
+        return cur.rowcount
+
+
+def dead_rows_by_reason(reasons: list[str]) -> list[dict]:
+    """Every DEAD row whose dead_reason is one of `reasons` — the revive-sweep work-list.
+    Returns the columns the liveness re-check needs to key each posting to its board."""
+    cols = ("id", "ats", "company_key", "external_id", "url", "company", "title",
+            "is_remote", "last_seen", "dead_reason")
+    with _cur() as cur:
+        cur.execute("SELECT " + ",".join(cols) + " FROM job_catalog "
+                    "WHERE COALESCE(dead, FALSE) AND dead_reason = ANY(%s) "
+                    "ORDER BY ats, company_key", (list(reasons),))
+        return [dict(r) for r in cur.fetchall()]
+
+
 def deactivate_stale(boards_seen, run_start, reason: str = "stale") -> int:
     """Mark LIVE rows of SUCCESSFULLY-fetched boards that were NOT re-seen this run as dead
     (disappeared at the source). MIRRORS mass_hiring.deactivate_stale, but per (ats, company_key)

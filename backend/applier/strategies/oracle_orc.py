@@ -157,11 +157,29 @@ class OracleORCStrategy(GenericStrategy):
                 await self._advance_wizard(page, report, profile_form, cover_letter, facts)
             except Exception as exc:
                 logger.debug("oracle_orc: wizard advance raised: %s", exc)
+        # Validation failures (a filled-but-rejected field, e.g. the reserved-fiction 555-01xx phone
+        # Oracle's libphonenumber flags 'Enter a valid number') are NOT empty, so _rescan_required
+        # misses them — surface them so the co-pilot's submit gate refuses honestly.
+        try:
+            inv = await self._invalid_fields(page)
+            if inv:
+                report["invalid_fields"] = inv
+                cur = list(report.get("unfilled") or [])
+                for lbl in inv:
+                    tag = f"{lbl} (invalid)"
+                    if tag not in cur:
+                        cur.append(tag)
+                report["unfilled"] = cur
+        except Exception as exc:
+            logger.debug("oracle_orc: invalid-scan raised: %s", exc)
         return report
 
     # ---- ORC-specific gap fill (label/role driven so it generalizes across CX tenants) ----
     async def _fill_orc_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
         await self._dismiss_cookie_banner(page)
+        # Guest-auth 'I agree with the terms and conditions' — must be ticked for the auth step's
+        # Next to reveal the full application form (harmless on later steps: no-op when absent).
+        await self._tick_terms(page)
         # EEO / diversity self-ID + required legal consent — Oracle renders these as JET
         # radiosets / checkboxsets / selects; the shared dropdowns helpers decline every
         # demographic (never claiming a protected characteristic) and tick required consent.
@@ -258,14 +276,16 @@ class OracleORCStrategy(GenericStrategy):
             return []
 
     async def _fill_orc_combobox_by(self, page: Page, boxes: list, want: str, val: str,
-                                    match, first_ok: bool = False) -> bool:
+                                    match, first_ok: bool = False, prefer: str = "",
+                                    shorten: bool = False) -> bool:
         for b in boxes:
             lab = b.get("label") or ""
             if not match(lab):
                 continue
             if (b.get("val") or "").strip() and not first_ok:
                 return True
-            return await self._pick_combobox(page, f"[data-jfcb='{b['i']}']", val, first_ok=first_ok)
+            return await self._pick_combobox(page, f"[data-jfcb='{b['i']}']", val,
+                                             first_ok=first_ok, prefer=prefer, shorten=shorten)
         return False
 
     async def _fill_orc_comboboxes(self, page: Page, profile_form: dict, facts) -> None:
@@ -289,16 +309,29 @@ class OracleORCStrategy(GenericStrategy):
             labs = " ".join((b.get("label") or "") for b in boxes)
             if "city" in labs or "state" in labs or "postal" in labs:
                 break
+        st_full = (profile_form.get("state") or "").strip()
+        st_code = (profile_form.get("state_code") or "").strip()
+        zc = profile_form.get("zip") or profile_form.get("postal_code") or ""
+        st_prefer = st_code or st_full
+        # CITY FIRST, preferring the persona's STATE — selecting a city on Oracle CX auto-cascades its
+        # State + County, and a bare "Columbus" collides ("Columbus City, IA" vs Columbus, OH), so
+        # pick the option in the right state. Then State (re-assert only if the cascade left it empty),
+        # then Postal (now scoped to the correct state so the ZIP typeahead resolves), then County.
         addr = [
-            ("state", profile_form.get("state") or "", lambda l: "state" in l or "province" in l, False),
-            ("city", profile_form.get("city") or "", lambda l: "city" in l, False),
-            ("postal", profile_form.get("zip") or profile_form.get("postal_code") or "",
-             lambda l: "postal" in l or "zip" in l, False),
-            ("county", "", lambda l: "county" in l, True),
+            ("city", profile_form.get("city") or "", lambda l: "city" in l, False, st_prefer, False),
+            ("state", st_full, lambda l: "state" in l or "province" in l, False, st_code, False),
+            # Postal: first_ok + shorten so a persona ZIP that doesn't fit the auto-cascaded county
+            # still resolves to a valid consistent ZIP (retype shorter prefixes until options appear).
+            ("postal", zc, lambda l: "postal" in l or "zip" in l, True, "", True),
+            ("county", "", lambda l: "county" in l, True, "", False),
         ]
-        for _key, val, match, first_ok in addr:
+        for _key, val, match, first_ok, prefer, shorten in addr:
             try:
-                await self._fill_orc_combobox_by(page, boxes, _key, val, match, first_ok=first_ok)
+                # re-map before each so a just-cascaded field (State/County auto-set by City) is seen
+                # as already-filled and skipped, and the Postal field (late-rendering) is picked up.
+                boxes = await self._map_comboboxes(page)
+                await self._fill_orc_combobox_by(page, boxes, _key, val, match,
+                                                 first_ok=first_ok, prefer=prefer, shorten=shorten)
             except Exception:
                 pass
         # 3) EEO comboboxes: decline (Veteran Self-ID / Gender) — open + pick the non-disclosure
@@ -315,12 +348,37 @@ class OracleORCStrategy(GenericStrategy):
                 except Exception:
                     pass
 
+    # Popup option shapes across CX tenants: classic JET renders <li role=option> /
+    # .oj-listbox-result; Redwood/CX renders a role=grid popup (aria-haspopup="grid") whose
+    # options are role=row / role=gridcell / .cx-select-* list items. Cover all of them.
+    _OPT_SEL = ("[role=option], [role=row], [role=gridcell], .oj-listbox-result, "
+                "li[role=option], .oj-collection-item, [class*='listbox'] li, "
+                "[class*='dropdown'] li, [class*='cx-select'] li, [class*='select'] [role=row]")
+
+    async def _options_locator(self, page: Page, el):
+        """Prefer the combobox's OWN popup (its aria-controls listbox) so we never match a stray
+        grid row elsewhere; fall back to the page-wide option selectors."""
+        try:
+            ctrl = await el.get_attribute("aria-controls")
+        except Exception:
+            ctrl = None
+        if ctrl:
+            cid = ctrl.split()[0]
+            scoped = page.locator(
+                f"#{cid} [role=option], #{cid} [role=row], #{cid} li, #{cid} [role=gridcell]")
+            try:
+                if await scoped.count():
+                    return scoped
+            except Exception:
+                pass
+        return page.locator(self._OPT_SEL)
+
     async def _decline_combobox(self, page: Page, sel: str) -> bool:
         """Open a JET EEO combobox and click its non-disclosure option (decline / prefer-not /
         'I do not want to answer' / 'not a protected veteran'). Never types a protected characteristic."""
         dec_re = re.compile(
             r"do not (want|wish)|don't want|decline|prefer not|not to answer|choose not|"
-            r"not a protected veteran|i am not a|not applicable", re.I)
+            r"not a protected veteran|i am not a|not applicable|not identif", re.I)
         try:
             el = page.locator(sel).first
             if not await el.count():
@@ -328,8 +386,7 @@ class OracleORCStrategy(GenericStrategy):
             await el.scroll_into_view_if_needed(timeout=2000)
             await el.click(timeout=2500)
             await page.wait_for_timeout(600)
-            opts = page.locator("[role=option], .oj-listbox-result, li[role=option], "
-                                ".oj-collection-item")
+            opts = await self._options_locator(page, el)
             n = await opts.count()
             for i in range(min(n, 40)):
                 o = opts.nth(i)
@@ -349,7 +406,8 @@ class OracleORCStrategy(GenericStrategy):
                 pass
         return False
 
-    async def _pick_combobox(self, page: Page, sel: str, val: str, first_ok: bool = False) -> bool:
+    async def _pick_combobox(self, page: Page, sel: str, val: str, first_ok: bool = False,
+                             prefer: str = "", shorten: bool = False) -> bool:
         try:
             el = page.locator(sel).first
             if not await el.count():
@@ -363,10 +421,58 @@ class OracleORCStrategy(GenericStrategy):
                 except Exception:
                     await page.keyboard.type(val, delay=45)
                 await page.wait_for_timeout(900)
-            opts = page.locator("[role=option], .oj-listbox-result, li[role=option], "
-                                ".oj-collection-item")
+                # POSTAL/ZIP: the CX Postal typeahead is scoped to the auto-cascaded City+County, so
+                # the persona's exact ZIP (43215 = Franklin) yields "No results" when the city picked a
+                # different-county default (Columbus→Delaware). A synthetic persona only needs a VALID,
+                # CONSISTENT ZIP, so retype progressively shorter numeric prefixes until the typeahead
+                # offers options, then take the first real one (first_ok) — a real zip for this locale.
+                if shorten and val.strip().isdigit():
+                    probe = await self._options_locator(page, el)
+                    def _has_real(loc):
+                        return loc.filter(
+                            has_not_text=re.compile("no matches|no results|searching|select", re.I))
+                    try:
+                        has_now = await _has_real(probe).count()
+                    except Exception:
+                        has_now = 0
+                    if not has_now:
+                        for k in (5, 4, 3, 2):
+                            pre = val.strip()[:k]
+                            if len(pre) >= len(val.strip()):
+                                continue
+                            try:
+                                await el.fill(pre, timeout=2000)
+                            except Exception:
+                                await page.keyboard.type(pre, delay=45)
+                            await page.wait_for_timeout(900)
+                            try:
+                                if await _has_real(await self._options_locator(page, el)).count():
+                                    break
+                            except Exception:
+                                pass
+            opts = await self._options_locator(page, el)
             target = None
-            if val:
+            # 1) EXACT value in the preferred state: the option whose text STARTS with the typed city
+            #    immediately followed by a separator — so "Columbus" resolves to "Columbus, OH", never
+            #    "Columbus Grove, OH" (a different town+county whose ZIP then won't fit → empty Postal).
+            if val and prefer:
+                exact = opts.filter(
+                    has_text=re.compile(r"^\s*" + re.escape(val) + r"\s*[,(\-–/]", re.I)).filter(
+                    has_text=re.compile(r"\b" + re.escape(prefer) + r"\b", re.I)).first
+                if await exact.count():
+                    target = exact
+            # 2) with a `prefer` token (the persona's state), pick the option that matches BOTH the
+            #    typed value AND the state — so a bare "Columbus" resolves to Columbus, OH not IA.
+            if (target is None or not await target.count()) and val and prefer:
+                cand = opts.filter(has_text=re.compile(re.escape(val.split()[0]), re.I)).filter(
+                    has_text=re.compile(r"\b" + re.escape(prefer) + r"\b", re.I)).first
+                if await cand.count():
+                    target = cand
+            if (target is None or not await target.count()) and prefer:
+                cand = opts.filter(has_text=re.compile(r"\b" + re.escape(prefer) + r"\b", re.I)).first
+                if await cand.count():
+                    target = cand
+            if (target is None or not await target.count()) and val:
                 target = opts.filter(has_text=re.compile(re.escape(val.split()[0]), re.I)).first
             if (target is None or not await target.count()) and first_ok:
                 target = opts.filter(
@@ -761,9 +867,21 @@ class OracleORCStrategy(GenericStrategy):
             return ["Yes, my home internet is hardwired", "Yes"]
         if re.search(r"download speed|\bmbps\b|high.?speed|cable or fiber|internet|connection", t):
             return ["Yes"]
-        if re.search(r"documentation|diploma or ged|provide.*if needed|verify.*education|"
-                     r"able to provide", t):
+        # "Do you HAVE a High School Diploma, GED or equivalent?" (a Yes/No screener a synthetic
+        # persona with an education fact answers Yes). Checked AFTER the education-tier question
+        # above (which owns "highest level of education"), so this only catches the Yes/No form.
+        if re.search(r"high school diploma|diploma.{0,8}ged|\bged\b|diploma or equivalent|"
+                     r"documentation|provide.*if needed|verify.*education|able to provide", t):
             return ["Yes"]
+        # Relatives / other members currently employed with the company → No (a fresh synthetic
+        # persona has no relatives at the employer — truthful).
+        if re.search(r"(relative|family member|immediate family|other member|anyone).{0,50}"
+                     r"(employ|work)|member.{0,20}currently employed|know (anyone|someone).{0,30}work", t):
+            return ["No"]
+        # "Have you ever worked for / provided services for <company>?" → No (fresh persona).
+        if re.search(r"ever (worked|work).{0,20}for|previously (employed|worked)|former (employee|"
+                     r"associate)|worked for or provided|provided services (for|to)", t):
+            return ["No"]
         if re.search(r"18 (years|and older)|older|authorized|eligible to work", t):
             return ["Yes"]
         if re.search(r"seasonal|interested in (the |this )?(season|temporary|position|role|opportunity)", t):
@@ -780,6 +898,32 @@ class OracleORCStrategy(GenericStrategy):
                      r"background (check|investigation)", t):
             return ["Yes"]
         return None
+
+    async def _invalid_fields(self, page: Page) -> list:
+        """Labels of visible, NON-empty fields the page marks aria-invalid=true or that carry a
+        visible field error (e.g. the phone 'Enter a valid number' from Oracle's libphonenumber on
+        the reserved-fiction 555-01xx number). These aren't 'empty' so _rescan_required misses them,
+        but they still block Submit — surface them so the co-pilot gate is honest."""
+        try:
+            return await page.evaluate(
+                """()=>{const out=[];const seen=new Set();
+                  for(const el of document.querySelectorAll('input,textarea,[role=combobox]')){
+                    const r=el.getBoundingClientRect(); if(r.width===0&&r.height===0) continue;
+                    const val=(el.value||'').trim(); if(!val) continue;   // empty is _rescan_required's job
+                    let bad=el.getAttribute('aria-invalid')==='true';
+                    const desc=el.getAttribute('aria-describedby');
+                    if(!bad&&desc){for(const id of desc.split(/\\s+/)){const n=document.getElementById(id);
+                      if(n&&(n.innerText||'').trim()&&/valid|invalid|required|enter a/i.test(n.innerText)){bad=true;break;}}}
+                    if(!bad) continue;
+                    let lab='';const id=el.id;
+                    if(id){const l=document.querySelector('label[for="'+
+                      (window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');if(l)lab=l.innerText.trim();}
+                    if(!lab)lab=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.name||'field';
+                    lab=(lab||'').replace(/\\s*\\*\\s*$/,'').replace(/\\s+/g,' ').trim().slice(0,60);
+                    if(!seen.has(lab)){seen.add(lab);out.push(lab);}
+                  } return out;}""")
+        except Exception:
+            return []
 
     async def _rescan_required(self, page: Page) -> list:
         """Labels of required-but-empty visible fields on the current step, so the report's
@@ -820,6 +964,22 @@ class OracleORCStrategy(GenericStrategy):
         'Are You Still With Us?' session-idle modal, which pops repeatedly during a slow fill and
         otherwise resets the cascade / blocks Submit."""
         await self._dismiss_idle_modal(page)
+        # Oracle CX's own cookie-consent MODAL (a role=dialog with Accept / Decline / Manage
+        # Preferences) overlays the guest-auth step + blocks the Next/Submit click. SCOPE the
+        # click to a cookie container so a stray 'Accept' elsewhere on the form is never hit.
+        for csel in (".cookie-consent-modal button:has-text('Accept')",
+                     ".cookie-consent button:has-text('Accept')",
+                     "[class*='cookie'] button:has-text('Accept')",
+                     ".cookie-consent-modal button:has-text('Decline')",
+                     "[class*='cookie'] button:has-text('Decline')"):
+            try:
+                b = page.locator(csel).first
+                if await b.count() and await b.is_visible(timeout=500):
+                    await b.click(timeout=1500)
+                    await page.wait_for_timeout(250)
+                    return
+            except Exception:
+                continue
         for name in ("Reject Optional Cookies", "Reject All", "Accept All Cookies",
                      "Accept Cookies", "Accept All", "I Agree"):
             try:
@@ -830,6 +990,83 @@ class OracleORCStrategy(GenericStrategy):
                     return
             except Exception:
                 continue
+
+    async def _tick_terms(self, page: Page) -> None:
+        """Accept the guest-auth Terms & Conditions so the auth 'Next' enables + reveals the full
+        application form. Oracle CX gates acceptance behind an AGREEMENT DIALOG (a role=dialog with
+        per-country info links — all target=_blank — and an 'Agree' button) bound to the Knockout
+        observable legalDisclaimer.isAccepted. Acceptance = clicking 'Agree' (NOT a country link,
+        which just opens the legal text in a new tab). We open the dialog via #legal-disclaimer-link
+        if it isn't already up, click 'Agree', and force-check the hidden <input> as a fallback.
+        No-op when the disclaimer checkbox is absent (later steps) or already accepted."""
+        try:
+            state = await page.evaluate(
+                "()=>{const c=document.getElementById('legal-disclaimer-checkbox');"
+                "return c?(c.checked?'checked':'present'):'absent';}")
+        except Exception:
+            state = "absent"
+        if state != "present":
+            return
+
+        async def _click_agree() -> bool:
+            for sel in ("div[class*='dialog'] button:has-text('Agree')",
+                        ".app-dialog button:has-text('Agree')",
+                        "button:has-text('Agree')"):
+                try:
+                    b = page.locator(sel).first
+                    if await b.count() and await b.is_visible(timeout=600):
+                        await b.click(timeout=1500)
+                        await page.wait_for_timeout(400)
+                        return True
+                except Exception:
+                    continue
+            return False
+
+        # 1) If the agreement dialog is already open, just Agree; else open it via the disclaimer
+        #    link (NEVER a country link — those spawn target=_blank tabs), then Agree.
+        if not await _click_agree():
+            for sel in ("#legal-disclaimer-link", "a#legal-disclaimer-link",
+                        "label[for='legal-disclaimer-checkbox'] a:has-text('terms')"):
+                try:
+                    b = page.locator(sel).first
+                    if await b.count() and await b.is_visible(timeout=600):
+                        await b.click(timeout=1500)
+                        await page.wait_for_timeout(600)
+                        break
+                except Exception:
+                    continue
+            await _click_agree()
+        # 2) Fallback: force-check the hidden native input + dispatch so the Knockout checked
+        #    binding (legalDisclaimer.isAccepted) fires even if the Agree button wasn't found.
+        try:
+            await page.evaluate(
+                "()=>{const c=document.getElementById('legal-disclaimer-checkbox');"
+                "if(c&&!c.checked){c.checked=true;"
+                "c.dispatchEvent(new Event('click',{bubbles:true}));"
+                "c.dispatchEvent(new Event('input',{bubbles:true}));"
+                "c.dispatchEvent(new Event('change',{bubbles:true}));}}")
+        except Exception:
+            pass
+
+    async def _wait_for_form_render(self, page: Page, timeout_ms: int = 16000) -> bool:
+        """After the guest-auth Next, the full single-page application form renders asynchronously.
+        Poll until real form widgets (JET/CX role=radio / role=combobox groups) appear, so the gap
+        fill runs against the actual form and not the still-loading auth step."""
+        import time as _t
+        deadline = _t.time() + timeout_ms / 1000.0
+        while _t.time() < deadline:
+            await self._dismiss_cookie_banner(page)
+            try:
+                n = await page.evaluate(
+                    "()=>document.querySelectorAll('[role=radio],[role=combobox],"
+                    "input[type=file]').length")
+            except Exception:
+                n = 0
+            if n and n > 0:
+                await page.wait_for_timeout(800)
+                return True
+            await page.wait_for_timeout(600)
+        return False
 
     async def _dismiss_idle_modal(self, page: Page) -> None:
         """Click the keep-alive button of Oracle CX's 'Are You Still With Us?' idle dialog."""
@@ -890,24 +1127,234 @@ class OracleORCStrategy(GenericStrategy):
         return None, None
 
     async def _fill_current_step(self, page, profile_form, cover_letter, facts) -> None:
-        """Fill an EEO / voluntary / review step: decline demographics, tick required consent,
-        fill any ordinary matched fields, and answer the step's JET screeners."""
+        """Fill a newly-revealed wizard step. On the full single-page application form this is the
+        WHOLE gap fill (identity/address comboboxes, Title + Yes/No screener radios, EEO decline,
+        WOTC) plus the generic analyzer pass; on an EEO/voluntary/review step it degrades to the
+        decline + consent + screener helpers those steps need."""
         await self._dismiss_cookie_banner(page)
-        for fn in (fill_demographics_decline, fill_demographic_checkboxes_decline,
-                   fill_required_consent):
-            try:
-                await fn(page)
-            except Exception:
-                pass
+        # Run the ordinary analyzer pass FIRST (fills the plain name/email/address text inputs the
+        # newly-rendered form exposes), then the ORC-specific JET/CX gap fill (comboboxes, radios,
+        # EEO decline, WOTC) which owns the widgets analyze_page can't.
         try:
             analysis = await analyze_page(page, profile_form, cover_letter, {}, facts or {})
             await fill_form(page, analysis)
         except Exception as exc:
-            logger.debug("oracle_orc: step fill raised: %s", exc)
+            logger.debug("oracle_orc: step analyze/fill raised: %s", exc)
         try:
-            await self._answer_screeners(page, facts)
+            await self._fill_orc_gaps(page, profile_form, facts)
         except Exception as exc:
-            logger.debug("oracle_orc: step screeners raised: %s", exc)
+            logger.debug("oracle_orc: step gap fill raised: %s", exc)
+        try:
+            await self._handle_wotc(page, profile_form)
+        except Exception as exc:
+            logger.debug("oracle_orc: step wotc raised: %s", exc)
+
+    # ---- WOTC (Work Opportunity Tax Credit) 'Take Tax Credit Assessment' ----
+    _WOTC_DONE_RE = re.compile(
+        r"thank you|assessment (?:is )?complete|completed|you have completed|"
+        r"return to (?:your )?application|no (?:further )?questions|survey complete", re.I)
+
+    async def _handle_wotc(self, page: Page, profile_form: dict) -> bool:
+        """Oracle CX gates Submit on a 'Tax Credit Assessment' (WOTC). 'Take Tax Credit Assessment'
+        navigates the tab SAME-WINDOW to the ADP jobcredits.com partner survey, where `_wotc_answer_no`
+        opts out (no SSN fabricated — WOTC is voluntary, "will NOT negatively impact consideration").
+        Returns True if handled. **OPT-IN via ORC_WOTC_OPTOUT=1** — the partner opt-out works but its
+        ASP.NET postback redirect back to the Oracle SPA is slow/flaky and can stall a fill, so by
+        default we DON'T navigate: the WOTC stays a pending step in `unfilled` (harmless, since the
+        reserved-fiction phone already blocks Submit as an owner-policy wall). Enable it once ORC_PHONE
+        is set and the lane is being driven to a real ack. Runs AT MOST once per fill (it navigates
+        the tab; a 2nd pass — the form step + the review step both call it — would re-navigate)."""
+        if os.getenv("ORC_WOTC_OPTOUT", "").strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        if getattr(self, "_wotc_attempted", False):
+            return False
+        try:
+            body = (await page.locator("body").inner_text(timeout=4000)).lower()
+        except Exception:
+            body = ""
+        if "tax credit" not in body:
+            return False
+        self._wotc_attempted = True
+        ctx = page.context
+        before = list(ctx.pages)
+        clicked = False
+        for sel in ('a:has-text("Take Tax Credit Assessment")',
+                    'button:has-text("Take Tax Credit Assessment")',
+                    'a:has-text("Tax Credit Assessment")', 'button:has-text("Tax Credit Assessment")',
+                    'a:has-text("Tax Credit")', 'button:has-text("Tax Credit")',
+                    'oj-button:has-text("Tax Credit") button'):
+            try:
+                b = page.locator(sel).first
+                if await b.count() and await b.is_visible(timeout=1000):
+                    await b.click(timeout=3000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            return False
+        await page.wait_for_timeout(3500)
+        # The partner survey usually opens in a NEW TAB; operate there, else on this page.
+        survey = page
+        try:
+            if len(ctx.pages) > len(before):
+                survey = ctx.pages[-1]
+        except Exception:
+            pass
+        try:
+            await survey.wait_for_load_state("domcontentloaded", timeout=20000)
+        except Exception:
+            pass
+        # Walk the survey — OPT OUT is the primary path (a synthetic persona has no SSN, and WOTC is
+        # voluntary: "your answers will NOT negatively impact consideration of your application"). The
+        # jobcredits.com partner (ADP) opts out via a link -> confirm "Opt Out" -> a J-1-visa confirm
+        # modal (answer No: a US persona is not a J-1 exchange visitor). Only if NO opt-out affordance
+        # exists do we answer everything No/decline + advance (which still can't pass an SSN gate).
+        import time as _t
+        wotc_deadline = _t.time() + 90                    # hard cap so a stuck survey can't hang the fill
+        opted_out = False
+        for _ in range(8):
+            if _t.time() > wotc_deadline:
+                break
+            await page.wait_for_timeout(1000)
+            try:
+                surl = (survey.url or "").lower()
+            except Exception:
+                surl = ""
+            if "oraclecloud.com" in surl:
+                break                                     # back on the application
+            # 1) trigger the opt-out (link OR <input type=submit value='Opt Out'>).
+            if not opted_out:
+                for sel in ("#OptOutVisibleLink", "a[data-open*='optout' i]",
+                            "a[aria-controls*='optout' i]", "input[value='Opt Out' i]",
+                            "a:has-text('Opt Out')", "button:has-text('Opt Out')",
+                            "a:has-text('Decline')", "button:has-text('Decline')"):
+                    try:
+                        loc = survey.locator(sel).first
+                        if await loc.count() and await loc.is_visible(timeout=500):
+                            await loc.click(timeout=2500)
+                            opted_out = True
+                            await survey.wait_for_timeout(700)
+                            break
+                    except Exception:
+                        continue
+            # 2) confirm the opt-out modal, then answer the follow-up J-1-visa confirm (No).
+            for sel in ("#OptOutConfirmYesButton", "input[name='OptOutConfirmYesButton']",
+                        ".reveal input[value='Opt Out' i]", "input[value='Opt Out' i]",
+                        "button:has-text('Confirm')", "input[value='Yes' i]"):
+                try:
+                    loc = survey.locator(sel).first
+                    if await loc.count() and await loc.is_visible(timeout=500):
+                        await loc.click(timeout=2500)
+                        await survey.wait_for_timeout(700)
+                        break
+                except Exception:
+                    continue
+            for sel in ("#j1VisaOptOutConfirmNoButton", "input[name='j1VisaOptOutConfirmNoButton']"):
+                try:
+                    loc = survey.locator(sel).first
+                    if await loc.count() and await loc.is_visible(timeout=500):
+                        await loc.click(timeout=2500)
+                        await survey.wait_for_timeout(700)
+                        break
+                except Exception:
+                    continue
+            # 3) if no opt-out was available at all, fall back to answer-No + advance.
+            if not opted_out:
+                try:
+                    stext = (await survey.locator("body").inner_text(timeout=3000))
+                except Exception:
+                    stext = ""
+                if self._WOTC_DONE_RE.search(stext or ""):
+                    break
+                await self._wotc_answer_no(survey, profile_form)
+                if not await self._wotc_advance(survey):
+                    break
+            try:
+                await survey.wait_for_load_state("domcontentloaded", timeout=8000)
+            except Exception:
+                pass
+        # Return focus to the application tab.
+        if survey is not page:
+            try:
+                await survey.close()
+            except Exception:
+                pass
+            try:
+                await page.bring_to_front()
+            except Exception:
+                pass
+        await page.wait_for_timeout(1500)
+        # SAFETY: the same-tab opt-out should redirect back to the Oracle SPA, but if the partner
+        # postback stalled and left us on jobcredits.com, go_back so the surrounding fill/submit runs
+        # against the application — never leave the tab stranded on the partner (that stalls the fill).
+        try:
+            if "oraclecloud.com" not in (page.url or "").lower():
+                for _ in range(3):
+                    await page.go_back(timeout=8000)
+                    await page.wait_for_timeout(1500)
+                    if "oraclecloud.com" in (page.url or "").lower():
+                        break
+        except Exception:
+            pass
+        logger.debug("oracle_orc: WOTC handled (opted_out=%s)", opted_out)
+        return True
+
+    async def _wotc_answer_no(self, q: Page, profile_form: dict) -> None:
+        """Answer every WOTC eligibility question No/decline; fill required Name/DOB/ZIP text
+        (NEVER an SSN — a synthetic persona has none, and a fake SSN must not be transmitted to a
+        government-adjacent partner). Mirrors taleo._wotc_fill's polarity."""
+        pf = profile_form or {}
+        full = (pf.get("full_name") or pf.get("name") or "").strip()
+        parts = full.split()
+        first = pf.get("first_name") or (parts[0] if parts else "")
+        last = pf.get("last_name") or (parts[-1] if len(parts) > 1 else "")
+        dob = pf.get("dob") or pf.get("date_of_birth") or "01/01/1995"
+        zc = pf.get("zip") or pf.get("postal_code") or ""
+        try:
+            await q.evaluate(
+                """([first,last,dob,zc])=>{
+                  const n=s=>(s||'').toLowerCase();
+                  const labOf=el=>{let t='';if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)t=l.innerText;}
+                    if(!t)t=el.getAttribute('aria-label')||el.getAttribute('placeholder')||'';
+                    if(!t){const w=el.closest('div,td,li,tr,p');if(w&&(w.innerText||'').length<120)t=w.innerText;} return n(t);};
+                  const setv=(el,v)=>{if(!v)return;el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
+                  for(const el of document.querySelectorAll('input[type=text],input:not([type]),input[type=tel],input[type=date],input[type=number]')){
+                    const ty=(el.type||'').toLowerCase(); if(['hidden','submit','button','checkbox','radio','file'].includes(ty))continue;
+                    if((el.value||'').trim())continue; const lab=labOf(el);
+                    if(/social security|\\bssn\\b/.test(lab))continue;            // never fill an SSN
+                    if(/first name|given name/.test(lab))setv(el,first); else if(/last name|surname|family name/.test(lab))setv(el,last);
+                    else if(/date of birth|birth date|\\bdob\\b/.test(lab))setv(el,dob);
+                    else if(/zip|postal/.test(lab))setv(el,zc);}
+                  const rg={}; for(const r of document.querySelectorAll('input[type=radio]')){if(r.name)(rg[r.name]=rg[r.name]||[]).push(r);}
+                  const rlab=r=>{const l=r.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]'):null;return n(((l&&l.innerText)||(r.closest('label')?r.closest('label').innerText:'')||''));};
+                  for(const nm in rg){const rs=rg[nm]; if(rs.some(r=>r.checked))continue;
+                    let pick=rs.find(r=>/^\\s*no\\b|none of these|does not|do not|decline|not a member|not applicable|n\\/a/.test(rlab(r)))||rs.find(r=>/^\\s*no\\s*$/.test(n(r.value||'')));
+                    if(pick){pick.checked=true;pick.dispatchEvent(new Event('click',{bubbles:true}));pick.dispatchEvent(new Event('change',{bubbles:true}));}}
+                  for(const sel of document.querySelectorAll('select')){if(sel.multiple)continue;const cur=sel.options[sel.selectedIndex];
+                    if(sel.value&&cur&&!/select|choose|^--|no selection/.test(n(cur.text)))continue;
+                    const o=[...sel.options].find(o=>o.value&&/^\\s*no\\s*$|none|decline|not a\\b|n\\/a/.test(n(o.text)))||[...sel.options].find(o=>o.value&&!/select|choose|^--|no selection/.test(n(o.text)));
+                    if(o){sel.value=o.value;sel.dispatchEvent(new Event('change',{bubbles:true}));}}
+                  for(const c of document.querySelectorAll('input[type=checkbox]')){if(c.checked)continue;const lab=labOf(c);
+                    if(/agree|consent|acknowledge|certify|understand|authorize|i have read|confirm|signature/.test(lab)&&!/marketing|newsletter|opt.?in to receive/.test(lab)){
+                      c.checked=true;c.dispatchEvent(new Event('click',{bubbles:true}));c.dispatchEvent(new Event('change',{bubbles:true}));}}
+                }""", [first, last, dob, zc])
+        except Exception as exc:
+            logger.debug("oracle_orc: wotc answer raised: %s", exc)
+
+    async def _wotc_advance(self, q: Page) -> bool:
+        for sel in ('input[value="Submit" i]', 'button:has-text("Submit")', 'input[value="Continue" i]',
+                    'button:has-text("Continue")', 'button:has-text("Next")', 'input[value="Next" i]',
+                    'button:has-text("Finish")', 'button:has-text("Done")', 'a:has-text("Submit")',
+                    'button[type="submit"]', 'input[type="submit"]'):
+            try:
+                loc = q.locator(sel).first
+                if await loc.count() and await loc.is_visible(timeout=600):
+                    await loc.click(timeout=4000)
+                    return True
+            except Exception:
+                continue
+        return False
 
     async def _advance_wizard(self, page, report, profile_form, cover_letter, facts) -> None:
         """Walk the multi-step wizard: click Continue while it advances (filling each new step),
@@ -916,6 +1363,9 @@ class OracleORCStrategy(GenericStrategy):
         still empty), stop and leave the gaps in `unfilled` for the human / next iteration."""
         for _ in range(6):
             await self._dismiss_cookie_banner(page)
+            # Tick the guest-auth Terms checkbox (if this is that step) BEFORE reading the primary
+            # button — an unaccepted disclaimer makes the auth Next silently validation-fail.
+            await self._tick_terms(page)
             btn, kind = await self._primary_button(page)
             if btn is None:
                 break
@@ -930,15 +1380,30 @@ class OracleORCStrategy(GenericStrategy):
                 report["unfilled"] = await self._rescan_required(page)
                 return
             sig = await self._step_signature(page)
+            n_fields_before = await self._field_count(page)
             try:
                 await btn.click()
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(1500)
             except Exception:
                 break
-            if await self._step_signature(page) == sig:
+            # The full single-page form renders asynchronously after the guest-auth Next; wait for
+            # its widgets to appear (a signature check alone misses the async render + false-fires
+            # "blocked"). Advanced == the step signature changed OR new form widgets appeared.
+            rendered = await self._wait_for_form_render(page)
+            advanced = rendered or (await self._step_signature(page) != sig) \
+                or (await self._field_count(page) > n_fields_before)
+            if not advanced:
                 # Did not advance -> a required field on this step is still empty. Stop; the
                 # human / next iteration finishes it (the dry-run screenshot shows what's left).
                 report["wizard_blocked_step"] = sig
                 report["unfilled"] = await self._rescan_required(page)
                 return
             await self._fill_current_step(page, profile_form, cover_letter, facts)
+
+    async def _field_count(self, page: Page) -> int:
+        try:
+            return await page.evaluate(
+                "()=>document.querySelectorAll('[role=radio],[role=combobox],"
+                "input[type=file]').length")
+        except Exception:
+            return 0

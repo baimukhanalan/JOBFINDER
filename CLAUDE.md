@@ -659,6 +659,7 @@ Source recipes (endpoint + gotcha):
 - **UnitedHealth/Optum** (Radancy `POST careers.unitedhealthgroup.com/search-jobs/resultspost`): a `FacetFilters` array (Remote+US; fc/fl GET params ignored).
 - **Centene** (`centene`) + **Cigna** (`cigna`): `_fetch_workday` with the US country facet (`us_confirmed=True`); remote in the location/path. Cigna's facet is `Location_Country`, Centene's `locationCountry`.
 - **Humana** (Phenom `POST careers.humana.com/widgets`, `selected_fields.city=["Remote"]`): keep `country=="United States of America"` + (`isRemote=="Yes"` OR `city=="Remote"`). Seasonal (AEP Oct-Dec).
+- **Foundever** (ex-Sitel; SuccessFactors Recruiting Marketing `jobs.foundever.com/search-jobs/results?q=&startrow=N`): read the results TABLE (`tr.data-row`); US+remote from the location string's country code + workplace token; one job is PINNED per page so end-of-results = a repeated id set. `fetch_foundever`/`_foundever_row`/`_foundever_parse`. Apply = SuccessFactors careersection (see the Foundever auto-apply lane).
 - **himalayas:** RETRY the offset on intermittent non-JSON, don't `break` the pagination.
 - **E-Verify large-employer REFERENCE** (`tools/everify_employers.py`, keyless `h1btrack.com/e-verify/employers/`): yields EMPLOYERS (a mass-hiring SIGNAL), never feeds `mass_hiring_jobs`. Cached, refreshed by a guarded weekly hook at the TAIL of `mass_hiring.collect()`. Manual: `everify_employers --refresh`.
 
@@ -760,6 +761,36 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   now; refuses + exits otherwise so it never spams un-completable attempts). Cron line (report-only, HEADFUL on :98):
   `36 6 * * * cd /home/projects/jobfinder && flock -n logs/orc_apply.lock env DISPLAY=:98 ORC_PHONE='<valid#>' sg mail -c 'ORC_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_orc_cron --limit 4' >> logs/orc_apply.log 2>&1`.
   Tests: `test_oracle_orc.py`.
+- **Foundever / SuccessFactors** (`strategies/foundever.py` `SuccessFactorsStrategy`, driver `tools/foundever_recon.py`,
+  cron `tools/mass_hiring_apply_foundever_cron.py`, gated `FOUNDEVER_ADVANCE=1`) — **FULL-AUTO to a real ack from the
+  datacenter IP, NO captcha, NO résumé upload; LIVE-PROVEN 2026-09-19** (on-page "Your Application has been sent. Thank you!"
+  + a SuccessFactors account email `system@successfactors.com` "Welcome to Foundever's Career Portal" in the persona box).
+  Foundever's `jobs.foundever.com` RMK job page hands off (SAME TAB) via the "Apply now" **dropdown-toggle → manual-apply
+  option `#applyOption-top-manual`** to the SuccessFactors careersection `career4.successfactors.com/careers?company=SitelPROD`
+  (the job is carried in the RMK session — you CANNOT deep-link the careersection directly, must click through the RMK page).
+  The careersection renders the WHOLE application on ONE page: account (`fbclc_*` email×2/pwd×2/name), phone Country-code +
+  Country-of-Residence **native `<select>`s**, address (Street/City/Zip `tor__*` + Country/State **SF paginated-select
+  comboboxes**), screener + EEO + consent comboboxes (`rcmpaginatedselect`, input `N:_input` → listbox via `aria-owns`), a
+  `fbjq_question_N` Yes/No radio block, and submit `#fbqa_apply`. **GOTCHAS:** (1) the paginated Country/State comboboxes filter
+  on REAL keystrokes — `_pick_combobox` `.type()`s the value (an `.fill()` sets value without firing the keyup SF's autocomplete
+  needs, so 'United States' past the alphabetical page-1 is never surfaced → left blank). Short EEO/screener comboboxes just
+  click-open + pick. (2) The two marketing checkboxes (`fbclc_emailEnabled` Notification, `fbclc_campaignEmailEnabled`) are
+  DEFAULT-CHECKED — `_tick_consents` UNCHECKS them (no job-alert spam). (3) Required **"Terms of Use*" = `#dataPrivacyId`** opens
+  a Data Privacy Consent modal ONLY once the rest of the form is valid; `_accept_data_privacy` clicks the anchor then the modal's
+  `button.globalPrimaryButton` "Accept" (run it LAST, after every field is filled). (4) EEO/self-ID always answered with the
+  DECLINE option (never a protected characteristic); the 7 job questions are Yes for a synthetic in-state CSR persona (residence
+  "State of <X>" → Yes only when the persona is placed in state X — `foundever_recon._state_from_row` reads the posting's state,
+  incl. the collector's `Conneticut` typo). (5) A **required "last 6 digits of SSN"** (`tor__fpreferredLocYes`) is filled with a
+  deterministic SYNTHETIC value (`ssn_last6`, like the reserved-fiction phone/DOB — only transmitted on the gated submit).
+  (6) The submit ack is the ON-PAGE "Your Application has been sent"; this tenant sends the SF account/welcome email to the box,
+  NOT a per-job "application received" email — `_app_confirmed`/the cron accept either. Licensed-insurance roles are skipped
+  (`is_licensed`, no fabricated license). Cron line (HEADLESS, no captcha — hour-staggered off the other lanes):
+  `42 1,5,10,15,20 * * * cd /home/projects/jobfinder && flock -n logs/foundever_cron.lock env sg mail -c 'FOUNDEVER_HEADLESS=1 FOUNDEVER_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_foundever_cron --limit 4' >> logs/foundever_apply.log 2>&1`
+  (NOTE: the crontab `flock` file **must differ** from the cron's own internal fcntl `logs/foundever_apply.lock` — flock(2)
+  on the same path from an inherited fd would self-deadlock the child, so it uses `logs/foundever_cron.lock`). HEADLESS so no
+  `DISPLAY`/`:98` contention; the `sg mail` group is inherited by the `foundever_recon` subprocesses (do NOT re-wrap). Fits the
+  hour-stagger: hour 1 pairs with TP(:12), hours 5/10/15/20 pair with Maximus(:00), all ≥30 min apart, ≤2 lanes/hour.
+  Tests: `test_foundever.py`.
 
 ## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`)
 A separate engine (manual/cron, `DISPLAY=:98 sg mail`, nothing live imports it → no pm2 restart): enters a post-apply

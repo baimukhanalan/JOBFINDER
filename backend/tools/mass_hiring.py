@@ -312,9 +312,10 @@ _AUTO_STATUS = {
     "kelly": "needs_laptop", "concentrix": "needs_laptop", "cvshealth": "needs_laptop",
     "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
     "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
-    # foundever: SuccessFactors careersection, account-creation apply with NO register captcha
-    # (verified live 2026-09-19) — auto-apply is BUILDABLE server-side, strategy not yet wired.
-    "foundever": "needs_laptop",
+    # foundever: SuccessFactors careersection, single-page account-creation apply, NO captcha/résumé.
+    # Full-auto server-side via strategies/foundever.py + tools/foundever_recon.py; LIVE-PROVEN
+    # 2026-09-19 ("Your Application has been sent" + a SuccessFactors account email in the persona box).
+    "foundever": "auto",
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
 }
 

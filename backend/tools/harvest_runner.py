@@ -134,8 +134,15 @@ def main() -> None:
     if args.url:
         adapter = _adapter(args.platform, args.mailbox or "")
         _lock = _acquire_lock()  # noqa: F841
+        # The Hallo tp-global-us battery driven from Part 1 (speaking + listening/reading + personality
+        # + cognitive figures + computer-literacy + Sales best/worst) is LONG — a full pass banks ~76
+        # items over far more than the default 320 STEPS (each listening audio-wait, each figure re-pick
+        # and each Sales best/worst re-pick is a step), so a fresh drive hit "max_items reached" AT the
+        # final Sales module. Give hallo a larger step budget so a single fresh drive can complete
+        # (still bounded by HARVEST_SESSION_SECS wall-clock).
+        _max_items = 900 if args.platform == "hallo" else 320
         res = asyncio.run(core.harvest_one(args.url, args.mailbox or "manual", adapter,
-                                           min_delay=0.0, max_delay=0.0))
+                                           min_delay=0.0, max_delay=0.0, max_items=_max_items))
         # A REAL completion marks the CRM invite «пройдено» (leaves «Действие»), same as the discover
         # path — so the dashboard reflects what the Mac lane passed. Guarded on status=="completed"
         # (never false-marks a stuck/partial run) + a real persona email (contains '@'), since --mailbox

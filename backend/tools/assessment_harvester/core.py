@@ -475,7 +475,7 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                 item.get("url", url))
         return s
 
-    async def _run():
+    async def _run(resume: bool = False):
         nonlocal page
         async with async_playwright() as p:
             # REMOTE CDP mode (HARVEST_CDP_URL): drive an already-running Chrome elsewhere (the owner's
@@ -669,7 +669,15 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                 # player); a fresh adapter.enter would re-navigate/reset that tab. If the already-open
                 # page is on the assessment domain, SKIP the fresh nav and start the walk on it. Default
                 # behaviour (env unset, or a non-assessment URL) is unchanged: adapter.enter runs.
-                if (res.get("_remote_cdp") and os.getenv("HARVEST_CDP_RESUME") == "1"
+                if resume and res.get("_remote_cdp"):
+                    # RECONNECT-RESUME: the tailscale-nc CDP tunnel resets ~every 2 min, so a
+                    # multi-minute drive drops mid-walk (TargetClosedError). The assessment SESSION
+                    # lives on the Mac's Chrome tab (not our client), so on reconnect we re-grab the
+                    # SAME tab and continue the walk IN PLACE — never re-navigate to the invite (that
+                    # would restart/burn the flow). See the harvest_one reconnect loop below.
+                    logger.info("[%s] CDP RECONNECT-RESUME: continuing the walk in place on %s "
+                                "(no re-nav — assessment persists on the Mac)", mailbox, page.url)
+                elif (res.get("_remote_cdp") and os.getenv("HARVEST_CDP_RESUME") == "1"
                         and _is_assessment_url(page.url)):
                     logger.info("[%s] CDP RESUME: already on assessment page %s — skipping fresh nav",
                                 mailbox, page.url)
@@ -1036,14 +1044,68 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                         pass
 
     page = None
-    try:
-        await asyncio.wait_for(_run(), timeout=session_secs)
-    except asyncio.TimeoutError:
-        res["note"] = f"timeout {int(session_secs)}s ({res['banked']} banked before hang)"
-        if res["banked"]:
-            res["status"] = "partial_timeout"
-    except Exception as exc:
-        res["note"] = f"{type(exc).__name__}: {exc}"[:200]
+    # CDP transport is UNRELIABLE (the Mac is reachable only over a userspace tailscale-egress `nc`
+    # tunnel that resets the CDP WebSocket ~every 2 min, even with the Mac awake — proven 2026-09-19).
+    # A single long-lived connection therefore ALWAYS dies mid-drive with TargetClosedError → the whole
+    # Sutherland/Mac lane reported status=error → the supervisor labelled it "transient" and NEVER
+    # passed one. The assessment SESSION persists on the Mac's Chrome tab, so on a transport drop we
+    # RECONNECT and RESUME the walk in place (no re-nav). Gated on CDP mode: a LOCAL-browser lane
+    # (amcat/hallo/harver/taleo crons) is _cdp_mode2=False → 0 reconnects → single attempt, byte-
+    # identical to before.
+    import time as _time
+    _cdp_mode2 = bool(os.getenv("HARVEST_CDP_URL"))
+    _deadline = _time.time() + session_secs
+    _max_reconnects = int(os.getenv("HARVEST_CDP_RECONNECTS", "60")) if _cdp_mode2 else 0
+    # A DROPPED tailscale-nc CDP socket does NOT raise — the next Playwright call HANGS (proven
+    # 2026-09-19: a drive answered item #1 then hung silently to the 300s budget, 0 reconnects). So in
+    # CDP mode PROACTIVELY cycle the connection on a short per-attempt cap (default 90s, UNDER the ~125s
+    # tunnel lifetime) and RESUME on the same Mac tab — a window elapsing (TimeoutError) OR a raised
+    # drop BOTH trigger a reconnect. Non-CDP is unchanged: one attempt with the full session budget.
+    _attempt_cap = int(os.getenv("HARVEST_CDP_ATTEMPT_SECS", "90")) if _cdp_mode2 else session_secs
+    _attempt = 0
+    while True:
+        _left = _deadline - _time.time()
+        if _cdp_mode2 and _left <= 8:
+            res["note"] = f"session budget {int(session_secs)}s reached ({res['banked']} banked)"
+            if res["banked"] and res["status"] != "completed":
+                res["status"] = "partial_timeout"
+            break
+        _tmo = min(_left, _attempt_cap) if _cdp_mode2 else session_secs
+        try:
+            await asyncio.wait_for(_run(resume=(_attempt > 0)), timeout=_tmo)
+            break                                   # _run returned (completed / wall / stuck / done)
+        except asyncio.TimeoutError:
+            # CDP: a short window elapsed (or the dead socket hung the call) — reconnect + resume.
+            if (_cdp_mode2 and _attempt < _max_reconnects
+                    and (_deadline - _time.time()) > 20 and res.get("status") != "completed"):
+                _attempt += 1
+                res["reconnects"] = _attempt
+                logger.info("[%s] CDP window elapsed/stalled at ~%ds — reconnecting + resuming "
+                            "(reconnect %d/%d, %d banked so far)", mailbox, int(_tmo), _attempt,
+                            _max_reconnects, res["banked"])
+                await asyncio.sleep(3)              # let the tunnel/tab settle before re-grabbing
+                continue
+            res["note"] = f"timeout {int(session_secs)}s ({res['banked']} banked before hang)"
+            if res["banked"]:
+                res["status"] = "partial_timeout"
+            break
+        except Exception as exc:
+            res["note"] = f"{type(exc).__name__}: {exc}"[:200]
+            _es = (type(exc).__name__ + " " + str(exc)).lower()
+            _dropped = ("targetclos" in _es or "browser has been closed" in _es
+                        or "target page, context or browser has been closed" in _es
+                        or "websocket" in _es or "connection closed" in _es
+                        or "connect_over_cdp" in _es or "econnrefused" in _es)
+            if (_cdp_mode2 and _dropped and _attempt < _max_reconnects
+                    and (_deadline - _time.time()) > 20):
+                _attempt += 1
+                res["reconnects"] = _attempt
+                logger.info("[%s] CDP transport dropped (%s) — reconnecting + resuming "
+                            "(reconnect %d/%d, %d banked so far)", mailbox,
+                            type(exc).__name__, _attempt, _max_reconnects, res["banked"])
+                await asyncio.sleep(3)              # let the tunnel/tab settle before re-grabbing
+                continue
+            break
     # After the walk, transcribe the captured question audio and bank the listen-repeat /
     # listen-comprehension sentences (outside the browser watchdog; blocking ASR is fine here).
     try:

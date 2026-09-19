@@ -126,6 +126,31 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   the Mac must stay reachable+awake (OBS + caffeinate) and the event-driven `mail_indexer` trigger matters.** Health group
   «Ассессменты» (`health.assessment_lanes`) shows futile churn / offline-Mac-while-running (a `down` row → `health --alert`) /
   idle-tunnel-still-up.
+  **ROOT CAUSE of the endless «transient», passed=0 (2026-09-19, FIXED): the `tailscale nc` CDP WebSocket to the Mac drops
+  ~every 2 min EVEN WITH the Mac awake** (proven: a bare CDP hold over a clean slot-1 socat, Mac's `pmset` showing
+  `PreventUserIdleSystemSleep=1` + display-on, dropped at 125s with `browser.is_connected()=False` + a `disconnected` event —
+  NOT a tab close, NOT link-expired, NOT WCI200). A drive takes minutes, so the single long-lived CDP connection ALWAYS died
+  mid-walk with `TargetClosedError` → `harvest_one` `status=error` → the supervisor's `_TRANSIENT_RE`/`status==error` labelled
+  it «transient» (correctly «not skipping», but it NEVER completed). **A DROPPED socket does NOT raise — it HANGS the next
+  Playwright call** (a drive answered item #1 then hung silently to the session budget, 0 reconnects). FIX (`core.py`
+  `harvest_one`, CDP-mode-gated so local lanes are byte-identical): a RECONNECT-RESUME loop — bound each attempt to
+  `HARVEST_CDP_ATTEMPT_SECS` (default 90s, UNDER the ~125s tunnel life) and on a window-elapsed (TimeoutError) OR a raised drop,
+  `connect_over_cdp` AFRESH, re-grab the SAME pinned Mac tab, and CONTINUE the walk IN PLACE (never re-nav — the SHL/AMCAT
+  session persists on the Mac; `_run(resume=True)` skips `adapter.enter`), up to `HARVEST_CDP_RECONNECTS` (60). LIVE-PROVEN
+  2026-09-19: griffin now walks PAST the SHL intro (where every prior drive died) onto the AMCAT player and answers battery
+  items across repeated reconnects (`CDP window elapsed … reconnecting + resuming` → `CDP RECONNECT-RESUME: continuing in
+  place`). **Supervisor fixes same commit:** `_tunnel_up` no longer hardcodes `ts-egress/0` (the `*/10 tailscale_egress --sync`
+  cron CHURNS which slot's socket exists — slot 0 is often gone; `_egress_sock()` now scans slots + prefers one whose tailnet
+  status sees the Mac); classification checks `expired` BEFORE `transient` (a link-expired drive that also trips the broad
+  transient regex was mislabelled «transient» forever); caffeinate is DETACHED (`nohup … & disown`) so it survives the SSH
+  channel closing (a plain `ssh "caffeinate"` dies with the channel → Mac sleeps mid-drive). **STILL OWNER-SIDE / not
+  server-fixable:** (1) the Mac's egress path FLAPS reachable/unreachable on a ~1-2 min cycle (the Mac is awake — it's the
+  userspace-egress `tailscale nc` netstack path; the server's MAIN tailscaled is on a DIFFERENT tailnet and can't see the Mac,
+  so the flaky egress slot is the only route); (2) `macalan`'s SSH `ProxyCommand` is pinned to `ts-egress/0/tailscaled.sock`
+  (in `~/.ssh/config`, NOT the repo) — when the sync cron has that slot momentarily gone, `ssh macalan` (⇒ caffeinate, ssh -L)
+  fails with `dial unix …/ts-egress/0/tailscaled.sock: no such file or directory`; the owner should repoint macalan's
+  ProxyCommand at a dynamically-chosen live slot. (3) A token already driven into an `/…/evaluating` state (griffin, hammered
+  for hours) re-shows the SAME item and won't advance — the AMCAT battery-ADVANCE, not the transport, is the next barrier.
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals

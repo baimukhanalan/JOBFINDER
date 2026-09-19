@@ -39,8 +39,6 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 _MAC_IP = os.environ.get("MAC_IP", "100.86.135.112")
 _MAC_CDP_PORT = 9223           # Chrome remote-debug port ON the Mac
 _PORT = 9222                   # local tunnel port
-_SLOT = 0
-_SOCK = f"backend/data/ts-egress/{_SLOT}/tailscaled.sock"
 _LOCK = "/tmp/jf_assess_supervisor.lock"
 _ATTEMPTS = os.path.join(_ROOT, "backend", "data", "sutherland_attempts.json")
 _SKIP_AFTER = 3                # low-yield attempts before a stuck invite is skipped
@@ -92,16 +90,39 @@ def _tunnel_listening() -> bool:
         s.close()
 
 
+def _egress_sock() -> str | None:
+    """Pick a live userspace-egress `tailscaled` socket that can reach the Mac. The `*/10
+    tailscale_egress --sync` cron CHURNS which slot is live, so slot 0 is NOT guaranteed to exist —
+    the old hardcoded `ts-egress/0/tailscaled.sock` silently broke `_tunnel_up` whenever the cron had
+    rebuilt the slots (only a pre-existing socat then kept the lane alive). Scan all slots and prefer
+    one whose tailnet status actually sees the Mac's node; fall back to the first existing socket."""
+    import glob as _glob
+    socks = sorted(_glob.glob(os.path.join(_ROOT, "backend/data/ts-egress/*/tailscaled.sock")))
+    fallback = None
+    for s in socks:
+        fallback = fallback or s
+        try:
+            r = subprocess.run(["tailscale", f"--socket={s}", "status"],
+                               cwd=_ROOT, capture_output=True, text=True, timeout=8)
+            out = (r.stdout or "").lower()
+            if _MAC_IP in (r.stdout or "") or "macbook-air-alan" in out:
+                return s
+        except Exception:
+            continue
+    return fallback
+
+
 def _tunnel_up() -> bool:
-    """Bring the CDP tunnel to the Mac up if it isn't. False when the egress socket is missing."""
+    """Bring the CDP tunnel to the Mac up if it isn't. False when no egress socket can reach the Mac."""
     if _tunnel_listening():
         return True
-    if not os.path.exists(os.path.join(_ROOT, _SOCK)):
-        _log(f"egress socket {_SOCK} missing — cannot reach the Mac")
+    sock = _egress_sock()
+    if not sock:
+        _log("no egress tailscaled socket found — cannot reach the Mac")
         return False
     subprocess.Popen(
-        ["socat", f"TCP-LISTEN:{_PORT},bind=127.0.0.1,reuseaddr,fork",
-         f"EXEC:tailscale --socket={_SOCK} nc {_MAC_IP} {_MAC_CDP_PORT}"],
+        ["socat", f"TCP-LISTEN:{_PORT},bind=127.0.0.1,reuseaddr,fork,keepalive",
+         f"EXEC:tailscale --socket={sock} nc {_MAC_IP} {_MAC_CDP_PORT}"],
         cwd=_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     time.sleep(2)
     return _tunnel_listening()
@@ -146,8 +167,14 @@ def _keep_mac_awake() -> str:
     # window is open, then sleeps again (the owner's ask: awake WHILE driving, else sleep).
     try:
         ssh_target = shlex.split(target)
+        # DETACH the remote caffeinate (nohup + closed fds + `&`) so it OUTLIVES this SSH channel.
+        # A plain `ssh … "caffeinate …"` ties caffeinate to the SSH session — when the fire-and-forget
+        # client exits or the flaky tailscale-nc ProxyCommand blips, the remote caffeinate gets SIGHUP
+        # and dies, letting the Mac sleep mid-drive. nohup+disown keeps it holding the full 30-min window.
         subprocess.Popen(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
-                          "-o", "StrictHostKeyChecking=accept-new", *ssh_target, "caffeinate -dimsu -t 1800"],
+                          "-o", "StrictHostKeyChecking=accept-new", *ssh_target,
+                          "pkill caffeinate 2>/dev/null; nohup caffeinate -dimsu -t 1800 "
+                          ">/dev/null 2>&1 </dev/null & disown 2>/dev/null; true"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return f"caffeinate started on the Mac via '{target}' (30-min window)"
     except Exception as e:
@@ -251,17 +278,20 @@ def run(dry: bool, max_jobs: int) -> None:
         elif camera:
             # Mac OBS momentarily not feeding — a TEMPORARY Mac issue, NEVER counts toward a skip.
             _log(f"camera-wall {mbx} — Mac OBS/webcam not detected, NOT skipping (retry later)")
-        elif transient:
-            # a CDP/Mac/proxy hiccup or a partial hang — retry, do NOT accrue toward the skip cap.
-            _log(f"transient {mbx} — Mac/CDP hiccup, NOT skipping (retry later)")
         elif expired:
             # the SHL autologin token is dead (link-expired) — a real, unrecoverable terminal state, so
             # retire it in ONE pass (no value re-driving a dead link every run; not a camera/infra miss).
+            # CHECKED BEFORE `transient`: a link-expired drive can ALSO end status=error / print a
+            # traceback (which trips the broad _TRANSIENT_RE), and the old order labelled such a dead
+            # token "transient" forever — never retiring it. link-expired is terminal; it wins.
             from backend.tools import mailcrm
             mailcrm.mark_assessment_skipped(mbx)
             attempts.pop(mbx, None)
             skipped += 1
             _log(f"SKIP {mbx} (link-expired — dead SHL token, unrecoverable)")
+        elif transient:
+            # a CDP/Mac/proxy hiccup or a partial hang — retry, do NOT accrue toward the skip cap.
+            _log(f"transient {mbx} — Mac/CDP hiccup, NOT skipping (retry later)")
         elif items < 3:
             # reached the assessment but nothing to answer — genuinely stuck (submitted/«evaluating»).
             attempts[mbx] = int(attempts.get(mbx, 0)) + 1

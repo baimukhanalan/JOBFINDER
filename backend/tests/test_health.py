@@ -46,6 +46,36 @@ def test_error_after_summary_is_still_down(tmp_path, monkeypatch):
     assert r["status"] == "down"
 
 
+def test_timestamped_run_done_under_benign_failed_is_ok(tmp_path, monkeypatch):
+    # The exact Maximus false-ОШИБКА (2026-09): a TIMESTAMPED completion summary as the newest line,
+    # sitting under benign "AI polish failed — using deterministic" fallback lines. The anchored
+    # summary tokens never matched the timestamped line → the walk hit "failed" → false down + alert.
+    text = ("2026-09-19 15:29:44,530 AI polish failed (500) — using deterministic résumé\n"
+            "2026-09-19 15:29:46,548 AI polish failed (500) — using deterministic résumé\n"
+            "2026-09-19 15:36:35,546 apply run done: 15 jobs, clicked=6, confirmed=0\n")
+    r = _lane(tmp_path, monkeypatch, text, age_h=3)
+    assert r["status"] == "ok" and "ОШИБКА" not in r["detail"]
+
+
+def test_timestamped_completion_shapes_recognised():
+    # Every real lane's completion line still counts as a completed run even with a leading timestamp.
+    ok = [
+        "2026-09-19 15:36:35,546 apply run done: 15 jobs, clicked=6, confirmed=0",
+        "2026-09-19 17:45:17,263 tp apply run done: 38 jobs, submitted=38, confirmed=25",
+        "2026-09-19 18:47:45,825 FINISHED: 1/4 acked in 704s",
+        "2026-09-19 19:08:02,742 apply-campaigns done: 0 applications across 0 campaigns",
+        "bank total: 3063 items  by_type={'sjt': 39}",
+        "DONE. catalog counts -> {'total': 10333}",
+        "2026-09-19T04:15:05+0200 prefill_retention removed_jobs=121 run done",
+        "{'processed': 81, 'total': 10333}",
+    ]
+    for line in ok:
+        assert health._is_success_line(line), line
+    # a genuine failure line is NOT a completion
+    assert not health._is_success_line("2026-09-19 15:29:44,530 AI polish failed (500)")
+    assert not health._is_success_line("Traceback (most recent call last):")
+
+
 def test_stale_within_2x_cadence_is_warn(tmp_path, monkeypatch):
     r = _lane(tmp_path, monkeypatch, "FINISHED ok=5 errors=0\n", age_h=10, max_h=8)
     assert r["status"] == "warn" and "STALE" in r["detail"]
@@ -167,6 +197,53 @@ def test_gather_bounds_a_hanging_probe(monkeypatch):
     assert d["overall"] == "down" and d["counts"] == {"ok": 0, "warn": 2, "down": 1}   # info not counted
     assert d["g1"] and d["g2"] and "sections" in d and "elapsed" in d
     assert [s["status"] for s in d["sections"]] == ["down", "warn"]
+
+
+# ---- alert throttle (Telegram) -------------------------------------------------------------------
+def _alert_env(tmp_path, monkeypatch, tg_ok, down=True):
+    """Drive check_and_alert with a canned snapshot + a controllable _tg; return (result, calls, state)."""
+    monkeypatch.setattr(health, "_ALERT_STATE", str(tmp_path / "alert_state.json"))
+    rows = [{"name": "Apply: Maximus", "status": "down", "detail": "ОШИБКА"}] if down else \
+           [{"name": "ok", "status": "ok", "detail": ""}]
+    snap = {"sections": [{"rows": rows}], "overall": "down" if down else "ok", "ts": "2026-09-19 00:00:00"}
+    monkeypatch.setattr(health, "gather", lambda *a, **k: snap)
+    calls = []
+    monkeypatch.setattr(health, "_tg", lambda text: (calls.append(text), tg_ok)[1])
+    return calls, snap
+
+
+def test_alert_throttle_not_consumed_by_failed_send(tmp_path, monkeypatch):
+    # A DOWN whose Telegram send FAILS must NOT advance the throttle anchor — the very next tick has
+    # to retry (otherwise a delivery blip silences a real outage for the whole cooldown window).
+    calls, _ = _alert_env(tmp_path, monkeypatch, tg_ok=False)
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 1                                   # attempted
+    st = health._load_json(health._ALERT_STATE)
+    assert st.get("active") is True and int(st.get("last", 0)) == 0   # throttle NOT advanced
+    # second tick immediately retries (throttle still open) instead of staying silent
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 2
+
+
+def test_alert_throttle_advances_on_delivered_send(tmp_path, monkeypatch):
+    calls, _ = _alert_env(tmp_path, monkeypatch, tg_ok=True)
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 1
+    st = health._load_json(health._ALERT_STATE)
+    assert st.get("active") is True and int(st.get("last", 0)) > 0    # throttle armed after delivery
+    # a second tick within the cooldown does NOT re-send
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 1
+
+
+def test_recovery_note_retries_until_delivered(tmp_path, monkeypatch):
+    # An alert is active; now everything is healthy but the recovery send FAILS — the active flag
+    # must stay set so the next healthy tick retries the "восстановилось" note rather than losing it.
+    calls, _ = _alert_env(tmp_path, monkeypatch, tg_ok=False, down=False)
+    health._save_json(health._ALERT_STATE, {"active": True, "last": 1})   # a prior down left it active
+    health.check_and_alert(cooldown=14400)                  # recovery send fails
+    assert len(calls) == 1                                   # attempted
+    assert health._load_json(health._ALERT_STATE).get("active") is True   # NOT cleared on failed send
 
 
 def test_plural_and_restart_growth():

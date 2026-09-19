@@ -73,7 +73,11 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # (ttec.taleo.net). The board rows store the Radancy TalentBrew LISTING url, which
                    # taleo_recon resolves to the real *.taleo.net apply URL; NO captcha/WAF, account
                    # create + JSF wizard only. Submit gated behind TALEO_ADVANCE.
-                   "taleo.net", "careers.unitedhealthgroup.com", "ttecjobs.com")
+                   "taleo.net", "careers.unitedhealthgroup.com", "ttecjobs.com",
+                   # Foundever (ex-Sitel) SuccessFactors careersection (strategies/foundever.py) — the
+                   # RMK job page (jobs.foundever.com) hands off to career4.successfactors.com; NO
+                   # captcha, single-page apply. Submit gated behind FOUNDEVER_ADVANCE.
+                   "jobs.foundever.com", "career4.successfactors.com")
 
 
 def is_supported(apply_url: str) -> bool:

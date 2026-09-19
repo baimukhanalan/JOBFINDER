@@ -367,12 +367,34 @@ class HalloAdapter(Adapter):
         ticking the single "TP ... may use my recordings and AI for evaluation and proctoring" consent
         checkbox + the internet test finishing enables Continue. Returns True once Continue is clicked
         (into the battery); False (with a diagnostic dump) if it stayed walled."""
-        try:
-            body = (await page.inner_text("body", timeout=3000)).lower()
-        except Exception:
-            body = ""
-        if not any(s in body for s in ("check microphone and camera", "recording test",
-                                       "won't be able to proceed", "confirm your voice")):
+        # POLL for the device-check page to appear — "Begin Assessment" shows a loading spinner and can
+        # take 10-40s to render the "Check microphone and camera" gate (esp. the 6-part variant), so a
+        # single read misses it. Also bail early if we've clearly RESUMED straight into the battery (a
+        # deep-resume token can skip the device check) so the core drives it.
+        _DEV = ("check microphone and camera", "recording test", "won't be able to proceed",
+                "confirm your voice")
+        _BATTERY = ("question 1 of", "question 2 of", "question 3 of", "time left",
+                    "start questionnaire", "start part", "answer each question", "write your notes",
+                    "listen carefully")
+        body = ""
+        for _ in range(22):                          # up to ~44s
+            try:
+                body = (await page.inner_text("body", timeout=2000)).lower()
+            except Exception:
+                body = ""
+            await self._cancel_appeal(page, body)
+            if any(s in body for s in ("no longer accessible", "has either been completed or has expired",
+                                       "assessment has expired", "already been completed")):
+                logger.info("[hallo] token EXPIRED / no longer accessible — bailing")
+                return False                         # wall() will report 'expired'
+            if any(s in body for s in _DEV):
+                break
+            if any(s in body for s in _BATTERY):
+                logger.info("[hallo] device-check: already in battery — core will drive")
+                return False
+            await page.wait_for_timeout(2000)
+        else:
+            logger.info("[hallo] device-check page never appeared (body=%r)", body[:80])
             return False                             # not the device-check page
         self._start_mic_feed()                       # gapless voice into the virtmic for the sample
         try:
@@ -998,6 +1020,13 @@ class HalloAdapter(Adapter):
             body = (await page.inner_text("body", timeout=3000)).lower()
         except Exception:
             return None
+        # TOKEN EXPIRED / already consumed — Hallo links are single-use + time-limited (~1 day). A dead
+        # token pops "The assessment is no longer accessible as it has either been completed or has
+        # expired." over the welcome page; Begin then never advances. Terminal — stop fast so the drain
+        # marks it and moves on (do NOT keep re-clicking Begin for the whole session).
+        if any(s in body for s in ("no longer accessible", "has either been completed or has expired",
+                                   "assessment has expired", "already been completed")):
+            return "expired"
         if "won't be able to proceed" in body and ("camera" in body or "microphone" in body):
             # only a WALL if we're stuck ON the device-check (Continue never enabled)
             if not await self._continue_enabled(page):

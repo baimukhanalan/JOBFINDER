@@ -82,6 +82,61 @@ class HalloAdapter(Adapter):
             pass
         self._mic_feed = None
 
+    async def _snap(self, page, label: str) -> None:
+        """Debug screenshot at a module/flow boundary (gated on HALLO_DEBUG=1 so a production run is
+        unslowed). Saves into the hallo media dir + logs the path so a live-driving loop can Read it."""
+        if os.getenv("HALLO_DEBUG") != "1":
+            return
+        try:
+            from backend.tools.assessment_harvester import media as _media
+            shot = await _media.capture(page, self.platform, f"DBG:{label}", [], page.url)
+            if shot:
+                logger.info("[hallo] snap[%s] -> %s", label, shot)
+        except Exception as e:
+            logger.info("[hallo] snap[%s] failed: %s", label, e)
+
+    _FILL_NAMES_JS = r"""(names) => {
+      const [first, last] = names;
+      const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+        return r.width>2 && r.height>2 && s.visibility!=='hidden' && s.display!=='none'; };
+      const setVal = (el, val) => {
+        el.focus();
+        const proto = window.HTMLInputElement.prototype;
+        const d = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (d && d.set) d.set.call(el, val); else el.value = val;
+        el.dispatchEvent(new Event('input', {bubbles:true}));
+        el.dispatchEvent(new Event('change', {bubbles:true}));
+        el.blur();
+      };
+      // candidate name inputs: visible text inputs wide enough to be a name field (the language
+      // selector at top-right is ~69px, so a >=120px width floor drops it).
+      const inputs = [...document.querySelectorAll('input[type=text], input:not([type])')]
+        .filter(vis).filter(e => e.getBoundingClientRect().width >= 120);
+      const labelOf = (el) => { let n=el;
+        for (let i=0;i<5 && n;i++){ const t=(n.textContent||'').toLowerCase();
+          if (t.includes('first name')) return 'first';
+          if (t.includes('last name'))  return 'last';
+          n=n.parentElement; } return ''; };
+      let fEl=null, lEl=null;
+      for (const el of inputs){ const k=labelOf(el);
+        if (k==='first' && !fEl) fEl=el; if (k==='last' && !lEl) lEl=el; }
+      if (!fEl || !lEl){   // geometry fallback: leftmost wide input = First, next = Last
+        const sorted = inputs.slice().sort((a,b)=>a.getBoundingClientRect().x-b.getBoundingClientRect().x);
+        if (!fEl) fEl = sorted[0] || null;
+        if (!lEl) lEl = sorted.find(e => e!==fEl) || null;
+      }
+      let done=0;
+      if (fEl){ setVal(fEl, first); done++; }
+      if (lEl && lEl!==fEl){ setVal(lEl, last); done++; }
+      return done;
+    }"""
+
+    async def _fill_names(self, page, first: str, last: str) -> int:
+        try:
+            return await page.evaluate(self._FILL_NAMES_JS, [first, last])
+        except Exception:
+            return 0
+
     async def _click(self, page, rx: str, timeout: int = 3000) -> bool:
         try:
             b = page.get_by_role("button", name=re.compile("^" + rx, re.I)).first
@@ -107,6 +162,81 @@ class HalloAdapter(Adapter):
                         pass
         except Exception:
             pass
+
+    async def _confirm_submit(self, page) -> bool:
+        """Click the CONFIRM control of a "submit your response / cannot be edited" modal — Submit /
+        Confirm / Proceed (NEVER Stay / Cancel / Close-X). Hallo's is a styled text button ("Submit"),
+        so use robust Playwright role/text locators (real click + actionability) before a JS fallback."""
+        # 1) role=button by exact name
+        for rx in ("Submit", "Confirm", "Proceed"):
+            try:
+                b = page.get_by_role("button", name=re.compile(rf"^{rx}$", re.I))
+                if await b.count():
+                    el = b.first
+                    if await el.is_visible():
+                        await el.click(timeout=2500)
+                        return True
+            except Exception:
+                pass
+        # 2) any element with exact visible text (a styled span/link Submit)
+        for rx in ("Submit", "Confirm", "Proceed"):
+            try:
+                t = page.get_by_text(re.compile(rf"^{rx}$", re.I), exact=False)
+                for i in range(min(await t.count(), 4)):
+                    el = t.nth(i)
+                    try:
+                        if await el.is_visible():
+                            await el.click(timeout=2000)
+                            return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        # 3) JS fallback: click a visible element whose OWN trimmed text is exactly Submit/Confirm
+        try:
+            ok = await page.evaluate(r"""() => {
+              const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+                return r.width>1 && r.height>1 && s.visibility!=='hidden' && s.display!=='none'; };
+              const want = /^(submit|confirm|proceed)$/i;
+              const bad  = /stay|cancel|\bback\b|\bedit\b|\bno\b|review|close/i;
+              const pool = [...document.querySelectorAll('button,[role=button],a,span,div')].filter(
+                e => vis(e) && e.children.length <= 1);
+              for (const e of pool) { const t=(e.innerText||'').trim();
+                if (want.test(t) && !bad.test(t)) { e.click(); return true; } }
+              return false;
+            }""")
+            return bool(ok)
+        except Exception:
+            return False
+
+    async def _ok_modal(self, page) -> bool:
+        """Dismiss a transient proctoring/info modal by its OK/Got-it/Close/Try-Again button — NEVER
+        'Appeal' (an integrity-appeal action) and NEVER the main disabled 'Continue'. Returns True iff
+        it clicked something."""
+        for name in ("OK", "Okay", "Got it", "Got It", "Dismiss", "Close", "Try Again", "Retake"):
+            if await self._click(page, name, 1200):
+                return True
+        return False
+
+    async def _cancel_appeal(self, page, body: str = None) -> bool:
+        """The proctor "Appeal" modal ("Please provide any information that will be helpful when
+        reviewing your account", APPEAL / CANCEL) pops up during the battery (e.g. a best/worst SJT
+        page's proctor flag or an errant click on a latent Appeal control) and BLOCKS the page — nothing
+        in the generic dismisser clears it. Close it via CANCEL (NEVER APPEAL — that files an integrity
+        appeal against the account). Returns True iff the Appeal modal was present + cancelled."""
+        if body is None:
+            try:
+                body = (await page.inner_text("body", timeout=1500)).lower()
+            except Exception:
+                body = ""
+        if "reviewing your account" not in body and "helpful when reviewing" not in body:
+            return False
+        for rx in ("Cancel", "Close", "Dismiss"):
+            if await self._click(page, rx, 1500):
+                await page.wait_for_timeout(700)
+                logger.info("[hallo] proctor Appeal modal dismissed (Cancel)")
+                return True
+        return False
 
     async def _continue_enabled(self, page) -> bool:
         try:
@@ -188,79 +318,102 @@ class HalloAdapter(Adapter):
     async def enter(self, page, url: str) -> None:
         first, last = self._name()
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(3500)
-        await self._click(page, "Accept")            # cookie consent
-        await page.wait_for_timeout(1000)
-        # (1) NAME GATE — target the labelled First/Last Name inputs by placeholder/label (a bare
-        # nth(0)/nth(1) over all text inputs hit a hidden language selector on the tp-global-us variant,
-        # dropping the surname into "First Name" and leaving "Last Name" empty).
-        async def _fill_named(rx_ph: str, val: str) -> bool:
-            for loc in (page.get_by_placeholder(re.compile(rx_ph, re.I)),
-                        page.get_by_label(re.compile(rx_ph, re.I))):
-                try:
-                    if await loc.count():
-                        await loc.first.fill(val, timeout=4000)
-                        return True
-                except Exception:
-                    pass
-            return False
-        if not (await _fill_named(r"first ?name", first) and await _fill_named(r"last ?name", last)):
-            try:  # fallback: the first two text inputs, skipping the 'en' language field
-                tis = page.locator('input[type=text]:not([value="en"]), input:not([type])')
-                if await tis.count() >= 2:
-                    await tis.nth(0).fill(first, timeout=4000)
-                    await tis.nth(1).fill(last, timeout=4000)
-            except Exception:
-                pass
+        await page.wait_for_timeout(2000)
+        await self._click(page, "Accept")            # cookie consent (may render late)
+        # (1) NAME GATE — the tp-global-us welcome page renders First/Last Name as BARE MUI inputs with
+        # NO id / name / placeholder / associated <label> (the visible "First Name" text is a MUI
+        # floating label NOT wired to the input), so get_by_placeholder/get_by_label BOTH miss and the
+        # old `:not([value="en"])` CSS fallback (a static-attribute selector) failed to exclude the
+        # React-set language field → the surname landed in First Name and Last Name stayed EMPTY (proven
+        # on every stuck-drive welcome screenshot). Fill in JS: pick the visible, reasonably-wide text
+        # inputs (excludes the tiny top-right 'en' language selector), map First/Last by the nearest
+        # floating-label text with a left→right geometry fallback, and set the value via the native
+        # setter + input/change events so React registers it. The React SPA shows a LOADING SPINNER for
+        # 5-10s+ before the form paints, so POLL for the inputs (a fixed sleep filled 0 into an empty
+        # spinner page) — dismiss a late cookie banner each pass and stop once both names are set.
+        filled = 0
+        for _ in range(20):                          # up to ~40s for the form to render
+            await page.wait_for_timeout(2000)
+            await self._click(page, "Accept")
+            filled = await self._fill_names(page, first, last)
+            if filled >= 2:
+                break
+        logger.info("[hallo] name gate: filled=%s (%r %r)", filled, first, last)
+        await self._snap(page, "WELCOME")
         await self._tick_all(page)
-        # (1b) SINGLE-PAGE variant (tp-global-us): the Welcome page carries name + Terms + a
-        # "Begin Assessment" button and has NO separate honor-code / device-check pages. Click straight
-        # into the battery and RETURN — otherwise the device-check flow below wastes ~120s waiting for a
-        # Continue that never appears, then fails to match the "Begin Assessment" label and hangs.
+        # (1b) WELCOME → click "Begin Assessment" (tp-global-us) or fall back to a multi-page variant's
+        # Continue/honor-code. Begin leads to the DEVICE-CHECK gate (NOT straight into the battery — the
+        # old "no device-check page" assumption was WRONG; live 2026-09-19 the mic/camera gate always
+        # follows Begin), so DON'T return here — pass the gate in (2).
         await page.wait_for_timeout(800)
-        if await self._click(page, "Begin Assessment"):
-            await page.wait_for_timeout(4000)
-            return
-        await self._click(page, "Continue")
-        await page.wait_for_timeout(3500)
-        # (2) HONOR CODE — tick every clause + continue
-        await self._tick_all(page)
-        await self._click(page, "Continue")
-        await page.wait_for_timeout(6000)
-        # (3) DEVICE CHECK — real camera (daemon, ACCEPTED by Hallo) + gapless virtmic feed + consent +
-        # internet, then the mic RECORD→STOP→PLAY-BACK cycle. The camera passes on the virtual device;
-        # the wall (run 2026-09-14) was the mic 'recording test': Hallo says "complete the recording test
-        # and play back your sample before continuing", and Continue stays disabled until the recorded
-        # sample is PLAYED BACK. The old flow only Start/Retry'd (recorded, never stopped+played).
-        self._start_mic_feed()
+        began = await self._click(page, "Begin Assessment")
+        if not began:
+            await self._click(page, "Continue")
+            await page.wait_for_timeout(3500)
+            await self._tick_all(page)               # older variant: an honor-code page
+            await self._click(page, "Continue")
+        await page.wait_for_timeout(5000)
+        await self._snap(page, "AFTER_BEGIN")
+        # (2) DEVICE CHECK — pass the "Check microphone and camera" gate, then the battery starts.
+        await self._device_check(page)
+        await self._snap(page, "AFTER_DEVCHECK")
+        await page.wait_for_timeout(3000)
+
+    async def _device_check(self, page) -> bool:
+        """Pass the tp-global-us "Check microphone and camera" gate that follows Begin Assessment.
+        Live-mapped 2026-09-19: the real v4l2loopback camera is auto-detected (green ✓); the MIC
+        RECORDING TEST auto-records + plays back the moment "Start" is clicked (a "Retry" button
+        appearing == the sample is captured — there is NO separate Stop/Play-back to click); then
+        ticking the single "TP ... may use my recordings and AI for evaluation and proctoring" consent
+        checkbox + the internet test finishing enables Continue. Returns True once Continue is clicked
+        (into the battery); False (with a diagnostic dump) if it stayed walled."""
         try:
-            await self._click(page, "Start")          # Start Camera
-            await page.wait_for_timeout(3000)
-            await self._log_devcheck_controls(page)   # reveal the exact record/stop/playback labels
-            await self._mic_record_playback(page)     # record a sample + play it back -> enables Continue
-            try:
-                await page.mouse.wheel(0, 600)        # bring the bottom 'I understand' consent into view
-                await page.wait_for_timeout(500)
-            except Exception:
-                pass
-            await self._tick_all(page)
-            for i in range(24):                       # wait for the internet test + Continue to enable
-                if await self._continue_enabled(page):
-                    await self._click(page, "Continue")
+            body = (await page.inner_text("body", timeout=3000)).lower()
+        except Exception:
+            body = ""
+        if not any(s in body for s in ("check microphone and camera", "recording test",
+                                       "won't be able to proceed", "confirm your voice")):
+            return False                             # not the device-check page
+        self._start_mic_feed()                       # gapless voice into the virtmic for the sample
+        try:
+            await page.wait_for_timeout(2500)
+            # (a) mic recording test: Start → AUTO record+playback → a "Retry" button == captured.
+            # A transient proctoring "OK/Appeal" modal (or a Start click that raced the render) can
+            # leave "Start" showing and NO Retry → dismiss the modal (OK, NEVER Appeal) and re-click
+            # Start until Retry appears. ~4 attempts × ~12s.
+            got_retry = False
+            for _attempt in range(4):
+                await self._ok_modal(page)           # clear an OK/Appeal proctor modal if present
+                await self._click(page, "Start", 2500)
+                for _ in range(8):                   # up to ~12s per attempt
+                    await page.wait_for_timeout(1500)
+                    try:
+                        got_retry = await page.evaluate(
+                            "() => [...document.querySelectorAll('button')].some("
+                            "b => /^retry$/i.test((b.innerText||'').trim()))")
+                    except Exception:
+                        got_retry = False
+                    if got_retry:
+                        break
+                    await self._ok_modal(page)
+                if got_retry:
                     break
-                if i in (2, 6, 12):                   # re-run the cycle a few times if it raced the UI
-                    await self._mic_record_playback(page)
+            logger.info("[hallo] device-check recording test: retry_seen=%s", got_retry)
+            # (b) tick the recording/AI proctoring consent
+            await self._tick_all(page)
+            # (c) wait for the internet test + Continue to enable, then click it into the battery
+            for _ in range(30):                      # up to ~60s ("may take a few minutes")
                 await self._tick_all(page)
-                await page.wait_for_timeout(5000)
-            else:
-                await self._log_devcheck_controls(page)   # still walled — log the final control state
+                if await self._continue_enabled(page):
+                    await self._click(page, "Continue", 3000)
+                    await page.wait_for_timeout(3000)
+                    logger.info("[hallo] device-check PASSED — entering battery")
+                    return True
+                await page.wait_for_timeout(2000)
+            await self._log_devcheck_controls(page)  # still walled — diagnose
         finally:
             self._stop_mic_feed()
-        await page.wait_for_timeout(6000)
-        # (4) enter the battery
-        await self._click(page, "Start Questionnaire") or await self._click(page, "Start") \
-            or await self._click(page, "Begin Assessment")
-        await page.wait_for_timeout(4000)
+        return False
 
     # Hallo gates each module behind an instructions page with a module-START button ("Start Part 1",
     # "Start Questionnaire", "Begin", "I'm Ready") that the generic forward matcher misses — click it.
@@ -404,92 +557,65 @@ class HalloAdapter(Adapter):
         return False
 
     async def _pick_best_worst_and_next(self, page) -> bool:
-        """Best/worst SJT: click ONE option's thumbs-UP (best) + a DIFFERENT option's thumbs-DOWN
-        (worst) to enable the disabled Next, then advance. The two thumb icons per option row are
-        detected by CLUSTERING small clickable icon controls into rows (left icon = up/best, right =
-        down/worst). SELF-CORRECTING: tries distinct (best,worst) row pairs until Next actually enables.
-        Best-effort (any valid distinct pair completes the item); never raises."""
+        """Sales/Hardskill best-worst SJT: click ONE option's thumbs-UP (best) + a DIFFERENT option's
+        thumbs-DOWN (worst) to enable Next, then advance. LIVE-MAPPED 2026-09-19: each option is a
+        `<tr>` — a text `<td>` then TWO `<td>` each holding an `<svg class="hoverElement">` (left=up/
+        best, right=down/worst). The thumbs MUST be clicked with a REAL mouse click at the svg centre:
+        a JS `el.click()` does NOT register the selection in React AND intermittently trips the proctor
+        "Appeal" modal (proven — the old cluster+JS-click handler never enabled Next and kept opening
+        Appeal). `page.mouse.click(x,y)` selects cleanly (A-up + B-down → Next enabled, no Appeal).
+        SELF-CORRECTING across (best,worst) row pairs; best-effort; never raises."""
         try:
-            info = await page.evaluate(
-                """() => {
-                  const vis=e=>{const r=e.getBoundingClientRect();
-                    return r.width>=12 && r.width<=70 && r.height>=12 && r.height<=70
-                      && r.bottom>0 && r.top<innerHeight;};
-                  const all=[...document.querySelectorAll('button,[role=button],svg,[class*="thumb" i]')];
-                  const seen=new Set(); const ics=[];
-                  for (const n of all){
-                    if(!vis(n)) continue;
-                    const txt=((n.innerText||'')+(n.getAttribute('aria-label')||'')
-                      +(n.getAttribute('title')||'')).trim().toLowerCase();
-                    if(/back|next|quit|appeal|\\bok\\b|cookie|skip|close|stay|submit/.test(txt)) continue;
-                    let clk=n;
-                    for(let k=0;k<3 && clk;k++){ const cs=getComputedStyle(clk);
-                      if(clk.tagName==='BUTTON'||clk.getAttribute('role')==='button'||clk.onclick
-                        ||cs.cursor==='pointer') break; clk=clk.parentElement; }
-                    clk=clk||n;
-                    const rr=clk.getBoundingClientRect();
-                    if(rr.width>90||rr.height>90) continue;
-                    const key=Math.round(rr.x)+','+Math.round(rr.y);
-                    if(seen.has(key)) continue; seen.add(key);
-                    ics.push({el:clk, x:rr.x+rr.width/2, y:rr.y+rr.height/2});
-                  }
-                  ics.sort((a,b)=>a.y-b.y || a.x-b.x);
-                  const rows=[];
-                  for(const ic of ics){
-                    let row=rows.find(R=>Math.abs(R.y-ic.y)<20);
-                    if(!row){ row={y:ic.y, items:[]}; rows.push(row); }
-                    row.items.push(ic);
-                  }
-                  // an option row has 2-4 icon controls (an <svg>-inside-<button> can double-count);
-                  // take the LEFTMOST as thumbs-up (best) + the RIGHTMOST as thumbs-down (worst).
-                  const optRows=rows.filter(R=>R.items.length>=2 && R.items.length<=4);
-                  window.__bwRows=optRows.map(R=>{const s=R.items.sort((a,b)=>a.x-b.x);
-                    return [s[0].el, s[s.length-1].el];});
-                  return {rows:optRows.length, icons:ics.length};
-                }""")
+            rows = await page.evaluate(r"""() => {
+              const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+                return r.width>1 && r.height>1 && s.visibility!=='hidden' && s.display!=='none'; };
+              const svgs = [...document.querySelectorAll('svg.hoverElement, svg[class*="hover" i]')].filter(vis);
+              const trs = [...document.querySelectorAll('tr')];
+              const groups = new Map();
+              for (const s of svgs) {
+                const r = s.getBoundingClientRect();
+                const tr = s.closest('tr');
+                const key = tr ? ('tr' + trs.indexOf(tr)) : ('y' + Math.round(r.y / 20));
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push({x: r.x + r.width/2, y: r.y + r.height/2});
+              }
+              const out = [];
+              for (const arr of groups.values()) {
+                if (arr.length < 2) continue;               // an option row = up + down thumb
+                arr.sort((a,b) => a.x - b.x);
+                out.push({up:  [Math.round(arr[0].x), Math.round(arr[0].y)],
+                          down:[Math.round(arr[arr.length-1].x), Math.round(arr[arr.length-1].y)]});
+              }
+              out.sort((a,b) => a.up[1] - b.up[1]);          // top→bottom
+              return out;
+            }""")
         except Exception:
+            rows = None
+        n = len(rows) if rows else 0
+        if n < 2:
             return False
-        rows = (info or {}).get("rows") or 0
-        if rows < 2:
-            # detector missed the thumb pairs -> dump the option-area icon DOM ONCE so the exact
-            # up/down control structure can be targeted precisely on the next iteration.
-            if not getattr(self, "_bw_dumped", False):
-                self._bw_dumped = True
-                try:
-                    cands = await page.evaluate(
-                        "() => [...document.querySelectorAll('button,[role=button],svg,[class*=\"thumb\" i],[class*=\"icon\" i]')]"
-                        ".filter(e=>{const r=e.getBoundingClientRect(); return r.width>0 && r.width<=90 && r.height<=90 && r.top<innerHeight && r.bottom>0;})"
-                        ".slice(0,28).map(e=>{const r=e.getBoundingClientRect();"
-                        " const cn=(e.className&&e.className.baseVal!==undefined)?e.className.baseVal:(e.className||'');"
-                        " return (e.tagName+'.'+String(cn)).slice(0,44)+' @['+Math.round(r.x)+','+Math.round(r.y)"
-                        "+' '+Math.round(r.width)+'x'+Math.round(r.height)+'] al='+(e.getAttribute('aria-label')||'');})")
-                    logger.info("[hallo] best/worst detector MISS (rows=%s) — icon candidates: %s",
-                                rows, cands)
-                    await self._log_devcheck_controls(page)
-                except Exception as _e:
-                    logger.info("[hallo] best/worst dump failed: %s", _e)
-            return False
-        allpairs = [(b, w) for b in range(rows) for w in range(rows) if b != w]
-        start = getattr(self, "_bw_pick", 0) % len(allpairs)
+        pairs = [(b, w) for b in range(n) for w in range(n) if b != w]
+        start = getattr(self, "_bw_pick", 0) % len(pairs)
         self._bw_pick = start + 1
-        order = allpairs[start:] + allpairs[:start]
-        for bi, wi in order[:max(rows, 4)]:
+        order = pairs[start:] + pairs[:start]
+        for bi, wi in order[:max(n, 6)]:
             try:
-                await page.evaluate(
-                    "([b,w]) => { const R=window.__bwRows; if(!R) return;"
-                    " if(R[b]&&R[b][0]) R[b][0].click(); if(R[w]&&R[w][1]) R[w][1].click(); }", [bi, wi])
+                await page.mouse.click(rows[bi]["up"][0], rows[bi]["up"][1])
+                await page.wait_for_timeout(300)
+                await page.mouse.click(rows[wi]["down"][0], rows[wi]["down"][1])
+                await page.wait_for_timeout(400)
             except Exception:
                 continue
-            await page.wait_for_timeout(500)
             try:
                 nxt = await page.evaluate(
                     "() => { const b=[...document.querySelectorAll('button')]"
-                    ".find(x=>/^(next|submit)$/i.test((x.innerText||'').trim())); return b?!b.disabled:false; }")
+                    ".find(x=>/^(next|submit|finish)$/i.test((x.innerText||'').trim())); return b?!b.disabled:false; }")
             except Exception:
                 nxt = False
             if nxt:
-                logger.info("[hallo] best/worst SJT: best=row%d worst=row%d enabled Next", bi, wi)
-                if await self._click(page, "Next", 1500) or await self._click(page, "Submit", 1500):
+                logger.info("[hallo] sales best/worst: up-row%d down-row%d enabled Next", bi, wi)
+                if (await self._click(page, "Next", 1500) or await self._click(page, "Submit", 1500)
+                        or await self._click(page, "Finish", 1500)):
                     await page.wait_for_timeout(900)
                     return True
         return False
@@ -499,6 +625,53 @@ class HalloAdapter(Adapter):
             body = (await page.inner_text("body", timeout=2000)).lower()
         except Exception:
             body = ""
+        # proctor "Appeal" modal blocking the page — cancel it (never Appeal)
+        if await self._cancel_appeal(page, body):
+            self._stuck_advances = 0
+            return True
+        # END-OF-MODULE SUBMIT CONFIRMATION modal (live 2026-09-19): the LAST question of a paginated
+        # module (e.g. listening Q5 of 5) carries a "Finish" button, not "Next"; clicking it opens
+        # "Are you sure you wish to proceed with submitting your response? Once submitted, it cannot be
+        # edited." with Stay / Submit. The generic forward re-clicked Finish (covered by the modal) and
+        # never committed → the core looped re-reading Q5. Commit it: click the modal's Submit/Confirm
+        # (NEVER Stay). Fires whenever the confirm text is present so it also commits every later module.
+        if any(s in body for s in ("cannot be edited", "wish to proceed with submitting",
+                                   "sure you wish to proceed", "proceed with submitting")):
+            if await self._confirm_submit(page):
+                self._stuck_advances = 0
+                await page.wait_for_timeout(1800)
+                return True
+        # PAGINATED Q-of-N set (listening comprehension) whose "Finish" is DISABLED = an earlier
+        # question is unanswered — a RESUME artifact (Hallo keeps your position but drops the selected
+        # radios across sessions), so the last page shows Finish[disabled]. REWIND all the way to the
+        # first question (click Back to the start) so the core answers the whole set forward; once all
+        # are answered Finish enables + the confirm modal commits. Capped so a set where answers won't
+        # stick falls through to the out-wait (the module timer auto-submits). Only triggers when a
+        # DISABLED Finish + a Back are both present (never on a normal Next page).
+        try:
+            fin = await page.evaluate(
+                "() => { const b=[...document.querySelectorAll('button')].find("
+                "x=>/^finish$/i.test((x.innerText||'').trim()));"
+                " const bk=[...document.querySelectorAll('button')].find("
+                "x=>/^back$/i.test((x.innerText||'').trim()) && !x.disabled);"
+                " return {finDisabled: b? b.disabled : null, back: !!bk}; }")
+        except Exception:
+            fin = {"finDisabled": None, "back": False}
+        if fin.get("finDisabled") and fin.get("back"):
+            self._rewinds = getattr(self, "_rewinds", 0) + 1
+            if self._rewinds <= 4:
+                logger.info("[hallo] listening Finish disabled — rewinding to Q1 (rewind #%d)", self._rewinds)
+                for _ in range(8):                   # click Back to the first question
+                    if not await self._click(page, "Back", 1200):
+                        break
+                    await page.wait_for_timeout(600)
+                self._stuck_advances = 0
+                await page.wait_for_timeout(800)
+                return True
+            # answers aren't sticking — out-wait the module timer (it auto-submits at 0:00)
+            if "time left" in body:
+                await page.wait_for_timeout(4000)
+                return True
         # TIMED custom-widget sections the core can't read as options (Next stays disabled -> the
         # harvest gives up). Handle the known widgets, else WAIT OUT the countdown so the scored section
         # auto-advances at 0:00 (an unanswered section still auto-submits + moves on). Gated on the
@@ -610,6 +783,41 @@ class HalloAdapter(Adapter):
         # instruction/example/video-intro pages carry a Skip; use it to reach the answerable item faster.
         # Use the precise skip (excludes the 'Skip to main content' a11y link that ^Skip used to grab).
         return await self._skip_forward(page)
+
+    async def dismiss_noise(self, page) -> bool:
+        """The core calls this at the TOP of every walk iteration. Base dismiss_noise clicks
+        Close/OK/Continue — which on the end-of-module SUBMIT-confirmation modal ("... cannot be
+        edited", Stay / Submit / ✕) would click the ✕ and DROP the submit → the module never commits
+        and the last question loops. So intercept that modal here and CONFIRM it (Submit); never let the
+        base close it. Otherwise defer to the generic dismisser."""
+        try:
+            body = (await page.inner_text("body", timeout=1500)).lower()
+        except Exception:
+            body = ""
+        # proctor "Appeal" modal (blocks the page) — cancel it first
+        if await self._cancel_appeal(page, body):
+            return True
+        if any(s in body for s in ("cannot be edited", "wish to proceed with submitting",
+                                   "sure you wish to proceed", "proceed with submitting")):
+            if not getattr(self, "_confirm_dumped", False):
+                self._confirm_dumped = True
+                try:
+                    els = await page.evaluate(
+                        "() => [...document.querySelectorAll('button,[role=button],a,span')]"
+                        ".filter(e=>{const r=e.getBoundingClientRect(); const s=getComputedStyle(e);"
+                        " return r.width>1&&r.height>1&&s.visibility!=='hidden'&&s.display!=='none'"
+                        " && (e.innerText||'').trim().length>0 && (e.innerText||'').trim().length<20;})"
+                        ".slice(0,20).map(e=>e.tagName+':'+(e.getAttribute('role')||'')+':'"
+                        "+(e.innerText||'').replace(/\\s+/g,' ').trim())")
+                    logger.info("[hallo] confirm-modal clickables: %s", els)
+                except Exception:
+                    pass
+            if await self._confirm_submit(page):
+                logger.info("[hallo] submit-confirmation modal COMMITTED")
+                await page.wait_for_timeout(1500)
+                return True
+            return False       # modal present but not yet committed — do NOT let base close it
+        return await super().dismiss_noise(page)
 
     async def read_item(self, page) -> dict:
         item = await super().read_item(page)

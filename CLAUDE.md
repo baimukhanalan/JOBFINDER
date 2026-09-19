@@ -17,8 +17,8 @@ Semi-automatic job-application engine for remote US/CA roles + a self-hosted can
 (company roster + live ATS APIs), tailors a résumé per JD, pre-fills the ATS form, a human reviews + submits (the co-pilot
 can auto-submit — see Gotchas); recruiter replies land in a Gmail-style inbox per candidate.
 
-**Nav** (`mailcrm_ui._NAV`, **5 rail entries**): **Кандидаты** (`/mail/candidates`, primary tab — Gmail-style inbox GROUPED BY
-CANDIDATE), **Вакансии** (merges **Каталог** `/catalog` + **Mass Hiring** `/mass-hiring` + **Незавершённые** `/unfinished`
+**Nav** (`mailcrm_ui._NAV`, **6 rail entries**): **Кандидаты** (`/mail/candidates`, primary tab — Gmail-style inbox GROUPED BY
+CANDIDATE), **События найма** (`/hiring-events` — TP live-Zoom hiring events, see below), **Вакансии** (merges **Каталог** `/catalog` + **Mass Hiring** `/mass-hiring` + **Незавершённые** `/unfinished`
 behind one rail entry + the in-page segmented control `vacancies_seg`; routes unchanged so deep-links work), **Статистика**
 `/stats`, **Пользователи** `/users`, **Health**. Drill-downs: `/queue` (via the roster «📄 N» chip), `/setup` (onboard a real
 candidate), `/candidates/{id}`. Deleted: `/jobs` `/roles` `/apply`; `/mail` (old flat `render_inbox`) kept unrouted as a
@@ -986,6 +986,26 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   picked up by the LIVE `ivremind` daemon within ~60s and DMed to the responsible (or the OWNER chat if unlinked) — so any test
   that assigns MUST `UPDATE iv_interviews SET announced=TRUE WHERE mailbox LIKE 'test_iv_%'` right after (the manager test does),
   or it spams the owner's Telegram with throwaway собесы.
+
+## Hiring Events lane (`backend/tools/hiring_events.py` + `/hiring-events`)
+TP mass-mails personas a **Virtual Hiring Event** invite (sender `teleperformance…@talent.icims.com`, subject «Virtual/…
+Hiring Event»): a LIVE Zoom room where a human joins under a persona and is **hired on the spot for Remote CSR — NO test**.
+The classifier deliberately routes these mass-blasts to `kind='other'` (they're not personal 1:1 interviews), so they never
+reach the «Собес» pool. This is a **SEPARATE capture** reading them straight from `mail_index` by sender+subject — it does NOT
+touch the classifier and does NOT write `iv_interviews` (pool stays clean).
+- `hiring_events.py`: `is_hiring_event(subj,from)` matcher; `extract_schedule/extract_role/extract_join` parse the Maildir body
+  (`mailcrm._parse_full`, read-only); `resolve_join_url`/`resolve_many` follow the **icims tracking redirect → real
+  `*.zoom.us/j/<id>` room** (one light no-follow GET, the 302 `Location` IS the Zoom URL), cached in gitignored
+  `backend/data/hiring_events_zoom.json`. `grouped_events()` groups invites by Zoom room; `render_page()` = the «События найма»
+  surface (reuses `mailcrm_ui._page`/`_page_head`; neutral RU, «Zoom» is the recruiter's tool = allowed, no stack names).
+  `extract_join` MUST never return the unsubscribe link (footer «please go to:») as the join link — that's a tested invariant.
+- Route `routes_hiring_events.py` (`GET /hiring-events` page + `POST /hiring-events/refresh`), guarded-included in
+  `dashboard_app` like the other interview routers; admin-gated (not on the dash_auth allowlist). Nav entry key `hiring`.
+- CLI: `PYTHONPATH=. sg mail -c 'python3 -m backend.tools.hiring_events --refresh --list'` (pre-warm the Zoom cache + print).
+- **Restart to go live:** `pm2 restart jobfinder-alan-dash` (new route + nav; NO indexer/copilot restart — read-only, no
+  classifier change). Optional cron to keep the cache warm as invites land, e.g. `*/30 … python3 -m backend.tools.hiring_events
+  --refresh` (page also resolves misses lazily, so a cron is optional). Live 2026-09-19: 31 invites → 2 Zoom rooms, all resolved.
+  Tests: `test_hiring_events.py` (pure matcher/extractor/zoom-id).
 
 ## Live findings (reality checks — don't re-conclude the opposite)
 - **Salmon (Ashby `salmon-group`) is ACCEPTING, degraded by VELOCITY — NOT a strict-tier wall.** `mail_index` has 49 real

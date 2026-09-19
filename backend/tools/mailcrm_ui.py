@@ -684,8 +684,11 @@ _IC_STATS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 _IC_USERS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
 _IC_LOGOUT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>'
 _IC_HEALTH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>'
+# «События найма» — a video-call glyph (live Zoom hiring events).
+_IC_HIRING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>'
 _NAV = [
     ("/mail/candidates", "candidates", "Кандидаты", _IC_CANDIDATES),
+    ("/hiring-events", "hiring", "События найма", _IC_HIRING),
     ("/catalog", "vacancies", "Вакансии", _IC_CATALOG),
     ("/stats", "stats", "Статистика", _IC_STATS),
     ("/users", "users", "Пользователи", _IC_USERS),

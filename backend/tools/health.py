@@ -322,13 +322,30 @@ _ERR_RE = re.compile(
 # exiting" flock-skip is normal. Don't flag any of those.
 _BENIGN_RE = re.compile(
     r'errors?["\s]*[=:]\s*0\b|\b0\s+errors?\b|error\s*[=:]\s*(?:none|null|0)\b|'
-    r"still going\s*[—-]\s*exiting", re.I)
+    r"still going\s*[—-]\s*exiting|using deterministic", re.I)
 
 
-# A run-completion summary line — every cron here ends a successful run on one of these shapes
-# (`DONE …`, `FINISHED …`, `stats: {…}`/`collect: {…}`, `catalog counts -> …`, or a bare JSON/dict
-# summary). Seen as the newest line it means "the latest run completed", whatever sits above it.
-_SUCCESS_RE = re.compile(r"^\s*(?:DONE\b|FINISHED\b|stats:|collect:|catalog counts|\{)", re.I)
+# A leading log timestamp ("2026-09-19 15:36:35,546 …" / "2026-09-19T04:15:05+0200 …", optionally
+# bracketed) — STRIPPED before the summary check so a TIMESTAMPED completion line is recognised.
+# Every apply/harvester lane prefixes each line with a timestamp, so the anchored summary tokens
+# below never matched their completion line → the newest-first walk fell through to a benign
+# "…failed…" line above and flagged a COMPLETED run as ОШИБКА (the Maximus lane alerted this way,
+# 2026-09: last line "… apply run done: 15 jobs …" sat under "AI polish failed — using deterministic").
+_TS_PREFIX_RE = re.compile(
+    r"^\s*\[?\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:\s?[+-]\d{2}:?\d{2})?\]?\s+")
+# A run-completion summary line — every cron here ends a successful run on one of these shapes:
+# a leading `DONE …`/`FINISHED …`/`stats:`/`collect:`/`catalog counts …`/JSON `{…}` OR (the apply
+# lanes + harvester, which timestamp every line) a `… run done: …` / `apply-campaigns done: …` /
+# `… acked in …s` / `bank total: …` tail. Seen as the newest line it means "the latest run
+# completed", whatever sits above it.
+_SUCCESS_RE = re.compile(
+    r"^\s*(?:DONE\b|FINISHED\b|stats:|collect:|catalog counts|\{)"
+    r"|\b(?:run done|apply-campaigns done|acked in|bank total)\b", re.I)
+
+
+def _is_success_line(ln: str) -> bool:
+    """A completion-summary line, tolerant of a leading log timestamp."""
+    return bool(_SUCCESS_RE.search(_TS_PREFIX_RE.sub("", ln, count=1)))
 
 _DOW_RU = {0: "вс", 1: "пн", 2: "вт", 3: "ср", 4: "чт", 5: "пт", 6: "сб"}
 
@@ -462,7 +479,7 @@ def _lane_row(label: str, fn: str, max_h: float, entry: dict | None, tracked: bo
     for ln in reversed(tail[-4:]):
         if not ln.strip():
             continue
-        if _SUCCESS_RE.search(ln) or _BENIGN_RE.search(ln):
+        if _is_success_line(ln) or _BENIGN_RE.search(ln):
             break
         if _ERR_RE.search(ln):
             err = True
@@ -1333,24 +1350,34 @@ def check_and_alert(cooldown: int = 14400) -> dict:
     def _save(s: dict) -> None:
         _save_json(_ALERT_STATE, s)
 
-    def _send(text: str) -> None:
-        if _tg(text):
+    def _send(text: str) -> bool:
+        ok = _tg(text)
+        if ok:
             st["last_ok_send"] = now
+        return ok
 
     if down:
         if now - int(st.get("last", 0)) >= cooldown:
             body = (f"🔴 <b>JobFinder health</b> — {_plural(len(down), 'сбой', 'сбоя', 'сбоев')} ({snap['ts']})\n\n"
                     + "\n".join("• " + d for d in down[:12]))
-            _send(body)
             print(f"[health] ALERT: {len(down)} down: {down}", flush=True)
-            st["last"] = now
+            # Advance the throttle ONLY when the alert was actually DELIVERED. A transient send
+            # failure (api.telegram.org blip / momentary token reject) must not consume the whole
+            # `cooldown` window while the box is genuinely down — otherwise the owner is silenced
+            # for hours over a delivery hiccup. On failure we keep retrying every cron tick.
+            if _send(body):
+                st["last"] = now
         st["active"] = True
         _save(st)
     else:
         if st.get("active"):
-            _send(f"🟢 <b>JobFinder health</b> — всё восстановилось ({snap['ts']})")
             print("[health] RECOVERED", flush=True)
-        st["active"] = False
+            # Clear the alert only once the recovery note is delivered, so a failed send retries
+            # next tick instead of silently swallowing the "всё восстановилось" message.
+            if _send(f"🟢 <b>JobFinder health</b> — всё восстановилось ({snap['ts']})"):
+                st["active"] = False
+        else:
+            st["active"] = False
         _save(st)
     return {"overall": snap["overall"], "down": down}
 

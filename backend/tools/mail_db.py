@@ -115,8 +115,31 @@ def _cur(dict_rows: bool = True):
 
 
 # ---- schema --------------------------------------------------------------------
+# Columns added after the original CREATE TABLE, with their DDL types. ensure_schema adds
+# only the ones the live table LACKS (checked via information_schema — a plain SELECT),
+# because a bare `ADD COLUMN IF NOT EXISTS` still takes the table's ACCESS EXCLUSIVE lock even
+# when the column already exists — and a boot/indexer ensure_schema would then queue every CRM
+# reader behind a no-op DDL if any session held the table (the mail_index is read on every
+# /mail request). See the repo DDL rule in CLAUDE.md.
+_EXTRA_COLS = (
+    # booking_url / booking_provider: the recruiter self-schedule link (Calendly/ModernLoop/
+    # GoodTime/…) extracted from the FULL body at index time (interview_priority.booking_link,
+    # provider-scoped so a marketing/CDN link never counts). Populated only for interview mail
+    # (None otherwise). The «Собес» priority surface reads this column so its "directly bookable
+    # now" signal has full-body coverage (~22%) instead of the snippet-bound ~2.6%.
+    ("booking_url", "TEXT"), ("booking_provider", "TEXT"),
+)
+
+
+def _existing_columns(cur, table: str) -> set[str]:
+    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name=%s", (table,))
+    return {r[0] for r in cur.fetchall()}
+
+
 def ensure_schema() -> None:
     with _cur(dict_rows=False) as cur:
+        # A blocked DDL fails fast instead of holding the whole mail_index hostage for hours.
+        cur.execute("SET LOCAL lock_timeout='15s'")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS mail_index (
           id           BIGSERIAL PRIMARY KEY,
@@ -149,11 +172,15 @@ def ensure_schema() -> None:
           key   TEXT PRIMARY KEY,
           value TEXT NOT NULL
         );""")
+        have = _existing_columns(cur, "mail_index")
+        for col, decl in _EXTRA_COLS:
+            if col not in have:
+                cur.execute(f"ALTER TABLE mail_index ADD COLUMN IF NOT EXISTS {col} {decl}")
 
 
 _COLS = ("mailbox", "candidate", "candidate_id", "path", "path_hash", "from_name",
          "from_email", "subject", "snippet", "kind", "thread_key", "has_att",
-         "outbound", "date_ts", "seen")
+         "outbound", "date_ts", "seen", "booking_url", "booking_provider")
 
 
 # ---- writes (indexer) ----------------------------------------------------------
@@ -530,7 +557,8 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
         # can parse the booking deadline + role WITHOUT reading the .eml file (a per-request
         # 229-file MIME parse was ~26s on a cold cache — see interview_priority).
         cur.execute(
-            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key, subject, snippet, date_ts "
+            "SELECT DISTINCT ON (mailbox) mailbox, path_hash, thread_key, subject, snippet, date_ts, "
+            "booking_url, booking_provider "
             "FROM mail_index WHERE mailbox = ANY(%s) AND kind='interview' AND NOT outbound "
             "ORDER BY mailbox, date_ts DESC, path_hash DESC", (mboxes,))
         iv = {r["mailbox"]: dict(r) for r in cur.fetchall()}
@@ -569,6 +597,8 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
             "iv_subject": im.get("subject") or "",
             "iv_snippet": im.get("snippet") or "",
             "iv_ts": im.get("date_ts") or 0,
+            "iv_booking_url": im.get("booking_url") or "",
+            "iv_booking_provider": im.get("booking_provider") or "",
         })
     return groups
 

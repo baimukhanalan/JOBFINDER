@@ -40,13 +40,15 @@ WITH stage AS (
 ),
 latest AS (
     SELECT DISTINCT ON (mailbox)
-           mailbox, candidate, subject, snippet, from_email, from_name, date_ts, path_hash
+           mailbox, candidate, subject, snippet, from_email, from_name, date_ts, path_hash,
+           booking_url, booking_provider
       FROM mail_index
      WHERE kind='interview' AND NOT outbound
      ORDER BY mailbox, date_ts DESC, path_hash DESC
 )
 SELECT l.mailbox, l.candidate, l.subject, l.snippet, l.from_email, l.from_name, l.date_ts,
-       l.path_hash AS source_hash
+       l.path_hash AS source_hash,
+       l.booking_url AS iv_booking_url, l.booking_provider AS iv_booking_provider
   FROM stage s
   JOIN latest l ON l.mailbox = s.mailbox
   LEFT JOIN (SELECT DISTINCT mailbox FROM iv_interviews WHERE status <> 'cancelled') iv

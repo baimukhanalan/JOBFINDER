@@ -390,8 +390,14 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   regex — a bare `calendly.com`/`goodtime`/`modernloop` substring over-matches a privacy footer + a CDN image, verified) sets
   `has_booking`/`booking_provider` → a «📅 запись» marker + the urgency boost. It's a PRESENCE signal only: the exact last
   bookable SLOT/date is NOT read (Calendly/ModernLoop/GoodTime are JS SPAs behind bot-protection + the links soft-404 when the
-  window closes). Coverage is snippet-bound today (~2.6%); the enrichment reads subject+snippet (no body I/O), so full ~22%
-  coverage needs the booking URL extracted at INDEX time into a mail_index column (not yet wired). Tests: `test_interview_priority.py`.
+  window closes). **The link is extracted from the FULL body at INDEX time** (`mailcrm.build_index_row` calls the SAME
+  provider-scoped `interview_priority.booking_link` — imported, kept in sync) into `mail_index.booking_url`/`booking_provider`
+  (added under the DDL rule in `mail_db._EXTRA_COLS`), and `enrich_interview_groups` reads that column first
+  (carried as `iv_booking_url`/`iv_booking_provider` by `candidate_groups` + `pool._UNALLOCATED_SQL`), falling back to the
+  subject+snippet scan only for rows indexed before the column existed — so coverage went from the snippet-bound ~2.6% to the
+  full-body ~21% (measured over the 212 latest interview messages). Changing this parsing needs `pm2 restart
+  jobfinder-mail-indexer` (new `build_index_row`) + `jobfinder-alan-dash` (new read SQL) + a reindex to backfill the column on
+  existing rows (a fresh mail only gets it after the indexer restart). Tests: `test_interview_priority.py`.
 - **Operator assessment control** on grouped cards (`_assessment_control` → `assessment_inner`): a pending TEST (matching
   `mail_db._TEST_SUBJECT_SQL` — any test/proctor/aptitude/amcat/harver/`video interview`/`magic link` subject) shows «✓
   Отметить»; marking re-tags rows `action_needed→assessment_done` so the item LEAVES «Действие» (shared helper

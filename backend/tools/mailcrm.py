@@ -866,6 +866,15 @@ def build_index_row(path: str, seen: int) -> dict | None:
     full_text = _message_text(msg)
     snip = full_text[:280]
     from_email = _email_only(frm)
+    # Self-schedule booking link (Calendly/ModernLoop/GoodTime/…) from the FULL body — the same
+    # provider-scoped extractor the «Собес» priority surface uses, imported so the two stay in
+    # sync. Scanning the whole body here (not just the 280-char snippet the surface reads live)
+    # lifts the "directly bookable now" coverage from ~2.6% to ~22%. Best-effort — never fatal.
+    try:
+        from backend.tools import interview_priority
+        booking_url, booking_provider = interview_priority.booking_link(subj, full_text)
+    except Exception:
+        booking_url, booking_provider = None, None
     return {
         "mailbox": box["email"], "candidate": box["name"], "candidate_id": box["id"],
         "path": path, "path_hash": _pid(path),
@@ -876,6 +885,7 @@ def build_index_row(path: str, seen: int) -> dict | None:
         "has_att": any(_is_attachment(p) for p in msg.walk()),
         "outbound": from_email.lower() == box["email"],
         "date_ts": _date_ts(msg, path), "seen": bool(seen),
+        "booking_url": booking_url, "booking_provider": booking_provider,
     }
 
 

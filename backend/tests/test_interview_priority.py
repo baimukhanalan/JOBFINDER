@@ -168,6 +168,50 @@ def test_role_from_email_maps_title_to_category():
     assert ip._role_from_email("Your interview is scheduled", "") is None
 
 
+# ---- self-schedule booking link --------------------------------------------------
+def test_booking_link_provider_scoped():
+    # a real booking path matches; a marketing/CDN link on the same host does NOT
+    assert ip.booking_link("", "Book here: https://calendly.com/acme-recruiting/30min today") \
+        == ("https://calendly.com/acme-recruiting/30min", "calendly")
+    assert ip.booking_link("", "footer https://calendly.com/pricing and https://a.goodtime.io/s3/logo.png") \
+        == (None, None)
+
+
+def _base_group(**kw):
+    g = {"mailbox": "x@takhet.com", "direction": "it", "iv_hash": ""}  # direction set → no DB pool.enrich
+    g.update(kw)
+    return g
+
+
+def test_enrich_reads_booking_column_first():
+    # the index-time column WINS over the snippet scan (full-body coverage), even when the
+    # subject/snippet carry no link at all
+    g = _base_group(iv_subject="Your interview", iv_snippet="Details attached.",
+                    iv_booking_url="https://calendly.com/deep/in-the-body",
+                    iv_booking_provider="calendly")
+    ip.enrich_interview_groups([g], hash_key="iv_hash")
+    assert g["has_booking"] is True
+    assert g["booking_url"] == "https://calendly.com/deep/in-the-body"
+    assert g["booking_provider"] == "calendly"
+
+
+def test_enrich_falls_back_to_snippet_when_column_absent_or_empty():
+    # no column (row indexed before the migration) → scan subject+snippet as before
+    g1 = _base_group(iv_subject="Interview",
+                     iv_snippet="pick a time https://calendly.com/rec/15min please")
+    ip.enrich_interview_groups([g1], hash_key="iv_hash")
+    assert g1["has_booking"] is True and g1["booking_provider"] == "calendly"
+    # empty-string column ('' from a NULL DB value) also falls back
+    g2 = _base_group(iv_booking_url="", iv_booking_provider="",
+                     iv_subject="Interview", iv_snippet="link https://calendly.com/rec/15min")
+    ip.enrich_interview_groups([g2], hash_key="iv_hash")
+    assert g2["has_booking"] is True and g2["booking_url"] == "https://calendly.com/rec/15min"
+    # no link anywhere → not bookable
+    g3 = _base_group(iv_subject="Interview", iv_snippet="We will email you a time.")
+    ip.enrich_interview_groups([g3], hash_key="iv_hash")
+    assert g3["has_booking"] is False and g3["booking_url"] is None
+
+
 # ---- live DB (read-only, skipped without a CRM DSN) --------------------------------
 try:
     from backend.tools import mail_db

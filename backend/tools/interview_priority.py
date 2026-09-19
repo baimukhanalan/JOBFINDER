@@ -384,8 +384,16 @@ def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") ->
         g["invite_ts"] = invite_ts or None
         g["invite_age_days"] = (int(math.floor((now - invite_ts) / _DAY))
                                 if invite_ts else None)
-        # self-schedule link (a "directly bookable now" signal; last-slot date is a separate job)
-        b_url, b_prov = booking_link(subj, body)
+        # self-schedule link (a "directly bookable now" signal; last-slot date is a separate job).
+        # The index-time column (mail_index.booking_url, extracted from the FULL body by
+        # mailcrm.build_index_row → ~22% coverage) WINS; the snippet scan below is the fallback for
+        # rows indexed before the column existed (snippet-bound, ~2.6%). Both use the same
+        # provider-scoped `booking_link`, so they never disagree on a link that IS in the snippet.
+        col_url = g.get("iv_booking_url")
+        if col_url:
+            b_url, b_prov = col_url, (g.get("iv_booking_provider") or None)
+        else:
+            b_url, b_prov = booking_link(subj, body)
         g["booking_url"] = b_url
         g["booking_provider"] = b_prov
         g["has_booking"] = bool(b_url)

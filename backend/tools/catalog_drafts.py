@@ -78,7 +78,8 @@ _HUMAN_FILE_RE = re.compile(
 # NO demographic keyword — the signal ('Person with disability', 'Neurodivergent', 'Veteran',
 # 'Refugee') lives only in the options. Kept in sync with dropdowns._DEMOGRAPHIC / analyzer._skip.
 _DEMOGRAPHIC_LABEL_RE = re.compile(
-    r"(?i)(gender|rac(e|ial)|ethnic|veteran|disabilit|demographic|"
+    r"(?i)(gender|rac(e|ial)|ethnic|veteran|serve(?:d)? in the (?:u\.?s\.? )?(?:military|armed forces|armed services)|"
+    r"disabilit|demographic|"
     r"hispanic|latin[ox]?\b(?!\s*americ)|pronoun|sexual orientation|transgender|lgbtq|neurodiverg|self.?identif"
     r"|under-?represented|marginali[sz]ed (?:group|communit)"
     r"|your (?:current )?age\b|age (?:range|group|bracket)|date of birth|\bdob\b)")
@@ -842,10 +843,18 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
             drafted.setdefault("Discipline", e0["field"])  # field of study
 
     # Structured EMPLOYMENT work-history block (newer Greenhouse hosted forms): Company name,
-    # Title, Start/End date components, and a 'Current role' checkbox — the persona's most
-    # recent role (experience[0]) carries all of it. Résumé dates are year-only ('2022-Present'),
-    # so the month defaults to January; a 'Present'/'Current' role ticks 'Current role' (which
-    # waives the End date), else the end year is parsed from the range.
+    # Title, Start/End date components — the persona's most recent role (experience[0]) carries
+    # it. Résumé dates are year-only ('2022-Present'), so the month defaults to January and the
+    # end year is parsed from the range (else today).
+    # NB: we DO NOT tick the 'Current role' checkbox even for a 'Present' role. On the standard
+    # Greenhouse form checking it WAIVES (hides) the End date, but on natera-style forms it leaves
+    # 'End date month*' VISIBLE + REQUIRED yet makes its react-select INERT — `fill_react_selects_
+    # known`/`apply_react_select_choice` then cannot select any option (proven live 2026-09-19:
+    # check → then fill leaves 'End date month*' EMPTY, blocking auto-submit; fill → then check
+    # keeps it), so a checked 'Current role' + a still-required End date is an unsatisfiable field.
+    # Since we ALWAYS supply a concrete End date below (fillable on EVERY form when 'Current role'
+    # is left unticked), the checkbox is redundant AND harmful — leave it unticked. A synthetic
+    # persona's current role reads as ending "today", which is acceptable filler.
     exp = ((d.get("resume") or {}).get("experience") or [])
     if exp:
         x0 = exp[0]
@@ -862,12 +871,9 @@ def materialize_prefill(job_id: int) -> tuple[str, str]:
         if years:
             drafted.setdefault("Start date year", years[0])
         drafted.setdefault("Start date month", "January")
-        if re.search(r"(?i)present|current", dates):
-            drafted.setdefault("Current role", "Yes")
         # ALWAYS supply an End date so a required 'End date month'/'End date year' never blocks the
         # submit — a single-year or unparseable résumé range (the #1 unfilled field, 56 jobs) hit
         # NEITHER branch before and stayed blank. A 2-year range uses its end; otherwise today.
-        # Harmless when 'Current role=Yes' waives the End date (setdefault never overrides).
         drafted.setdefault("End date year", years[-1] if len(years) >= 2 else str(_t.year))
         drafted.setdefault("End date month", "December" if len(years) >= 2 else _MON[_t.month - 1])
 
@@ -931,7 +937,7 @@ def apply_url_for_job(job: dict) -> str:
 # Bump when the scraper/generator changes in a way that should force a fresh draft on
 # the next click (so stale drafts from before the fix are regenerated, not reused).
 # v3: synthetic per-job persona + persona.json for the co-pilot /load.
-_SCRAPE_V = 10  # bump: axon military/armed-forces demographic false-positive removed (regenerate cached axon drafts)
+_SCRAPE_V = 11  # bump: stop ticking 'Current role' (left natera 'End date month*' inert+unfilled) + military-veteran demographic self-ID gated
 
 
 def ensure_and_wire(job_id: int, gender: str | None = None, name: str | None = None,

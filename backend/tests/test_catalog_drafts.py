@@ -198,6 +198,18 @@ def test_real_latino_demographic_still_gated():
     assert cd._is_demographic("Disability Status", ["Yes", "No", "I do not want to answer"]) is True
 
 
+def test_served_in_military_veteran_selfid_gated_not_axon_screeners():
+    """A protected-veteran self-ID with no 'veteran' token (Coalition's live "Have you ever
+    served in the military?") gates as demographic; Axon's criminal 'Prohibited Possessor' /
+    experience screeners with bare 'military'/'armed forces' stay ANSWERABLE (not gated)."""
+    assert cd._is_demographic("Have you ever served in the military?", ["Yes", "No", "Prefer not to say"]) is True
+    assert cd._is_demographic("Have you served in the U.S. Armed Forces?", ["Yes", "No"]) is True
+    for screener in ("Have you ever been discharged from the Armed Forces under dishonorable conditions?",
+                     "Have you ever been convicted in any court, including a military court, of a felony?",
+                     "Do you have experience working in law enforcement, corrections, military, or another environment?"):
+        assert cd._is_demographic(screener, ["Yes", "No"]) is False, screener
+
+
 # ---- unit: "based in a Latin American country?" answered from the persona's country -------
 # LatAm-exclusive employers (GoFasti) auto-reject non-LatAm applicants; the etalon for such a
 # role is synthesized as a real LatAm resident, so the screener must answer YES from the
@@ -280,3 +292,51 @@ def test_cover_letter_NOT_wired_for_real_persona(monkeypatch, tmp_path):
 def test_cover_letter_absent_when_body_empty(monkeypatch, tmp_path):
     drafted = _materialize_with_draft(monkeypatch, tmp_path, "demo_jane_doe1234", "")
     assert "Cover Letter" not in drafted, drafted
+
+
+def _materialize_with_experience(monkeypatch, tmp_path, dates: str):
+    """materialize_prefill with a stubbed job whose most-recent role has these `dates`."""
+    import json
+    from backend.tools import catalog_drafts as cdx
+    from backend.tools import drafts_ui, catalog_db
+    job = {
+        "id": 999002, "title": "Data Analyst", "company": "natera",
+        "company_key": "natera", "ats": "greenhouse",
+        "url": "https://job-boards.greenhouse.io/natera/jobs/6188291004",
+        "external_id": "6188291004",
+        "draft": {
+            "candidate": {"id": "demo_x1", "name": "X", "country": "United States",
+                          "work_authorization": "citizen", "email": "x@takhet.com"},
+            "answers": [], "cover_letter": "",
+            "resume": {"education": [], "personal_info": {},
+                       "experience": [{"company": "Remote Solutions Inc.",
+                                       "title": "Senior Data Analyst", "dates": dates}]},
+        },
+    }
+    monkeypatch.setattr(catalog_db, "get_job", lambda _id: job)
+    monkeypatch.setattr(drafts_ui, "resume_pdf", lambda _id: b"%PDF-1.4 stub")
+    monkeypatch.setattr(cdx, "PREFILL_ROOT", tmp_path)
+    pid, jid = cdx.materialize_prefill(999002)
+    return json.loads((tmp_path / pid / jid / "report.json").read_text())["drafted_answers"]
+
+
+def test_present_role_does_not_tick_current_role_but_supplies_end_date(monkeypatch, tmp_path):
+    """Regression (natera, live 2026-09-19): a 'Present' role must NOT tick the 'Current role'
+    checkbox — on natera-style GH forms that leaves the still-REQUIRED 'End date month*'
+    react-select INERT (unfillable) and blocks auto-submit. Instead ALWAYS supply a concrete,
+    fillable End date so the required field is satisfied on every form."""
+    drafted = _materialize_with_experience(monkeypatch, tmp_path, "2021-Present")
+    assert "Current role" not in drafted, drafted
+    _MON = {"January", "February", "March", "April", "May", "June", "July",
+            "August", "September", "October", "November", "December"}
+    assert drafted.get("End date month") in _MON, drafted
+    assert (drafted.get("End date year") or "").isdigit(), drafted
+    assert drafted.get("Start date month") == "January", drafted
+
+
+def test_past_role_supplies_end_date_from_range(monkeypatch, tmp_path):
+    """A closed 2-year range keeps its own end (year=range end, month=December) + no 'Current role'."""
+    drafted = _materialize_with_experience(monkeypatch, tmp_path, "2018-2021")
+    assert "Current role" not in drafted, drafted
+    assert drafted.get("End date year") == "2021", drafted
+    assert drafted.get("End date month") == "December", drafted

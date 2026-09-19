@@ -3,7 +3,11 @@
 The Mac's real camera is the only way past the AMCAT WCI200 proctor, reached over a Tailscale-nc →
 socat CDP tunnel. This tool makes that lane SELF-MANAGING + OBSERVABLE (owner ask 2026-09-18):
 
-  * AUTO-START the tunnel ONLY when there is FRESH work (a Sutherland invite not already done/skipped).
+  * AUTO-START — ONLY when there is FRESH work (a Sutherland invite not already done/skipped) — the WHOLE
+    Mac drive rig: the CDP tunnel, the keep-awake (`caffeinate`), AND OBS + its Virtual Camera
+    (`_ensure_obs`, the AMCAT WCI200 proctor needs the Mac's REAL camera, which the OBS Virtual Camera
+    feeds over CDP). OBS start is idempotent — an already-running OBS is LEFT alone (never restarted, so a
+    live drive's camera is never disturbed).
   * DRIVE each fresh invite through the Mac by FRESH-NAV (its own autologin link, `adapter.enter` hard-
     reloads first so the shared Mac tab can't re-read a stale parked page) — harvest_runner marks CRM
     «пройдено» on a real completion. Keeps the Mac awake WHILE driving via `MAC_SSH` (`caffeinate`,
@@ -14,8 +18,11 @@ socat CDP tunnel. This tool makes that lane SELF-MANAGING + OBSERVABLE (owner as
       - `link-expired` (dead SHL token) → skipped in ONE pass (unrecoverable);
       - reached-but-empty (0 items, «evaluating»/submitted) → skipped after `_SKIP_AFTER` cumulative
         low-yield attempts (persisted `sutherland_attempts.json`).
-  * AUTO-STOP: when no fresh work remains (or the Mac is offline), tear the tunnel DOWN and EXIT. Never
-    spins — the Health «Ассессменты» group + `health --alert` surface an offline Mac / futile churn.
+  * AUTO-STOP: when no fresh work remains (or the Mac is offline), close OBS (`_stop_obs`, so the Mac can
+    idle/sleep — GUARDED: never while a local `shl_sutherland` drive is still using the camera) and tear
+    the tunnel DOWN, then EXIT. Never spins — the Health «Ассессменты» group + `health --alert` surface
+    an offline Mac / futile churn. (pmset never-sleep is best-effort only: `sudo -n pmset` needs a
+    password on the Mac, so keep-awake leans on the owner's pre-set `SleepDisabled=1` + `caffeinate`.)
 
 ONE-SHOT + flock (single instance): invoke from cron (`*/15`, flock-skipped when a run overruns) and
 event-driven from `mail_indexer` on a fresh talentcentral invite. `--dry-run` reports intent only;
@@ -181,6 +188,97 @@ def _keep_mac_awake() -> str:
         return f"caffeinate SSH failed ({str(e)[:50]}) — check Remote Login / MAC_SSH"
 
 
+def _mac_ssh(target: str, remote_cmd: str, timeout: int) -> "subprocess.CompletedProcess | None":
+    """Run ONE blocking SSH command on the Mac (best-effort). `target` is MAC_SSH, shlex-split — an ssh
+    alias like 'macalan' (its ProxyCommand self-heals the egress hop) OR a full '-p 2222 user@host'.
+    Returns the CompletedProcess, or None if SSH itself failed/timed out — callers treat None as
+    'Mac unreachable' and never raise."""
+    try:
+        return subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6",
+             "-o", "StrictHostKeyChecking=accept-new", *shlex.split(target), remote_cmd],
+            capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+
+
+def _obs_running(target: str) -> "bool | None":
+    """True/False if OBS is up on the Mac; None if the Mac was unreachable over SSH."""
+    r = _mac_ssh(target, "pgrep -x OBS >/dev/null && echo up || echo down", 12)
+    if r is None:
+        return None
+    return "up" in (r.stdout or "")
+
+
+def _obs_camera_present(target: str) -> bool:
+    """Best-effort: is an OBS Virtual Camera device listed on the Mac? `system_profiler SPCameraDataType`
+    is slow (several s) so this is ONE generously-timed, NON-fatal probe — a False means 'presence
+    unconfirmed', NOT 'camera down' (we never restart a running OBS on the strength of it — see
+    `_ensure_obs`)."""
+    r = _mac_ssh(target, "system_profiler SPCameraDataType 2>/dev/null", 25)
+    return bool(r) and ("obs virtual" in (r.stdout or "").lower())
+
+
+def _ensure_obs() -> str:
+    """Bring OBS + its Virtual Camera UP on the Mac BEFORE a drive — the AMCAT WCI200 proctor needs the
+    Mac's REAL camera, which the OBS Virtual Camera feeds over CDP. Best-effort + env-gated on MAC_SSH,
+    never raises (like `_keep_mac_awake`). If OBS is ALREADY running, LEAVE it (idempotent no-op — assume
+    its cam is feeding, so a live drive's camera is never disturbed by a restart; a running-OBS-with-cam-
+    off is a logged note, not a forced restart). Else `open -a OBS --args --startvirtualcam
+    --minimize-to-tray` (headless, no sudo) + poll (≤~20s) until the OBS process is up, then a one-shot
+    best-effort virtual-cam presence note. Returns a status line for the log/Health."""
+    target = os.environ.get("MAC_SSH", "").strip()
+    if not target:
+        return ("OBS not auto-managed — set MAC_SSH (e.g. 'macalan') + keep OBS's Virtual Camera on, "
+                "or start OBS manually on the Mac")
+    up = _obs_running(target)
+    if up is None:
+        return "OBS state unknown — Mac unreachable over SSH (check Remote Login / MAC_SSH)"
+    if up:
+        return "OBS already running — leaving its Virtual Camera as-is (no restart)"
+    # not up → start it HEADLESSLY with the virtual cam already feeding (no sudo; won't steal focus)
+    _mac_ssh(target, "open -a OBS --args --startvirtualcam --minimize-to-tray", 15)
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        time.sleep(2)
+        if _obs_running(target):
+            cam = _obs_camera_present(target)
+            return ("OBS started (--startvirtualcam)"
+                    + (" + Virtual Camera detected" if cam else " (virtual-cam presence unconfirmed)"))
+    return "OBS start issued but process not confirmed up within ~20s (Mac may be offline)"
+
+
+def _drive_running_locally() -> bool:
+    """True if a `shl_sutherland` `harvest_runner` drive is executing on THIS server (its Chrome-over-CDP
+    session is USING the Mac's OBS camera). Guards `_stop_obs` so a manual/concurrent drive's proctored
+    camera is never killed out from under it. The supervisor's OWN cmdline doesn't contain 'harvest_runner'
+    so it never self-matches."""
+    try:
+        r = subprocess.run(["pgrep", "-f", "harvest_runner.*shl_sutherland"],
+                           capture_output=True, text=True, timeout=5)
+        return bool((r.stdout or "").strip())
+    except Exception:
+        return False
+
+
+def _stop_obs() -> str:
+    """Close OBS on the Mac (its Virtual Camera stops) so the Mac can idle/sleep when NO test is pending.
+    Called ONLY in the AUTO-STOP path (idle / queue drained / exit) where `_fresh()` is empty, so no invite
+    remains to drive. Best-effort + env-gated on MAC_SSH, never raises. GUARDED: refuses to kill OBS while a
+    `shl_sutherland` drive is running on THIS server (its CDP session is using the live proctored camera —
+    a kill would break it). Also BEST-EFFORT releases the manual never-sleep (`sudo -n pmset disablesleep
+    0`), which needs a password on this Mac → silently ignored (the pre-set `SleepDisabled=1` + caffeinate
+    already cover keep-awake; we do NOT block on pmset)."""
+    target = os.environ.get("MAC_SSH", "").strip()
+    if not target:
+        return "OBS not auto-managed (no MAC_SSH)"
+    if _drive_running_locally():
+        return "OBS left UP — a Sutherland drive is still running (camera in use)"
+    r = _mac_ssh(target,
+                 "pkill -x OBS 2>/dev/null; sudo -n pmset disablesleep 0 2>/dev/null; true", 20)
+    return "OBS stopped on the Mac (idle)" if r is not None else "OBS stop skipped — Mac unreachable"
+
+
 def _load_attempts() -> dict:
     try:
         with open(_ATTEMPTS) as f:
@@ -246,11 +344,13 @@ def run(dry: bool, max_jobs: int) -> None:
     _log(f"fresh Sutherland invites: {len(fresh)}")
     if not fresh:
         if not dry:
+            _log("OBS: " + _stop_obs())   # queue empty → let the Mac idle/sleep (guarded if a drive runs)
             _tunnel_down()
-        _log("idle: no fresh work → tunnel DOWN, exit")
+        _log("idle: no fresh work → OBS + tunnel DOWN, exit")
         return
     if dry:
-        _log(f"[dry-run] would ensure tunnel + drive up to {max_jobs} (mac_online check skipped)")
+        _log(f"[dry-run] would ensure OBS (Virtual Camera) + tunnel + caffeinate, then drive up to "
+             f"{max_jobs} (mac_online check skipped)")
         return
     if not _tunnel_up():
         _log("no tunnel to the Mac — exit")
@@ -259,6 +359,7 @@ def run(dry: bool, max_jobs: int) -> None:
         _log("Mac OFFLINE/asleep — not driving (Health shows «down» + alerts). Tunnel left up briefly.")
         return
     _log("Mac no-sleep: " + _keep_mac_awake())    # keep the Mac awake for the duration of the drives
+    _log("OBS: " + _ensure_obs())                 # bring the Virtual Camera up before driving (WCI200)
     attempts = _load_attempts()
     passed = skipped = partial = 0
     for mbx, url in fresh[:max_jobs]:
@@ -311,8 +412,9 @@ def run(dry: bool, max_jobs: int) -> None:
             _log(f"partial {mbx} ({items} items) — retry/resume next run")
         _save_attempts(attempts)
     if not _fresh():
+        _log("OBS: " + _stop_obs())   # nothing left to drive → close OBS so the Mac can idle/sleep
         _tunnel_down()
-        _log("queue drained → tunnel DOWN")
+        _log("queue drained → OBS + tunnel DOWN")
     _log(f"done: passed={passed} skipped={skipped} partial={partial}")
 
 

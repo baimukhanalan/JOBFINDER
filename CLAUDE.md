@@ -121,7 +121,21 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   target, `shlex`-split; `macalan` = ssh-config host `100.86.135.112` user `alanbaimukhan` key `id_ed25519` ProxyCommand
   `tailscale --socket=ts-egress/0 nc %h %p`, which self-heals per-call — no long-lived tunnel). Mac keeps awake ONLY while a
   drive window is open (30-min bounded, self-releases), then sleeps. Remote Login already ON (macOS 26; `sw_vers`); if it ever
-  refuses, `sudo systemsetup -setremotelogin on` on the Mac. **NOTE (2026-09-18): SHL autologin links EXPIRE within ~a day —
+  refuses, `sudo systemsetup -setremotelogin on` on the Mac.
+  **OBS lifecycle (self-managing camera, 2026-09-19): `_ensure_obs()` / `_stop_obs()` bring OBS + its Virtual Camera up/down
+  in lockstep with the drive rig** (the WCI200 proctor needs the Mac's REAL camera, which the OBS Virtual Camera feeds over
+  CDP). `_ensure_obs()` runs in `run()` right beside `_keep_mac_awake()` (only when FRESH work exists, after `_tunnel_up`+
+  `_mac_online`): if OBS is already up it's an **idempotent no-op — never restarts a running feed** (a live drive's camera is
+  untouched); else `open -a OBS --args --startvirtualcam --minimize-to-tray` (headless, NO sudo) + poll ≤~20s until the process
+  is up + a best-effort `system_profiler SPCameraDataType` virtual-cam note. `_stop_obs()` runs in the AUTO-STOP path (idle /
+  queue-drained / exit, same place as `_tunnel_down`): `pkill -x OBS` so OBS closes and the Mac can idle/sleep — **GUARDED by
+  `_drive_running_locally()`** (a `pgrep -f harvest_runner.*shl_sutherland` on the SERVER): it REFUSES to kill OBS while any
+  Sutherland drive is still using the live camera. Both are env-gated on `MAC_SSH`, best-effort, never raise, and idempotent
+  per `*/15` tick; `--dry-run` reports the intent (brings nothing up/down). **pmset caveat: `sudo -n pmset disablesleep 0/1`
+  needs a password on this Mac (NO passwordless sudo), so `_stop_obs` attempts the release best-effort and silently falls back
+  — keep-awake leans on the owner's pre-set `SleepDisabled=1` + `caffeinate`, NOT on a controller pmset toggle. For FULL
+  auto-sleep-when-idle the owner would need passwordless `sudo pmset` on the Mac.** **Battery caveat: the Mac is currently on
+  BATTERY (owner-physical) — keep it on the charger for reliable long drives.** **NOTE (2026-09-18): SHL autologin links EXPIRE within ~a day —
   only the NEWEST fresh invite is usually live (31/32 fresh were link-expired); invites MUST be driven promptly while live, so
   the Mac must stay reachable+awake (OBS + caffeinate) and the event-driven `mail_indexer` trigger matters.** Health group
   «Ассессменты» (`health.assessment_lanes`) shows futile churn / offline-Mac-while-running (a `down` row → `health --alert`) /

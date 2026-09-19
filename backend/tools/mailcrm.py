@@ -42,7 +42,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-09-18-notification-demote"
+CLASSIFIER_VERSION = "2026-09-19-other-triage-expand"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be

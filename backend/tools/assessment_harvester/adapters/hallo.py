@@ -191,15 +191,36 @@ class HalloAdapter(Adapter):
         await page.wait_for_timeout(3500)
         await self._click(page, "Accept")            # cookie consent
         await page.wait_for_timeout(1000)
-        # (1) NAME GATE
-        try:
-            tis = page.locator('input[type=text], input:not([type])')
-            if await tis.count() >= 2:
-                await tis.nth(0).fill(first, timeout=4000)
-                await tis.nth(1).fill(last, timeout=4000)
-        except Exception:
-            pass
+        # (1) NAME GATE — target the labelled First/Last Name inputs by placeholder/label (a bare
+        # nth(0)/nth(1) over all text inputs hit a hidden language selector on the tp-global-us variant,
+        # dropping the surname into "First Name" and leaving "Last Name" empty).
+        async def _fill_named(rx_ph: str, val: str) -> bool:
+            for loc in (page.get_by_placeholder(re.compile(rx_ph, re.I)),
+                        page.get_by_label(re.compile(rx_ph, re.I))):
+                try:
+                    if await loc.count():
+                        await loc.first.fill(val, timeout=4000)
+                        return True
+                except Exception:
+                    pass
+            return False
+        if not (await _fill_named(r"first ?name", first) and await _fill_named(r"last ?name", last)):
+            try:  # fallback: the first two text inputs, skipping the 'en' language field
+                tis = page.locator('input[type=text]:not([value="en"]), input:not([type])')
+                if await tis.count() >= 2:
+                    await tis.nth(0).fill(first, timeout=4000)
+                    await tis.nth(1).fill(last, timeout=4000)
+            except Exception:
+                pass
         await self._tick_all(page)
+        # (1b) SINGLE-PAGE variant (tp-global-us): the Welcome page carries name + Terms + a
+        # "Begin Assessment" button and has NO separate honor-code / device-check pages. Click straight
+        # into the battery and RETURN — otherwise the device-check flow below wastes ~120s waiting for a
+        # Continue that never appears, then fails to match the "Begin Assessment" label and hangs.
+        await page.wait_for_timeout(800)
+        if await self._click(page, "Begin Assessment"):
+            await page.wait_for_timeout(4000)
+            return
         await self._click(page, "Continue")
         await page.wait_for_timeout(3500)
         # (2) HONOR CODE — tick every clause + continue
@@ -237,7 +258,8 @@ class HalloAdapter(Adapter):
             self._stop_mic_feed()
         await page.wait_for_timeout(6000)
         # (4) enter the battery
-        await self._click(page, "Start Questionnaire") or await self._click(page, "Start")
+        await self._click(page, "Start Questionnaire") or await self._click(page, "Start") \
+            or await self._click(page, "Begin Assessment")
         await page.wait_for_timeout(4000)
 
     # Hallo gates each module behind an instructions page with a module-START button ("Start Part 1",

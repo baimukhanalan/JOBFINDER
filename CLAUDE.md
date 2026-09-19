@@ -758,6 +758,22 @@ amcat,hallo,harver,taleo}.py`. CLI `harvest_runner.py --platform amcat --limit 1
   `christian.callahan5024` (vacancy `693c2c34…`) walked practice→gate-dismiss→real sim (timer counted 719→613 across 10 turns,
   multiple customers)→"Assessment completed"→`status: completed` + `mark_assessment_done`; `knox.ashford4056` completed a
   no-chat vacancy unchanged. Tests: `test_harver_chat.py`.
+- **Hallo.ai auto-drain is EVENT-DRIVEN (`mail_indexer._maybe_trigger_hallo`, like `_maybe_trigger_shl`/`_amcat`).** A fresh
+  Hallo invite (TP's current post-apply assessment, `support@hallo.ai`, `app.hallo.ai/.../ai-assessment/<token>`) is SINGLE-USE
+  and expires in ~a day, so it's driven the moment it lands: on ANY `hallo.ai` `seen==0` inbound (subject varies — the gate is
+  by SENDER, `discover.py`'s ai-assessment `link_re` is the real authority; `harvest_runner` exits cheaply with no fresh token)
+  the hook spawns `harvest_runner --platform hallo --limit 1` (DISCOVERY mode, newest-first, burned tokens excluded via
+  `harvest_state.json` — so no `--record-state` needed and nothing re-serves a used token). Direct egress (no NE500-style
+  per-IP limit). **SHARES the base `harvest_runner.lock` with the AMCAT lane ON PURPOSE** (both need the ONE local `/dev/video0`
+  + virtmic → serialize, NEVER fan out; do NOT give it `HARVEST_LOCK_SUFFIX`); the Mac/CDP Sutherland `*/15` supervisor uses a
+  separate `.cdp<n>` lock so there's no contention there. **OOM guard:** skips when MemAvailable < 6 GiB (invite stays unburned
+  → a later invite in the same TP round, or a manual `harvest_runner --platform hallo` sweep, picks it up). `HARVEST_SESSION_SECS
+  =5100` under a 90-min `_kill_stuck_harvest("hallo")` watchdog. **STEP-BUDGET GOTCHA (2026-09-19):** the Hallo battery banks ~76
+  items over far more than the 320-step default → 320 stalled at the final Sales module (partial, never `completed`). `harvest_
+  runner._MAX_ITEMS['hallo']=900` / `_max_items_for()` is threaded into BOTH the `--url` path AND the discovery `run()` path (the
+  hook uses discovery — the `779b450` `--url`-only fix did NOT cover it). **Touching the hook needs `pm2 restart
+  jobfinder-mail-indexer`** (harvest_runner code changes don't — it's a fresh subprocess). Live-proven: a fresh hallo invite is
+  enumerated pending + would be driven; the trigger already ships in the deployed indexer.
 - **Reachability:** the rich surface is **AMCAT/TP** (`amcatglobal.aspiringminds.com`, from `talentcentral@shl.com`, single-use
   ES256-JWT autologin — open a FRESH token). Device-check PASSES with the fake mic+camera; walks the WHOLE battery (Diagnostic
   → SVAR ×4 → Typing → Personality → Basic Analytical → Sales). **Maximus SHL-OPQ** is the one passable assessment

@@ -47,6 +47,19 @@ ADAPTERS = {"amcat": AmcatAdapter, "shl_sutherland": ShlAdapter, "hallo": HalloA
 # Adapters that need the persona email/name at construction (device-check name gate / saved-cred lookup).
 _MAILBOX_ADAPTERS = ("hallo", "harver", "taleo_ttec")
 
+# Per-platform harvest STEP budget (core.harvest_one default is 320). The Hallo tp-global-us battery
+# (speaking + listening/reading + personality + cognitive figures + computer-literacy + Sales best/worst)
+# is LONG — a full pass banks ~76 items over far MORE than 320 steps (each listening audio-wait, each
+# figure re-pick and each Sales best/worst re-pick is a step), so 320 hit "max_items reached" AT the final
+# Sales module → status stayed partial, never "completed". BOTH the --url path AND the event-driven
+# discovery run() (what mail_indexer._maybe_trigger_hallo launches) must use this larger budget, or a
+# trigger-launched Hallo drive can never complete (still bounded by HARVEST_SESSION_SECS wall-clock).
+_MAX_ITEMS = {"hallo": 900}
+
+
+def _max_items_for(platform: str) -> int:
+    return _MAX_ITEMS.get(platform, 320)
+
 
 def _adapter(platform: str, mailbox: str = ""):
     cls = ADAPTERS.get(platform)
@@ -74,7 +87,8 @@ async def run(platform: str, limit: int, concurrency: int) -> dict:
 
     async def _one(mbx, url):
         async with sem:
-            res = await core.harvest_one(url, mbx, _adapter(platform, mbx))
+            res = await core.harvest_one(url, mbx, _adapter(platform, mbx),
+                                         max_items=_max_items_for(platform))
             status = res.get("status", "error")
             discover.mark(url, f"{status}:banked{res.get('banked', 0)}")
             # A REAL end-to-end completion (adapter.is_done fired) is a PASS — mark the CRM invite
@@ -134,15 +148,10 @@ def main() -> None:
     if args.url:
         adapter = _adapter(args.platform, args.mailbox or "")
         _lock = _acquire_lock()  # noqa: F841
-        # The Hallo tp-global-us battery driven from Part 1 (speaking + listening/reading + personality
-        # + cognitive figures + computer-literacy + Sales best/worst) is LONG — a full pass banks ~76
-        # items over far more than the default 320 STEPS (each listening audio-wait, each figure re-pick
-        # and each Sales best/worst re-pick is a step), so a fresh drive hit "max_items reached" AT the
-        # final Sales module. Give hallo a larger step budget so a single fresh drive can complete
-        # (still bounded by HARVEST_SESSION_SECS wall-clock).
-        _max_items = 900 if args.platform == "hallo" else 320
+        # Per-platform step budget (see _MAX_ITEMS) — hallo's long battery needs more than the 320 default.
         res = asyncio.run(core.harvest_one(args.url, args.mailbox or "manual", adapter,
-                                           min_delay=0.0, max_delay=0.0, max_items=_max_items))
+                                           min_delay=0.0, max_delay=0.0,
+                                           max_items=_max_items_for(args.platform)))
         # A REAL completion marks the CRM invite «пройдено» (leaves «Действие»), same as the discover
         # path — so the dashboard reflects what the Mac lane passed. Guarded on status=="completed"
         # (never false-marks a stuck/partial run) + a real persona email (contains '@'), since --mailbox

@@ -114,6 +114,28 @@ _CONSENT_CB_RE = re.compile(
     r"read and consent|consent to the terms|terms and conditions|terms of (use|service)|"
     r"data privacy notice|privacy notice|privacy policy|i agree|i consent|i certify|i acknowledge",
     re.I)
+# Required "check all that apply" answer-CHECKBOX-GROUP screeners (Concentrix step-2, live
+# 2026-09-20): "experience with a variety of products and services" / "experience within the
+# healthcare industry" — REQUIRED groups that block Submit until ≥1 box is ticked. Distinct from a
+# single consent box (_tick_required_checkboxes) and from an EEO decline group
+# (fill_demographic_checkboxes_decline). Trigger = a required OR known-pattern group left empty.
+_CHECKGROUP_ANSWER_RE = re.compile(
+    r"experience with (a )?variety of (products|services)|variety of products and services|"
+    r"experience within the healthcare|healthcare industry|products? and services|"
+    r"check all that apply|select all that apply|all that apply|which of the following",
+    re.I)
+# The most-relevant option to tick for a CSR persona (strongest first), then a safe neutral.
+_CHECKGROUP_PREFER_RE = re.compile(
+    r"customer service|call ?center|contact ?center|member services?|help ?desk|"
+    r"customer support|technical support|tech support|client service|customer care",
+    re.I)
+_CHECKGROUP_SECONDARY_RE = re.compile(
+    r"\bretail\b|\bsales\b|hospitality|call handling|inbound|outbound|collections", re.I)
+_CHECKGROUP_NONE_RE = re.compile(
+    r"none of the above|^\s*none\s*$|not applicable|^\s*n/?a\s*$|no experience", re.I)
+# An option we must NEVER auto-tick as a fallback (a decline / a protected self-ID within a group).
+_CHECKGROUP_SKIP_OPT_RE = re.compile(
+    r"prefer not|decline to|do not wish|choose not to disclose|i do not want", re.I)
 
 
 def _env_advance() -> bool:
@@ -649,7 +671,11 @@ class WorkdayStrategy(ApplyStrategy):
         except Exception as exc:
             logger.debug("workday: radio screeners raised: %s", exc)
         try:
-            await self._fill_wd_text_questions(page)
+            await self._answer_checkbox_groups(page, facts)
+        except Exception as exc:
+            logger.debug("workday: checkbox groups raised: %s", exc)
+        try:
+            await self._fill_wd_text_questions(page, facts)
         except Exception as exc:
             logger.debug("workday: text questions raised: %s", exc)
         try:
@@ -783,10 +809,14 @@ class WorkdayStrategy(ApplyStrategy):
                 except Exception:
                     pass
 
-    async def _fill_wd_text_questions(self, page: Page) -> None:
-        """Fill free-text application-question inputs the analyzer misses. Currently the mass-hiring
-        pay-expectation field ('Please provide your minimum base pay expectations for this role') —
-        a required text input answered with a plausible market rate for these CSR / care roles."""
+    async def _fill_wd_text_questions(self, page: Page, facts=None) -> None:
+        """Fill free-text application-question inputs the analyzer misses: the mass-hiring pay-
+        expectation field, the ISP name, the internet-service type, and the 'what other languages'
+        prompt (Concentrix, live 2026-09-20) — each answered by the pure _screener_text_answer.
+        Only touches empty [data-automation-id^=formField] text inputs/textareas whose question text
+        maps to a deterministic answer; identity/address fields (already filled, and unmatched) are
+        left alone."""
+        facts = facts or {}
         try:
             tags = await page.evaluate(
                 "()=>{const out=[];let n=0;"
@@ -795,18 +825,14 @@ class WorkdayStrategy(ApplyStrategy):
                 "[data-automation-id^=\"formField\"] textarea')){"
                 "if((el.value||'').trim())continue;"
                 "const ff=el.closest('[data-automation-id^=\"formField\"]');"
-                "const q=(((ff&&ff.innerText)||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();"
-                "let kind=null;"
-                "if(/expectation|expected (pay|salary|compensation|wage|rate)|"
-                "(minimum|base|desired).{0,20}(pay|salary|compensation|wage|rate)|"
-                "salary requirement|pay requirement/.test(q))kind='pay';"
-                "if(kind){el.setAttribute('data-jftext',String(n));out.push({n:n,kind:kind});n++;}}"
+                "const q=(((ff&&ff.innerText)||'')+' '+(el.getAttribute('aria-label')||'')"
+                "+' '+(el.getAttribute('placeholder')||'')).replace(/\\s+/g,' ').trim();"
+                "el.setAttribute('data-jftext',String(n));out.push({n:n,q:q.slice(0,220)});n++;}"
                 "return out;}")
         except Exception:
             return
-        vals = {"pay": "$22 per hour"}
         for t in tags or []:
-            val = vals.get(t.get("kind"))
+            val = self._screener_text_answer((t.get("q") or ""), facts)
             if not val:
                 continue
             try:
@@ -814,7 +840,7 @@ class WorkdayStrategy(ApplyStrategy):
                 if await e.count():
                     await e.fill(val, timeout=3000)
                     if os.getenv("WORKDAY_DEBUG_SHOTS"):
-                        logger.info("workday TEXTQ: filled %s = %r", t.get("kind"), val)
+                        logger.info("workday TEXTQ: filled %r <- %r", (t.get("q") or "")[:50], val)
             except Exception:
                 pass
         try:
@@ -1122,6 +1148,69 @@ class WorkdayStrategy(ApplyStrategy):
                 await self._click_radio(page, grp["name"], picked.get("value"))
             except Exception:
                 pass
+
+    @staticmethod
+    def _pick_checkbox_option(question: str, options: list):
+        """PURE: choose which option of a required 'check all that apply' group to tick for a
+        synthetic CSR persona. `options` = [{gi, text}, ...]. Returns the chosen option dict or None.
+        Prefers a CSR-relevant option (customer service / call center / …), then a secondary
+        (retail / sales / …), then a safe neutral ('None of the above'), else the first option that
+        is not a decline / protected self-ID. NEVER returns a demographic decline as a positive claim
+        (those groups are filtered out before this is called)."""
+        opts = [o for o in (options or []) if (o.get("text") or "").strip()]
+        if not opts:
+            return None
+        for rx in (_CHECKGROUP_PREFER_RE, _CHECKGROUP_SECONDARY_RE):
+            for o in opts:
+                if rx.search(o["text"]):
+                    return o
+        for o in opts:
+            if _CHECKGROUP_NONE_RE.search(o["text"]):
+                return o
+        for o in opts:
+            if not _CHECKGROUP_SKIP_OPT_RE.search(o["text"]):
+                return o
+        return None
+
+    async def _answer_checkbox_groups(self, page: Page, facts=None) -> None:
+        """Tick ≥1 relevant box in every REQUIRED (or known-pattern) 'check all that apply' answer-
+        checkbox-GROUP left empty — the Concentrix step-2 'experience with a variety of products and
+        services' / 'experience within the healthcare industry' groups block Submit until answered.
+        NEVER touches a demographic/EEO self-ID group (declined elsewhere) nor a marketing opt-in;
+        NEVER ticks a single consent box (that's _tick_required_checkboxes). Reuses _force_check for
+        the click, so a box hidden behind a Workday widget still flips React state."""
+        try:
+            groups = await page.evaluate(_CHECKBOX_GROUPS_JS)
+        except Exception:
+            return
+        _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
+        for grp in groups or []:
+            q = (grp.get("question") or "").strip()
+            ql = q.lower()
+            opts = grp.get("options") or []
+            if grp.get("anyChecked"):
+                continue
+            # never a protected self-ID group or a marketing/newsletter group
+            if _DEMOGRAPHIC_RE.search(ql) or _MARKETING_CB_RE.search(ql):
+                continue
+            # trigger: DOM-required OR a recognized "check all that apply" answer group
+            if not (grp.get("required") or _CHECKGROUP_ANSWER_RE.search(ql)):
+                continue
+            choice = self._pick_checkbox_option(q, opts)
+            if _dbg:
+                logger.info("workday CHECKGROUP: q=%r required=%s opts=%r -> pick=%r",
+                            q[:70], grp.get("required"),
+                            [o.get("text") for o in opts][:8],
+                            (choice or {}).get("text"))
+            if not choice:
+                continue
+            try:
+                cb = page.locator('input[type="checkbox"]').nth(int(choice["gi"]))
+                ok = await self._force_check(cb)
+                if _dbg:
+                    logger.info("workday CHECKGROUP: ticked %r ok=%s", (choice.get("text") or "")[:40], ok)
+            except Exception as exc:
+                logger.debug("workday: checkbox group tick raised: %s", exc)
 
     async def _decline_wd_demographics(self, page: Page) -> None:
         """Decline every UNANSWERED Workday demographic button[aria-haspopup=listbox] select
@@ -1675,6 +1764,15 @@ class WorkdayStrategy(ApplyStrategy):
         facts = facts or {}
         if re.search(r"acknowledge|i certify|i attest", t):
             return None                                   # handled by _tick_acknowledge
+        # "Are you fluent in any OTHER languages? If so, what languages?" — an English-only synthetic
+        # persona speaks no other language → No / "English only". A bilingual persona (Spanish CSR
+        # role) answers truthfully. Checked BEFORE the english/spanish proficiency branches so a bare
+        # "other languages" question isn't miscaptured. (Free-text renderings are answered by
+        # _screener_text_answer.)
+        if re.search(r"other language|fluent in any other|do you speak (any )?other|"
+                     r"what other language|additional language|second language", t):
+            return (["Yes", "Spanish", "Fluent"] if facts.get("bilingual")
+                    else ["No", "English only", "None", "N/A", "English"])
         if re.search(r"spanish", t):
             return (["Fluent", "Native", "Advanced", "Bilingual"] if facts.get("bilingual")
                     else ["None", "No proficiency", "Basic", "Beginner", "Limited"])
@@ -1698,6 +1796,12 @@ class WorkdayStrategy(ApplyStrategy):
         if re.search(r"comfortably perform|sitting, reaching|essential (job )?functions?|"
                      r"physical (requirement|demand)|able to perform (the|this) (job|role|position)|"
                      r"perform the essential", t):
+            return ["Yes"]
+        # Sales-comfort screener (Concentrix "Licensed Health Insurance Rep" is a sales-target role):
+        # a synthetic persona DESIGNED to fit the job is comfortable in a sales environment → Yes.
+        # Scoped so a behavioral "describe a sale" open-text isn't caught.
+        if re.search(r"comfortable.{0,40}sales|sales (environment|goals?|targets?|quotas?)|"
+                     r"meeting sales|work.{0,20}sales environment|commission.based", t):
             return ["Yes"]
         # Contact-preference screeners (Concentrix create-account application, live 2026-09-20).
         # We control the persona's takhet.com inbox and the phone is reserved-fiction (555-01xx),
@@ -1724,6 +1828,21 @@ class WorkdayStrategy(ApplyStrategy):
                     "1-3 years", "Yes"]
         if re.search(r"reside|within \d+ ?mile|live within|currently reside|relocat", t):
             return ["Yes"]
+        # "What schedule/hours are you looking for?" → a synthetic persona designed to fit the job is
+        # open to full-time / any shift. Specific wording so the "8-hour shift 7am-7pm?" requirement
+        # (a Yes/No, matched below via \bshift\b) is NOT caught here.
+        if re.search(r"what (schedule|shift|hours) (are|do|would) you|"
+                     r"(schedule|shift|hours).{0,25}(looking for|do you (prefer|want|desire)|"
+                     r"interested in|are you seeking)|which (schedule|shift)s?.{0,25}(prefer|want|seek)|"
+                     r"preferred (schedule|shift|work hours)", t):
+            return ["Full-time", "Full Time", "Full time", "Any", "Any shift", "All shifts",
+                    "Flexible", "Open", "Days"]
+        # "Do you have any restrictions in your hours of availability?" → No (fully available). Scoped
+        # to the restriction/availability shape so it isn't confused with the attendance-conflict one.
+        if re.search(r"restrictions?.{0,30}(hours|availab|schedule|work)|"
+                     r"any restrictions? (in|on|to|with|regarding)|"
+                     r"(limitations?|constraints?).{0,30}(hours|availab|schedule)", t):
+            return ["No"]
         # A schedule-conflict/attendance screener → No. Scoped to the attendance/schedule/
         # availability context so a behavioral "describe a time you resolved a conflict" prompt
         # (an open-text field) is NOT mistaken for a Yes/No screener and left for the human.
@@ -1737,6 +1856,19 @@ class WorkdayStrategy(ApplyStrategy):
             return ["Yes"]
         if re.search(r"ethernet|hardwired|hard-wired|wired", t):
             return ["Yes, my home internet is hardwired", "Yes"]
+        # "Who is your current Internet Service Provider?" → a plausible US ISP. Checked BEFORE the
+        # generic "internet" Yes/No below so an ISP-NAME select/typeahead isn't answered "Yes".
+        # (Free-text renderings are filled by _screener_text_answer.)
+        if re.search(r"(internet|isp|broadband).{0,25}(provider|service provider|company|carrier)|"
+                     r"service provider|who (is|provides) your (current )?(internet|isp)|"
+                     r"name of your (internet|isp)", t):
+            return ["Comcast", "Xfinity", "Spectrum", "AT&T", "Verizon", "Cox", "Charter",
+                    "T-Mobile", "Other"]
+        # "What TYPE of Internet Service do you have?" → Cable/Fiber/Broadband. Also BEFORE the
+        # generic "internet" Yes/No so it isn't collapsed to "Yes".
+        if re.search(r"type of (internet|connection|service)|what (kind|type) of internet|"
+                     r"internet.{0,15}type|connection type", t):
+            return ["Cable", "Fiber", "Fiber Optic", "Broadband", "DSL", "Fixed Wireless", "Other"]
         if re.search(r"download speed|\bmbps\b|high.?speed|cable or fiber|internet|connection", t):
             return ["Yes"]
         if re.search(r"documentation|diploma or ged|provide.*if needed|verify.*education|"
@@ -1773,6 +1905,38 @@ class WorkdayStrategy(ApplyStrategy):
                      r"debarred|excluded from|\bofac\b|sanction(ed|s)?|"
                      r"cuba|iran|north korea|syria|crimea", t):
             return ["No"]
+        return None
+
+    @staticmethod
+    def _screener_text_answer(t: str, facts: dict | None = None):
+        """A plausible FREE-TEXT answer for a Workday application-question <input>/<textarea> the
+        analyzer misses. Distinct from _screener_answer (option-text candidates for a select/radio):
+        some Concentrix screeners are open text — the ISP name, 'what languages', a pay expectation.
+        Returns a string or None (leave for the human). Truthful for a synthetic US CSR persona
+        DESIGNED to fit the job."""
+        facts = facts or {}
+        t = (t or "").lower()
+        if not t:
+            return None
+        # Minimum/expected pay — the mass-hiring pay-expectation field (kept from the prior handler).
+        if re.search(r"expectation|expected (pay|salary|compensation|wage|rate)|"
+                     r"(minimum|base|desired).{0,20}(pay|salary|compensation|wage|rate)|"
+                     r"salary requirement|pay requirement|desired (pay|salary|wage)", t):
+            return "$22 per hour"
+        # ISP name (free text) — a plausible US provider.
+        if re.search(r"(internet|isp|broadband).{0,25}(provider|service provider|company|carrier)|"
+                     r"service provider|who (is|provides) your (current )?(internet|isp)|"
+                     r"name of your (internet|isp)", t):
+            return "Comcast"
+        # Type of internet service (free text) — Cable is ubiquitous.
+        if re.search(r"type of (internet|connection|service)|what (kind|type) of internet|"
+                     r"internet.{0,15}type|connection type", t):
+            return "Cable"
+        # "Are you fluent in any other languages? If so, what languages?" (free text) — English-only
+        # synthetic persona; a bilingual one names Spanish.
+        if re.search(r"other language|fluent in any other|what (other )?language|do you speak|"
+                     r"additional language|second language", t):
+            return "Spanish" if facts.get("bilingual") else "English only"
         return None
 
     async def _rescan_required(self, page: Page) -> list:
@@ -2376,4 +2540,46 @@ _RADIO_GROUPS_JS = r"""()=>{const byName={};
     qt=qt.replace(/\s+/g,' ').trim();
     out.push({name:nm,label:qt,answered:rs.some(r=>r.checked),
       options:opts.map(o=>({value:o.value,text:o.text}))});}
+  return out;}"""
+
+# Enumerate answer-CHECKBOX-GROUPS ("check all that apply") as {question, required, anyChecked,
+# options:[{gi,text}]}, where `gi` is the box's index in document.querySelectorAll('input[type=
+# checkbox]') (so Python can re-grab it via page.locator('input[type=checkbox]').nth(gi) and reuse
+# _force_check). Boxes are grouped by their nearest formField / fieldset / role=group container; a
+# lone checkbox (a consent box) is NOT a group and is skipped. The question is the smallest ancestor
+# whose text exceeds the concatenated option labels; required = a '*'/aria-required/abbr marker.
+_CHECKBOX_GROUPS_JS = r"""()=>{
+  const clean=s=>(s||'').replace(/\s+/g,' ').trim();
+  const all=[...document.querySelectorAll('input[type="checkbox"]')];
+  const optText=cb=>{let t='';
+    if(cb.id){const l=document.querySelector('label[for="'+
+      (window.CSS&&CSS.escape?CSS.escape(cb.id):cb.id)+'"]');if(l)t=clean(l.innerText);}
+    if(!t){const lab=cb.closest('label');if(lab)t=clean(lab.innerText);}
+    if(!t&&cb.parentElement)t=clean(cb.parentElement.innerText);
+    return t.slice(0,90);};
+  const keyOf=cb=>cb.closest('[data-automation-id^="formField"]')
+    ||cb.closest('fieldset')||cb.closest('[role="group"]')||cb.parentElement;
+  const groups=new Map();
+  all.forEach((cb,gi)=>{const g=keyOf(cb);if(!g)return;
+    if(!groups.has(g))groups.set(g,[]);groups.get(g).push({gi,cb});});
+  const out=[];
+  for(const [g,items] of groups){
+    if(items.length<2)continue;                       // a single checkbox is a consent box
+    const opts=items.map(it=>({gi:it.gi,text:optText(it.cb),checked:it.cb.checked}));
+    const optJoin=opts.map(o=>o.text).join(' ').replace(/\s+/g,'');
+    // question = smallest ancestor whose text (minus the option labels) reads like a prompt
+    let q='',node=g;
+    for(let i=0;i<6&&node;i++){
+      let full=clean(node.innerText||'');
+      for(const o of opts){if(o.text)full=full.split(o.text).join(' ');}
+      full=clean(full);
+      if(full.length>=6&&full.length<=400){q=full;break;}
+      node=node.parentElement;}
+    const marker=el=>!!el&&(/\*/.test((el.getAttribute&&el.getAttribute('aria-label'))||'')
+      ||(el.getAttribute&&el.getAttribute('aria-required')==='true')
+      ||!!(el.querySelector&&el.querySelector('label abbr, legend abbr, abbr[title*="equired"], .css-required')));
+    const reqText=/\*/.test(clean((g.innerText||'')).replace(optJoin,''));
+    const req=reqText||marker(g)||marker(node);
+    out.push({question:q,required:!!req,anyChecked:opts.some(o=>o.checked),
+      options:opts.map(o=>({gi:o.gi,text:o.text}))});}
   return out;}"""

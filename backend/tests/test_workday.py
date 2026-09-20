@@ -208,6 +208,79 @@ def test_screener_answer_concentrix_remaining():
     assert A("what is your highest level of education?", {})[0] == "Bachelor"
 
 
+def test_screener_answer_concentrix_job328_screeners():
+    # The job-328 "Licensed Health Insurance Rep" required screeners left values=None (live "Errors
+    # Found", 2026-09-20). Each returns a candidate option list a select/radio can match against.
+    A = WorkdayMassHiringStrategy._screener_answer
+    assert A("what schedule/hours are you looking for?", {})[0] == "Full-time"
+    assert A("do you have any restrictions in your hours of availability?", {}) == ["No"]
+    assert A("are you fluent in any other languages? if so, what languages?", {})[0] == "No"
+    assert A("are you comfortable working in a sales environment and meeting sales goals?", {}) == ["Yes"]
+    isp = A("who is your current internet service provider?", {})
+    assert isp and isp[0] == "Comcast"
+    itype = A("what type of internet service do you have?", {})
+    assert itype and itype[0] == "Cable"
+    # a bilingual persona (Spanish CSR role) answers the other-languages screener truthfully Yes
+    assert A("are you fluent in any other languages?", {"bilingual": True})[0] == "Yes"
+
+
+def test_internet_provider_and_type_beat_the_generic_internet_yesno():
+    # The ISP-name and internet-TYPE selects contain the word "internet" — they MUST NOT collapse to
+    # the generic "do you have internet? -> Yes" branch (they'd pick "Yes", not an ISP/type option).
+    A = WorkdayMassHiringStrategy._screener_answer
+    assert A("who is your current internet service provider?", {}) != ["Yes"]
+    assert A("what type of internet service do you have?", {}) != ["Yes"]
+    # the generic high-speed-internet Yes/No still resolves to Yes
+    assert A("do you have reliable high-speed internet at home?", {}) == ["Yes"]
+
+
+def test_screener_text_answer_freetext_fields():
+    # Free-text renderings (an <input>/<textarea>, not a select) are answered by _screener_text_answer.
+    T = WorkdayMassHiringStrategy._screener_text_answer
+    assert T("please provide your minimum base pay expectations for this role") == "$22 per hour"
+    assert T("who is your current internet service provider?") == "Comcast"
+    assert T("what type of internet service do you have?") == "Cable"
+    assert T("are you fluent in any other languages? if so, what languages?") == "English only"
+    assert T("are you fluent in any other languages?", {"bilingual": True}) == "Spanish"
+    # identity/address fields (and unknowns) are left alone — never overwritten with a screener value
+    assert T("first name") is None
+    assert T("home address line 1") is None
+    assert T("") is None
+
+
+def test_pick_checkbox_option_prefers_csr_relevant():
+    P = WorkdayMassHiringStrategy._pick_checkbox_option
+    # "experience with a variety of products and services" — prefer Customer Service over Retail
+    prods = [{"gi": 0, "text": "Retail"}, {"gi": 1, "text": "Customer Service"},
+             {"gi": 2, "text": "None of the above"}]
+    assert P("experience with a variety of products and services", prods)["text"] == "Customer Service"
+    # "experience within the healthcare industry" with NO CSR option -> safe "None of the above"
+    health = [{"gi": 0, "text": "Medicare"}, {"gi": 1, "text": "Medicaid"},
+              {"gi": 2, "text": "None of the above"}]
+    assert P("experience within the healthcare industry", health)["text"] == "None of the above"
+    # a call-center option wins over a generic secondary
+    mixed = [{"gi": 0, "text": "Sales"}, {"gi": 1, "text": "Call Center"}]
+    assert P("check all that apply", mixed)["text"] == "Call Center"
+    # a decline/self-ID option is NEVER the fallback pick
+    skip = [{"gi": 0, "text": "Prefer not to answer"}, {"gi": 1, "text": "Warehouse"}]
+    assert P("check all that apply", skip)["text"] == "Warehouse"
+    # secondary (retail/sales) chosen when no strong CSR option exists
+    sec = [{"gi": 0, "text": "Manufacturing"}, {"gi": 1, "text": "Retail"}]
+    assert P("check all that apply", sec)["text"] == "Retail"
+    assert P("check all that apply", []) is None
+
+
+def test_checkgroup_answer_regex_matches_concentrix_prompts():
+    from backend.applier.strategies.workday import _CHECKGROUP_ANSWER_RE
+    assert _CHECKGROUP_ANSWER_RE.search(
+        "We are interested in your experience with a variety of products and services. "
+        "Please check all that apply:")
+    assert _CHECKGROUP_ANSWER_RE.search(
+        "We are interested in your experience within the healthcare industry. "
+        "Please check all that apply:")
+    assert not _CHECKGROUP_ANSWER_RE.search("What is your gender?")
+
+
 def test_screener_answer_unknown_returns_none():
     A = WorkdayMassHiringStrategy._screener_answer
     assert A("describe a time you resolved a conflict", {}) is None

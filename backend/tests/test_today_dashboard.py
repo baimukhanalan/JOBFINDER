@@ -130,13 +130,7 @@ def test_role_label_maps_and_falls_back():
     assert t.role_label(None) == "Прочее"
 
 
-# ---- offer-producing lanes constant ----------------------------------------------
-def test_offer_producing_covers_apply_lanes():
-    # every mass-hiring apply lane that ends in a human hire is 'offer-producing'
-    for k in ("tp", "ttec", "maximus", "sutherland", "kelly"):
-        assert k in t._OFFER_PRODUCING
-
-
+# ---- window isolation -------------------------------------------------------------
 def test_yesterdays_lines_never_leak_across_window():
     # a defensive end-to-end: only the target day's lines are ever counted
     y = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")

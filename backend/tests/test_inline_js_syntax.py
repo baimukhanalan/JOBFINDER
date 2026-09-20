@@ -94,6 +94,23 @@ def test_catalog_page_scripts_parse(tmp_path, monkeypatch):
     _check_scripts(html, tmp_path, "catalog")
 
 
+def test_hiring_events_page_scripts_parse(tmp_path, monkeypatch):
+    from backend.tools import hiring_events as he
+    # stub the grouped-events scan → one room + one invite, and force the persona resolver
+    # to miss so the render is pure (no disk scan of the real prefill tree).
+    monkeypatch.setattr(he, "prefill_dir_for", lambda *a, **k: None)
+    monkeypatch.setattr(he, "grouped_events", lambda **k: [{
+        "key": "m1", "meeting_id": "7436255779",
+        "join_url": "https://us06web.zoom.us/j/7436255779",
+        "role": "Remote CSR", "date_text": "Mon-Fri", "time_text": "9-5 ET",
+        "latest_ts": 0, "invites": [
+            {"mailbox": "jane.doe1@takhet.com", "candidate": "Jane Doe",
+             "date_ts": 0, "path_hash": "abc123"}]}])
+    html = he.render_page()
+    assert "he-exp-btn" in html and 'id="he-d-abc123"' in html
+    _check_scripts(html, tmp_path, "hiring")
+
+
 def test_mass_hiring_page_scripts_parse(tmp_path, monkeypatch):
     from backend.tools import mass_hiring_ui as ui
     monkeypatch.setattr(ui.mass_hiring, "stats", lambda: {"active": 1, "companies": 1, "last_collected": 0})

@@ -7,6 +7,8 @@ not here. Fixtures are trimmed copies of the two real invite variants (inline-UR
 """
 from __future__ import annotations
 
+import json
+
 from backend.tools import hiring_events as he
 
 # ---- fixtures: the two real invite shapes (tokens scrubbed) ----------------------
@@ -128,3 +130,76 @@ def test_zoom_meeting_id():
         "https://us06web.zoom.us/j/7436255779?pwd=abc") == "7436255779"
     assert he.zoom_meeting_id("https://tracking.icims.com/f/a/x~~/y/z") is None
     assert he.zoom_meeting_id(None) is None
+
+
+# ---- candidate résumé + detail (state / ФИО / approximate age) -------------------
+def test_estimate_age_from_education_graduation_year():
+    # earliest education year → age ≈ now − grad + 22
+    r = {"education": [{"degree": "BS", "year": "2010"}]}
+    assert he.estimate_age(r, now_year=2026) == 2026 - 2010 + 22  # 38
+
+
+def test_estimate_age_from_experience_when_no_education():
+    r = {"experience": [{"title": "CSR", "dates": "2015 - 2019"}]}
+    assert he.estimate_age(r, now_year=2026) == 2026 - 2015 + 22  # 33
+
+
+def test_estimate_age_uses_earliest_anchor_across_edu_and_exp():
+    r = {"education": [{"year": "2018"}], "experience": [{"dates": "2012-2018"}]}
+    assert he.estimate_age(r, now_year=2026) == 2026 - 2012 + 22  # earliest=2012 → 36
+
+
+def test_estimate_age_none_when_no_year_or_implausible():
+    assert he.estimate_age({}, now_year=2026) is None
+    assert he.estimate_age({"education": [{"year": "n/a"}]}, now_year=2026) is None
+    # a stray year before the 1950 floor is ignored → no plausible anchor → None
+    assert he.estimate_age({"education": [{"year": "1900"}]}, now_year=2026) is None
+    # an anchor that would imply age > 75 is rejected (guess band 18–75)
+    assert he.estimate_age({"education": [{"year": "1955"}]}, now_year=2026) is None
+
+
+def test_candidate_detail_reads_state_name_age_and_omits_missing():
+    persona = {"profile": {"full_name": "Jane Doe", "state": "Ohio",
+                           "resume": {"education": [{"year": "2016"}]}}}
+    det = he.candidate_detail(persona)
+    assert det["full_name"] == "Jane Doe"
+    assert det["state"] == "Ohio"
+    assert det["age"] == he.estimate_age(persona["profile"]["resume"])
+    # nameless / unresolved → the fallback name, no state, no age
+    det2 = he.candidate_detail(None, fallback_name="Fallback Name")
+    assert det2 == {"full_name": "Fallback Name", "state": "", "age": None}
+
+
+def test_prefill_resolution_resume_path_and_filename(tmp_path):
+    # a fake prefill tree; id_resolver=None-returning forces the deterministic demo-id guess
+    # (`jane.doe1@…` → `demo_jane_doe1`), so the test never touches the real registry/disk.
+    root = tmp_path
+    d = root / "demo_jane_doe1" / "mh_5"
+    d.mkdir(parents=True)
+    persona = {"profile": {"full_name": "Jane Doe", "state": "Texas",
+                           "resume": {"personal_info": {"name": "Jane Doe"},
+                                      "education": [{"degree": "BS", "year": "2016"}],
+                                      "experience": [{"title": "CSR",
+                                                      "dates": "2018-Present"}]}}}
+    (d / "persona.json").write_text(json.dumps(persona), encoding="utf-8")
+    (d / "resume.pdf").write_bytes(b"%PDF-1.4 test resume")
+    noid = lambda _e: None  # noqa: E731 — force the localpart-guess branch
+
+    got = he.prefill_dir_for("jane.doe1@takhet.com", root=str(root), id_resolver=noid)
+    assert got == str(d)
+    assert he.resume_pdf_path("jane.doe1@takhet.com", root=str(root),
+                              id_resolver=noid) == str(d / "resume.pdf")
+    loaded = he.load_persona("jane.doe1@takhet.com", root=str(root), id_resolver=noid)
+    assert he.candidate_detail(loaded)["state"] == "Texas"
+    # filename is the candidate's name (persona passed → no disk lookup)
+    assert he.resume_filename("jane.doe1@takhet.com", loaded) == "Jane Doe - resume.pdf"
+    # an unknown persona resolves to nothing (button hidden / 404)
+    assert he.prefill_dir_for("nobody.here9@takhet.com", root=str(root),
+                              id_resolver=noid) is None
+    assert he.resume_pdf_path("nobody.here9@takhet.com", root=str(root),
+                              id_resolver=noid) is None
+
+
+def test_resume_filename_falls_back_to_localpart():
+    assert he.resume_filename("someone.new42@takhet.com", persona={}) == \
+        "someone.new42 - resume.pdf"

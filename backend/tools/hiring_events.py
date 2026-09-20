@@ -18,11 +18,14 @@ in a gitignored JSON. Neutral user-facing text; no assistant/stack names.
 """
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import os
 import re
 import threading
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from html import escape
 
@@ -148,6 +151,154 @@ def zoom_meeting_id(url: str | None) -> str | None:
         return None
     m = _ZOOM_ID_RE.search(url)
     return m.group(1) if m else None
+
+
+# ---- candidate résumé + detail (per persona, from uploads/prefill) ---------------
+# A hiring-event invite is a synthetic persona whose email IS its takhet.com mailbox.
+# Its generated résumé PDF + structured facts live in
+# ``uploads/prefill/<demo_id>/<jobid>/`` ({resume.pdf, persona.json}). We map the mailbox
+# to that dir, expose the state / ФИО / approximate age the operator wants on the card,
+# and serve the PDF. Read-only; neutral RU everywhere (no stack names).
+_PREFILL_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "prefill"))
+# a 4-digit 19xx/20xx year anywhere in an education "year" / experience "dates" string.
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+# assumed age at the earliest résumé anchor (graduation / first job) — turns that year
+# into an approximate CURRENT age. Deliberately coarse; the UI always labels it «~N г.».
+_ANCHOR_AGE = 22
+
+
+def _demo_id_guess(mailbox: str) -> str:
+    """Deterministic demo-id for a persona mailbox (`first.last123@…` → `demo_first_last123`),
+    the fallback when the demo-registry lookup misses (no scan of every prefill dir)."""
+    local = (mailbox or "").strip().lower().split("@")[0]
+    return "demo_" + re.sub(r"[^a-z0-9]+", "_", local).strip("_")
+
+
+def prefill_dir_for(mailbox: str, *, root: str | None = None,
+                    id_resolver=None) -> str | None:
+    """The newest ``uploads/prefill/<demo_id>/<jobid>`` dir that has a ``persona.json`` for
+    this persona mailbox, or None. demo_id via the demo registry
+    (``candidate_apps.id_for_email``), else a deterministic localpart guess. ``root`` and
+    ``id_resolver`` are injectable so the resolution is unit-testable off disk."""
+    email = (mailbox or "").strip().lower()
+    if not email:
+        return None
+    root = root or _PREFILL_ROOT
+    if id_resolver is None:
+        try:
+            from backend.tools import candidate_apps
+            id_resolver = candidate_apps.id_for_email
+        except Exception:
+            def id_resolver(_e):
+                return None
+    ids: list[str] = []
+    try:
+        cid = id_resolver(email)
+    except Exception:
+        cid = None
+    if cid:
+        ids.append(cid)
+    guess = _demo_id_guess(email)
+    if guess and guess not in ids:
+        ids.append(guess)
+    for cid in ids:
+        d = os.path.join(root, cid)
+        if not os.path.isdir(d):
+            continue
+        best = None
+        best_mt = -1.0
+        try:
+            subs = os.listdir(d)
+        except OSError:
+            continue
+        for sub in subs:
+            pj = os.path.join(d, sub, "persona.json")
+            if os.path.isfile(pj):
+                try:
+                    mt = os.path.getmtime(pj)
+                except OSError:
+                    mt = 0.0
+                if mt > best_mt:
+                    best_mt = mt
+                    best = os.path.join(d, sub)
+        if best:
+            return best
+    return None
+
+
+def load_persona(mailbox: str, **kw) -> dict | None:
+    """The persona.json dict for a hiring-event mailbox (newest prefill dir), or None."""
+    d = prefill_dir_for(mailbox, **kw)
+    if not d:
+        return None
+    try:
+        with open(os.path.join(d, "persona.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def estimate_age(resume: dict | None, *, now_year: int | None = None) -> int | None:
+    """Approximate CURRENT age from a résumé dict: the EARLIEST year across education
+    graduation years + experience date-ranges is treated as the applicant's ~age-22 anchor
+    (``age ≈ now − anchor + 22``). Returns None when no plausible year is present or the
+    result falls outside a sane 18–75 guard band — the caller then OMITS age rather than
+    guess wildly. Pure; the UI always shows it as approximate («~N г.»)."""
+    resume = resume or {}
+    now_year = now_year or datetime.date.today().year
+    years: list[int] = []
+    for e in (resume.get("education") or []):
+        if isinstance(e, dict):
+            years += [int(y) for y in _YEAR_RE.findall(str(e.get("year") or ""))]
+    for e in (resume.get("experience") or []):
+        if isinstance(e, dict):
+            years += [int(y) for y in _YEAR_RE.findall(str(e.get("dates") or ""))]
+    years = [y for y in years if 1950 <= y <= now_year]
+    if not years:
+        return None
+    age = (now_year - min(years)) + _ANCHOR_AGE
+    return age if 18 <= age <= 75 else None
+
+
+def candidate_detail(persona: dict | None, *, fallback_name: str = "") -> dict:
+    """``{full_name, state, age}`` for a persona.json dict — the operator's expand panel.
+    Pure. ``state`` prefers ``profile.state`` then city/location; ``age`` via
+    :func:`estimate_age`; a missing field comes back as ``''`` / ``None`` so the UI omits
+    it. ``fallback_name`` (e.g. the invite's display name) is used when the persona is
+    unresolved / nameless."""
+    persona = persona or {}
+    prof = persona.get("profile") or {}
+    resume = prof.get("resume") or persona.get("resume") or {}
+    pi = resume.get("personal_info") or {}
+    full_name = (prof.get("full_name") or prof.get("name") or pi.get("full_name")
+                 or pi.get("name") or fallback_name or "").strip()
+    state = (prof.get("state") or prof.get("city") or prof.get("location")
+             or pi.get("location") or "").strip()
+    return {"full_name": full_name, "state": state, "age": estimate_age(resume)}
+
+
+def resume_pdf_path(mailbox: str, **kw) -> str | None:
+    """Path to the persona's generated résumé PDF (``resume.pdf`` in its newest prefill dir),
+    or None when absent (the caller then hides the button / renders on the fly)."""
+    d = prefill_dir_for(mailbox, **kw)
+    if not d:
+        return None
+    p = os.path.join(d, "resume.pdf")
+    return p if os.path.isfile(p) else None
+
+
+def resume_filename(mailbox: str, persona: dict | None = None) -> str:
+    """A human, ASCII-safe download filename for a persona's résumé («Samuel Nash - resume.pdf»).
+    Falls back to the mailbox localpart when the name is unknown."""
+    if persona is None:
+        persona = load_persona(mailbox)
+    name = candidate_detail(persona).get("full_name") if persona else ""
+    if not name:
+        name = (mailbox or "").split("@")[0] or "resume"
+    safe = re.sub(r"[^A-Za-z0-9 ._-]+", "", name).strip() or "resume"
+    return f"{safe} - resume.pdf"
 
 
 # ---- Zoom resolution (icims tracking redirect → real room), cached ---------------
@@ -368,17 +519,75 @@ def _fmt_date(ts: int) -> str:
         return ""
 
 
+def _resume_worthy(resume: dict | None) -> bool:
+    """True when a résumé dict has enough to render a PDF on the fly (the download-button
+    fallback when no ``resume.pdf`` sits on disk)."""
+    resume = resume or {}
+    return bool(resume.get("personal_info") or resume.get("experience")
+                or resume.get("education"))
+
+
 def _invite_row_html(inv: dict) -> str:
-    mb = escape(inv.get("mailbox") or "")
-    who = escape(inv.get("candidate") or (inv.get("mailbox") or "").split("@")[0])
+    """One persona row: name + mailbox, «Письмо» link, a «Скачать резюме» button (when a
+    résumé resolves) and an expand chevron that toggles the Штат / ФИО / Возраст panel."""
+    mbx = inv.get("mailbox") or ""
+    who_fallback = inv.get("candidate") or mbx.split("@")[0]
+    # resolve the persona ONCE (its prefill dir), then read persona.json + résumé presence.
+    prefill = prefill_dir_for(mbx)
+    persona = None
+    has_resume = False
+    if prefill:
+        try:
+            with open(os.path.join(prefill, "persona.json"), encoding="utf-8") as fh:
+                persona = json.load(fh)
+        except Exception:
+            persona = None
+        resume = ((persona or {}).get("profile") or {}).get("resume") \
+            or (persona or {}).get("resume") or {}
+        has_resume = (os.path.isfile(os.path.join(prefill, "resume.pdf"))
+                      or _resume_worthy(resume))
+    detail = candidate_detail(persona, fallback_name=who_fallback)
+
+    who = escape(detail["full_name"] or who_fallback)
+    mb = escape(mbx)
     when = _fmt_date(inv.get("date_ts") or 0)
-    open_mail = escape(f"/mail/candidates?q={inv.get('mailbox') or ''}", quote=True)
+    open_mail = escape(f"/mail/candidates?q={mbx}", quote=True)
+
+    # a stable, unique panel id per message (the mail path_hash, sanitized).
+    pid = re.sub(r"[^A-Za-z0-9_-]", "", inv.get("path_hash") or "")
+    if not pid:
+        pid = hashlib.md5(mbx.encode("utf-8")).hexdigest()[:10]
+    did = f"he-d-{pid}"
+
+    res_btn = ""
+    if has_resume:
+        href = "/hiring-events/resume?mbx=" + urllib.parse.quote(mbx, safe="")
+        res_btn = (f'<a class="he-res" href="{escape(href, quote=True)}">'
+                   '<span class="he-dl" aria-hidden="true">↓</span>Скачать резюме</a>')
+
+    exp_btn = (f'<button type="button" class="he-exp-btn" aria-expanded="false" '
+               f'aria-controls="{did}" aria-label="Показать данные кандидата">'
+               '<span class="he-chev" aria-hidden="true">⌄</span></button>')
+
+    bits = []
+    if detail["state"]:
+        bits.append(f'Штат: {escape(detail["state"])}')
+    bits.append(f'ФИО: {escape(detail["full_name"] or who_fallback)}')
+    if detail["age"]:
+        bits.append(f'Возраст: ~{detail["age"]} г.')
+    detail_html = " · ".join(bits) if bits else "Данные кандидата недоступны"
+
     return (
+        '<div class="he-inv-wrap">'
         '<div class="he-inv">'
         f'<div class="he-inv-main"><span class="he-inv-name">{who}</span>'
         f'<span class="he-inv-mb">{mb}</span></div>'
+        '<div class="he-inv-actions">'
         f'<span class="he-inv-when">{escape(when)}</span>'
         f'<a class="he-inv-open" href="{open_mail}">Письмо</a>'
+        f'{res_btn}{exp_btn}</div>'
+        '</div>'
+        f'<div class="he-detail" id="{did}" hidden>{detail_html}</div>'
         '</div>'
     )
 
@@ -431,16 +640,56 @@ _CSS = """
 .he-join-off{background:var(--panel-2);color:var(--ink-mute);}
 .he-count{color:var(--ink-mute);font-size:11.5px;}
 .he-invites{padding:4px 6px 8px;}
-.he-inv{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;}
+.he-inv-wrap{border-radius:8px;}
+.he-inv{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;flex-wrap:wrap;}
 .he-inv:hover{background:var(--panel-2);}
-.he-inv-main{display:flex;flex-direction:column;min-width:0;flex:1 1 auto;}
+.he-inv-main{display:flex;flex-direction:column;min-width:120px;flex:1 1 150px;}
 .he-inv-name{font-weight:600;font-size:13.5px;color:var(--ink);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
 .he-inv-mb{font-size:11.5px;color:var(--ink-mute);font-family:var(--ff-mono);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
+.he-inv-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex:0 0 auto;}
 .he-inv-when{font-size:12px;color:var(--ink-mute);flex:0 0 auto;}
 .he-inv-open{font-size:12.5px;color:var(--accent);flex:0 0 auto;white-space:nowrap;}
+.he-res{display:inline-flex;align-items:center;gap:5px;height:var(--chip-h);padding:0 12px;
+  border:1px solid var(--line);border-radius:var(--r-full);background:var(--panel);
+  color:var(--ink);font-size:12.5px;font-weight:600;text-decoration:none;white-space:nowrap;}
+.he-res:hover{border-color:var(--accent);color:var(--accent);text-decoration:none;}
+.he-res .he-dl{font-size:14px;line-height:1;}
+.he-exp-btn{display:inline-flex;align-items:center;justify-content:center;width:var(--chip-h);
+  height:var(--chip-h);border:1px solid var(--line);border-radius:50%;background:var(--panel);
+  color:var(--ink-soft);cursor:pointer;padding:0;flex:0 0 auto;
+  -webkit-appearance:none;appearance:none;}
+.he-exp-btn:hover{border-color:var(--accent);color:var(--accent);}
+.he-chev{display:inline-block;font-size:15px;line-height:1;transition:transform .18s ease;}
+.he-exp-btn[aria-expanded="true"] .he-chev{transform:rotate(180deg);}
+.he-detail{margin:2px 10px 8px;padding:9px 12px;border-radius:8px;background:var(--panel-2);
+  color:var(--ink-soft);font-size:12.5px;line-height:1.55;}
+.he-detail[hidden]{display:none;}
 """
+
+
+# The expand toggle: ONE delegated click listener (idempotent across the jfSwap in-place
+# tab switch — a swap aborts the prior page's listeners via window.jfPage.signal, this one
+# re-registers). Keyboard-accessible: the control is a real <button> with aria-expanded /
+# aria-controls, so Enter/Space fire the same click. No external libs.
+_TOGGLE_JS = """<script>
+(function(){
+  var sig=(window.jfPage||{}).signal;
+  function onClick(e){
+    var t=e.target;
+    var btn=(t&&t.closest)?t.closest('.he-exp-btn'):null;
+    if(!btn)return;
+    e.preventDefault();
+    var panel=document.getElementById(btn.getAttribute('aria-controls'));
+    if(!panel)return;
+    var willOpen=panel.hasAttribute('hidden');
+    if(willOpen){panel.removeAttribute('hidden');}else{panel.setAttribute('hidden','');}
+    btn.setAttribute('aria-expanded',willOpen?'true':'false');
+  }
+  document.addEventListener('click',onClick,sig?{signal:sig}:false);
+})();
+</script>"""
 
 
 def render_page(groups: list[dict] | None = None) -> str:
@@ -465,7 +714,8 @@ def render_page(groups: list[dict] | None = None) -> str:
                       '<div class="he-empty">Пока нет приглашений на события найма.</div>')
     meta = f"комнат: {n_rooms} · приглашений: {n_inv}"
     head = mailcrm_ui._page_head("События найма", count=n_rooms, meta=meta)
-    body = f'<style>{_CSS}</style><div class="he-wrap">{head}{body_inner}</div>'
+    body = (f'<style>{_CSS}</style><div class="he-wrap">{head}{body_inner}</div>'
+            f'{_TOGGLE_JS}')
     return mailcrm_ui._page("hiring", body)
 
 

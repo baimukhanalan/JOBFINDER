@@ -13,7 +13,7 @@ into ``iv_interviews``, so the interview pool stays clean.
 from __future__ import annotations
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from backend.tools import hiring_events
 
@@ -25,6 +25,32 @@ def hiring_events_page() -> HTMLResponse:
     """The live-hiring-events surface. Resolution is cache-first (only new invites hit
     the network), so repeat renders are fast."""
     return HTMLResponse(hiring_events.render_page())
+
+
+@router.get("/hiring-events/resume")
+def hiring_events_resume(mbx: str = ""):
+    """Stream a hiring-event candidate's résumé PDF (admin-gated, like the page itself).
+    ``mbx`` is the persona mailbox. Serves the persona's generated ``resume.pdf``, falling
+    back to a fresh render from its persona.json; 404 when neither is available (the page
+    hides the button in that case). Filename = the candidate's name."""
+    mbx = (mbx or "").strip()
+    persona = hiring_events.load_persona(mbx)
+    fname = hiring_events.resume_filename(mbx, persona)
+    path = hiring_events.resume_pdf_path(mbx)
+    if path:
+        return FileResponse(path, media_type="application/pdf", filename=fname)
+    if persona:
+        resume = ((persona.get("profile") or {}).get("resume")
+                  or persona.get("resume") or {})
+        try:
+            from backend.tools import drafts_ui
+            pdf = drafts_ui.render_resume_pdf(resume)
+        except Exception:
+            pdf = None
+        if pdf:
+            return Response(content=pdf, media_type="application/pdf",
+                            headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    return JSONResponse({"error": "not found"}, status_code=404)
 
 
 @router.post("/hiring-events/refresh")

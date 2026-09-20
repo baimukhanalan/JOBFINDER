@@ -860,6 +860,38 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   `DISPLAY`/`:98` contention; the `sg mail` group is inherited by the `foundever_recon` subprocesses (do NOT re-wrap). Fits the
   hour-stagger: hour 1 pairs with TP(:12), hours 5/10/15/20 pair with Maximus(:00), all ≥30 min apart, ≤2 lanes/hour.
   Tests: `test_foundever.py`.
+- **Amazon (corporate/virtual `account.amazon.jobs`)** (`strategies/amazon_apply.AmazonStrategy`, driver `tools/amazon_recon.py`,
+  cron `tools/mass_hiring_apply_amazon_cron.py`, gated `AMAZON_ADVANCE=1`) — **INERT until owner-armed; live submit UNPROVEN.**
+  **TWO DISTINCT Amazon systems — recon 2026-09-20:**
+  **(1) `hiring.amazon.com` (HOURLY: warehouse/fulfillment/delivery/CS — the true volume board) = NOT AUTOMATABLE, not built.**
+  Evidence: CloudFront **403 "Request blocked"** from this datacenter IP for BOTH the SPA root AND `/api/candidate/graphql`
+  (proven via curl + WebFetch — needs US residential egress even to LOAD); the flow terminates in an **in-person New Hire
+  Appointment** (badge photo / I-9 / drug test / physical first day) for warehouse/fulfillment/delivery — structurally
+  un-completable by a synthetic remote persona; and we do NOT collect its rows (the connector fetches the amazon.jobs corporate
+  board). Login is email + a 6-digit PIN with email-OR-phone verification (email path exists), but reachability + the in-person
+  terminus are the walls, not OTP. **(2) `account.amazon.jobs` (CORPORATE/VIRTUAL — what `mass_hiring source='amazon'` collects,
+  e.g. "Bilingual Technical Customer Support, Ring", "Virtual, <State>, USA")** — reachable (200) but SAML-redirects to the
+  **Amazon Passport** account wall. Account creation `POST /api/createAccountWithEmail` is gated by an **AWS WAF CAPTCHA**
+  (403 without a valid `aws-waf-token`, proven; `captcha-sdk.awswaf.com`, NOT reCAPTCHA/hCaptcha) → **NopeCHA CANNOT open it**
+  (NopeCHA does reCAPTCHA/hCaptcha/Turnstile only); it needs **CapSolver's `AntiAwsWafTask`** = `CAPTCHA_SOLVER_KEY`
+  (`applier/captcha_solver.solve_aws_waf`, NOT set). Verification is **EMAIL OTP** (read from the persona Maildir via
+  `verify_code.read_code`) — NO real SMS number needed (the corporate apply form's phone is a plain contact field, so the
+  reserved-fiction 555-01xx phone is fine there; if Amazon ever adds a phone-SMS step at submit, THAT would need a real US
+  number). From the datacenter IP the wall is served in **French** (Paris CloudFront PoP) — an IP/locale mismatch that raises
+  the WAF/reCAPTCHA risk score, so a **US residential egress** (a live `proxy_pool` phone slot; `amazon_recon` uses one when
+  live, DIRECT else) is required for a non-flagged run. **Dry-run (AMAZON_ADVANCE off) is LIVE-PROVEN to reach the ceiling:**
+  `amazon_recon` navigates the collected apply URL → Passport wall → `AmazonStrategy` flags `needs_account`/`login_required`
+  (fixed 2026-09-20: the wall is detected by HOST via `_on_passport`, since `analyzer.detect_page_type` returns `unknown` on the
+  localized FR wall) and stops — nothing created, no PII sent. **GO-LIVE (owner-side): set `CAPTCHA_SOLVER_KEY` (CapSolver) +
+  bring a US phone egress slot online**; then `AMAZON_ADVANCE=1` lets the strategy create the account (email OTP), fill the
+  wizard, and the driver clicks the recorded Submit ONLY when `unfilled==[]`. Ground truth = the Amazon "Thank you for
+  applying" email in the persona Maildir. Cron is **INERT until BOTH `AMAZON_ADVANCE=1` AND `CAPTCHA_SOLVER_KEY`** are set
+  (mirrors ORC's `ORC_PHONE`-inert guard; exits 0 → safe to add now, never spams the wall). `AMAZON_NOPECHA=1` arms the vendored
+  NopeCHA ext as a reCAPTCHA fallback for a later step (does not help the AWS-WAF gate). Cron line (report-only, HEADFUL :98,
+  minute 30 so it doesn't collide with the :00/:12/:24/:36/:48/:54 lanes):
+  `30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY='<capsolver-key>' sg mail -c 'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1`.
+  No pm2 restart (fresh subprocess each run; the `amazon_apply.py` strategy is imported live by the runner but the lane drives
+  its own browser). Tests: `test_amazon.py` (row decode / bilingual / confirmation matcher / screener logic, network-free).
 
 ## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`)
 A separate engine (manual/cron, `DISPLAY=:98 sg mail`, nothing live imports it → no pm2 restart): enters a post-apply

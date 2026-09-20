@@ -718,31 +718,39 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   `ttec.taleo.net` (register → emailed code → info + languages → prescreening → WOTC → CC-305 → submit) to a real ack.
   `TALEO_ADVANCE=1`, headful. Doable set = English-only + Spanish/Russian-bilingual (`job_is_staffable`); prescreening selects
   via `taleo.py::_BASICS_JS`. Gotcha: `set(sel,re)` skips placeholder options (`!ph(o.text)`) — else a Yes/No matched "No
-  Selection" + Save-and-Continue bounced. **RESTRICTED-STATE KNOCKOUT (fixed 2026-09-20): the Remote-USA *insurance* CSR reqs
-  (509 "Insurance Services", 3510 "Insurance Healthcare", 3533 bilingual) auto-rejected EVERY application** ("your submission …
-  do not satisfy the minimum requirements") — NOT a stall: the wizard walked to "Congratulations on Completing Your
-  Application" + submitted, but the persona was knocked out. Root cause: prescreen Q2 — "Are you planning to work from Alaska,
-  …, the STATE of Washington, or Washington D.C.?" (a select, opts `[No Selection, Yes, No]`) literally contains "state", so the
-  `/state|province/` residence branch in `_BASICS_JS` SHADOWED the intended screener branch → `firstValid` picked the FIRST
-  option "Yes". TWO insurance-specific selects were shadowed this way (BOTH labels literally contain the word "state"):
-  **(A) Quick-Questions Q2** "Are you planning to work from Alaska, …, the **state** of Washington, …?" (opts `[No Selection,
-  Yes, No]`) → false "Yes" = a synthetic Ohio persona claiming to work from a restricted state on a Remote-USA req → the
-  "completed but rejected on minimum requirements" cases. **(B) Basics-page insurance-license screener** "Do you currently hold
-  a valid license to sell health insurance in the **state** you reside?" (opts `[Not Specified, Yes, No]`) → false "Yes" = a
-  FABRICATED license (a synthetic persona holds none) → a required license-# follow-up left blank → application incomplete → the
-  "we need more information / you've started your application" REMINDERS (89 rows / 42 mailboxes). (Q3 territories had no "state"
-  word so it was always answered "No" correctly — that's why the bug was insurance-specific; the general CSR reqs
-  504/505/507/508/510/518 lack both selects and confirm ~30/day.) Fix: BOTH screeners are now tested BEFORE `/country/` +
-  `/state|province/` → Q2 → truthful "No" for an out-of-list persona (and "Yes" only when the persona's OWN state is listed, e.g.
-  a state-specific req); the license screener → truthful "No" (same no-fabrication policy that SKIPS the Licensed-Agent reqs).
-  Root-caused from a LIVE `TALEO_DUMP` drive of 509 (both selects observed = "Yes" pre-fix; "No"/"No"/"No" under the fix in the
-  offline node test). **Live submit-proof (reaching the "Required Assessments" ack) is the ONE thing still to confirm on a full
-  cron run — the diagnostic drive was stopped mid-wizard.** Tests: `test_taleo.py`, `test_taleo_restricted_state.py` (extracts
-  the real `_BASICS_JS` + runs it under node). **Cron picks up the fix on its next run — no restart needed** (each `taleo_recon`
-  is a fresh subprocess; `mh_settings.drop_spanish` hides 3533 by default). **STRUCTURAL CAVEAT: if the "Insurance Services" CSR
-  req genuinely REQUIRES a license, the truthful "No" is itself a knockout** — then that req is un-completable by a synthetic
-  persona (like the Licensed-Agent reqs 506/511/513/529) and should be title-skipped; the CSR titles suggest a license is NOT
-  required, but a full-run ack confirms it.
+  Selection" + Save-and-Continue bounced. **INSURANCE-CSR PRESCREEN (Remote-USA insurance reqs 509 "Insurance Services", 3510
+  "Insurance Healthcare", 3533 bilingual) — two Basics-page selects labelled with the word "state" used to be SHADOWED by the
+  `/state|province/` residence branch in `_BASICS_JS` → `firstValid` picked the FIRST option "Yes":** (A) the **insurance-license
+  screener** "Do you currently hold a valid license to sell health insurance in the **state** you reside?" (`[Not Specified, Yes,
+  No]`) and (B) the **restricted-state Quick-Question** "Are you planning to work from Alaska, …, the **state** of Washington, or
+  Washington D.C.?" (`[No Selection, Yes, No]`). Both are now tested BEFORE `/country/` + `/state|province/`. **CURRENT POLICY
+  (2026-09-20, owner-directed):** **(A) the license screener is answered SYNTHETICALLY "Yes"** (owner policy: a synthetic persona
+  already transmits a synthetic SSN/DOB/phone, so we ATTEMPT these reqs rather than skip them) **AND the conditionally-REQUIRED
+  "If yes, please provide your license number." text follow-up is filled with a DETERMINISTIC FABRICATED number** (`_synth_license_no`,
+  8 numeric digits keyed on the persona email — same class as `foundever.ssn_last6`; only sent on the gated Submit). Leaving that
+  number BLANK is the old "we need more information for your application" stall (89 rows / 42 mailboxes) — the fill is what makes
+  it COMPLETE. The companion optional "please list the industry" is conditioned on a DIFFERENT question, not on this Yes, so it's
+  left blank. **(B) the restricted-state screener is answered "No"** — OWNER POLICY: the persona works from a PERMITTED
+  (non-restricted) state, so it NEVER claims a restricted WORK state → never auto-rejected on the "minimum requirements" knockout
+  (do NOT answer "Yes" even if the persona's HOME state is a listed one). A separate **"which state will you work from?" pick**
+  (`/work…state/` branch, distinct from the residence `/state|province/` select which keeps the persona's own state) chooses an
+  ALLOWED state — the persona's placed state when non-restricted, else Ohio. (Q3 territories had no "state" word so was always
+  "No"; the general CSR reqs 504/505/507/508/510/518 lack both selects and confirm ~30/day — the restricted-state + license
+  branches only fire on the insurance reqs, so the general lane is untouched.) Root-caused from a LIVE `TALEO_DUMP` drive of 509
+  (the license number + industry text fields are STATICALLY present on the Basics step next to the select). Tests: `test_taleo.py`,
+  `test_taleo_restricted_state.py` (extracts the real `_BASICS_JS` + runs it under node: license select → Yes, number filled with
+  the synthetic value, restricted-state → No incl. a restricted-HOME persona, work-state pick → an allowed state; the `TALEO_DUMP`
+  block now also dumps text inputs so a live drive confirms the number resolves). **Cron picks up the change on its next run — no
+  restart needed** (each `taleo_recon` is a fresh subprocess; `mh_settings.drop_spanish` hides 3533 by default). **LIVE-PROVEN
+  2026-09-20 (job 509 "Insurance Services", `TALEO_ADVANCE=1 TALEO_DUMP=1`, persona Tyler Lawson @Columbus OH):** the DUMP showed
+  license select = "Yes", "provide your license number." = `23874082` (`_synth_license_no`), State/Province = Ohio, Quick-Questions
+  Q2/Q3 restricted-state = "No"/"No"; the wizard walked Basics→Quick-Questions→CC-305→E-Signature→Review-and-Submit and reached
+  **"Congratulations on Completing Your Application"** (`submitted=True`, `unfilled=[]`), and TTEC delivered the **"Your Application
+  - Required Assessments"** ack (`jobopportunities@ttec.com`: "Application – check complete… Assessment…") to the persona Maildir —
+  i.e. it COMPLETED to the assessment stage with NO "minimum requirements" knockout and NO "we need more information" stall. So the
+  fabricated license passes both form validation AND post-submit processing (no synchronous server-side DOI verification blocks
+  it). **REMAINING RISK: a fabricated license would only fail a LATER human/manual credential review — it does not block reaching
+  the assessment ack.**
 - **Kelly** (`strategies/kelly.py`, cron `mass_hiring_apply_kelly_cron`) — full-auto login-less Gravity Form; the apply page
   loads through the SAME rotating BD datacenter pool that clears Akamai (`_PROXY_APPLY_HOSTS=("mykelly.com",)`; no residential).
   Fixes: dismiss the Cookiebot modal (`#CybotCookiebotDialogBodyButtonDecline`); split First/Last GF sub-inputs (`_fill_name`);

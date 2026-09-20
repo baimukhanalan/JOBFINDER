@@ -1528,38 +1528,99 @@ class WorkdayStrategy(ApplyStrategy):
         return ok
 
     async def _tick_required_checkboxes(self, page: Page) -> None:
-        """Tick every REQUIRED, currently-unchecked checkbox that is not a marketing opt-in — the
-        create-account Terms box is required but its <label> is often just a link, so a text
-        consent-matcher misses it and the step is blocked. Never ticks newsletter/marketing."""
+        """Tick every REQUIRED-or-consent, currently-unchecked checkbox that is not a marketing
+        opt-in — the create-account Terms box is required but its label text sits in a SIBLING of
+        the input's tiny wrapper (so a closest-div matcher misses it) AND its native <input> is
+        hidden behind a styled widget (so a plain .check()/`.checked=true` does NOT flip Workday's
+        React state). We gather context from the label[for]/ancestors and click the VISIBLE label/
+        wrapper, verifying the box actually flipped. Never ticks newsletter/marketing."""
         try:
             boxes = page.locator('input[type="checkbox"]')
-            for i in range(await boxes.count()):
-                cb = boxes.nth(i)
-                try:
-                    if await cb.is_checked():
-                        continue
-                    req = await cb.evaluate(
-                        "e=>e.required||e.getAttribute('aria-required')==='true'")
-                    ctx = (await cb.evaluate(
-                        "e=>{const c=e.closest('div,li,fieldset,form');return c?c.innerText:'';}")
-                        or "")
-                    if _MARKETING_CB_RE.search(ctx):
-                        continue
-                    # Tick when DOM-required OR when the context clearly signals a legal/consent
-                    # agreement (Workday CxS's Terms box isn't DOM-required — see _CONSENT_CB_RE).
-                    if not (req or _CONSENT_CB_RE.search(ctx)):
-                        continue
-                    try:
-                        await cb.check(timeout=2500)
-                    except Exception:
-                        await cb.evaluate(
-                            "e=>{e.checked=true;"
-                            "e.dispatchEvent(new Event('click',{bubbles:true}));"
-                            "e.dispatchEvent(new Event('change',{bubbles:true}));}")
-                except Exception:
-                    continue
+            count = await boxes.count()
         except Exception as exc:
-            logger.debug("workday: checkbox tick raised: %s", exc)
+            logger.debug("workday: checkbox enumerate raised: %s", exc)
+            return
+        for i in range(count):
+            cb = boxes.nth(i)
+            try:
+                if await cb.is_checked():
+                    continue
+                info = await cb.evaluate(
+                    """e=>{
+                      const texts=[];
+                      const push=t=>{t=(t||'').trim(); if(t) texts.push(t);};
+                      if(e.id){const l=document.querySelector('label[for="'+
+                        (window.CSS&&CSS.escape?CSS.escape(e.id):e.id)+'"]'); if(l)push(l.innerText);}
+                      const lab=e.closest('label'); if(lab)push(lab.innerText);
+                      let p=e.parentElement, hops=0;
+                      while(p&&hops<4){push(p.innerText); p=p.parentElement; hops++;}
+                      return {req:!!(e.required||e.getAttribute('aria-required')==='true'),
+                              ctx:texts.join(' | ')};
+                    }""")
+                req = bool(info.get("req"))
+                ctx = info.get("ctx") or ""
+                if _MARKETING_CB_RE.search(ctx):
+                    continue
+                # Tick when DOM-required OR when the context clearly signals a legal/consent
+                # agreement (Workday CxS's Terms box isn't DOM-required — see _CONSENT_CB_RE).
+                if not (req or _CONSENT_CB_RE.search(ctx)):
+                    continue
+                if not await self._force_check(cb):
+                    logger.info("workday: consent checkbox did NOT flip (ctx=%r)", ctx[:120])
+            except Exception:
+                continue
+
+    async def _force_check(self, cb) -> bool:
+        """Flip an unchecked checkbox whose native <input> may be hidden behind a Workday widget.
+        Tries, verifying after each: native .check() → click label[for] → click closest <label> →
+        click nearest [data-automation-id] wrapper → a JS .checked+events fallback. A no-op method
+        escalates to the next; returns whether the box is finally checked."""
+        async def _is_checked() -> bool:
+            try:
+                return await cb.is_checked()
+            except Exception:
+                return False
+        # 1) native check — works when the input is genuinely visible/actionable
+        try:
+            await cb.check(timeout=2000)
+            if await _is_checked():
+                return True
+        except Exception:
+            pass
+        # 2/3/4) click the VISIBLE toggle target — what Workday's handler actually listens on
+        for finder in (
+            "e=>e.id?document.querySelector('label[for=\"'+"
+            "(window.CSS&&CSS.escape?CSS.escape(e.id):e.id)+'\"]'):null",
+            "e=>e.closest('label')",
+            "e=>e.closest('[data-automation-id]')",
+        ):
+            try:
+                handle = await cb.evaluate_handle(finder)
+                el = handle.as_element()
+                if not el:
+                    continue
+                try:
+                    await el.scroll_into_view_if_needed(timeout=1500)
+                except Exception:
+                    pass
+                try:
+                    await el.click(force=True, timeout=2000)
+                except Exception:
+                    pass
+                if await _is_checked():
+                    return True
+            except Exception:
+                continue
+        # 5) last-resort: set .checked + fire the events a React handler may still catch
+        try:
+            await cb.evaluate(
+                "e=>{e.checked=true;"
+                "e.dispatchEvent(new Event('input',{bubbles:true}));"
+                "e.dispatchEvent(new Event('click',{bubbles:true}));"
+                "e.dispatchEvent(new Event('change',{bubbles:true}));}")
+        except Exception:
+            pass
+        return await _is_checked()
 
     async def _tick_acknowledge(self, page: Page) -> None:
         """Tick a required certification/acknowledgement checkbox or radio (a single affirmative

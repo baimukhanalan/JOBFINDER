@@ -209,6 +209,9 @@ _HARVEST_LOG = os.path.join(
 _HALLO_LOG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_hallo_event.log")
 
+_TALEO_LOG = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs", "harvest_taleo_event.log")
+
 _LOGS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "logs")
 _SUTHERLAND_PROBE_FLAG = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", ".sutherland_probe_armed")
@@ -363,6 +366,39 @@ def _maybe_trigger_hallo(row, seen):
         log.close()
 
 
+def _maybe_trigger_taleo(row, seen):
+    """A FRESH TTEC "Required Assessments" invite (jobopportunities@ttec.com → Taleo→login→HARVER) just
+    landed → drive it through the harver-backed adapter AT ONCE. Event-driven like _maybe_trigger_hallo:
+    the teletech.taleo.net sealedRequestId link is single-use, best walked promptly (before this hook
+    the Taleo lane had NO cron/trigger — ttec invites piled up until an operator ran the drain by hand).
+    GATE on the discover matcher's signal — ttec.com sender + "required assessment" subject — which
+    EXCLUDES the "Reminder, we need more information for your application" ttec mail (an application-info
+    reminder, NOT a test). Serialized by the base harvest fcntl lock (ONE virtual mic + ONE /dev/video0
+    — never fan out), OOM-guarded like Hallo, fully try/excepted by the caller so it can NEVER affect
+    indexing. harvest_runner exits without a browser when there is no fresh token, so a non-invite is a
+    cheap no-op. The Harver battery marks the CRM «пройдено» via the adapter's is_done on completion."""
+    if seen != 0:
+        return
+    fe = (row.get("from_email") or "").lower()
+    subj = (row.get("subject") or "").lower()
+    if "ttec.com" not in fe or "required assessment" not in subj:
+        return
+    if _mem_available_kb() < 6 * 1024 * 1024:   # < 6 GiB available → too tight for another headful browser
+        return
+    import subprocess
+    _kill_stuck_harvest("taleo_ttec", 3000)   # 50 min: a full Harver battery runs long; kill only a hang
+    env = dict(os.environ, DISPLAY=os.environ.get("DISPLAY") or ":98",
+               HARVEST_SESSION_SECS=os.environ.get("HARVEST_SESSION_SECS") or "2400")
+    try:
+        log = open(_TALEO_LOG, "a")
+    except Exception:
+        log = subprocess.DEVNULL
+    subprocess.Popen(["/usr/bin/python3", _HARVEST_RUNNER, "--platform", "taleo_ttec", "--limit", "1"],
+                     env=env, stdout=log, stderr=log, start_new_session=True)
+    if hasattr(log, "close"):
+        log.close()
+
+
 _NOTIFIED_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                               "logs", "iv_mail_notified.txt")
 
@@ -433,6 +469,10 @@ def index_file(path):
         _maybe_trigger_hallo(row, seen)
     except Exception as e:
         print(f"hallo trigger error {path}: {e}", flush=True)
+    try:
+        _maybe_trigger_taleo(row, seen)
+    except Exception as e:
+        print(f"taleo trigger error {path}: {e}", flush=True)
     try:
         _maybe_notify_mail_event(row, seen)
     except Exception as e:

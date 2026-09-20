@@ -66,6 +66,18 @@ def apply_order() -> str:
     return v if v in ("pay_desc", "pay_asc", "none", "as_is") else "none"
 
 
+def pay_floor_monthly() -> float:
+    """Minimum MONTHLY pay (USD) a CATALOG (tech) position must disclose to be applied to (env
+    `APPLY_MIN_MONTHLY_USD`, default 5000 = ~$60k/yr). 0/unset = no floor. Owner 2026-09-20: this
+    floor is CATALOG-ONLY — MASS-HIRING (BPO) is DELIBERATELY EXEMPT (every offer to date came from
+    BPO roles paying ~$3000-3400/mo, below any such floor, so flooring them would kill the offer
+    pipeline — offers matter more than the pay level there)."""
+    try:
+        return max(0.0, float(os.environ.get("APPLY_MIN_MONTHLY_USD") or 5000))
+    except (TypeError, ValueError):
+        return 5000.0
+
+
 def candidates_per_position(default: int = 2) -> int:
     """K — distinct personas to send to ONE position before the stop condition takes over (env
     `APPLY_CANDIDATES_PER_POSITION`). Clamped 1..8: a big K on the catalog path is trimmed by the
@@ -105,6 +117,20 @@ def pay_key_catalog(row) -> float:
                      row.get("est_total_max"), row.get("est_total_min"),
                      row.get("est_base_max"), row.get("est_base_min"))
     return max(nums) if nums else 0.0
+
+
+def passes_catalog_floor(row, *, floor_monthly=None) -> bool:
+    """True iff a CATALOG (tech) row clears the monthly pay floor. Annual figure (`pay_key_catalog`)
+    → monthly = /12. A row with NO disclosed pay (0.0) is KEPT (benefit of the doubt — the floor
+    only removes positions whose DISCLOSED pay is below it). floor<=0 → always True (no floor).
+    Mass-hiring must NOT use this (BPO is exempt — see `pay_floor_monthly`)."""
+    floor = pay_floor_monthly() if floor_monthly is None else float(floor_monthly)
+    if floor <= 0:
+        return True
+    annual = pay_key_catalog(row or {})
+    if annual <= 0:
+        return True
+    return (annual / 12.0) >= floor
 
 
 def pay_key_masshiring(row, *, hourly_pay=None) -> float:

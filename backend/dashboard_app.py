@@ -1983,6 +1983,15 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
         all_ids, velocity_held = _vguard(all_ids)
     except Exception:
         pass
+    # CATALOG PAY FLOOR (owner 2026-09-20): drop tech positions below the monthly floor
+    # (env APPLY_MIN_MONTHLY_USD, default $5000/mo). Applies regardless of ordering; this is the
+    # /catalog tech drain only — mass-hiring (BPO, the offer source) is exempt.
+    if _op is not None:
+        try:
+            _pfrows = {j["id"]: j for j in jobs}
+            all_ids = [i for i in all_ids if _op.passes_catalog_floor(_pfrows.get(i) or {})]
+        except Exception:
+            pass
     if str(randomize).strip().lower() in ("1", "true", "yes", "on"):
         import random as _rnd
         _rnd.shuffle(all_ids)          # sample DIVERSE jobs across companies, not the first N

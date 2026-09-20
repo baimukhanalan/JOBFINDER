@@ -10,14 +10,14 @@ from backend.tools import offer_priority as op
 
 
 # ---- knobs ------------------------------------------------------------------------------------
-def test_apply_order_defaults_to_pay_desc(monkeypatch):
+def test_apply_order_defaults_to_none(monkeypatch):
     monkeypatch.delenv("APPLY_ORDER", raising=False)
-    assert op.apply_order() == "pay_desc"
+    assert op.apply_order() == "none"   # owner 2026-09-20: no high-pay accent by default
 
 
 @pytest.mark.parametrize("val,expect", [
     ("pay_asc", "pay_asc"), ("none", "none"), ("as_is", "as_is"),
-    ("PAY_DESC", "pay_desc"), ("garbage", "pay_desc"),
+    ("PAY_DESC", "pay_desc"), ("garbage", "none"),
 ])
 def test_apply_order_knob(monkeypatch, val, expect):
     monkeypatch.setenv("APPLY_ORDER", val)
@@ -125,8 +125,8 @@ def test_remaining_candidates():
 # ---- plan_positions: multi-candidate + stop + order + cap -------------------------------------
 def test_plan_positions_emits_k_copies_high_pay_first():
     pay = {1: 100000, 2: 300000, 3: 50000}
-    plan = op.plan_positions([1, 2, 3], pay_key_of=lambda j: pay[j], k=2)
-    # 2 copies each, highest-paying first
+    plan = op.plan_positions([1, 2, 3], pay_key_of=lambda j: pay[j], k=2, order="pay_desc")
+    # 2 copies each, highest-paying first (explicit pay_desc — default is now 'none')
     assert plan == [2, 2, 1, 1, 3, 3]
 
 
@@ -247,7 +247,8 @@ def test_landed_check_closure(tmp_path):
 
 
 # ---- plan_mh_batch live wrapper ---------------------------------------------------------------
-def test_plan_mh_batch_orders_by_pay_and_stops_landed(tmp_path):
+def test_plan_mh_batch_orders_by_pay_and_stops_landed(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPLY_ORDER", "pay_desc")   # exercise ordering (default is now 'none')
     root = tmp_path / "prefill"
     # job 22 already reached interview -> dropped; jobs 11 & 33 open
     _write_persona(root, "demo_x", "mh_22", "x@x")
@@ -261,7 +262,8 @@ def test_plan_mh_batch_orders_by_pay_and_stops_landed(tmp_path):
     assert plan == [33, 33, 11, 11]
 
 
-def test_plan_mh_batch_worktree_no_uploads_falls_back(tmp_path):
+def test_plan_mh_batch_worktree_no_uploads_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPLY_ORDER", "pay_desc")   # exercise ordering (default is now 'none')
     rows = {11: {"salary_min": 15}, 22: {"salary_min": 25}}
     # no prefill tree -> nothing landed, applied=0 -> each id gets `rounds` copies (order by pay)
     plan = op.plan_mh_batch([11, 22], rounds=2, rows_by_id=rows,
@@ -282,3 +284,12 @@ def test_plan_mh_batch_lifetime_cap(tmp_path):
 
 def test_plan_mh_batch_empty():
     assert op.plan_mh_batch([], rounds=3) == []
+
+
+def test_catalog_pay_floor(monkeypatch):
+    monkeypatch.setenv("APPLY_MIN_MONTHLY_USD", "5000")   # $60k/yr floor
+    assert op.passes_catalog_floor({"est_total_max": 72000}) is True    # $6k/mo — passes
+    assert op.passes_catalog_floor({"est_total_max": 48000}) is False   # $4k/mo — below
+    assert op.passes_catalog_floor({}) is True                          # no comp — kept (benefit of doubt)
+    monkeypatch.setenv("APPLY_MIN_MONTHLY_USD", "0")
+    assert op.passes_catalog_floor({"est_total_max": 12000}) is True    # floor off — passes

@@ -626,6 +626,11 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     # (a no-comp pool keeps list_jobs order). Guarded — a bad row/module leaves the order as-is.
     if _op is not None:
         try:
+            # CATALOG PAY FLOOR (owner 2026-09-20): drop tech positions whose disclosed pay is below
+            # the monthly floor (env APPLY_MIN_MONTHLY_USD, default $5000/mo). Mass-hiring (BPO) is
+            # DELIBERATELY EXEMPT — offers come from BPO roles that pay below this, so they are never
+            # floored (see offer_priority.pay_floor_monthly). No-comp rows are kept (benefit of doubt).
+            rows = [r for r in rows if _op.passes_catalog_floor(r)]
             rows = _op.order_by_pay(list(rows), _op.pay_key_catalog, order=order)
         except Exception:
             pass

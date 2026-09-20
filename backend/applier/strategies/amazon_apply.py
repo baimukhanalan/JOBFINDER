@@ -114,11 +114,21 @@ class AmazonStrategy(ApplyStrategy):
             facts=facts, profile_id=profile_id, niche=niche,
             resume_parser_only=resume_parser_only)
         report["account_password"] = getattr(self, "_account_pw", "")
-        if report.get("page_type") in ("login_required", "captcha", "expired"):
-            # Still on the Passport account wall (the normal state for a dry-run without a captcha
-            # key + residential proxy). Flag it so the caller/dashboard shows a needs-account state
-            # rather than a phantom "form complete".
+        # Still on the Passport account wall? Detect it by HOST (`_on_passport`), not only via the
+        # analyzer's page_type: from a non-US IP the wall is served in a localized language (e.g. FR
+        # from a Paris egress) so `detect_page_type` returns `unknown`, not `login_required`. A
+        # host-based check flags the ceiling correctly regardless of locale — otherwise the dry-run
+        # would fill the wall's email box as if it were the form ("phantom complete").
+        try:
+            on_wall = await self._on_passport(page)
+        except Exception:
+            on_wall = False
+        if on_wall or report.get("page_type") in ("login_required", "captcha", "expired"):
+            # The normal state for a dry-run without a captcha key + residential proxy. Flag it so
+            # the caller/dashboard shows a needs-account state rather than a phantom "form complete".
             report["needs_account"] = True
+            if report.get("page_type") not in ("captcha", "expired"):
+                report["page_type"] = "login_required"
             return report
         try:
             await self._fill_amazon_gaps(page, profile_form, facts)

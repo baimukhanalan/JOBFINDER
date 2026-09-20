@@ -229,3 +229,49 @@ def test_aws_waf_noop_on_page_error(monkeypatch):
     monkeypatch.setenv("CAPTCHA_SOLVER_PROVIDER", "capsolver")
     page = _FakePage(raise_eval=True)
     assert _run(cs.solve_aws_waf(page)) is False   # evaluate raised -> swallowed, no raise
+
+
+# ---- amazon_recon driver helpers (row decode / bilingual / confirmation matcher) ----------------
+# Network-free: state placement from the collected "Virtual, <State>, USA" location, the bilingual
+# persona-attribute detection, and the Maildir confirmation-email matcher.
+
+from backend.tools.amazon_recon import (  # noqa: E402
+    _is_amazon_confirmation,
+    _is_bilingual,
+    _state_from_amazon_location,
+)
+
+
+def test_recon_state_from_location_named_state():
+    assert _state_from_amazon_location("Virtual, Arizona, USA") == "Arizona"
+    assert _state_from_amazon_location("Virtual, Texas, USA") == "Texas"
+    assert _state_from_amazon_location("Virtual, New York, USA") == "New York"
+
+
+def test_recon_state_from_location_stateless_is_blank():
+    # "Virtual, USA" names no state (any US state fits) -> the driver falls back to a default.
+    assert _state_from_amazon_location("Virtual, USA") == ""
+    assert _state_from_amazon_location("USA") == ""
+    assert _state_from_amazon_location("Remote, USA") == ""
+    assert _state_from_amazon_location("") == ""
+
+
+def test_recon_is_bilingual():
+    assert _is_bilingual("Bilingual Technical Customer Support, Ring, Ring") is True
+    assert _is_bilingual("Customer Service Associate") is False
+    assert _is_bilingual("") is False
+
+
+def test_recon_confirmation_by_sender():
+    assert _is_amazon_confirmation("From: no-reply@amazon.jobs", "Subject: hi") is True
+    assert _is_amazon_confirmation("From: careers@hiring.amazon.com", "Subject: x") is True
+
+
+def test_recon_confirmation_by_subject():
+    assert _is_amazon_confirmation("From: x@ex.com", "Subject: Thank you for applying to Amazon") is True
+    assert _is_amazon_confirmation("From: x@ex.com", "Subject: We received your application") is True
+
+
+def test_recon_confirmation_negative():
+    assert _is_amazon_confirmation("From: recruiter@randombpo.com",
+                                   "Subject: A job you might like") is False

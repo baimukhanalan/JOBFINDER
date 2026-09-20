@@ -2566,7 +2566,6 @@ _CHECKBOX_GROUPS_JS = r"""()=>{
   for(const [g,items] of groups){
     if(items.length<2)continue;                       // a single checkbox is a consent box
     const opts=items.map(it=>({gi:it.gi,text:optText(it.cb),checked:it.cb.checked}));
-    const optJoin=opts.map(o=>o.text).join(' ').replace(/\s+/g,'');
     // question = smallest ancestor whose text (minus the option labels) reads like a prompt
     let q='',node=g;
     for(let i=0;i<6&&node;i++){
@@ -2575,11 +2574,11 @@ _CHECKBOX_GROUPS_JS = r"""()=>{
       full=clean(full);
       if(full.length>=6&&full.length<=400){q=full;break;}
       node=node.parentElement;}
-    const marker=el=>!!el&&(/\*/.test((el.getAttribute&&el.getAttribute('aria-label'))||'')
-      ||(el.getAttribute&&el.getAttribute('aria-required')==='true')
-      ||!!(el.querySelector&&el.querySelector('label abbr, legend abbr, abbr[title*="equired"], .css-required')));
-    const reqText=/\*/.test(clean((g.innerText||'')).replace(optJoin,''));
-    const req=reqText||marker(g)||marker(node);
+    // required is judged on the GROUP container only (not the climbed ancestor, whose text can leak
+    // a sibling field's required '*'): an asterisk in its label, aria-required, or an abbr marker.
+    const req=/\*/.test((g.innerText||''))
+      ||(g.getAttribute&&g.getAttribute('aria-required')==='true')
+      ||!!(g.querySelector&&g.querySelector('label abbr, legend abbr, abbr[title*="equired"], .css-required'));
     out.push({question:q,required:!!req,anyChecked:opts.some(o=>o.checked),
       options:opts.map(o=>({gi:o.gi,text:o.text}))});}
   return out;}"""

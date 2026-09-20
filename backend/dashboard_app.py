@@ -1963,6 +1963,17 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
             all_ids = [i for i in all_ids if str(i) not in done_ids]
     except Exception:
         pass
+    # STOP-ON-RESPONSE (offer_priority, owner 2026-09-20): never re-apply to a position that already
+    # reached interview/offer — a landed posting has produced the outcome we want, so it leaves the
+    # drain (freeing that company's velocity budget for its still-open jobs). Guarded: on any error
+    # (or a worktree without uploads/mail) nothing is treated as landed.
+    _op = None
+    try:
+        from backend.tools import offer_priority as _op
+        _stage = _op.landed_check(all_ids)
+        all_ids = [i for i in all_ids if not _op.is_landed(_stage(i))]
+    except Exception:
+        _op = None
     # PER-COMPANY velocity cap (shared with the campaign cron): this bulk lane is what put 130 of
     # 149 fills on Salmon and tripped Ashby's per-tenant spam filter. Drop companies over cap and
     # limit the batch to each company's remaining budget (COMPANY_CAP_PER_DAY/_PER_WEEK).
@@ -1975,6 +1986,14 @@ def catalog_fill_all(gender: str = Form(""), count: str = Form(""),
     if str(randomize).strip().lower() in ("1", "true", "yes", "on"):
         import random as _rnd
         _rnd.shuffle(all_ids)          # sample DIVERSE jobs across companies, not the first N
+    elif _op is not None:
+        # HIGH-PAY FIRST (offer_priority): order the kept set by disclosed pay DESC so a capped
+        # drain (`[:n]`) takes the best-paying OPEN jobs. Skipped when the owner chose `randomize`.
+        try:
+            _rows = {j["id"]: j for j in jobs}
+            all_ids = _op.order_by_pay(all_ids, lambda i: _op.pay_key_catalog(_rows.get(i) or {}))
+        except Exception:
+            pass
     job_ids = all_ids if n is None else all_ids[:n]
     wraw = (workers or "").strip().lower()
     if wraw in ("", "auto", "0"):

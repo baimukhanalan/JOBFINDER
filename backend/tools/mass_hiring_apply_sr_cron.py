@@ -140,6 +140,11 @@ def main() -> None:
         ids = [args.only]
     else:
         ids = sr_job_ids()
+        # High-pay-first order + STOP-ON-RESPONSE (drop jobs that already reached interview/offer)
+        # BEFORE --limit so the top-N are the highest-paying OPEN jobs. Guarded — falls back to the
+        # id-ordered list on any error / a worktree without uploads/ (offer_priority).
+        from backend.tools import offer_priority
+        ids = offer_priority.plan_mh_batch(ids, rounds=1)
         if args.skip_confirmed:
             done = _confirmed_jobids_in_log()
             ids = [i for i in ids if i not in done]

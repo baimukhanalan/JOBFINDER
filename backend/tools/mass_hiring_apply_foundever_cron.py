@@ -171,10 +171,16 @@ def main() -> None:
         logger.info("no auto-applyable Foundever jobs on the board")
         return
 
-    batch = ids * max(1, args.rounds)
+    # High-pay-first order + STOP-ON-RESPONSE (skip jobs that already reached interview/offer) +
+    # `rounds` personas/run. Guarded — falls back to `ids * rounds` on any error (offer_priority).
+    from backend.tools import offer_priority
+    batch = offer_priority.plan_mh_batch(ids, rounds=max(1, args.rounds))
     workers = max(1, args.workers)
-    logger.info("applying to %d Foundever jobs x %d round(s) = %d applications (workers=%d)",
+    logger.info("applying to %d Foundever jobs x %d round(s) = %d applications (workers=%d, pay-ordered, open-only)",
                 len(ids), args.rounds, len(batch), workers)
+    if not batch:
+        logger.info("every Foundever job already reached interview/offer — nothing to apply")
+        return
 
     if workers > 1:
         import concurrent.futures

@@ -42,6 +42,8 @@ def test_dedup_on_server_and_user():
 def test_next_proxy_round_robin_and_empty(tmp_path, monkeypatch):
     store = tmp_path / "proxies.json"
     monkeypatch.setattr(pp, "_STORE", store)
+    # isolate from any LIVE residential/phone slot (next_proxy PREFERS residential_proxy() when up)
+    monkeypatch.setattr(pp, "residential_proxy", lambda: None)
     assert pp.next_proxy() is None                       # empty pool
     pp._save({"proxies": [{"server": "http://a:1"}, {"server": "http://b:2"}],
               "cursor": 0})

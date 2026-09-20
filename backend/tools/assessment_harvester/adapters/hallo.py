@@ -588,7 +588,7 @@ class HalloAdapter(Adapter):
         Appeal). `page.mouse.click(x,y)` selects cleanly (A-up + B-down → Next enabled, no Appeal).
         SELF-CORRECTING across (best,worst) row pairs; best-effort; never raises."""
         try:
-            rows = await page.evaluate(r"""() => {
+            data = await page.evaluate(r"""() => {
               const vis = e => { const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
                 return r.width>1 && r.height>1 && s.visibility!=='hidden' && s.display!=='none'; };
               const svgs = [...document.querySelectorAll('svg.hoverElement, svg[class*="hover" i]')].filter(vis);
@@ -598,36 +598,45 @@ class HalloAdapter(Adapter):
                 const r = s.getBoundingClientRect();
                 const tr = s.closest('tr');
                 const key = tr ? ('tr' + trs.indexOf(tr)) : ('y' + Math.round(r.y / 20));
-                if (!groups.has(key)) groups.set(key, []);
-                groups.get(key).push({x: r.x + r.width/2, y: r.y + r.height/2});
+                if (!groups.has(key)) groups.set(key, {pts: [], tr});
+                groups.get(key).pts.push({x: r.x + r.width/2, y: r.y + r.height/2});
               }
               const out = [];
-              for (const arr of groups.values()) {
-                if (arr.length < 2) continue;               // an option row = up + down thumb
-                arr.sort((a,b) => a.x - b.x);
-                out.push({up:  [Math.round(arr[0].x), Math.round(arr[0].y)],
-                          down:[Math.round(arr[arr.length-1].x), Math.round(arr[arr.length-1].y)]});
+              for (const g of groups.values()) {
+                if (g.pts.length < 2) continue;             // an option row = up + down thumb
+                g.pts.sort((a,b) => a.x - b.x);
+                let txt = '';
+                if (g.tr) { const td = [...g.tr.querySelectorAll('td')].find(d => (d.innerText||'').trim().length > 3);
+                            txt = td ? (td.innerText||'').trim() : (g.tr.innerText||'').trim(); }
+                out.push({text: (txt||'').slice(0,300),
+                          up:  [Math.round(g.pts[0].x), Math.round(g.pts[0].y)],
+                          down:[Math.round(g.pts[g.pts.length-1].x), Math.round(g.pts[g.pts.length-1].y)]});
               }
               out.sort((a,b) => a.up[1] - b.up[1]);          // top→bottom
-              return out;
+              // scenario = the first substantial visible text block on the page (the SJT prompt)
+              let scen = '';
+              for (const e of [...document.querySelectorAll('h1,h2,h3,p,div')].filter(vis)) {
+                const t = (e.innerText||'').trim();
+                if (t.length > 25 && t.length < 600) { scen = t; break; }
+              }
+              return {rows: out, scenario: scen};
             }""")
         except Exception:
-            rows = None
-        n = len(rows) if rows else 0
+            data = None
+        rows = (data or {}).get("rows") or []
+        scenario = (data or {}).get("scenario") or ""
+        n = len(rows)
         if n < 2:
             return False
-        pairs = [(b, w) for b in range(n) for w in range(n) if b != w]
-        start = getattr(self, "_bw_pick", 0) % len(pairs)
-        self._bw_pick = start + 1
-        order = pairs[start:] + pairs[:start]
-        for bi, wi in order[:max(n, 6)]:
+
+        async def _try(bi, wi) -> bool:
             try:
                 await page.mouse.click(rows[bi]["up"][0], rows[bi]["up"][1])
                 await page.wait_for_timeout(300)
                 await page.mouse.click(rows[wi]["down"][0], rows[wi]["down"][1])
                 await page.wait_for_timeout(400)
             except Exception:
-                continue
+                return False
             try:
                 nxt = await page.evaluate(
                     "() => { const b=[...document.querySelectorAll('button')]"
@@ -640,6 +649,32 @@ class HalloAdapter(Adapter):
                         or await self._click(page, "Finish", 1500)):
                     await page.wait_for_timeout(900)
                     return True
+            return False
+
+        # STRONG-MODEL solve FIRST: this Sales/Hardskill SJT is SCORED, so a correct best/worst is the
+        # offer lever. Read each row's response text + the scenario, ask the strong solver, click THAT
+        # best row's up-thumb + worst row's down-thumb. Rotation below is only a completion fallback (it
+        # enables Next with a near-random pick → ~zero score), used when the solver is unavailable or its
+        # pick doesn't enable Next.
+        texts = [r.get("text") or "" for r in rows]
+        if any(len(t) > 3 for t in texts):
+            try:
+                from backend.tools.assessment_harvester import openai_solver
+                if openai_solver.available():
+                    import asyncio
+                    bw = await asyncio.to_thread(openai_solver.solve_best_worst, scenario, texts)
+                    if bw is not None and await _try(bw[0], bw[1]):
+                        logger.info("[hallo] sales best/worst SOLVED (strong model) best=%d worst=%d", bw[0], bw[1])
+                        return True
+            except Exception:
+                pass
+        pairs = [(b, w) for b in range(n) for w in range(n) if b != w]
+        start = getattr(self, "_bw_pick", 0) % len(pairs)
+        self._bw_pick = start + 1
+        order = pairs[start:] + pairs[:start]
+        for bi, wi in order[:max(n, 6)]:
+            if await _try(bi, wi):
+                return True
         return False
 
     async def advance(self, page) -> bool:

@@ -155,3 +155,29 @@ def solve_text(question: str, options: list[str]) -> int | None:
         return None
     idx = int(m.group()) - 1
     return idx if 0 <= idx < len(options) else None
+
+
+def solve_best_worst(question: str, responses: list[str]) -> tuple[int, int] | None:
+    """A situational-judgement 'pick the BEST and the WORST response' item. Return (best_idx, worst_idx)
+    0-based, or None on failure. SJT is a SCORED module — a correct best/worst materially lifts the
+    assessment score, which is the offer lever — so this uses the strong model, not the local one."""
+    n = len(responses)
+    if n < 2:
+        return None
+    numbered = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(responses))
+    q = ("You are a competent, reliable, customer-focused customer-service representative taking a "
+         "situational-judgement test. Read the scenario and the responses, then choose the ONE BEST "
+         "response and the ONE WORST response.\n\n"
+         f"Scenario: {question or '(choose the best and worst response)'}\n\nResponses:\n{numbered}\n\n"
+         "Reply with TWO numbers only: the BEST response number, a comma, then the WORST response number. "
+         "Example: 2,4")
+    out = _post(_TEXT_MODEL, q, max_tokens=10)
+    if not out:
+        return None
+    nums = [int(x) - 1 for x in re.findall(r"\d+", out)]
+    if len(nums) < 2:
+        return None
+    best, worst = nums[0], nums[1]
+    if not (0 <= best < n) or not (0 <= worst < n) or best == worst:
+        return None
+    return best, worst

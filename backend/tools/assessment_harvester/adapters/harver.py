@@ -999,6 +999,18 @@ class HarverAdapter(Adapter):
         Returns (best_idx, worst_idx); a robust fallback keeps the run moving on any parse/HTTP failure.
         The bank stores the question so a stronger offline pass can re-key it later (same as AMCAT)."""
         n = len(responses)
+        # STRONG model FIRST: the SJT is scored, and a correct best/worst is the offer lever. The local
+        # Sumrak model is weak at judgement; route through the OpenAI solver when available, fall back to
+        # the local model, then a fixed pick — so the run always completes even with no solver.
+        try:
+            from backend.tools.assessment_harvester import openai_solver
+            if openai_solver.available():
+                import asyncio
+                bw = await asyncio.to_thread(openai_solver.solve_best_worst, question, responses)
+                if bw is not None:
+                    return bw
+        except Exception:
+            pass
         numbered = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(responses))
         prompt = (
             "You are a competent, reliable, customer-focused customer service representative taking a "

@@ -83,7 +83,10 @@ uvicorn dashboard_app:app` is BROKEN).
 ## Secrets & PII (gitignored)
 - `backend/.env` — `CRM_PG_DSN`, `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`, `IV_BOT_TOKEN`,
   `INTERVIEW_SESSION_SECRET`, `LLM_URL/KEY/MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, `BRIGHTDATA_*`,
-  `NOPECHA_KEY`, legacy Mailgun keys. `config.py` uses `extra="ignore"`.
+  `NOPECHA_KEY`, `CAPTCHA_SOLVER_KEY` (CapSolver API key — the PAID hard-captcha escalation tier; UNSET ⇒ that tier is a pure
+  no-op, everything else unchanged; owner funds the CapSolver balance in its dashboard), `CAPTCHA_SOLVER_PROVIDER`
+  (`capsolver` default | `twocaptcha`), `AWSWAF_BROWSER` (`1` ⇒ the FREE, no-key AWS-WAF `getToken()` path), legacy Mailgun
+  keys. `config.py` uses `extra="ignore"`.
 - `backend/.assist_token` — the `X-Assist-Token`; **must match the hardcoded `ASSIST_TOKEN` in `extension/background.js`**.
 - Real identity: `extension/{profile.js,background.js}`, `data/{profiles.json,facts/*,etalons/*}`, `mailbox_passwords.json`,
   `uploads/`. Only `.example`/`.template`/`sample.json` committed.
@@ -674,6 +677,21 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
   but a FINAL reCAPTCHA on the code step blocks the submit from a datacenter IP — no ack ever (samsara/fivetran/calendly =
   un-completable; standard `job-boards.greenhouse.io` companies complete fine). A human at noVNC can't finish one either.
   Follow-up: a per-company completion-rate SKIP.
+- **Captcha solver = FREE first → PAID CapSolver escalation** (`applier/captcha_solver.py` + `applier/capsolver.py`).
+  Order per challenge: **(1)** the FREE path — the in-browser **NopeCHA** extension for reCAPTCHA/hCaptcha/Turnstile where
+  armed (`COPILOT_NOPECHA`/`ICIMS_NOPECHA`), and `AwsWafIntegration.getToken()` (`AWSWAF_BROWSER=1`) for AWS WAF — runs first;
+  **(2)** the PAID **CapSolver** tier fires only when a challenge is STILL present AND `CAPTCHA_SOLVER_KEY` is set.
+  `capsolver.py` is the HTTP client (`createTask`+`getTaskResult`, BOUNDED exponential-backoff poll: 2s→×2→cap 10s, deadline
+  120s; every failure path returns None, never raises). Supported task types + solution field: Turnstile
+  `AntiTurnstileTaskProxyLess`→`token`; hCaptcha (+enterprise via `enterprisePayload`) `HCaptchaTaskProxyLess`→
+  `gRecaptchaResponse`; reCAPTCHA v2/v2-enterprise/v3(+enterprise) `ReCaptchaV2*/ReCaptchaV3*TaskProxyLess`→`gRecaptchaResponse`;
+  AWS WAF `AntiAwsWafTaskProxyLess`→`cookie`. `solve_on_page` detects the challenge + injects the token (Turnstile
+  `cf-turnstile-response`; reCAPTCHA `#g-recaptcha-response` + walks `___grecaptcha_cfg.clients` for the callback; hCaptcha
+  `h-/g-recaptcha-response`), `solve_aws_waf` sets the `aws-waf-token` cookie. **Casing is CapSolver-documented `ProxyLess`
+  (capital L)** — do not "fix" to lowercase. **UNSET `CAPTCHA_SOLVER_KEY` ⇒ the paid tier is a true no-op** (verified: no HTTP
+  client is even constructed) so every existing lane behaves exactly as before a key is added. Does NOT overclaim any wall —
+  it wires the escalation; whether a given Managed-Turnstile / invisible-enterprise-hCaptcha / visual-WAF actually clears is
+  IP-reputation-dependent and unproven here. Tests: `test_capsolver.py`.
 - **Two live-DOM GH fill bugs — FIXED 2026-09-19 (live-proven, both live-only / not in scraped questions).**
   **(1) coalition «Have you ever served in the military?»** — a protected-veteran self-ID whose label carries NO
   `veteran` token, so `_DEMOGRAPHIC` skipped it → left blank → the REQUIRED react-select blocked auto-submit. Fixed by

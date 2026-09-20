@@ -277,8 +277,11 @@ def _stop_obs() -> str:
         return "OBS not auto-managed (no MAC_SSH)"
     if _drive_running_locally():
         return "OBS left UP — a Sutherland drive is still running (camera in use)"
+    # SIGKILL (-9), NOT SIGTERM: a plain quit while the Virtual Camera is active pops OBS's blocking
+    # "OBS is still currently active. All streams/recordings will be shut down." confirm dialog and
+    # HANGS waiting for a click (no one is at the Mac) — so OBS never actually closes. -9 force-quits it.
     r = _mac_ssh(target,
-                 "pkill -x OBS 2>/dev/null; sudo -n pmset disablesleep 0 2>/dev/null; true", 20)
+                 "pkill -9 -x OBS 2>/dev/null; sudo -n pmset disablesleep 0 2>/dev/null; true", 20)
     return "OBS stopped on the Mac (idle)" if r is not None else "OBS stop skipped — Mac unreachable"
 
 

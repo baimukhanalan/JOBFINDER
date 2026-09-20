@@ -104,7 +104,8 @@ def test_stop_obs_kills_when_idle(monkeypatch):
     monkeypatch.setattr(s, "_mac_ssh", lambda t, c, to: cmds.append(c) or _cp())
     msg = s._stop_obs()
     assert "stopped" in msg
-    assert any("pkill -x OBS" in c for c in cmds)
+    # SIGKILL (-9) so a plain quit doesn't hang on OBS's "still active" confirm dialog
+    assert any("pkill -9 -x OBS" in c for c in cmds)
     # pmset release is best-effort in the same one-liner (silently ignored if sudo needs a password)
     assert any("pmset disablesleep 0" in c for c in cmds)
 

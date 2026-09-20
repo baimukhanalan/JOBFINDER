@@ -132,7 +132,10 @@ def apply_one(jobid: int, keep: int) -> dict:
         "ICIMS_PROFILE_DIR": profile_dir,
         "DISPLAY": ":98",
         "ICIMS_NOPECHA": "1",
-        "ICIMS_PROXY": "",
+        "ICIMS_PROXY": "",          # DIRECT — TP's offers all come from the datacenter IP; NopeCHA solves
+        #                             the captcha regardless of IP, and the connected phones are KZ (a
+        #                             geo-mismatch for a US application). Opt IN to a phone only via
+        #                             ICIMS_RESIDENTIAL=1, or point at a US slot via ICIMS_PROXY=<url>.
         "NOPECHA_KEY": _nopecha_key(),
     })
     started = time.time()

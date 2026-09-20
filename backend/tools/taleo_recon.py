@@ -195,10 +195,22 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
 
     start_ts = time.time()
     async with async_playwright() as pw:
-        ctx = await pw.chromium.launch_persistent_context(
-            profile_dir, headless=headless, channel="chromium", no_viewport=not headless,
-            locale="en-US", timezone_id="America/New_York",
-            args=[] if headless else ["--start-maximized"])
+        # Egress: DIRECT by DEFAULT (the connected phones are KZ residential = a geo-mismatch for a US
+        # application, and slow/flaky). Residential is OPT-IN: TALEO_RESIDENTIAL=1 → a live phone slot
+        # (Sutherland Mac excluded), else DIRECT; TALEO_PROXY=<url> → that exact proxy (e.g. a US slot).
+        # Guarded so egress lookup never breaks a fill.
+        _lk = dict(headless=headless, channel="chromium", no_viewport=not headless,
+                   locale="en-US", timezone_id="America/New_York",
+                   args=[] if headless else ["--start-maximized"])
+        try:
+            from backend.tools import proxy_pool
+            _px = proxy_pool.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY", str(os.getpid()))
+        except Exception:
+            _px = None
+        if _px:
+            _lk["proxy"] = _px
+            print(f"[egress: {_px['server']} (phone/residential)]", flush=True)
+        ctx = await pw.chromium.launch_persistent_context(profile_dir, **_lk)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         shot_dir = os.path.join(REPO, "logs", "taleo_recon", str(job_id))
         os.makedirs(shot_dir, exist_ok=True)

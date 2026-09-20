@@ -398,6 +398,99 @@ def _pool_pick() -> dict | None:
     return {"server": p.get("server"), "username": p.get("username"), "password": p.get("password")}
 
 
+# ---- mass-hiring APPLY-lane egress (OPT-IN residential; the Mac slot is reserved for Sutherland) ---
+# The mass-hiring apply lanes CAN egress through the owner's PHONE exit-node slots, but DIRECT is the
+# DEFAULT — the currently-connected phones are KAZAKHSTAN residential (Alma Telecom AS39824 /
+# Kazakhtelecom AS9198), which is a GEO-MISMATCH (⇒ a negative reCAPTCHA/risk signal) for a US remote-CSR
+# application, and they are SLOW/FLAKY (a US Workday page failed to render through one). The proven offer
+# lane (Teleperformance) produces its offers from the DIRECT datacenter IP, so routing a working lane
+# through a KZ phone risks REGRESSING it. Residential is therefore strictly per-lane OPT-IN (see
+# lane_egress) so it never degrades what works; the REAL unblock for the US BPOs is a US-residential IP
+# specifically (the KZ phones do NOT satisfy it). When a lane opts in, the MacBook Air egress slot is
+# DELIBERATELY excluded: it carries the Sutherland/SHL CDP tunnel + AMCAT camera drive, and an apply fill
+# routed through it would fight that lane. A slot is reserved-away when its tailscale_egress record's
+# hostname/note matches a substring in APPLY_EGRESS_EXCLUDE (default "mac", case-insensitive; set it to
+# "" to exclude nothing). Fail-open — a lookup error never mis-excludes a phone into a stall. (Kelly is
+# NOT wired here: it needs a BD DATACENTER IP, since Akamai 403s a carrier IP.)
+_APPLY_EXCLUDE_DEFAULT = "mac"
+_apply_cursor = 0
+
+
+def _reserved_egress_servers() -> set:
+    """The residential SOCKS `server` URLs reserved AWAY from the apply lanes (the Sutherland Mac
+    slot). Consults tailscale_egress.running_slots() for the port→hostname/note map. Fail-open to an
+    empty set (never block a fill by mis-excluding)."""
+    import os
+    subs = [s.strip().lower() for s in
+            os.getenv("APPLY_EGRESS_EXCLUDE", _APPLY_EXCLUDE_DEFAULT).split(",") if s.strip()]
+    if not subs:
+        return set()
+    out: set = set()
+    try:
+        from backend.tools import tailscale_egress
+        for r in tailscale_egress.running_slots():
+            label = f"{r.get('hostname', '')} {r.get('note', '')}".lower()
+            if any(sub in label for sub in subs):
+                srv = r.get("server")
+                if srv:
+                    out.add(srv)
+    except Exception:
+        pass
+    return out
+
+
+def apply_slots() -> list:
+    """Live residential SOCKS slots a mass-hiring APPLY lane may egress through: residential_slots()
+    minus the reserved (Sutherland Mac) slot, socks5 only (Chromium can't auth socks5; the loopback
+    phone tunnels are no-auth)."""
+    reserved = _reserved_egress_servers()
+    return [s for s in residential_slots()
+            if s.startswith("socks5://") and s not in reserved]
+
+
+def apply_proxy(name: str = "") -> dict | None:
+    """The next live PHONE egress slot for a mass-hiring apply fill as a {server} dict, or None
+    (⇒ DIRECT) when no phone is live. Used ONLY when a lane OPTS IN to residential (see lane_egress).
+    `name` (persona email / a per-process id) pins a stable slot so a relaunch/retry of the same fill
+    reuses the same egress IP AND parallel processes spread across phones (hash is per-process salted);
+    blank round-robins the module cursor (in-process spread)."""
+    global _apply_cursor
+    slots = apply_slots()
+    if not slots:
+        return None
+    if name:
+        i = abs(hash(name)) % len(slots)
+    else:
+        with _LOCK:
+            i = _apply_cursor % len(slots)
+            _apply_cursor += 1
+    return {"server": slots[i]}
+
+
+def lane_egress(residential_env: str, proxy_env: str = "", name: str = "") -> dict | None:
+    """Resolve a mass-hiring apply lane's egress. DIRECT is the DEFAULT (the proven path for the US BPO
+    lanes; the connected phones are KZ residential = a geo-mismatch/negative signal for a US application,
+    and slow/flaky). Residential is strictly OPT-IN, precedence high→low:
+       - `<proxy_env>` = a socks5://… / http://… URL  → that EXACT proxy (e.g. a US-residential slot when
+                                                        one is available); the way to point a lane at a
+                                                        specific egress without code changes.
+       - `<proxy_env>` = "direct"/"none"/"off"/"0"/"false"/"" (set) → force DIRECT.
+       - `<residential_env>` truthy ("1"/"true"/"yes"/"on")        → PREFER a live PHONE slot, else DIRECT.
+       - nothing set                                               → DIRECT (default — never routes a
+                                                                     working lane through a KZ phone)."""
+    import os
+    if proxy_env:
+        raw = os.getenv(proxy_env)
+        if raw is not None:
+            v = raw.strip()
+            if v == "" or v.lower() in ("direct", "none", "off", "0", "false"):
+                return None
+            return {"server": v}
+    if (os.getenv(residential_env) or "").strip().lower() in ("1", "true", "yes", "on"):
+        return apply_proxy(name)
+    return None
+
+
 def next_proxy() -> dict | None:
     """Round-robin the pool (advances + persists the cursor). Returns
     {server, username, password} or None when the pool is empty.

@@ -288,6 +288,61 @@ no DB/mail/net — `test_offer_priority.py`, 43 tests) + guarded live wrappers t
   no restart for the lane crons (fresh subprocess each run).** Cross-lane cadence (favour the fast-offer BPO lanes over the
   operator-triggered catalog drain) is the CRONTAB's job and already the case; `lane_priority()` documents the intent.
 
+## Apply-lane egress: OPT-IN residential (`proxy_pool.apply_slots`/`apply_proxy`/`lane_egress`)
+Every mass-hiring APPLY lane CAN egress through the owner's PHONE exit-node slots, but **DIRECT (the
+server's own Contabo IP) is the DEFAULT** and residential is strictly per-lane OPT-IN. **Why DIRECT by
+default (2026-09-20):** the currently-connected phones are KAZAKHSTAN residential (Alma Telecom AS39824 /
+Kazakhtelecom AS9198) — a GEO-MISMATCH (⇒ a negative reCAPTCHA-Enterprise/ATS-risk signal) for a US
+remote-CSR application, and they are SLOW/FLAKY (a US Workday page failed to render through one). The
+proven offer lane (Teleperformance) produces ALL its offers from the DIRECT datacenter IP, so routing a
+working lane through a KZ phone risks REGRESSING the only offer engine. So the plumbing exists (drop a
+US-residential slot in the moment one is available) WITHOUT degrading what works today.
+- **Slot inventory** (`data/ts_egress.json`): slot 0/1 = `jf-egress-0/1` (owner's PHONES), slot 2 =
+  `jf-egress-2` (**MacBook Air — Alan, RESERVED for Sutherland/SHL**).
+- **`proxy_pool.apply_slots()`** = `residential_slots()` (socks5 only) MINUS the reserved Mac slot
+  (`_reserved_egress_servers` matches `tailscale_egress.running_slots()` hostname/note against
+  `APPLY_EGRESS_EXCLUDE`, **default `"mac"`** — set `""` to exclude nothing) so an opted-in apply lane
+  never fights the Sutherland Mac lane. `apply_proxy(name)` round-robins the phones. **`lane_egress(
+  residential_env, proxy_env, name)`** = the per-lane resolver, DIRECT-default: `<proxy_env>=<url>` →
+  that EXACT proxy (the way to point a lane at a US slot); `<proxy_env>=direct`/`=`/`none`/`off`/`0` →
+  force DIRECT; `<residential_env>` truthy (`1`/`true`/`yes`/`on`) → prefer a live PHONE slot (else
+  DIRECT); nothing set → DIRECT. Tests: `test_proxy_pool.py`.
+- **Wired lanes + their OPT-IN / override env:** iCIMS/TP (`ICIMS_RESIDENTIAL` / `ICIMS_PROXY`,
+  `icims_recon._egress_proxy` + TCP-verify; **the TP cron STILL forces `ICIMS_PROXY=""` = DIRECT** —
+  unchanged, NopeCHA solves the captcha regardless of IP), Taleo (`TALEO_RESIDENTIAL`/`TALEO_PROXY`),
+  SmartRecruiters (`SR_RESIDENTIAL`/`SR_PROXY`), Workday/Centene (`WORKDAY_RESIDENTIAL`/`WORKDAY_PROXY`),
+  ORC/Alorica (`ORC_RESIDENTIAL`/`ORC_PROXY`), Foundever (`FOUNDEVER_RESIDENTIAL`/`FOUNDEVER_PROXY`) —
+  each adds `proxy=lane_egress(...)` to its `launch_persistent_context` (guarded, DIRECT default).
+  Maximus/Avature via the co-pilot lane (`mass_hiring_apply._egress_plan`→`/load` `proxy_server`): DIRECT
+  by default; opt in with `MH_COPILOT_RESIDENTIAL=1` (phone → 2nd phone → DIRECT, rotating ONLY on a
+  transport/proxy error `_PROXY_ERR_RE`, a genuine verdict stops the loop) or `MH_COPILOT_PROXY=<url>`.
+  Tests: `test_mass_hiring_apply_egress.py`.
+- **Kelly is DELIBERATELY NOT phone-routed** — `mykelly.com` (Akamai) 403s a residential/carrier IP, so
+  it keeps the BD DATACENTER pool (`_proxy_for`→`_pool_pick`, 3-attempt 403 retry, never direct). Do NOT
+  wire Kelly to `apply_proxy`.
+- **PROVEN LIVE 2026-09-20** (curl `--socks5` + a real headless Playwright `launch(proxy=…)`, the recon
+  mechanism): DIRECT = `173.249.18.153` (Contabo DC); slot 0 phone → `81.88.146.232` (AS39824 Alma
+  Telecom, Almaty KZ); slot 1 phone → `95.57.129.132` (AS9198 Kazakhtelecom `dynamic.telecom.kz`); Mac
+  slot → `176.64.7.75` (AS29555 Mobile Telecom). `apply_slots()` returned only the two phones (Mac
+  dropped). **HONEST READ — the KZ phones do NOT help a US application (they can HURT):** both APPLY
+  phones are KZ residential broadband (distinct IPs, NOT a shared-home NAT — but not US, and not mobile-
+  cellular; ironically the excluded Mac slot was on a mobile carrier). A US remote-CSR application from a
+  KZ IP is geographically inconsistent with the persona (a claimed US resident) ⇒ a negative reCAPTCHA/
+  risk signal, and the KZ slots are slow (a US page failed to render). **The REAL unblock for the US BPOs
+  (Concentrix/CVS/Cigna/Humana/Amazon-corporate) is a US-RESIDENTIAL IP specifically + a captcha solver
+  key — the connected KZ phones do NOT satisfy that.** When a US slot exists, point a lane at it with
+  `<LANE>_PROXY=<us-url>` (no code change). No live A/B was run (each real submit burns an attempt on the
+  proven lanes); the read is from IP-geo + the coordinator's live observation that a US Workday page
+  wouldn't render through a KZ slot.
+- **Outbound persona MAIL stays DIRECT (Contabo), by design — NOT routed through a phone.** `mailcrm.send`
+  submits to local Postfix (`127.0.0.1:587`, SASL as the persona) which relays out DKIM-signed from the
+  SPF-authorized Contabo IP. Routing it through a phone is both non-native (Postfix has no per-message
+  SOCKS) AND counterproductive: a phone's residential IP is NOT in `takhet.com`'s SPF, is on the Spamhaus
+  PBL (residential/dynamic = "don't send direct-to-MX"), and has no matching PTR → mail would be
+  rejected/spam-foldered, the OPPOSITE of the apply-form goal. Email deliverability wants a legit
+  SPF/DKIM/PTR-aligned mail server; apply FORMS want to look like a home user — different threat models.
+  Left untouched.
+
 ## Gotchas
 
 **Process / infra**

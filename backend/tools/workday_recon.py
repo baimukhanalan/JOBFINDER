@@ -225,16 +225,26 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                 if os.path.isdir(ext) else [])
     deadline = time.time() + keep_minutes * 60
     started = time.time()
-    proxy = _pick_proxy()
-    out["proxy"] = proxy
-    proxy_kw = {"proxy": {"server": proxy}} if proxy else {}
-    print(f"[egress {'via ' + proxy if proxy else 'DIRECT (datacenter IP)'}]", flush=True)
     try:
         async with async_playwright() as pw:
-            ctx = await pw.chromium.launch_persistent_context(
-                profile_dir, headless=False, channel="chromium", no_viewport=True,
-                locale="en-US", timezone_id="America/New_York",
-                args=["--start-maximized"] + ext_args, **proxy_kw)
+            # Egress: DIRECT by DEFAULT (a KZ residential phone is a geo-mismatch for a US application
+            # AND slow/flaky — a US Workday page failed to render through one). Residential is OPT-IN:
+            # WORKDAY_RESIDENTIAL=1 → a live phone slot (Sutherland Mac excluded), else DIRECT;
+            # WORKDAY_PROXY=<url> → that exact proxy (e.g. a Bright Data US datacenter/residential slot).
+            # lane_egress supersedes the old _pick_proxy residential-default. Guarded — never breaks a fill.
+            _lk = dict(headless=False, channel="chromium", no_viewport=True,
+                       locale="en-US", timezone_id="America/New_York",
+                       args=["--start-maximized"] + ext_args)
+            try:
+                from backend.tools import proxy_pool
+                _px = proxy_pool.lane_egress("WORKDAY_RESIDENTIAL", "WORKDAY_PROXY", str(os.getpid()))
+            except Exception:
+                _px = None
+            out["proxy"] = _px["server"] if _px else None
+            if _px:
+                _lk["proxy"] = _px
+            print(f"[egress: {_px['server'] if _px else 'DIRECT (datacenter IP)'}]", flush=True)
+            ctx = await pw.chromium.launch_persistent_context(profile_dir, **_lk)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             # preseed the NopeCHA key (same setup URL icims_recon uses) so the extension solves reCAPTCHA
             if ext_args:

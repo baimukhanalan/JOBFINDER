@@ -158,6 +158,70 @@ def classify(item: dict) -> tuple[str, bool]:
     return "unknown", False
 
 
+# ---- CSR-ideal answer profile for UNKEYED behavioural items (personality / single-response SJT) ----
+# An unkeyed personality/self-rating or single-best-response SJT item is answered DETERMINISTICALLY
+# toward the hireable customer-service profile (conscientious, agreeable, customer-focused, reliable,
+# calm), which pushes the assessment SCORE toward an offer. This is stronger + faster than the weak
+# local Sumrak model and never random; COGNITIVE/ability items are NEVER touched (they need the
+# correct answer). Mirrors the Maximus SHL-OPQ etalon's favourable-profile logic for the harvester.
+_CSR_POS_RE = re.compile(
+    r"reliab|depend|\bcalm\b|patient|\bhelp|\bdetail|accurat|thorough|listen|organi[sz]|responsib|"
+    r"conscien|follow through|friendly|polite|courteous|cooperat|\bteam\b|\blearn|improv|adapt|"
+    r"resolv|\bsolve|honest|respect|positive|careful|diligent|commit|hard.?work|punctual|on time|"
+    r"consistent|stay calm|remain calm|support|understand|enjoy help|like help|cheerful|enthusias|"
+    r"motivat|dedicat|flexible|open to feedback|take responsibility|go the extra", re.I)
+_CSR_NEG_RE = re.compile(
+    r"\brude\b|\bargue|lose (my )?temper|give up|\bquit\b|careless|\blate\b|absent|forget|forgot|"
+    r"complain|upset easily|angr|frustrat|impatient|\bignore\b|\bavoid\b|\bbored\b|dislike|\bhate\b|"
+    r"struggle to|not interested|leave early|procrastinat|\bblame|deflect|\bhang up\b", re.I)
+
+
+def _csr_scale_rank(o: str):
+    """Favourability rank of a Likert/frequency option (+3 most favourable .. -3 least); None when the
+    option is not on a recognizable agreement/frequency scale."""
+    t = (o or "").lower().strip()
+    if re.search(r"strongly agree|completely agree|^always\b|all of the time|to a great extent", t): return 3
+    if re.search(r"^agree\b|very often|almost always|usually|frequently|more than|to a large extent", t): return 2
+    if re.search(r"slightly agree|somewhat agree|^often\b|more like me", t): return 1
+    if re.search(r"neither|neutral|^sometimes\b|occasionally|about (as|the same)|average|moderate|undecided", t): return 0
+    if re.search(r"slightly disagree|somewhat disagree|^rarely\b|seldom|less than|less like me", t): return -1
+    if re.search(r"^disagree\b|hardly ever|not very often", t): return -2
+    if re.search(r"strongly disagree|completely disagree|^never\b|not at all|to no extent", t): return -3
+    return None
+
+
+def _csr_stmt_polarity(q: str) -> int:
+    p = len(_CSR_POS_RE.findall(q or "")); n = len(_CSR_NEG_RE.findall(q or ""))
+    return 1 if p > n else (-1 if n > p else 0)
+
+
+def csr_pick(item_type: str, question: str, opt_txt: list):
+    """A deterministic CSR-ideal option index for an UNKEYED personality/SJT item, else None (then the
+    caller falls back to the model). Never used for cognitive/ability items."""
+    opts = [o or "" for o in (opt_txt or [])]
+    if len(opts) < 2:
+        return None
+    if item_type == "personality":
+        ranks = [(i, _csr_scale_rank(o)) for i, o in enumerate(opts)]
+        scale = [(i, r) for i, r in ranks if r is not None]
+        if len(scale) >= max(2, len(opts) - 1):
+            # positive/neutral work statement -> most favourable end; a negative statement -> least
+            return (min(scale, key=lambda t: t[1])[0] if _csr_stmt_polarity(question) < 0
+                    else max(scale, key=lambda t: t[1])[0])
+        # forced-choice statement set -> the most CSR-favourable statement (if any is net-positive)
+        fc = [(i, len(_CSR_POS_RE.findall(o)) - 1.5 * len(_CSR_NEG_RE.findall(o))) for i, o in enumerate(opts)]
+        best = max(fc, key=lambda t: t[1])
+        return best[0] if best[1] > 0 else None
+    if item_type == "sjt":
+        # single-response SJT -> the most helpful/professional option (empathy/ownership/escalate),
+        # avoiding dishonest/avoidant; a mild nudge toward customer-positive wording
+        sc = [(i, len(_CSR_POS_RE.findall(o)) - 1.5 * len(_CSR_NEG_RE.findall(o))
+               + (0.3 if re.search(r"customer|client", o, re.I) else 0.0)) for i, o in enumerate(opts)]
+        best = max(sc, key=lambda t: t[1])
+        return best[0] if best[1] > 0 else None
+    return None
+
+
 def _msig(item: dict) -> str:
     imgs = list(item.get("qimgs") or [])
     for o in item.get("options") or []:
@@ -951,6 +1015,13 @@ async def harvest_one(url: str, mailbox: str, adapter, *, max_items: int = 320,
                                 idx = ak["index"]
                             if idx is not None:
                                 pick_src = "answer_key"
+                        # UNKEYED behavioural item -> deterministic CSR-ideal profile pick (offer-optimal),
+                        # BEFORE the weak local model; cognitive/ability items (has_img) are never touched.
+                        if (idx is None and not has_img and not item.get("_no_llm_solve")
+                                and item_type in ("personality", "sjt")):
+                            _cp = csr_pick(item_type, q, opt_txt)
+                            if _cp is not None:
+                                idx, pick_src = _cp, "csr_profile"
                         # `_no_llm_solve` lets an adapter opt an item OUT of the wasted local-model solve
                         # when it answers that item itself (Harver SJT best/worst + personality rating are
                         # decided inside the adapter, so core's solve_one here is pure latency).

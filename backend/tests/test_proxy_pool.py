@@ -47,3 +47,94 @@ def test_next_proxy_round_robin_and_empty(tmp_path, monkeypatch):
               "cursor": 0})
     servers = [pp.next_proxy()["server"] for _ in range(3)]
     assert servers == ["http://a:1", "http://b:2", "http://a:1"]  # wraps around
+
+
+# ---- mass-hiring apply-lane egress (phones only; Mac excluded) --------------------------------
+
+_PHONE0 = "socks5://127.0.0.1:10800"
+_PHONE1 = "socks5://127.0.0.1:10801"
+_MAC = "socks5://127.0.0.1:10802"
+
+
+def _fake_running_slots():
+    return [
+        {"slot": "0", "server": _PHONE0, "hostname": "jf-egress-0", "note": "localhost"},
+        {"slot": "1", "server": _PHONE1, "hostname": "jf-egress-1", "note": "localhost"},
+        {"slot": "2", "server": _MAC, "hostname": "jf-egress-2", "note": "MacBook Air — Alan"},
+    ]
+
+
+def _patch_slots(monkeypatch, servers):
+    """residential_slots() returns `servers`; running_slots() carries the Mac's hostname/note."""
+    monkeypatch.setattr(pp, "residential_slots", lambda: list(servers))
+    import backend.tools.tailscale_egress as te
+    monkeypatch.setattr(te, "running_slots", lambda timeout=1.0: _fake_running_slots())
+
+
+def test_apply_slots_excludes_mac_by_note(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1, _MAC])
+    monkeypatch.delenv("APPLY_EGRESS_EXCLUDE", raising=False)
+    assert pp.apply_slots() == [_PHONE0, _PHONE1]        # Mac (note "MacBook Air") dropped
+
+
+def test_apply_slots_drops_non_socks(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, "http://5.6.7.8:8080", _MAC])
+    monkeypatch.delenv("APPLY_EGRESS_EXCLUDE", raising=False)
+    assert pp.apply_slots() == [_PHONE0]                 # http proxy + Mac both dropped
+
+
+def test_apply_slots_exclude_disabled(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1, _MAC])
+    monkeypatch.setenv("APPLY_EGRESS_EXCLUDE", "")       # exclude nothing → Mac allowed back in
+    assert pp.apply_slots() == [_PHONE0, _PHONE1, _MAC]
+
+
+def test_apply_proxy_none_when_no_phone(monkeypatch):
+    _patch_slots(monkeypatch, [_MAC])                    # only the Mac live
+    monkeypatch.delenv("APPLY_EGRESS_EXCLUDE", raising=False)
+    assert pp.apply_proxy() is None                      # Mac excluded → nothing → DIRECT
+
+
+def test_apply_proxy_round_robin(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1, _MAC])
+    monkeypatch.delenv("APPLY_EGRESS_EXCLUDE", raising=False)
+    pp._apply_cursor = 0
+    got = [pp.apply_proxy()["server"] for _ in range(4)]
+    assert got == [_PHONE0, _PHONE1, _PHONE0, _PHONE1]   # wraps over phones, never the Mac
+
+
+def test_lane_egress_default_is_direct(monkeypatch):
+    # NEITHER env set → DIRECT (never route a working lane through a KZ phone by default).
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1])
+    monkeypatch.delenv("TALEO_RESIDENTIAL", raising=False)
+    monkeypatch.delenv("TALEO_PROXY", raising=False)
+    assert pp.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY") is None
+
+
+def test_lane_egress_proxy_env_forced_direct(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1])
+    monkeypatch.setenv("TALEO_RESIDENTIAL", "1")             # even with opt-in on…
+    for v in ("", "direct", "none", "off", "0", "false", "DIRECT"):
+        monkeypatch.setenv("TALEO_PROXY", v)                # …an explicit direct wins
+        assert pp.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY") is None
+
+
+def test_lane_egress_explicit_url_wins(monkeypatch):
+    monkeypatch.setenv("TALEO_PROXY", "socks5://127.0.0.1:19999")   # e.g. a US slot
+    assert pp.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY") == {"server": "socks5://127.0.0.1:19999"}
+
+
+def test_lane_egress_opt_in_prefers_phone(monkeypatch):
+    _patch_slots(monkeypatch, [_PHONE0, _PHONE1, _MAC])
+    monkeypatch.setenv("TALEO_RESIDENTIAL", "1")
+    monkeypatch.delenv("TALEO_PROXY", raising=False)
+    monkeypatch.delenv("APPLY_EGRESS_EXCLUDE", raising=False)
+    pp._apply_cursor = 0
+    assert pp.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY")["server"] == _PHONE0   # phone, not the Mac
+
+
+def test_lane_egress_opt_in_direct_when_no_phone(monkeypatch):
+    _patch_slots(monkeypatch, [])                        # no residential at all
+    monkeypatch.setenv("TALEO_RESIDENTIAL", "1")
+    monkeypatch.delenv("TALEO_PROXY", raising=False)
+    assert pp.lane_egress("TALEO_RESIDENTIAL", "TALEO_PROXY") is None

@@ -104,9 +104,22 @@ async def apply_job(jobid: int, keep_min: int = 8) -> dict:
     os.makedirs(STEALTH_PROFILE, exist_ok=True)
     async with async_playwright() as pw:
         ext = [f"--disable-extensions-except={NOPECHA_EXT}", f"--load-extension={NOPECHA_EXT}"]
-        ctx = await pw.chromium.launch_persistent_context(
-            STEALTH_PROFILE, headless=False, channel="chromium", no_viewport=True,
-            locale="en-US", timezone_id="America/New_York", args=["--start-maximized"] + ext)
+        # Egress: DIRECT by DEFAULT (SR already reaches a real ack from the datacenter IP; the connected
+        # phones are KZ residential = a geo-mismatch for a US application, and slow/flaky). Residential
+        # is OPT-IN: SR_RESIDENTIAL=1 → a live phone slot (Sutherland Mac excluded), else DIRECT;
+        # SR_PROXY=<url> → that exact proxy (e.g. a US slot). Guarded so lookup never breaks a fill.
+        _lk = dict(headless=False, channel="chromium", no_viewport=True,
+                   locale="en-US", timezone_id="America/New_York",
+                   args=["--start-maximized"] + ext)
+        try:
+            from backend.tools import proxy_pool
+            _px = proxy_pool.lane_egress("SR_RESIDENTIAL", "SR_PROXY", str(os.getpid()))
+        except Exception:
+            _px = None
+        if _px:
+            _lk["proxy"] = _px
+            print(f"[egress: {_px['server']} (phone/residential)]", flush=True)
+        ctx = await pw.chromium.launch_persistent_context(STEALTH_PROFILE, **_lk)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         try:
             try:

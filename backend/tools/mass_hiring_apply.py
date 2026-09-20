@@ -239,6 +239,51 @@ def _proxy_for(row: dict) -> dict | None:
         return None
 
 
+# A PROXY/transport failure THROUGH an egress (a dead/slow phone slot) makes the co-pilot /load return
+# a 500 whose `error` matches this — it is NOT a verdict on the posting, so we rotate to the next egress
+# (which always ends at DIRECT). Mirrors dashboard_app._PROXY_ERR_RE (that module is the source of truth;
+# importing it would start its submit-reconciler thread, so a small local copy is kept in sync).
+_PROXY_ERR_RE = re.compile(
+    r"net::ERR_|Timeout \d+ms exceeded|ERR_TUNNEL_CONNECTION|ERR_PROXY_CONNECTION|ERR_SOCKS"
+    r"|ERR_EMPTY_RESPONSE|ERR_ADDRESS_UNREACHABLE|ERR_NAME_NOT_RESOLVED|ProxyError|ConnectTimeout",
+    re.I)
+
+
+def _egress_plan(row: dict, name: str = "") -> tuple[list, bool]:
+    """Ordered egress candidates for ONE co-pilot fill of this row, and whether every non-fill is
+    retryable. Kelly (mykelly / Akamai) MUST use the BD DATACENTER pool — a residential/carrier IP 403s
+    — so it's 3 datacenter picks, never direct, and retry_all=True (retry a 403 with a fresh IP). Every
+    OTHER co-pilot host (Maximus/Avature) is DIRECT by DEFAULT — Maximus is a WORKING lane (its submits
+    mint the SHL-OPQ invites) and the connected phones are KZ residential (a geo-mismatch for a US
+    application, and slow/flaky), so we never route it through a phone unless asked. Residential is
+    OPT-IN: MH_COPILOT_RESIDENTIAL=1 → a live phone, a 2nd phone, then DIRECT (rotates ONLY on a
+    transport/proxy error, retry_all=False, so a genuine verdict stops immediately); MH_COPILOT_PROXY=
+    <url> → that exact proxy (e.g. a US slot) then DIRECT; MH_COPILOT_PROXY=direct → DIRECT only."""
+    if _host_needs_proxy(row):                       # mykelly / Akamai
+        return [_proxy_for(row) for _ in range(3)], True
+    import os
+    forced = (os.getenv("MH_COPILOT_PROXY") or "").strip()
+    if forced:
+        if forced.lower() in ("direct", "none", "off", "0", "false"):
+            return [None], False
+        return [{"server": forced}, None], False
+    if (os.getenv("MH_COPILOT_RESIDENTIAL") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        return [None], False                          # DEFAULT: DIRECT (don't route a working lane thru KZ)
+    try:
+        from backend.tools import proxy_pool
+        cands: list = []
+        seen: set = set()
+        for _ in range(2):
+            p = proxy_pool.apply_proxy(name)
+            if p and p.get("server") and p["server"] not in seen:
+                seen.add(p["server"])
+                cands.append(p)
+        cands.append(None)                            # ALWAYS end DIRECT (never blocked on a phone)
+        return cands, False
+    except Exception:
+        return [None], False
+
+
 def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                        dry_run: bool = True, per_job_timeout: int = 360,
                        progress_path: str | None = None) -> list[dict]:
@@ -298,16 +343,17 @@ def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                 pid, jobid = prepare(row, gender=gender)
                 rec["profile"] = pid
                 httpx.post(f"http://127.0.0.1:{port}/release", data={"profile": pid}, timeout=10)
-                # Akamai/DataDome hosts (Kelly) load DIRECT otherwise -> 403 before the strategy can
-                # fill; route the co-pilot context through a pool proxy, and retry with a FRESH egress
-                # if a bad IP still 403s (nothing filled, no click).
-                needs_proxy = _host_needs_proxy(row)
-                attempts = 3 if needs_proxy else 1
+                # Egress plan: Kelly (Akamai) uses the BD DATACENTER pool (retry a 403 with a fresh IP);
+                # Maximus/Avature PREFER a live PHONE slot (residential → lower velocity/spam risk +
+                # higher captcha score) with a DIRECT fallback (never blocked on a dead phone). The Mac
+                # slot is excluded upstream (proxy_pool.apply_slots). `retry_all` = Kelly's 403 loop;
+                # else we rotate ONLY on a transport/proxy error (a genuine verdict stops the loop).
+                plan, retry_all = _egress_plan(row, pid)
                 res: dict = {}
-                for attempt in range(attempts):
+                attempt = 0
+                for attempt, prox in enumerate(plan):
                     data = {"jobid": jobid, "profile": pid,
                             "dry_run": "1" if dry_run else "0", "wait_submit": "1"}
-                    prox = _proxy_for(row) if needs_proxy else None
                     if prox and prox.get("server"):
                         data.update({"proxy_server": prox["server"],
                                      "proxy_username": prox.get("username", ""),
@@ -315,15 +361,25 @@ def run_batch_parallel(row_ids, workers: int = 6, gender: str | None = None,
                     r = httpx.post(f"http://127.0.0.1:{port}/load", data=data, timeout=per_job_timeout)
                     res = r.json() if "application/json" in r.headers.get("content-type", "") else {}
                     rec["http"] = r.status_code
+                    rec["egress"] = (prox or {}).get("server") or "direct"
                     sr = res.get("submit_result") or {}
-                    if (not needs_proxy) or res.get("filled") or sr.get("clicked"):
-                        break  # loaded fine (or a real fill/click) — a 403 leaves filled empty
+                    if retry_all:
+                        # Kelly: a 403 leaves filled empty & no click — retry with a fresh datacenter IP
+                        if res.get("filled") or sr.get("clicked"):
+                            break
+                    else:
+                        # opportunistic phone: a proxy/transport error rotates to the next egress
+                        # (ending DIRECT); any real result (200, or a non-proxy error) stops here.
+                        proxy_err = (r.status_code != 200 and prox and prox.get("server")
+                                     and _PROXY_ERR_RE.search(str(res.get("error") or "")))
+                        if not proxy_err:
+                            break
                 sr = res.get("submit_result") or {}
                 rec.update({"clicked": sr.get("clicked"),
                             "confirmed": sr.get("confirmed"), "blocked": sr.get("blocked"),
                             "post_url": sr.get("post_url"), "filled": res.get("filled"),
                             "unfilled": res.get("unfilled"),
-                            "proxy_attempts": (attempt + 1) if needs_proxy else 0})
+                            "egress_attempts": attempt + 1})
             except Exception as e:
                 rec["error"] = f"{type(e).__name__}: {e}"[:200]
             with lock:

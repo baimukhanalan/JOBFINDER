@@ -201,10 +201,22 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
     started = time.time()
     try:
         async with async_playwright() as pw:
-            ctx = await pw.chromium.launch_persistent_context(
-                profile_dir, headless=False, channel="chromium", no_viewport=True,
-                locale="en-US", timezone_id="America/New_York",
-                args=["--start-maximized"] + ext_args)
+            # Egress: DIRECT by DEFAULT (a KZ residential phone is a geo-mismatch for a US application
+            # AND slow/flaky — a US Workday page failed to render through one). Residential is OPT-IN:
+            # WORKDAY_RESIDENTIAL=1 → a live phone slot (Sutherland Mac excluded), else DIRECT;
+            # WORKDAY_PROXY=<url> → that exact proxy (e.g. a US slot). Guarded — never breaks a fill.
+            _lk = dict(headless=False, channel="chromium", no_viewport=True,
+                       locale="en-US", timezone_id="America/New_York",
+                       args=["--start-maximized"] + ext_args)
+            try:
+                from backend.tools import proxy_pool
+                _px = proxy_pool.lane_egress("WORKDAY_RESIDENTIAL", "WORKDAY_PROXY", str(os.getpid()))
+            except Exception:
+                _px = None
+            if _px:
+                _lk["proxy"] = _px
+                print(f"[egress: {_px['server']} (phone/residential)]", flush=True)
+            ctx = await pw.chromium.launch_persistent_context(profile_dir, **_lk)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             # preseed the NopeCHA key (same setup URL icims_recon uses) so the extension solves reCAPTCHA
             if ext_args:

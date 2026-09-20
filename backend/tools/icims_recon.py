@@ -38,23 +38,36 @@ RECON_ROOT = os.path.join(REPO, "logs", "icims_recon")
 # Chromium profile dir. Overridable so the multi-job apply lane can give each job a FRESH, isolated
 # profile (no logged-in session from a previous persona) — a fresh persona must register a NEW account.
 STEALTH_PROFILE = os.getenv("ICIMS_PROFILE_DIR") or os.path.join(REPO, "backend", "data", "icims_stealth_profile")
-SLOT = os.getenv("ICIMS_PROXY", "socks5://127.0.0.1:8120")   # empty = DIRECT (no residential tunnel)
-
-
-def _tunnel_up() -> bool:
-    """True if the SLOT proxy actually accepts a TCP connection (the residential chisel tunnel is
-    often down). When it's down we launch DIRECT instead of pointing Chromium at a dead proxy."""
-    if not SLOT:
+def _server_alive(url: str) -> bool:
+    """True if the proxy URL accepts a TCP connection (a residential/phone tunnel is often down).
+    Launch DIRECT rather than point Chromium at a dead proxy when it isn't."""
+    if not url:
         return False
     import socket
     from urllib.parse import urlparse
-    u = urlparse(SLOT)
-    host, port = (u.hostname or "127.0.0.1"), (u.port or 8120)
+    u = urlparse(url)
+    host, port = (u.hostname or "127.0.0.1"), (u.port or 1080)
     try:
         with socket.create_connection((host, port), timeout=2):
             return True
     except OSError:
         return False
+
+
+def _egress_proxy(name: str = ""):
+    """Egress for the TP/iCIMS lane. DIRECT by DEFAULT — TP's offers all come from the DIRECT datacenter
+    IP and NopeCHA solves the captcha regardless of IP, so we never route this proven lane through the
+    (KZ, slow/flaky) phones unless asked. Residential is OPT-IN: `ICIMS_RESIDENTIAL=1` ⇒ a live phone
+    slot (Sutherland Mac excluded), else DIRECT; `ICIMS_PROXY=<url>` ⇒ that exact proxy (e.g. a US slot);
+    `ICIMS_PROXY=direct`/`=` ⇒ DIRECT. TCP-verify the pick so a dead tunnel/slot falls back to DIRECT."""
+    try:
+        from backend.tools import proxy_pool
+        px = proxy_pool.lane_egress("ICIMS_RESIDENTIAL", "ICIMS_PROXY", name)
+    except Exception:
+        px = None
+    if px and px.get("server") and _server_alive(px["server"]):
+        return px
+    return None
 # NopeCHA extension auto-solves the hCaptcha in-page (its API egresses via the browser's residential
 # proxy, dodging the datacenter-IP free-tier ban). With it, the bot drives everything autonomously.
 NOPECHA_EXT = os.path.join(REPO, "backend", "vendor", "nopecha_ext")
@@ -990,11 +1003,12 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
     async with async_playwright() as pw:
         _lk = dict(headless=False, channel="chromium", no_viewport=True, locale="en-US",
                    timezone_id="America/New_York", args=["--start-maximized"] + _ext_args)
-        if _tunnel_up():
-            _lk["proxy"] = {"server": SLOT}
-            print(f"[proxy: {SLOT} (residential tunnel)]", flush=True)
+        _px = _egress_proxy(pf.get("email", ""))
+        if _px:
+            _lk["proxy"] = _px
+            print(f"[proxy: {_px['server']} (opt-in residential egress)]", flush=True)
         else:
-            print("[proxy: DIRECT — no residential tunnel; NopeCHA solves the captcha regardless of IP]", flush=True)
+            print("[proxy: DIRECT (default; NopeCHA solves the captcha regardless of IP)]", flush=True)
         ctx = await pw.chromium.launch_persistent_context(STEALTH_PROFILE, **_lk)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         # DIAGNOSTIC: log iCIMS dependent-dropdown / typeahead AJAX so we can SEE whether the

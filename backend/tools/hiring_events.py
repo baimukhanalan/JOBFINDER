@@ -508,6 +508,36 @@ def grouped_events(*, resolve: bool = True) -> list[dict]:
     return out
 
 
+def candidate_join(inv: dict, *, group_meeting_id: str | None = None) -> dict:
+    """Per-candidate join info: THIS persona's OWN original tracking link + the resolved
+    Zoom room it maps to (both keyed on the candidate's own invite, not the group's room).
+
+    A mass invite blasts the SAME Zoom room to many personas, but each persona's invite
+    carries a UNIQUE icims tracking link and a candidate CAN resolve to a different room.
+    Returns ``{tracking_url, join_url, meeting_id, resolved, differs}`` where:
+      * ``tracking_url`` — the persona's unique original invite link (redirects to Zoom);
+      * ``join_url``     — the resolved ``*.zoom.us`` room, else the tracking link (still
+                            opens Zoom on click) — the URL the «Ссылка» control opens;
+      * ``meeting_id``   — the resolved Zoom meeting id, else None;
+      * ``resolved``     — whether this invite resolved to a real Zoom room;
+      * ``differs``      — True iff this persona's resolved room differs from the group's
+                            shared room (BOTH must be resolved meeting ids to compare — an
+                            unresolved candidate is NEVER flagged as differing).
+    Pure; unit-testable off the invite dict :func:`events` produces."""
+    tracking = inv.get("tracking_url") or None
+    join = inv.get("join_url") or tracking or None
+    mid = inv.get("meeting_id") or None
+    resolved = bool(inv.get("resolved") or mid)
+    differs = bool(mid and group_meeting_id and mid != group_meeting_id)
+    return {
+        "tracking_url": tracking,
+        "join_url": join,
+        "meeting_id": mid,
+        "resolved": resolved,
+        "differs": differs,
+    }
+
+
 # ---- rendering (dedicated «События найма» surface) -------------------------------
 def _fmt_date(ts: int) -> str:
     if not ts:
@@ -527,9 +557,12 @@ def _resume_worthy(resume: dict | None) -> bool:
                 or resume.get("education"))
 
 
-def _invite_row_html(inv: dict) -> str:
-    """One persona row: name + mailbox, «Письмо» link, a «Скачать резюме» button (when a
-    résumé resolves) and an expand chevron that toggles the Штат / ФИО / Возраст panel."""
+def _invite_row_html(inv: dict, *, group_meeting_id: str | None = None) -> str:
+    """One persona row: name + mailbox, a per-candidate «Ссылка» (THIS persona's OWN Zoom
+    room, keyed on their unique invite — flagged «др. комната» when it differs from the
+    group's shared room), «Письмо» link, a «Скачать резюме» button (when a résumé resolves)
+    and an expand chevron that toggles the Штат / ФИО / Возраст panel (which also shows the
+    resolved room + the persona's personal invite link)."""
     mbx = inv.get("mailbox") or ""
     who_fallback = inv.get("candidate") or mbx.split("@")[0]
     # resolve the persona ONCE (its prefill dir), then read persona.json + résumé presence.
@@ -569,6 +602,21 @@ def _invite_row_html(inv: dict) -> str:
                f'aria-controls="{did}" aria-label="Показать данные кандидата">'
                '<span class="he-chev" aria-hidden="true">⌄</span></button>')
 
+    # THIS persona's OWN join link (keyed on their unique invite), + whether it opens a
+    # DIFFERENT Zoom room than the group's shared one.
+    cj = candidate_join(inv, group_meeting_id=group_meeting_id)
+    if cj["join_url"]:
+        cls = "he-inv-link" + (" he-inv-link-diff" if cj["differs"] else "")
+        room_title = (f'Zoom · {cj["meeting_id"]}' if cj["meeting_id"]
+                      else "Откроется в Zoom")
+        link_html = (f'<a class="{cls}" href="{escape(cj["join_url"], quote=True)}" '
+                     f'target="_blank" rel="noopener noreferrer" '
+                     f'title="{escape(room_title, quote=True)}">Ссылка</a>')
+        if cj["differs"]:
+            link_html += '<span class="he-inv-diff">др. комната</span>'
+    else:
+        link_html = '<span class="he-inv-link he-inv-link-off">Ссылки нет</span>'
+
     bits = []
     if detail["state"]:
         bits.append(f'Штат: {escape(detail["state"])}')
@@ -577,6 +625,23 @@ def _invite_row_html(inv: dict) -> str:
         bits.append(f'Возраст: ~{detail["age"]} г.')
     detail_html = " · ".join(bits) if bits else "Данные кандидата недоступны"
 
+    # per-candidate room + personal invite link, surfaced in the expand panel
+    extra = []
+    if cj["meeting_id"]:
+        room_line = f'Комната: Zoom · {escape(cj["meeting_id"])}'
+        if cj["differs"]:
+            room_line += " · отдельная комната"
+        extra.append(f'<div class="he-detail-room">{room_line}</div>')
+    elif cj["join_url"]:
+        extra.append('<div class="he-detail-room">Комната: определится при '
+                     'открытии ссылки</div>')
+    if cj["tracking_url"]:
+        extra.append('<div class="he-detail-link">Персональная ссылка: '
+                     f'<a href="{escape(cj["tracking_url"], quote=True)}" '
+                     'target="_blank" rel="noopener noreferrer">открыть приглашение</a>'
+                     '</div>')
+    detail_body = f'<div class="he-detail-facts">{detail_html}</div>' + "".join(extra)
+
     return (
         '<div class="he-inv-wrap">'
         '<div class="he-inv">'
@@ -584,10 +649,11 @@ def _invite_row_html(inv: dict) -> str:
         f'<span class="he-inv-mb">{mb}</span></div>'
         '<div class="he-inv-actions">'
         f'<span class="he-inv-when">{escape(when)}</span>'
+        f'{link_html}'
         f'<a class="he-inv-open" href="{open_mail}">Письмо</a>'
         f'{res_btn}{exp_btn}</div>'
         '</div>'
-        f'<div class="he-detail" id="{did}" hidden>{detail_html}</div>'
+        f'<div class="he-detail" id="{did}" hidden>{detail_body}</div>'
         '</div>'
     )
 
@@ -606,7 +672,8 @@ def _group_card_html(g: dict) -> str:
         '<span class="he-join he-join-off">Ссылка недоступна</span>'
     )
     sched_bits = " · ".join(x for x in (date_text, time_text) if x)
-    invites = "".join(_invite_row_html(inv) for inv in g.get("invites") or [])
+    invites = "".join(_invite_row_html(inv, group_meeting_id=mid)
+                      for inv in g.get("invites") or [])
     return (
         '<section class="he-card">'
         '<div class="he-head">'
@@ -651,6 +718,18 @@ _CSS = """
 .he-inv-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex:0 0 auto;}
 .he-inv-when{font-size:12px;color:var(--ink-mute);flex:0 0 auto;}
 .he-inv-open{font-size:12.5px;color:var(--accent);flex:0 0 auto;white-space:nowrap;}
+.he-inv-link{display:inline-flex;align-items:center;height:var(--chip-h);padding:0 12px;
+  border-radius:var(--r-full);background:#188038;color:#fff;font-size:12.5px;font-weight:600;
+  text-decoration:none;white-space:nowrap;flex:0 0 auto;}
+.he-inv-link:hover{background:#137333;text-decoration:none;}
+.he-inv-link-off{background:var(--panel-2);color:var(--ink-mute);}
+.he-inv-link-diff{background:#b8860b;}
+.he-inv-link-diff:hover{background:#9c7209;}
+.he-inv-diff{font-size:11.5px;font-weight:700;color:#b8860b;flex:0 0 auto;white-space:nowrap;}
+.he-detail-room{margin-top:5px;font-family:var(--ff-mono);font-size:11.5px;}
+.he-detail-link{margin-top:5px;}
+.he-detail a{color:var(--accent);text-decoration:none;}
+.he-detail a:hover{text-decoration:underline;}
 .he-res{display:inline-flex;align-items:center;gap:5px;height:var(--chip-h);padding:0 12px;
   border:1px solid var(--line);border-radius:var(--r-full);background:var(--panel);
   color:var(--ink);font-size:12.5px;font-weight:600;text-decoration:none;white-space:nowrap;}
@@ -735,11 +814,17 @@ def _main(argv=None) -> int:
         print(f"resolved {ok}/{len(mapping)} tracking links (cache: {_CACHE_PATH})")
     if args.list or not args.refresh:
         for g in grouped_events():
-            print(f"[{g.get('meeting_id') or '?'}] {g['role']} | "
+            gmid = g.get("meeting_id")
+            print(f"[{gmid or '?'}] {g['role']} | "
                   f"{g['date_text']} {g['time_text']} | {len(g['invites'])} invited")
             print(f"    join: {g['join_url']}")
             for inv in g["invites"]:
-                print(f"      - {inv['mailbox']}  ({_fmt_date(inv['date_ts'])})")
+                cj = candidate_join(inv, group_meeting_id=gmid)
+                room = cj["meeting_id"] or "unresolved"
+                flag = " [DIFFERENT ROOM]" if cj["differs"] else ""
+                print(f"      - {inv['mailbox']}  ({_fmt_date(inv['date_ts'])})  "
+                      f"room={room}{flag}")
+                print(f"          own link: {cj['join_url']}")
     return 0
 
 

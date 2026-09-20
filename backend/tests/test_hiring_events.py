@@ -203,3 +203,52 @@ def test_prefill_resolution_resume_path_and_filename(tmp_path):
 def test_resume_filename_falls_back_to_localpart():
     assert he.resume_filename("someone.new42@takhet.com", persona={}) == \
         "someone.new42 - resume.pdf"
+
+
+# ---- per-candidate join link (each persona's OWN link, not just the group room) ---
+def test_candidate_join_same_room_as_group_not_flagged():
+    # a persona resolved to the SAME Zoom room as the group → own link, NOT «differs».
+    inv = {"tracking_url": "https://tracking.icims.com/f/a/A~~/x/tokA",
+           "join_url": "https://us06web.zoom.us/j/7436255779?pwd=abc",
+           "meeting_id": "7436255779", "resolved": True}
+    cj = he.candidate_join(inv, group_meeting_id="7436255779")
+    assert cj["tracking_url"] == "https://tracking.icims.com/f/a/A~~/x/tokA"
+    assert cj["join_url"] == "https://us06web.zoom.us/j/7436255779?pwd=abc"
+    assert cj["meeting_id"] == "7436255779"
+    assert cj["resolved"] is True
+    assert cj["differs"] is False
+
+
+def test_candidate_join_different_room_is_flagged():
+    # a persona whose UNIQUE invite resolves to a DIFFERENT room than the group's → flagged.
+    inv = {"tracking_url": "https://tracking.icims.com/f/a/B~~/x/tokB",
+           "join_url": "https://us06web.zoom.us/j/9990001111",
+           "meeting_id": "9990001111", "resolved": True}
+    cj = he.candidate_join(inv, group_meeting_id="7436255779")
+    assert cj["meeting_id"] == "9990001111"
+    assert cj["differs"] is True
+    # the own link opens the candidate's OWN room, not the group's
+    assert cj["join_url"] == "https://us06web.zoom.us/j/9990001111"
+
+
+def test_candidate_join_unresolved_falls_back_to_tracking_never_differs():
+    # resolution failed: join_url falls back to the tracking link (still opens Zoom on
+    # click), no meeting_id, and an UNRESOLVED candidate is NEVER flagged as differing.
+    inv = {"tracking_url": "https://tracking.icims.com/f/a/C~~/x/tokC",
+           "join_url": "https://tracking.icims.com/f/a/C~~/x/tokC",
+           "meeting_id": None, "resolved": False}
+    cj = he.candidate_join(inv, group_meeting_id="7436255779")
+    assert cj["join_url"] == "https://tracking.icims.com/f/a/C~~/x/tokC"
+    assert cj["meeting_id"] is None
+    assert cj["resolved"] is False
+    assert cj["differs"] is False
+
+
+def test_candidate_join_resolved_flag_derived_from_meeting_id():
+    # even if an invite dict omits an explicit `resolved`, a real meeting_id means resolved.
+    cj = he.candidate_join({"tracking_url": "https://tracking.icims.com/f/a/D~~/x/tokD",
+                            "join_url": "https://us06web.zoom.us/j/12345",
+                            "meeting_id": "12345"})
+    assert cj["resolved"] is True
+    # no group room to compare against → never differs
+    assert cj["differs"] is False

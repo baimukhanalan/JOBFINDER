@@ -699,6 +699,24 @@ class TaleoStrategy(AvatureStrategy):
                       // demographic -> DECLINE only; fall back to an explicit not-a-protected/none option, NEVER a characteristic
                       set(sel,DEC) || set(sel,/not a protected|no,? i am not|i am not|none of the above|not applicable/i);
                     }
+                    // TTEC restricted-state/territory screener — MUST be tested BEFORE the /country/ and
+                    // /state|province/ branches below. Q2 ("Are you planning to work from Alaska, ..., the
+                    // state of Washington, or Washington D.C.?") literally contains the word "state", so
+                    // /state|province/ used to SHADOW it -> firstValid picked "Yes" (opts ["No Selection",
+                    // "Yes","No"]) = a synthetic Ohio persona FALSELY claiming to work from a restricted
+                    // state on a Remote-USA role -> TTEC auto-rejected the whole application on "minimum
+                    // requirements". Truthful answer = Yes iff the persona's own state IS in the listed set.
+                    else if(RESTRICT_Q.test(lab) && RESTRICT_PLACES.test(lab)){
+                      const inList = stIn && stIn.test(lab);
+                      (inList ? set(sel,/^\\s*yes\\s*$/i) : set(sel,/^\\s*no\\s*$/i)) || firstValid(sel); }
+                    // TTEC insurance-CSR license screener ("Do you currently hold a valid license to sell
+                    // health insurance in the state you reside?") — a synthetic persona holds NO license
+                    // (same no-fabrication policy that SKIPS the Licensed-Agent reqs). Truthful = "No".
+                    // MUST precede /state|province/: the label contains "the state you reside", so /state/
+                    // used to shadow it -> firstValid picked the first option "Yes" = a FABRICATED license
+                    // claim -> either a required license-# follow-up left blank (application incomplete ->
+                    // the "we need more information" reminder) or a mis-stated credential at submit.
+                    else if(/licen[sc]e to sell|hold a (valid )?licen[sc]e|insurance licen[sc]e|licen[sc]ed to sell/.test(lab)){ set(sel,/^\\s*no\\s*$/i)||set(sel,/\\bno\\b/i); }
                     else if(/referred by an employee|were you referred/.test(lab)){ set(sel,/^\\s*no\\b/i)||firstValid(sel); }
                     else if(/contacted via sms|sms text|text message|receive text/.test(lab)){ set(sel,/yes|agree|i agree/i)||firstValid(sel); }
                     else if(/source type|how did you (hear|find)|how you found|source track/.test(lab)){ set(sel,/^\\s*other\\s*$|job board|company website|newspaper/i)||set(sel,/indeed|linkedin|search engine/i)||firstValid(sel); }
@@ -710,9 +728,6 @@ class TaleoStrategy(AvatureStrategy):
                     else if(/employed by|worked for|former employee|current(ly)? employ/.test(lab)){ set(sel,/^\\s*no\\b/i)||set(sel,/\\bnever\\b|have not|not employed/i); }  /* truthful No; never blind-firstValid to a 'Yes' */
                     else if(/weekend|willing to work|able to work|overtime|different shift|any shift/.test(lab)){ set(sel,/^\\s*yes|able|willing/i)||firstValid(sel); }
                     else if(/experience/.test(lab)){ set(sel,/5\\+|5 or more|more than 5|6\\+|10\\+/i)||set(sel,/3\\+|3-5|3 or more|more than 3/i)||set(sel,/1 year or more|1\\+|1-3|more than 1|1 year/i)||firstValid(sel); }
-                    else if(RESTRICT_Q.test(lab) && RESTRICT_PLACES.test(lab)){  // TTEC restricted-state/territory screener
-                      const inList = stIn && stIn.test(lab);
-                      (inList ? set(sel,/^\\s*yes\\s*$/i) : set(sel,/^\\s*no\\s*$/i)) || firstValid(sel); }
                     else { firstValid(sel); }  // any OTHER leftover blank select (e.g. a Source-Type dependent sub-select) -> don't block
                   }
                   // radio-group questionnaires (experience level, weekend availability, employed-before) —

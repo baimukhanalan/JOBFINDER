@@ -103,10 +103,9 @@ def render_page(force: bool = False) -> str:
              sub=f'{_fmt(sub["total_attempts"])} попыток', color=_C["accent"]),
         _kpi("Инвайты на тесты", inv["total_personas"],
              sub=f'{_fmt(inv["total_msgs"])} писем', color=_C["invite"]),
-        _kpi("Тесты пройдены", solv["total"], sub="за сегодня", color=_C["assess"]),
+        _kpi("Тесты решено", solv["total"], sub="за сегодня", color=_C["assess"]),
         _kpi("Собеседования", iv["total"], sub="пришли сегодня", color=_C["interview"]),
-        _kpi("Офферы", off["arrived"]["total"], sub="пришли сегодня", color=_C["offer"]),
-        _kpi("Могут прийти", off["pending"]["total"], sub="прошли тест сегодня", color=_C["mute"]),
+        _kpi("Офферы пришли", off["total"], sub="за сегодня", color=_C["offer"]),
     ])
 
     # Подачи по каналам
@@ -127,10 +126,8 @@ def render_page(force: bool = False) -> str:
     # Собеседования
     iv_tbl = _cand_table(iv["cards"])
 
-    # Офферы
-    off_tbl = _cand_table(off["arrived"]["cards"])
-    pend_src = _chips(off["pending"]["by_source"])
-    pend_tbl = _cand_table(off["pending"]["cards"])
+    # Офферы (только реальные — пришедшие сегодня)
+    off_tbl = _cand_table(off["cards"])
 
     # Кандидаты с оффером/собеседованием
     cand_tbl = _cand_table(b["candidates"], stage_col=True)
@@ -162,18 +159,15 @@ def render_page(force: bool = False) -> str:
     <div class="td-sub" style="margin-top:12px">По направлениям</div>{solv_role}</section>
 </div>
 
-<section class="td-card"><h2 class="td-h">Кто прошёл тест сегодня</h2>
-<p class="td-note">Прошли ассессмент — следующий шаг оффер или собеседование. Зарплата
-приблизительная: точная вилка по вакансии, иначе медиана по направлению.</p>{solv_tbl}</section>
+<section class="td-card"><h2 class="td-h">Кто решил тест сегодня</h2>
+<p class="td-note">Кандидаты, реально сдавшие ассессмент сегодня. Зарплата приблизительная:
+точная вилка по вакансии, иначе медиана по направлению.</p>{solv_tbl}</section>
 
 <section class="td-card"><h2 class="td-h">Собеседования сегодня</h2>{iv_tbl}</section>
 
-<div class="td-grid2">
-  <section class="td-card"><h2 class="td-h">Офферы сегодня</h2>{off_tbl}</section>
-  <section class="td-card"><h2 class="td-h">Могут прийти (ждём оффер)</h2>
-    <div class="td-sub">По каналам</div>{pend_src}
-    <div style="margin-top:10px">{pend_tbl}</div></section>
-</div>
+<section class="td-card"><h2 class="td-h">Офферы пришли сегодня</h2>
+<p class="td-note">Реальные офферы, полученные сегодня (с 00:00). Всего:
+<b>{_fmt(off['total'])}</b>.</p>{off_tbl}</section>
 
 <section class="td-card"><h2 class="td-h">Кандидаты с оффером / собеседованием</h2>
 <p class="td-note">Компания и приблизительная зарплата по каждому. Собеседования и офферы,

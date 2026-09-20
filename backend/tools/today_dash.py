@@ -19,8 +19,8 @@ What it aggregates, all scoped to today:
   * СОБЕСЕДОВАНИЯ / ОФФЕРЫ — today's `interview` / `offer` inbound (distinct persona), each
     enriched with the employer + an APPROXIMATE salary (reusing `interview_priority` /
     `comp_fmt` / `est_comp`: the job's posted comp when the persona resolves to a catalog
-    posting, else the role-category median). Plus a PENDING-offer list: personas who passed
-    an assessment today on a hire-producing lane and may get an offer soon.
+    posting, else the role-category median). ACTUALS only — how many offers ARRIVED today
+    and how many tests were SOLVED today; NO projection / "might come" estimate.
 
 Neutral Russian labels only. The apply-lane / assessment-source labels are EMPLOYER company
 names (business data), never our internal tool / ATS / vendor / model stack names.
@@ -179,12 +179,6 @@ def sender_source(from_email: str, subject: str = "") -> tuple[str, str]:
     return "other", "Другие"
 
 
-# The lanes whose assessment PASS is followed by a human interview / on-the-spot hire — so a
-# candidate who passed today «может получить оффер». (All current mass-hiring lanes qualify;
-# TP is the fastest.)
-_OFFER_PRODUCING = {"tp", "ttec", "maximus", "sutherland", "foundever", "alorica", "kelly", "centene"}
-
-
 # ---- role labels ------------------------------------------------------------------
 _ROLE_RU = {
     "Engineering": "Инженерия", "Data & ML": "Данные и ML", "Product": "Продукт",
@@ -315,8 +309,8 @@ def _enrich_source_role(cur, mailboxes: list[str]) -> dict:
 
 
 def _assessments_solved(cur, day: str) -> dict:
-    """Assessments PASSED today: total + by source + by role + per-candidate cards (with an
-    approximate salary, so the operator sees who «может получить оффер» and at roughly what pay)."""
+    """Assessments SOLVED today: total + by source + by role + per-candidate cards (with an
+    approximate salary — who actually passed a test today and at roughly what pay)."""
     mboxes = sorted(_solved_today(day))
     meta = _enrich_source_role(cur, mboxes)
     by_src: dict = defaultdict(int)
@@ -416,12 +410,6 @@ def compute_today(now: datetime | None = None) -> dict:
     except Exception as e:
         log.warning("today_dash: DB section failed: %s", e)
 
-    # PENDING offers = passed-an-assessment-today on a hire-producing lane → an offer may come.
-    pending_cards = [c for c in solved["cards"] if c.get("source_key") in _OFFER_PRODUCING]
-    pending_by_src: dict = defaultdict(int)
-    for c in pending_cards:
-        pending_by_src[c["source"]] += 1
-
     # «Кандидаты с оффером/собеседованием»: the offer + interview cards (company + salary).
     candidates = ([{**c, "stage": "offer"} for c in offers]
                   + [{**c, "stage": "interview"} for c in interviews])
@@ -433,15 +421,8 @@ def compute_today(now: datetime | None = None) -> dict:
         "submissions": submissions,
         "assessments": {"invites": invites, "solved": solved},
         "interviews": {"total": len(interviews), "cards": interviews},
-        "offers": {
-            "arrived": {"total": len(offers), "cards": offers},
-            "pending": {
-                "total": len(pending_cards),
-                "by_source": sorted(({"label": k, "n": v} for k, v in pending_by_src.items()),
-                                    key=lambda x: x["n"], reverse=True),
-                "cards": pending_cards,
-            },
-        },
+        # ACTUALS only: offers that ARRIVED today (real kind='offer' inbound). No projection.
+        "offers": {"total": len(offers), "cards": offers},
         "candidates": candidates,
     }
     log.info("today computed in %sms: subs=%s invites=%s solved=%s iv=%s off=%s",

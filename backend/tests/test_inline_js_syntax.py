@@ -66,11 +66,9 @@ def test_today_page_scripts_parse(tmp_path, monkeypatch):
                                   "salary_label": "~$80k–$130k", "salary_estimated": True}]},
         },
         "interviews": {"total": 0, "cards": []},
-        "offers": {"arrived": {"total": 0, "cards": []},
-                   "pending": {"total": 4, "by_source": [{"label": "TTEC", "n": 4}],
-                               "cards": [{"email": "a.b1@takhet.com", "company": "TTEC",
+        "offers": {"total": 1, "cards": [{"email": "a.b1@takhet.com", "company": "TTEC",
                                           "source": "TTEC", "role": "Прочее",
-                                          "salary_label": "~$80k–$130k", "salary_estimated": True}]}},
+                                          "salary_label": "~$80k–$130k", "salary_estimated": True}]},
         "candidates": [],
     }
     monkeypatch.setattr(today_dash, "get_today", lambda force=False: blob)

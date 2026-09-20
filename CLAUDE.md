@@ -799,6 +799,24 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   events — `_sign_in` submits several ways (Enter, JS `.click()` on the div then the button) stopping when the URL leaves
   `/login`; the generic submit is SKIPPED on `/login`/captcha/expired. cigna/humana/cvs/concentrix stay `_BLOCKED` (register
   reCAPTCHA needs a solver key + US residential IP). Tests: `test_workday.py`.
+  **Residential-egress + NopeCHA wiring for the 4 register-walled tenants (2026-09-20, `drive_apply`):** `_pick_proxy()` routes
+  the headful create-account browser through a live phone/residential slot — `WORKDAY_PROXY=socks5://host:port` (or
+  `direct`/`0` to force the datacenter IP), else the first `proxy_pool.residential_slots()` slot (phone slots …:10800/10801
+  preferred over the Mac …:10802), else DIRECT. The launch now passes `proxy={"server":…}`, records the real egress IP
+  (`out["egress_ip"]`, via an `api.ipify.org` probe) as evidence, and the NopeCHA key is read from `backend/.env` (was
+  `os.getenv` only → FREE-TIER under `sg mail`, so the register captcha never actually solved; same `.env` loader as
+  `icims_recon`). Run: `DISPLAY=:98 WORKDAY_ADVANCE=1 WORKDAY_PROXY=socks5://127.0.0.1:10801 sg mail -c '… python3 -m
+  backend.tools.workday_recon --job <id>'`. **HONEST STATUS: still NOT proven to an ack — the register reCAPTCHA was NOT
+  reached.** The only live residential egress currently up is the owner's KZ phones (Alma Telecom AS39824 / Kazakhtelecom
+  AS9198 — residential but NOT the US-residential the wall calls for). A live Concentrix drive (job 328, egress 95.57.129.132)
+  routed correctly + NopeCHA loaded with the key, but the Workday CxS job page never RENDERED through the slow KZ SOCKS slot
+  (blank `01_landed.png`; the Apply→create-account form never appeared, so the `captcha presence:all-False`/`created=True`
+  probe was a false positive — no form ⇒ no email field ⇒ no captcha). So no tenant moves to a live lane. Remaining blockers:
+  (1) a US-residential IP (KZ residential scores poorly on reCAPTCHA-Enterprise for US healthcare/BPO reqs even before a solve);
+  (2) the KZ phone slots are too slow/flaky to render Workday CxS in-window (needs longer goto waits + retry-loads, live
+  iteration); (3) the local Sumrak LLM was DOWN this session ("Codex refresh token expired" → 500s), degrading persona prep to
+  the deterministic fallback. NEXT: re-drive each tenant once the Mac slot (…:10802) or a US-residential egress is live, watch
+  the `workday register captcha presence` log + `_debug/06_create_account_form.png` for the actual reCAPTCHA type.
 - **Oracle ORC / Alorica** (`strategies/oracle_orc.py`, driver `tools/orc_recon.py`, cron `mass_hiring_apply_orc_cron.py`,
   gated `ORC_ADVANCE`) — now REACHES the full Redwood form + Submit (at_submit=True); **live-proven Alorica job 153: 15 submit
   issues → 4.** Correctly fills Title, all 8 Yes/No screeners, EEO decline (Veteran="Declines to Self-Identify"), name/address,

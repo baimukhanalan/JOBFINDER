@@ -562,8 +562,8 @@ def _render(profile: str) -> str:
 
 @app.get("/")
 def home():
-    # Candidate-first: land on the candidate list (+ funnel), not the merged inbox.
-    return RedirectResponse("/mail/candidates")
+    # Land on today's statistics dashboard first (owner 2026-09-20), not the candidate list.
+    return RedirectResponse("/stats/today")
 
 
 @app.get("/queue", response_class=HTMLResponse)

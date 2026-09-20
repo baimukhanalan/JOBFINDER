@@ -59,10 +59,11 @@ _LANE_WEIGHT = {name: 100 for name in FAST_OFFER_LANES}
 
 # ---- knobs -----------------------------------------------------------------------------------
 def apply_order() -> str:
-    """Queue ordering (env `APPLY_ORDER`): `pay_desc` (default — high-pay first, the offer goal),
-    `pay_asc`, or `none`/`as_is` (keep the caller's order). An unknown value → `pay_desc`."""
-    v = (os.environ.get("APPLY_ORDER") or "pay_desc").strip().lower()
-    return v if v in ("pay_desc", "pay_asc", "none", "as_is") else "pay_desc"
+    """Queue ordering (env `APPLY_ORDER`): `none`/`as_is` (DEFAULT — keep the caller's order, NO
+    high-pay accent, per owner 2026-09-20), `pay_desc` (high-pay first), or `pay_asc`. An unknown
+    value → `none`."""
+    v = (os.environ.get("APPLY_ORDER") or "none").strip().lower()
+    return v if v in ("pay_desc", "pay_asc", "none", "as_is") else "none"
 
 
 def candidates_per_position(default: int = 2) -> int:

@@ -58,6 +58,31 @@ def _mha_prefill_root():
     return mha.PREFILL_ROOT
 
 
+def _pick_proxy() -> str | None:
+    """The SOCKS5 egress the register step runs through. Order:
+      1. WORKDAY_PROXY env — an explicit `socks5://host:port` (or `direct`/`0`/`off`/`none` to
+         FORCE the server's own datacenter IP);
+      2. else the first live residential / phone slot (`proxy_pool.residential_slots()`, which
+         merges the Tailscale exit-node phone slots + the mobile-SOCKS pool), preferring the
+         phone slots over the Mac slot (10802 = the assessment tunnel);
+      3. else None = DIRECT (datacenter IP).
+    A residential IP materially raises the Workday create-account reCAPTCHA-Enterprise score vs
+    the datacenter IP (the documented register wall). Never raises."""
+    ov = (os.getenv("WORKDAY_PROXY") or "").strip()
+    if ov:
+        return None if ov.lower() in ("0", "direct", "none", "off") else ov
+    try:
+        from backend.tools import proxy_pool
+        slots = list(proxy_pool.residential_slots() or [])
+        if not slots:
+            return None
+        # prefer a phone slot (…:10800/10801) over the Mac assessment slot (…:10802).
+        phones = [s for s in slots if not s.rstrip("/").endswith(":10802")]
+        return (phones or slots)[0]
+    except Exception:
+        return None
+
+
 def workday_job_ids(sources=("centene", "cigna", "humana", "cvshealth", "concentrix"),
                     limit: int | None = None) -> list[int]:
     """Active Workday-CxS mass-hiring rows to drive across the WHOLE family that
@@ -158,7 +183,8 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
 
     advance = os.getenv(advance_env, "0").strip().lower() in ("1", "true", "yes", "on")
     out = {"jobid": row["id"], "persona": None, "filled": None, "clicked": False,
-           "confirmed": False, "advance": advance, "error": None}
+           "confirmed": False, "advance": advance, "error": None,
+           "proxy": None, "egress_ip": None}
     url = row.get("apply_url") or ""
     if not url:
         out["error"] = "no apply_url"
@@ -199,17 +225,35 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                 if os.path.isdir(ext) else [])
     deadline = time.time() + keep_minutes * 60
     started = time.time()
+    proxy = _pick_proxy()
+    out["proxy"] = proxy
+    proxy_kw = {"proxy": {"server": proxy}} if proxy else {}
+    print(f"[egress {'via ' + proxy if proxy else 'DIRECT (datacenter IP)'}]", flush=True)
     try:
         async with async_playwright() as pw:
             ctx = await pw.chromium.launch_persistent_context(
                 profile_dir, headless=False, channel="chromium", no_viewport=True,
                 locale="en-US", timezone_id="America/New_York",
-                args=["--start-maximized"] + ext_args)
+                args=["--start-maximized"] + ext_args, **proxy_kw)
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             # preseed the NopeCHA key (same setup URL icims_recon uses) so the extension solves reCAPTCHA
             if ext_args:
                 try:
+                    # Use the PAID subscription key so the register reCAPTCHA solves autonomously.
+                    # os.getenv("NOPECHA_KEY") is EMPTY under pm2/sg-mail (config.py's pydantic
+                    # extra='ignore' drops it; pm2 doesn't export .env into os.environ), so read it
+                    # from .env directly — same fix as icims_recon / the co-pilot.
                     key = (os.getenv("NOPECHA_KEY") or "").strip()
+                    if not key:
+                        try:
+                            from pathlib import Path as _P
+                            _root = _P(__file__).resolve().parents[2]
+                            for _ln in (_root / "backend" / ".env").read_text().splitlines():
+                                if _ln.strip().startswith("NOPECHA_KEY="):
+                                    key = _ln.split("=", 1)[1].strip().strip('"').strip("'")
+                                    break
+                        except Exception:
+                            pass
                     cfg = ("input_method=javascript|recaptcha_auto_open=true|recaptcha_auto_solve=true|"
                            "recaptcha_solve_delay_time=300|enabled=true" + (f"|key={key}" if key else ""))
                     sp = await ctx.new_page()
@@ -217,8 +261,21 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                                   wait_until="domcontentloaded", timeout=45000)
                     await sp.wait_for_timeout(3000)
                     await sp.close()
+                    print(f"[NopeCHA configured{' (key set)' if key else ' (FREE TIER — no key)'}]",
+                          flush=True)
                 except Exception as e:
                     print(f"[nopecha setup: {type(e).__name__}: {e}]"[:120], flush=True)
+            # Record the ACTUAL egress IP the register step will run through (evidence: proves the
+            # application went via the residential/phone slot, not the datacenter IP). Best-effort.
+            try:
+                ip_page = await ctx.new_page()
+                await ip_page.goto("https://api.ipify.org?format=text",
+                                   wait_until="domcontentloaded", timeout=30000)
+                out["egress_ip"] = (await ip_page.inner_text("body")).strip()[:64]
+                await ip_page.close()
+                print(f"[egress IP = {out['egress_ip']}]", flush=True)
+            except Exception as e:
+                print(f"[egress IP check: {type(e).__name__}: {e}]"[:120], flush=True)
             import os as _os
             shotdir = _os.path.join(REPO, "logs", "workday_recon", str(row["id"]))
             _os.makedirs(shotdir, exist_ok=True)
@@ -362,8 +419,8 @@ def main() -> None:
         res = asyncio.run(drive_apply(row, advance_env="WORKDAY_ADVANCE", keep_minutes=args.keep))
         conf += 1 if res.get("confirmed") else 0
         print(f"job {jid} persona={res.get('persona')} strategy={res.get('strategy')} "
-              f"clicked={res.get('clicked')} confirmed={res.get('confirmed')} "
-              f"error={res.get('error')}", flush=True)
+              f"egress={res.get('egress_ip')} clicked={res.get('clicked')} "
+              f"confirmed={res.get('confirmed')} error={res.get('error')}", flush=True)
     print(f"done: {len(ids)} jobs, confirmed={conf}", flush=True)
 
 

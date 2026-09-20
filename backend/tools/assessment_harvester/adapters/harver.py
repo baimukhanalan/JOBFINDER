@@ -1051,10 +1051,57 @@ class HarverAdapter(Adapter):
                  "polite", "honest", "organi", "focus", "positive", "cheer", "respect", "responsib",
                  "consist", "thorough", "prepared", "confident")
 
+    @staticmethod
+    def _rating_options(left: str, right: str, n: int) -> list[str]:
+        """Descriptive options for a bipolar 1..n item: index i (0-based) → rating i+1 (1 = fully LEFT,
+        n = fully RIGHT), graded strongest-at-the-ends. Lets a text solver pick the ideal-CSR RATING via
+        the existing solve_text() (semantic choices, not a bare number)."""
+        left = (left or "the first statement").strip()[:140]
+        right = (right or "the second statement").strip()[:140]
+        grade = ["Slightly", "Moderately", "Strongly", "Very strongly"]
+        opts: list[str] = []
+        half = n // 2
+        for i in range(n):
+            if i < half:                                   # LEFT pole, strongest at i=0
+                opts.append(f"{grade[min(half - 1 - i, len(grade) - 1)]} agree with: {left}")
+            elif n % 2 == 1 and i == half:
+                opts.append("Neutral / no preference")
+            else:                                          # RIGHT pole, strongest at i=n-1
+                k = i - (half + (1 if n % 2 else 0))
+                opts.append(f"{grade[min(k, len(grade) - 1)]} agree with: {right}")
+        return opts
+
     async def _solve_personality(self, stem: str, left: str, right: str, n: int) -> int:
-        """Bipolar 1..n item (1 = fully LEFT pole, n = fully RIGHT pole). FAST heuristic, no network: lean
-        toward the pole with more desirable / fewer undesirable CS traits, with mild variation on ties so
-        we don't straight-line a flat scale (some personality instruments flag careless straight-lining)."""
+        """Bipolar 1..n item (1 = fully LEFT pole, n = fully RIGHT pole). OFFER-OPTIMAL: a personality
+        item has no 'correct' answer but it IS scored against the employer's ideal-CSR profile, so a
+        neutral/random answer scores a mediocre fit → no offer. Ask the strong model (reusing solve_text
+        over descriptive rating-options) which rating the ideal, hireable, customer-focused CSR would give
+        — committing toward the job-desirable pole, not the middle. Cascade claude_cli(free) → openrouter
+        → anthropic → openai; the keyword heuristic below is the fallback when no solver is available."""
+        try:
+            import asyncio
+            from backend.tools.assessment_harvester import (anthropic_solver, claude_cli_solver,
+                                                            openai_solver, openrouter_solver)
+            opts = self._rating_options(left, right, n)
+            prompt = ("You are completing a workplace PERSONALITY questionnaire while applying for a remote "
+                      "customer-service representative job. Pick the option the IDEAL candidate the employer "
+                      "most wants to hire — reliable, conscientious, patient, empathetic, customer-focused, "
+                      "emotionally stable, positive, a team player who stays in the role — would choose. "
+                      "Commit toward the clearly job-desirable end rather than the neutral middle unless the "
+                      "item is genuinely neutral. " + (stem or "").strip())
+            for solver in (claude_cli_solver, openrouter_solver, anthropic_solver, openai_solver):
+                try:
+                    if not solver.available():
+                        continue
+                    idx = await asyncio.to_thread(solver.solve_text, prompt, opts)
+                except Exception:
+                    continue
+                if idx is not None and 0 <= idx < n:
+                    self._pers_i = getattr(self, "_pers_i", 0) + 1
+                    return idx + 1
+        except Exception:
+            pass
+        # FALLBACK (no solver funded/available): keyword heuristic — lean to the desirable pole.
         def score(t: str) -> int:
             t = (t or "").lower()
             return sum(w in t for w in self._PERS_POS) - sum(w in t for w in self._PERS_NEG)
@@ -1065,7 +1112,7 @@ class HarverAdapter(Adapter):
         elif sl > sr:
             v = 1 if (sl - sr) >= 2 else 2
         else:
-            v = [n // 2 + 1, n // 2, n // 2 + 1, n - 1][self._pers_i % 4]  # gentle variation near center
+            v = [n - 1, n // 2 + 1, n, n // 2 + 1][self._pers_i % 4]  # off-center lean, not dead-neutral
         return min(max(v, 1), n)
 
     async def _vision_pick(self, page, n: int, question: str, odd_one_out: bool = True) -> int | None:

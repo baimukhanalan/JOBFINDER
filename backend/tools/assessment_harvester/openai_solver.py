@@ -165,9 +165,12 @@ def solve_best_worst(question: str, responses: list[str]) -> tuple[int, int] | N
     if n < 2:
         return None
     numbered = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(responses))
-    q = ("You are a competent, reliable, customer-focused customer-service representative taking a "
-         "situational-judgement test. Read the scenario and the responses, then choose the ONE BEST "
-         "response and the ONE WORST response.\n\n"
+    q = ("Answer this customer-service situational-judgement item the way a TOP-PERFORMING, reliable "
+         "representative would — the answer that earns the HIGHEST hiring score. The BEST response shows "
+         "empathy, stays calm and professional, actively listens, takes ownership, follows company policy, "
+         "escalates correctly when needed, and resolves the customer's real need. The WORST response is "
+         "rude/dismissive, argues with or blames the customer, ignores or abandons the issue, breaks "
+         "policy/makes unauthorized promises, or is dishonest.\n\n"
          f"Scenario: {question or '(choose the best and worst response)'}\n\nResponses:\n{numbered}\n\n"
          "Reply with TWO numbers only: the BEST response number, a comma, then the WORST response number. "
          "Example: 2,4")

@@ -136,6 +136,14 @@ _CHECKGROUP_NONE_RE = re.compile(
 # An option we must NEVER auto-tick as a fallback (a decline / a protected self-ID within a group).
 _CHECKGROUP_SKIP_OPT_RE = re.compile(
     r"prefer not|decline to|do not wish|choose not to disclose|i do not want", re.I)
+# A NEGATION-type checkbox group (Concentrix "Do you have any restrictions in your hours of
+# availability?" is a check-all-that-apply, NOT a select) — a synthetic fully-available persona
+# ticks the "no restrictions / fully available / none" option, NEVER a specific restriction.
+_CHECKGROUP_NEGATE_Q_RE = re.compile(
+    r"restrictions?|limitations?|constraints?|any conflicts?|unable to work|cannot work", re.I)
+_CHECKGROUP_NORESTRICT_OPT_RE = re.compile(
+    r"^\s*no\b|no restriction|no limitation|no conflict|not? (any )?restriction|fully available|"
+    r"i am available|open availability|flexible|any ?time|any shift|any schedule", re.I)
 
 
 def _env_advance() -> bool:
@@ -1159,6 +1167,17 @@ class WorkdayStrategy(ApplyStrategy):
         (those groups are filtered out before this is called)."""
         opts = [o for o in (options or []) if (o.get("text") or "").strip()]
         if not opts:
+            return None
+        # A restrictions/limitations group → tick the "no restrictions / fully available / none"
+        # option (never a specific restriction, never a CSR-relevant one that a prefer-match below
+        # would wrongly grab). If none is present, leave it blank rather than claim a restriction.
+        if _CHECKGROUP_NEGATE_Q_RE.search(question or ""):
+            for o in opts:
+                if _CHECKGROUP_NORESTRICT_OPT_RE.search(o["text"]):
+                    return o
+            for o in opts:
+                if _CHECKGROUP_NONE_RE.search(o["text"]):
+                    return o
             return None
         for rx in (_CHECKGROUP_PREFER_RE, _CHECKGROUP_SECONDARY_RE):
             for o in opts:

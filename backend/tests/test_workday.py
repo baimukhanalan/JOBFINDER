@@ -297,6 +297,21 @@ def test_pick_checkbox_option_prefers_csr_relevant():
     assert P("check all that apply", []) is None
 
 
+def test_pick_checkbox_option_restrictions_group_picks_no():
+    # Concentrix "Do you have any restrictions in your hours of availability?" is a check-all
+    # group; a fully-available synthetic persona ticks the "no restrictions" option, NOT a
+    # specific restriction (and NOT a CSR-relevant option a prefer-match would grab).
+    P = WorkdayMassHiringStrategy._pick_checkbox_option
+    q = "do you have any restrictions in your hours of availability?"
+    opts = [{"gi": 0, "text": "Mornings only"}, {"gi": 1, "text": "Cannot work weekends"},
+            {"gi": 2, "text": "No, I have no restrictions"}]
+    assert P(q, opts)["text"] == "No, I have no restrictions"
+    # a bare Yes/No rendering
+    assert P(q, [{"gi": 0, "text": "Yes"}, {"gi": 1, "text": "No"}])["text"] == "No"
+    # no "no restrictions" option at all -> leave blank rather than claim a restriction
+    assert P(q, [{"gi": 0, "text": "Mornings only"}, {"gi": 1, "text": "Weekends only"}]) is None
+
+
 def test_checkgroup_answer_regex_matches_concentrix_prompts():
     from backend.applier.strategies.workday import _CHECKGROUP_ANSWER_RE
     assert _CHECKGROUP_ANSWER_RE.search(

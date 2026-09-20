@@ -15,7 +15,9 @@ from backend.applier.strategies.base import ApplyStrategy
 from backend.applier.strategies.workday import (
     WorkdayMassHiringStrategy,
     WorkdayStrategy,
+    _CONSENT_CB_RE,
     _DEMOGRAPHIC_RE,
+    _MARKETING_CB_RE,
     _MASSHIRING_HOST_RE,
     _env_advance,
     _gen_password,
@@ -221,3 +223,79 @@ def test_masshiring_host_regex_is_tenant_specific():
     assert not _MASSHIRING_HOST_RE.search(_GENERIC_WD)
     assert not _MASSHIRING_HOST_RE.search(_HUMANA)
     assert not _MASSHIRING_HOST_RE.search("https://cnx.wd1.example.com/job")
+
+
+# ---- proxy plumbing (Bright Data US egress for the register step) ------------
+from backend.tools import workday_recon as _wr  # noqa: E402
+
+
+def test_proxy_from_url_socks5_no_auth():
+    # a local no-auth SOCKS5 slot → server only, no credential fields.
+    assert _wr._proxy_from_url("socks5://127.0.0.1:10801") == {"server": "socks5://127.0.0.1:10801"}
+
+
+def test_proxy_from_url_http_with_embedded_auth_is_split_out():
+    # Playwright ignores creds baked into `server`, so they MUST be peeled into username/password.
+    d = _wr._proxy_from_url("http://brd-customer-x-zone-alibaba_dc-country-us-session-abc:secret@brd.superproxy.io:33335")
+    assert d["server"] == "http://brd.superproxy.io:33335"
+    assert d["username"] == "brd-customer-x-zone-alibaba_dc-country-us-session-abc"
+    assert d["password"] == "secret"
+
+
+def test_proxy_from_url_bare_hostport_defaults_to_http():
+    assert _wr._proxy_from_url("brd.superproxy.io:33335") == {"server": "http://brd.superproxy.io:33335"}
+
+
+def test_pick_proxy_direct_override(monkeypatch):
+    for v in ("0", "direct", "off", "none", "DIRECT"):
+        monkeypatch.setenv("WORKDAY_PROXY", v)
+        monkeypatch.delenv("WORKDAY_BRIGHTDATA", raising=False)
+        assert _wr._pick_proxy() is None
+
+
+def test_pick_proxy_explicit_http_proxy_is_authful(monkeypatch):
+    monkeypatch.delenv("WORKDAY_BRIGHTDATA", raising=False)
+    monkeypatch.setenv("WORKDAY_PROXY", "http://user:pass@gw.example.com:1000")
+    d = _wr._pick_proxy()
+    assert d == {"server": "http://gw.example.com:1000", "username": "user", "password": "pass"}
+
+
+def test_pick_proxy_brightdata_path_builds_authful_dict(monkeypatch):
+    # WORKDAY_BRIGHTDATA=1 wins over WORKDAY_PROXY and yields a server + username + password dict.
+    monkeypatch.setenv("WORKDAY_BRIGHTDATA", "1")
+    monkeypatch.setenv("WORKDAY_PROXY", "direct")  # must be overridden by the BD path
+    fake = {"server": "http://brd.superproxy.io:33335",
+            "username": "brd-customer-x-zone-alibaba_dc-country-us-session-deadbeef",
+            "password": "zonepw"}
+    monkeypatch.setattr(_wr, "_bd_proxy_dict", lambda: fake)
+    assert _wr._pick_proxy() == fake
+
+
+def test_pick_proxy_brightdata_falls_through_when_unconfigured(monkeypatch):
+    monkeypatch.setenv("WORKDAY_BRIGHTDATA", "1")
+    monkeypatch.setenv("WORKDAY_PROXY", "socks5://127.0.0.1:10801")
+    monkeypatch.setattr(_wr, "_bd_proxy_dict", lambda: None)   # BD not configured
+    assert _wr._pick_proxy() == {"server": "socks5://127.0.0.1:10801"}
+
+
+# ---- create-account consent-checkbox classification (Concentrix "Please check the box") ------
+
+def test_consent_checkbox_matches_concentrix_terms_wording():
+    # The EXACT Concentrix create-account context that blocked account creation (screenshot
+    # 08_after_create: unticked box + "Error: Please check the box to continue"). Its <input> is
+    # NOT DOM-required, so the old `required`-only gate skipped it.
+    ctx = ('By clicking the "Create Account" button, you are agreeing to our Recruiting Data '
+           'Privacy Notice. Yes, I have read and consent to the terms and conditions.')
+    assert _CONSENT_CB_RE.search(ctx)
+    assert not _MARKETING_CB_RE.search(ctx)
+
+
+def test_consent_checkbox_does_not_match_marketing_optin():
+    ctx = "Yes, I would like to join the Talent Community and receive marketing opportunities."
+    assert _MARKETING_CB_RE.search(ctx)
+
+
+def test_consent_checkbox_matches_generic_agree_and_privacy_policy():
+    assert _CONSENT_CB_RE.search("I agree to the Terms of Use")
+    assert _CONSENT_CB_RE.search("I have read the Privacy Policy")
+    assert not _CONSENT_CB_RE.search("Please enter your email address")

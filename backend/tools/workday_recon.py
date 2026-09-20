@@ -34,6 +34,14 @@ and the exact confirmation sender/subject need one live pass on :98 to tune (lik
 RUN (mail group needed for the persona mailbox + emailed code + the confirmation read):
     DISPLAY=:98 sg mail -c 'cd /home/projects/jobfinder && python3 -m backend.tools.workday_recon --job <id>'
     # add WORKDAY_ADVANCE=1 to REALLY submit; --fresh forces a new persona; --keep caps minutes.
+
+EGRESS (the register reCAPTCHA-Enterprise scores the IP — a US IP beats the server's French
+datacenter IP and a slow KZ phone slot). Pick one:
+    WORKDAY_BRIGHTDATA=1                      # a fresh Bright Data US session (BRIGHTDATA_ZONE/
+                                             #   COUNTRY in .env; alibaba_dc=US datacenter / alibaba_res=US residential)
+    WORKDAY_PROXY=socks5://127.0.0.1:10801   # an explicit slot / http://user:pass@host:port
+    WORKDAY_PROXY=direct                      # force the server's own datacenter IP
+    (unset)                                   # first live residential/phone slot, else DIRECT
 """
 from __future__ import annotations
 
@@ -58,19 +66,62 @@ def _mha_prefill_root():
     return mha.PREFILL_ROOT
 
 
-def _pick_proxy() -> str | None:
-    """The SOCKS5 egress the register step runs through. Order:
-      1. WORKDAY_PROXY env — an explicit `socks5://host:port` (or `direct`/`0`/`off`/`none` to
-         FORCE the server's own datacenter IP);
-      2. else the first live residential / phone slot (`proxy_pool.residential_slots()`, which
+def _bd_proxy_dict() -> dict | None:
+    """A FRESH Bright Data session proxy in Playwright's proxy shape (server + username +
+    password). Bright Data is an HTTP proxy that authenticates via the username/password — NOT a
+    URL-embedded credential — so Playwright needs them as separate fields (a cred baked into
+    `server` is silently ignored). The session is COUNTRY-PINNED per BRIGHTDATA_COUNTRY (us) so the
+    egress lands on a US IP (zone `alibaba_dc`=US datacenter / `alibaba_res`=US residential). None
+    when Bright Data isn't configured in .env. Never raises."""
+    try:
+        from backend.tools import brightdata_proxies as bd
+        cfg = bd._cfg()
+        if bd._missing(cfg):
+            return None
+        s = bd.make_sessions(1, cfg)[0]
+        return {"server": s["server"], "username": s["username"], "password": s["password"]}
+    except Exception:
+        return None
+
+
+def _proxy_from_url(url: str) -> dict:
+    """Turn a proxy URL — which MAY embed `user:pass@` — into Playwright's proxy dict. Playwright
+    ignores credentials embedded in `server`, so peel them into username/password. Accepts both
+    `socks5://host:port` (no-auth local slot) and `http://user:pass@host:port` (an auth'd HTTP
+    proxy such as a Bright Data gateway)."""
+    from urllib.parse import unquote, urlparse
+    p = urlparse(url if "://" in url else "http://" + url)
+    server = f"{p.scheme}://{p.hostname}" + (f":{p.port}" if p.port else "")
+    out: dict = {"server": server}
+    if p.username:
+        out["username"] = unquote(p.username)
+        out["password"] = unquote(p.password or "")
+    return out
+
+
+def _pick_proxy() -> dict | None:
+    """The egress the register step runs through, as a Playwright proxy DICT (or None = DIRECT).
+    Order:
+      1. WORKDAY_BRIGHTDATA=1 → a FRESH Bright Data country-pinned session (US per
+         BRIGHTDATA_COUNTRY/ZONE). A fast US IP that materially raises the Workday create-account
+         reCAPTCHA-Enterprise score vs the server's own French datacenter IP (geo-mismatch) or a
+         slow KZ phone slot;
+      2. WORKDAY_PROXY env — an explicit `socks5://host:port` OR `http://[user:pass@]host:port`
+         (or `direct`/`0`/`off`/`none` to FORCE the server's own datacenter IP);
+      3. else the first live residential / phone slot (`proxy_pool.residential_slots()`, which
          merges the Tailscale exit-node phone slots + the mobile-SOCKS pool), preferring the
          phone slots over the Mac slot (10802 = the assessment tunnel);
-      3. else None = DIRECT (datacenter IP).
-    A residential IP materially raises the Workday create-account reCAPTCHA-Enterprise score vs
-    the datacenter IP (the documented register wall). Never raises."""
+      4. else None = DIRECT (the server's own datacenter IP).
+    Never raises."""
+    if (os.getenv("WORKDAY_BRIGHTDATA") or "").strip().lower() in ("1", "true", "yes", "on"):
+        bd = _bd_proxy_dict()
+        if bd:
+            return bd
+        print("[WORKDAY_BRIGHTDATA=1 but Bright Data isn't configured in .env — "
+              "falling through to WORKDAY_PROXY/slots/DIRECT]", flush=True)
     ov = (os.getenv("WORKDAY_PROXY") or "").strip()
     if ov:
-        return None if ov.lower() in ("0", "direct", "none", "off") else ov
+        return None if ov.lower() in ("0", "direct", "none", "off") else _proxy_from_url(ov)
     try:
         from backend.tools import proxy_pool
         slots = list(proxy_pool.residential_slots() or [])
@@ -78,7 +129,7 @@ def _pick_proxy() -> str | None:
             return None
         # prefer a phone slot (…:10800/10801) over the Mac assessment slot (…:10802).
         phones = [s for s in slots if not s.rstrip("/").endswith(":10802")]
-        return (phones or slots)[0]
+        return _proxy_from_url((phones or slots)[0])
     except Exception:
         return None
 
@@ -226,9 +277,13 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
     deadline = time.time() + keep_minutes * 60
     started = time.time()
     proxy = _pick_proxy()
-    out["proxy"] = proxy
-    proxy_kw = {"proxy": {"server": proxy}} if proxy else {}
-    print(f"[egress {'via ' + proxy if proxy else 'DIRECT (datacenter IP)'}]", flush=True)
+    # Record ONLY the server host as evidence — never log the Bright Data username (carries the
+    # customer id) or the zone password.
+    srv = (proxy or {}).get("server")
+    out["proxy"] = srv
+    proxy_kw = {"proxy": proxy} if proxy else {}
+    print(f"[egress {'via ' + srv if srv else 'DIRECT (datacenter IP)'}"
+          f"{' (auth)' if (proxy or {}).get('username') else ''}]", flush=True)
     try:
         async with async_playwright() as pw:
             ctx = await pw.chromium.launch_persistent_context(

@@ -102,6 +102,18 @@ _DECLINE_VALUES = ("I do not wish to answer", "I don't wish to answer",
                    "I do not want to answer", "Prefer not to answer",
                    "Prefer not to say", "Decline to self-identify",
                    "Decline to answer", "Choose not to disclose", "Do not wish")
+# Create-account checkbox classification. Workday CxS gates the required Terms box via app-state,
+# NOT the native `required` attribute (Concentrix's "Yes, I have read and consent to the terms and
+# conditions" input is NOT DOM-required yet blocks Create Account with "Please check the box to
+# continue"), so we ALSO tick an unchecked box whose surrounding text signals a legal/consent
+# agreement — while still never ticking a marketing/newsletter opt-in.
+_MARKETING_CB_RE = re.compile(
+    r"newsletter|marketing|promotional|subscribe|contact you about|talent community|opportunities",
+    re.I)
+_CONSENT_CB_RE = re.compile(
+    r"read and consent|consent to the terms|terms and conditions|terms of (use|service)|"
+    r"data privacy notice|privacy notice|privacy policy|i agree|i consent|i certify|i acknowledge",
+    re.I)
 
 
 def _env_advance() -> bool:
@@ -1524,15 +1536,18 @@ class WorkdayStrategy(ApplyStrategy):
             for i in range(await boxes.count()):
                 cb = boxes.nth(i)
                 try:
+                    if await cb.is_checked():
+                        continue
                     req = await cb.evaluate(
                         "e=>e.required||e.getAttribute('aria-required')==='true'")
-                    if not req or await cb.is_checked():
-                        continue
                     ctx = (await cb.evaluate(
                         "e=>{const c=e.closest('div,li,fieldset,form');return c?c.innerText:'';}")
-                        or "").lower()
-                    if re.search(r"newsletter|marketing|promotional|subscribe|"
-                                 r"contact you about|talent community|opportunities", ctx):
+                        or "")
+                    if _MARKETING_CB_RE.search(ctx):
+                        continue
+                    # Tick when DOM-required OR when the context clearly signals a legal/consent
+                    # agreement (Workday CxS's Terms box isn't DOM-required — see _CONSENT_CB_RE).
+                    if not (req or _CONSENT_CB_RE.search(ctx)):
                         continue
                     try:
                         await cb.check(timeout=2500)

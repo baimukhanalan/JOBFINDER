@@ -36,6 +36,7 @@ Taleo form. Iterate exactly as `icims.py` / `avature.py` were.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -45,6 +46,18 @@ from playwright.async_api import Page
 from backend.applier.strategies.avature import AvatureStrategy, _gen_password
 
 logger = logging.getLogger(__name__)
+
+
+def _synth_license_no(persona: dict) -> str:
+    """A deterministic synthetic professional-license number derived from the persona (stable per
+    persona, clearly fabricated). Same class of synthetic datum as the reserved-fiction SSN/DOB/phone
+    the synthetic-persona lanes transmit (cf. `foundever.ssn_last6`) — only ever sent on the gated
+    final Submit. 8 numeric digits ~ a plausible insurance producer / license id."""
+    seed = (persona or {}).get("email") or (persona or {}).get("full_name") or "taleo-license"
+    n = int(hashlib.sha1(str(seed).encode("utf-8")).hexdigest(), 16) % 100000000
+    if n < 10000000:
+        n += 10000000
+    return f"{n:08d}"
 
 # The external Taleo apply URL embedded in a Radancy job/listing page. UnitedHealth uses careersection
 # 10020 (external); TTEC embeds a section-less jobapply.ftl that 302s to a numbered section — both are
@@ -663,7 +676,8 @@ class TaleoStrategy(AvatureStrategy):
         zc = (profile_form or {}).get("zip", "") or (profile_form or {}).get("postal_code", "")
         city = (profile_form or {}).get("city", "")
         edu = (profile_form or {}).get("education_level", "") or ""
-        _BASICS_JS = """([zc,city,st,edu])=>{
+        license_no = _synth_license_no(profile_form or {})
+        _BASICS_JS = """([zc,city,st,edu,lic])=>{
                   const stRe = st ? new RegExp('^\\\\s*'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'i') : null;
                   const stIn = st ? new RegExp('\\\\b'+st.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\b','i') : null;  // persona state named anywhere
                   // TTEC restricted-location screener: 'are you planning to work FROM <these states/territories>?'
@@ -703,20 +717,33 @@ class TaleoStrategy(AvatureStrategy):
                     // /state|province/ branches below. Q2 ("Are you planning to work from Alaska, ..., the
                     // state of Washington, or Washington D.C.?") literally contains the word "state", so
                     // /state|province/ used to SHADOW it -> firstValid picked "Yes" (opts ["No Selection",
-                    // "Yes","No"]) = a synthetic Ohio persona FALSELY claiming to work from a restricted
-                    // state on a Remote-USA role -> TTEC auto-rejected the whole application on "minimum
-                    // requirements". Truthful answer = Yes iff the persona's own state IS in the listed set.
+                    // "Yes","No"]) = FALSELY claiming to work from a restricted state on a Remote-USA role
+                    // -> TTEC auto-rejected the whole application on "minimum requirements". OWNER POLICY:
+                    // the persona works from a PERMITTED (non-restricted) state, so this screener is
+                    // ALWAYS "No" -> never self-knocked-out (do NOT answer "Yes" even if the persona's
+                    // home state happens to be a listed one — a Remote-USA req rejects a restricted WORK
+                    // state). The allowed work-state itself is picked in the /work.*state/ branch below.
                     else if(RESTRICT_Q.test(lab) && RESTRICT_PLACES.test(lab)){
-                      const inList = stIn && stIn.test(lab);
-                      (inList ? set(sel,/^\\s*yes\\s*$/i) : set(sel,/^\\s*no\\s*$/i)) || firstValid(sel); }
+                      set(sel,/^\\s*no\\s*$/i) || set(sel,/\\bno\\b/i) || firstValid(sel); }
+                    // "Which state will you work from?" (a REQUIRED work-state pick, distinct from the
+                    // residence /state|province/ select) -> pick an ALLOWED (non-restricted) state: the
+                    // persona's own placed state when it is not restricted, else a safe default (Ohio).
+                    // The regex requires the word "work" within ~24 chars of the singular word "state"
+                    // (either order) so it does NOT match "authorized to work in the united stateS" (no
+                    // word-bounded "state") nor the residence "state/province" (no "work").
+                    else if(/work(ing)?.{0,24}\\bstate\\b|\\bstate\\b.{0,24}work(ing)?/.test(lab)){
+                      const RESTRICTED=/^\\s*(alaska|california|colorado|hawaii|illinois|massachusetts|minnesota|montana|new jersey|new york|washington|district of columbia)\\b/i;
+                      ((stRe && !(st && RESTRICTED.test(st)) && set(sel,stRe)) || set(sel,/^\\s*ohio\\s*$/i) || set(sel,/^\\s*(texas|florida|georgia|arizona|tennessee|virginia|north carolina)\\s*$/i) || firstValid(sel)); }
                     // TTEC insurance-CSR license screener ("Do you currently hold a valid license to sell
-                    // health insurance in the state you reside?") — a synthetic persona holds NO license
-                    // (same no-fabrication policy that SKIPS the Licensed-Agent reqs). Truthful = "No".
-                    // MUST precede /state|province/: the label contains "the state you reside", so /state/
-                    // used to shadow it -> firstValid picked the first option "Yes" = a FABRICATED license
-                    // claim -> either a required license-# follow-up left blank (application incomplete ->
-                    // the "we need more information" reminder) or a mis-stated credential at submit.
-                    else if(/licen[sc]e to sell|hold a (valid )?licen[sc]e|insurance licen[sc]e|licen[sc]ed to sell/.test(lab)){ set(sel,/^\\s*no\\s*$/i)||set(sel,/\\bno\\b/i); }
+                    // health insurance in the state you reside?") — answered SYNTHETICALLY "Yes" (owner
+                    // policy: a synthetic persona already transmits a synthetic SSN/DOB/phone, so we
+                    // ATTEMPT these insurance reqs instead of skipping them). The conditionally-REQUIRED
+                    // "If yes, please provide your license number." text follow-up is filled with a
+                    // deterministic fabricated number (`lic`) in the text-input loop below — leaving it
+                    // blank is the old "we need more information for your application" stall. MUST still
+                    // precede /state|province/: the label carries "the state you reside", so /state/
+                    // otherwise SHADOWS it -> firstValid picks the first option (which is NOT "Yes").
+                    else if(/licen[sc]e to sell|hold a (valid )?licen[sc]e|insurance licen[sc]e|licen[sc]ed to sell/.test(lab)){ set(sel,/^\\s*yes\\s*$/i)||set(sel,/\\byes\\b/i); }
                     else if(/referred by an employee|were you referred/.test(lab)){ set(sel,/^\\s*no\\b/i)||firstValid(sel); }
                     else if(/contacted via sms|sms text|text message|receive text/.test(lab)){ set(sel,/yes|agree|i agree/i)||firstValid(sel); }
                     else if(/source type|how did you (hear|find)|how you found|source track/.test(lab)){ set(sel,/^\\s*other\\s*$|job board|company website|newspaper/i)||set(sel,/indeed|linkedin|search engine/i)||firstValid(sel); }
@@ -742,9 +769,8 @@ class TaleoStrategy(AvatureStrategy):
                     else if(/weekend|willing|able to work|any shift/.test(glab)){ pick=rs.find(r=>/^\\s*yes|able|willing/.test(rlab(r))); }
                     else if(/employed|worked for|former employee/.test(glab)){ pick=rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
                     else if(/ethnic|hispanic|latino|\\brace\\b|gender|veteran|protected|disabilit/.test(glab)){ pick=rs.find(r=>DEC.test(rlab(r)))||rs.find(r=>/none|not a protected|i am not/.test(rlab(r))); }
-                    else if(RESTRICT_Q.test(glab) && RESTRICT_PLACES.test(glab)){  // TTEC restricted-state/territory screener
-                      const inList = stIn && stIn.test(glab);
-                      pick = inList ? rs.find(r=>/^\\s*yes\\b/.test(rlab(r))) : rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
+                    else if(RESTRICT_Q.test(glab) && RESTRICT_PLACES.test(glab)){  // TTEC restricted-state/territory screener -> No (persona works from a permitted state)
+                      pick = rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
                     else if(/authorized to work|legally (authorized|able) to work|eligible to work/.test(glab)){ pick=rs.find(r=>/^\\s*yes\\b/.test(rlab(r))); }
                     else if(/require sponsorship|need sponsorship|visa sponsorship|require.*visa/.test(glab)){ pick=rs.find(r=>/^\\s*no\\b/.test(rlab(r))); }
                     else if(/high school|diploma|\\bged\\b|equivalent/.test(glab)){ pick=rs.find(r=>/^\\s*yes\\b/.test(rlab(r))); }
@@ -754,21 +780,28 @@ class TaleoStrategy(AvatureStrategy):
                   for(const c of document.querySelectorAll('input[type=checkbox]')){
                     const w=c.closest('div,li,td,label'); const t=((w&&w.innerText)||'').toLowerCase();
                     if(/none of the above/.test(t) && !c.checked){ c.checked=true; c.dispatchEvent(new Event('click',{bubbles:true})); c.dispatchEvent(new Event('change',{bubbles:true}));}}
-                  // required blank text: Zip
+                  // required blank text: Zip + the SYNTHETIC insurance-license number revealed by
+                  // answering the license screener "Yes" above. "If yes, please provide your license
+                  // number." becomes conditionally REQUIRED once the screener = Yes -> fill it with the
+                  // deterministic fabricated number `lic` (leaving it blank = the old "we need more
+                  // information" stall). The separate optional "please list the industry" companion is
+                  // conditioned on a DIFFERENT question, not on this Yes, so it is left blank.
+                  const setTxt=(el,v)=>{ el.value=v; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); };
                   for(const el of document.querySelectorAll('input[type=text]')){
                     if((el.value||'').trim()) continue;
                     const lab=labOf(el);
-                    if(/zip|postal/.test(lab) && zc){ el.value=zc; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); }
+                    if(/provide your licen[sc]e number|licen[sc]e number|number of (your |the )?licen[sc]e/.test(lab) && lic){ setTxt(el,lic); }
+                    else if(/zip|postal/.test(lab) && zc){ setTxt(el,zc); }
                   }
                 }"""
         # run twice: the Closest-Metro select is a Country/State-dependent AJAX cascade, so its options
         # aren't present on the first pass — the second pass (after a settle) picks the loaded option.
         try:
-            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu, license_no])
             await page.wait_for_timeout(2000)   # let the State→Metro AJAX cascade populate
-            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu, license_no])
             await page.wait_for_timeout(1500)
-            await page.evaluate(_BASICS_JS, [zc, city, state, edu])
+            await page.evaluate(_BASICS_JS, [zc, city, state, edu, license_no])
         except Exception:
             pass
         if __import__("os").getenv("TALEO_DUMP"):
@@ -799,6 +832,24 @@ class TaleoStrategy(AvatureStrategy):
                 print("[TALEO DUMP selects]\n" + _json.dumps(dump, ensure_ascii=False, indent=0)[:2500], flush=True)
             except Exception as _e:
                 print(f"[taleo dump err {_e}]", flush=True)
+        if __import__("os").getenv("TALEO_DUMP"):
+            try:  # text inputs — confirms the license-number follow-up resolves + gets the synthetic value
+                tdump = await page.evaluate(
+                    """()=>{const out=[];
+                      const labOf=el=>{const parts=[]; const w=el.closest('div,td,li,fieldset,tr,p')||el.parentElement;
+                        if(w){ parts.push(w.innerText||'');
+                          let p=w.previousElementSibling, h=0;
+                          while(p&&h<3){ parts.push(p.innerText||''); if((p.innerText||'').trim().length>5) break; p=p.previousElementSibling; h++; }
+                          const par=w.parentElement; if(par&&(par.innerText||'').length<350) parts.push(par.innerText||''); }
+                        return parts.join(' ').replace(/\\s+/g,' ').slice(0,120);};
+                      for(const el of document.querySelectorAll('input[type=text],input:not([type])')){
+                        const lab=labOf(el); if(!/licen[sc]e|zip|postal|industry/i.test(lab)) continue;
+                        out.push({lab, val:(el.value||'')});}
+                      return out;}""")
+                import json as _json2
+                print("[TALEO DUMP text]\n" + _json2.dumps(tdump, ensure_ascii=False, indent=0)[:1500], flush=True)
+            except Exception as _e2:
+                print(f"[taleo text dump err {_e2}]", flush=True)
         # The Closest-Metropolitan-Area section is a Taleo DEPENDENT dropdown (Country->State->Metro):
         # a raw JS value-set does NOT fire the AJAX that loads the next level, so we drive it with
         # Playwright-NATIVE select_option (real change events) — country, then state (waits for the metro

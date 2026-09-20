@@ -317,6 +317,14 @@ _AUTO_STATUS = {
     # 2026-09-19 ("Your Application has been sent" + a SuccessFactors account email in the persona box).
     "foundever": "auto",
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
+    # Staffing agencies (recon 2026-09-20). Randstad: guest apply + résumé + a Friendly-Captcha
+    # proof-of-work (self-solving, no image challenge) — the most auto-promising, but not yet
+    # proven end-to-end, so 'needs_laptop' until a live ack. Manpower/Experis: no captcha + a
+    # guest JobApplyNoAuth endpoint, but apply is a non-URL-addressable client SPA (needs deeper
+    # recon). Adecco: mandatory account on a custom candidate SPA. Robert Half: mandatory
+    # Salesforce account + reCAPTCHA Enterprise on submit. All four are COLLECT-ONLY today.
+    "randstad": "needs_laptop", "manpower": "needs_laptop", "experis": "needs_laptop",
+    "adecco": "needs_laptop", "roberthalf": "needs_laptop",
 }
 
 
@@ -1458,6 +1466,370 @@ def fetch_foundever() -> list[dict]:
     return rows
 
 
+# =====================================================================================
+# STAFFING AGENCIES — the fast-placement lane. Big US staffing firms place candidates
+# quickly with light screening (a recruiter phone-screen, not a multi-day assessment),
+# so their remote entry roles are a high-yield offer source. Each is its own careers
+# backend (NOT a shared ATS): endpoints reverse-engineered from the careers SPA's network
+# calls, then verified with httpx (recon 2026-09-20). US-only inventory (each is a US
+# domain), so US-eligibility is forced True on kept rows; categorize()/_is_remote enforce
+# the two HARD RULES. Salary figures are stored raw (to_hourly normalizes by magnitude at
+# display time, so an hourly 19.90 and an annual 45000 both render correctly).
+# =====================================================================================
+
+# --- Randstad USA (randstadusa.com) — its own React "search-app" over a first-party JSON
+#     API. POST /api/search/search-results with searchParams.isRemote=true is a SERVER-SIDE
+#     remote filter (the whole domain is US-only inventory). Every hit carries a lob (line of
+#     business): lobId 1027 / "Randstad Careers" is Randstad hiring its OWN staff and routes
+#     to a DIFFERENT apply host (randstadnorthamerica.workgr8.com) — NOT a staffing PLACEMENT,
+#     so it's dropped; the placement lobs (308 Office & Admin, 4 Digital, 337 Allied Health)
+#     apply natively at randstadusa.com/jobs/apply/<lob>/<atsReference>/. ---
+_RANDSTAD_URL = "https://www.randstadusa.com/api/search/search-results"
+# slug-form keywords (the API's `query` is a lowercase-hyphenated slug, not free text)
+_RANDSTAD_QUERIES = ("customer-service-representative", "call-center", "data-entry",
+                     "administrative-assistant", "sales", "collections", "claims",
+                     "scheduling-coordinator", "customer-support")
+
+
+def _randstad_salary_raw(sal: dict):
+    typ = (sal.get("type") or "").lower()
+    unit = "hr" if "hour" in typ else ("yr" if "year" in typ else "")
+    lo = sal.get("min") if sal.get("min") is not None else sal.get("fixed")
+    hi = sal.get("max") if sal.get("max") is not None else sal.get("fixed")
+    if not lo and not hi:
+        return None, None, None
+    lo, hi = (lo if lo is not None else hi), (hi if hi is not None else lo)
+    if lo == hi:
+        raw = f"${lo:g}/{unit}" if unit else f"${lo:g}"
+    else:
+        raw = f"${lo:g}–${hi:g}/{unit}" if unit else f"${lo:g}–${hi:g}"
+    return lo, hi, raw
+
+
+def _randstad_row(h: dict) -> dict | None:
+    """One randstad search hit → normalized row or None. Remote+US is server-guaranteed
+    (isRemote filter, US domain); drop the internal-hire lob (workgr8) and non-remote rows."""
+    if not isinstance(h, dict) or h.get("isDeleted"):
+        return None
+    if not h.get("isRemote"):
+        return None                                      # remote-only
+    if h.get("lobId") == 1027 or "randstad careers" in (h.get("lobName") or "").lower():
+        return None                                      # internal Randstad hire, not a placement
+    apply_url = h.get("applyUrl") or h.get("detailsUrl") or ""
+    if "workgr8" in apply_url.lower():
+        return None                                      # belt-and-suspenders: any workgr8 apply = internal
+    jl = h.get("jobLocation") or {}
+    city = (jl.get("city") or "").strip()
+    st = (jl.get("stateAbbreviation") or "").strip()
+    if city and city.lower() != "united states":
+        loc = f"Remote, {city}" + (f", {st}" if st else "") + ", United States"
+    else:
+        loc = "Remote, United States"                    # nationwide-remote rows carry city 'United States'
+    lo, hi, sraw = _randstad_salary_raw(h.get("salary") or {})
+    jid = h.get("atsReference") or h.get("id")
+    row = _mk_row("randstad", jid, "Randstad", h.get("title") or "", loc, apply_url,
+                  salary_min=lo, salary_max=hi, salary_raw=sraw,
+                  employment_type=h.get("employmentType"),
+                  posted_at=int((h.get("createdDate") or 0)) // 1000)  # createdDate is epoch MILLIS
+    if row:
+        row["us_eligible"] = True                        # US-only domain (authoritative)
+    return row
+
+
+def fetch_randstad() -> list[dict]:
+    rows, seen = [], set()
+    hdr = {"User-Agent": _BROWSER_UA, "Content-Type": "application/json",
+           "Accept": "application/json"}
+    for q in _RANDSTAD_QUERIES:
+        page, total = 1, None
+        while page <= 15:
+            body = {"data": {"currentRoute": {"path": "/jobs/:searchParams*", "params": {}},
+                             "currentLanguage": "en",
+                             "searchParams": {"query": q, "isRemote": True, "page": page}}}
+            try:
+                r = httpx.post(_RANDSTAD_URL, json=body, headers=hdr, timeout=30)
+                d = r.json()
+                # searchResults sits at the JSON top level (the request `data` wrapper is NOT
+                # echoed back); tolerate a nested `data.searchResults` shape too.
+                sr = d.get("searchResults") or (d.get("data") or {}).get("searchResults") or {}
+                hits = sr.get("hits") or []
+                total = int(sr.get("totalSize") or 0)
+            except Exception as e:
+                print(f"[randstad q={q!r} p={page}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            if not hits:
+                break
+            for h in hits:
+                jid = h.get("atsReference") or h.get("id")
+                if not jid or jid in seen:
+                    continue
+                seen.add(jid)
+                row = _randstad_row(h)
+                if row:
+                    rows.append(row)
+            if len(hits) < 10 or (total and page * 10 >= total):
+                break
+            page += 1
+    return rows
+
+
+# --- ManpowerGroup: Manpower (manpower.com) + Experis (experis.com) share ONE first-party
+#     .NET API `POST /api/services/Jobs/searchjobs`; the brand is resolved server-side from
+#     the Host header (US site = US-only inventory). There is NO reliable server-side remote
+#     field (the remoteJobs facet is dead), and a blank jobLocation is NOT a remote signal (a
+#     blank-location "Service Desk Analyst" was actually HYBRID), so remote is decided
+#     TITLE/description-first with a hard `hybrid` veto (same location-first philosophy as
+#     applier/regions.py). No structured salary — pay is free text in publicDescription, read
+#     via _parse_hourly_wage. Apply is a non-URL-addressable client SPA (guest JobApplyNoAuth
+#     exists) so this is COLLECT-ONLY for now (see _AUTO_STATUS / the report). ---
+_MG_HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
+# description-only remote signal, kept tight so an incidental "remote" mention doesn't leak in
+_MG_DESC_REMOTE_RE = re.compile(
+    r"(fully|100%|completely)\s+remote|work\s*from\s*home|remote\s+(position|role|opportunity|"
+    r"work)|location:\s*remote|telecommut|home[- ]?based", re.I)
+# "remote"/"work from home" lead the keyword list — a role keyword alone ranks the (few) remote
+# postings below pages of on-site ones, so the remote-titled roles were being missed.
+_MANPOWER_KEYWORDS = ("remote", "work from home", "customer service", "call center", "data entry",
+                      "administrative", "collections", "claims", "customer support", "sales")
+_EXPERIS_KEYWORDS = ("remote", "work from home", "help desk", "service desk", "technical support",
+                     "desktop support", "support specialist", "customer service")
+
+
+def _manpowergroup_row(j: dict, source: str, company: str, host: str) -> dict | None:
+    title = j.get("jobTitle") or ""
+    desc = re.sub(r"<[^>]+>", " ", j.get("publicDescription") or "")
+    if _MG_HYBRID_RE.search(f"{title} {desc}"):
+        return None                                      # hybrid ≠ remote
+    if not (_is_remote(title) or _MG_DESC_REMOTE_RE.search(desc)):
+        return None                                      # remote-only (title, else explicit desc signal)
+    jurl = j.get("jobURL") or ""
+    apply_url = (f"https://{host}" + jurl) if jurl.startswith("/") else jurl
+    branch = (j.get("jobLocation") or "").strip()
+    loc = f"Remote, {branch}, United States" if branch else "Remote, United States"
+    lo, hi, sraw = _parse_hourly_wage(desc)              # pay lives in the description prose
+    row = _mk_row(source, j.get("jobID"), company, title, loc, apply_url,
+                  salary_min=lo, salary_max=hi, salary_raw=sraw,
+                  employment_type=j.get("employmentType"),
+                  posted_at=_iso_epoch(j.get("publishfromDate")))
+    if row:
+        row["us_eligible"] = True                        # US-only domain (implicit)
+    return row
+
+
+def _fetch_manpowergroup(host: str, source: str, company: str, keywords) -> list[dict]:
+    rows, seen = [], set()
+    url = f"https://{host}/api/services/Jobs/searchjobs"
+    hdr = {"User-Agent": _BROWSER_UA, "Content-Type": "application/json",
+           "Accept": "application/json", "Referer": f"https://{host}/en/search"}
+    for kw in keywords:
+        offset, total = 0, None
+        while offset < 400:
+            body = {"filter": {"searchkeyword": kw, "offset": offset, "totalCount": 0,
+                               "limit": 50, "haslocation": False, "language": "en"}}
+            try:
+                r = httpx.post(url, json=body, headers=hdr, timeout=30)
+                d = r.json()
+                items = d.get("jobsItems") or []
+                total = int((d.get("filters") or {}).get("totalCount") or 0)
+            except Exception as e:
+                print(f"[{source} kw={kw!r} off={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            if not items:
+                break
+            for j in items:
+                jid = j.get("jobID")
+                if not jid or jid in seen:
+                    continue
+                seen.add(jid)
+                row = _manpowergroup_row(j, source, company, host)
+                if row:
+                    rows.append(row)
+            offset += len(items)
+            if total is not None and offset >= total:
+                break
+    return rows
+
+
+def fetch_manpower() -> list[dict]:
+    return _fetch_manpowergroup("www.manpower.com", "manpower", "Manpower", _MANPOWER_KEYWORDS)
+
+
+def fetch_experis() -> list[dict]:
+    return _fetch_manpowergroup("www.experis.com", "experis", "Experis", _EXPERIS_KEYWORDS)
+
+
+# --- Adecco (adecco.com/en-us) — its own Sitecore/Azure-Search backend whose list API
+#     (`jobs/summarized`) is broken (returns 0), so we discover jobs from the SITEMAP and read
+#     each posting's public detail API. The US sitemap has ~2600 URLs; a slug pre-filter bounds
+#     the per-job detail fetches to the mass-hiring-ish titles before categorize()/isRemote run.
+#     Apply is a mandatory account on a custom candidate SPA (candidate.adecco.com) → COLLECT-ONLY. ---
+_ADECCO_HOST = "https://www.adecco.com"
+_ADECCO_SLUG_HINT = re.compile(
+    r"customer-service|customer-care|call-center|contact-center|\bcsr\b|data-entry|"
+    r"administrative|admin-assistant|\bclerk\b|receptionist|virtual-assistant|scheduler|"
+    r"scheduling|sales|collections|claims|patient|member|enrollment|intake|help-?desk|"
+    r"support|coordinator|representative|-rep-|\brep\b|specialist|associate|advocate", re.I)
+
+
+def _adecco_us_sitemap_url() -> str | None:
+    r = httpx.get(_ADECCO_HOST + "/jobsindex.xml", headers={"User-Agent": _BROWSER_UA}, timeout=30)
+    m = re.search(r"<loc>\s*([^<\s]*sitemap-jobs-unitedstates-en\.xml)\s*</loc>", r.text, re.I)
+    return m.group(1) if m else None
+
+
+def _adecco_detail(job_tail: str) -> dict | None:
+    url = (f"{_ADECCO_HOST}/api/data/jobs/job-description-details/"
+           f"{job_tail}/adecco/US/en-US/job-details")
+    r = httpx.get(url, headers={"User-Agent": _BROWSER_UA, "Accept": "application/json"}, timeout=25)
+    if r.status_code != 200:
+        return None
+    try:
+        return r.json()
+    except Exception:
+        return None
+
+
+def _adecco_row(d: dict, url: str) -> dict | None:
+    """One adecco job-description-details payload → normalized row or None. Remote + US + OPEN
+    are read off the structured detail fields; categorize() enforces the mass-hiring rule."""
+    if not isinstance(d, dict) or not d.get("isRemote"):
+        return None                                      # remote-only
+    if (d.get("countryId") or "").upper() not in ("USA", "US"):
+        return None
+    if (d.get("jobStatusId") or "OPEN").upper() not in ("OPEN", ""):
+        return None
+    city = (d.get("cityName") or "").strip()
+    st = (d.get("stateName") or "").strip()
+    loc = f"Remote, {city}, {st}, United States" if city else "Remote, United States"
+    scale = (d.get("salaryTimeScale") or "").lower()
+    unit = "hr" if scale.startswith("hour") else ("yr" if scale.startswith(("year", "annu")) else scale)
+    smin, smax = d.get("minsalary"), d.get("maxSalary")
+    cur = d.get("salaryCurrencySymbol") or "$"
+    sraw = None
+    if smin:
+        sraw = (f"{cur}{smin:g}" + (f"–{cur}{smax:g}" if smax and smax != smin else "")
+                + (f"/{unit}" if unit else ""))
+    jid = d.get("jobId") or _slug(url)
+    row = _mk_row("adecco", jid, "Adecco", d.get("jobName") or "", loc, url,
+                  salary_min=smin, salary_max=smax, salary_raw=sraw,
+                  employment_type=d.get("contractTypeTitle"),
+                  posted_at=_iso_epoch(d.get("postedDate")))
+    if row:
+        row["us_eligible"] = True                        # US-only sitemap (authoritative)
+    return row
+
+
+def fetch_adecco(max_detail: int = 500) -> list[dict]:
+    rows = []
+    try:
+        sm = _adecco_us_sitemap_url()
+        if not sm:
+            print("[adecco] US jobs sitemap not found in index", file=sys.stderr)
+            return rows
+        r = httpx.get(sm, headers={"User-Agent": _BROWSER_UA}, timeout=40)
+        urls = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", r.text)
+    except Exception as e:
+        print(f"[adecco sitemap] {type(e).__name__}: {e}", file=sys.stderr)
+        return rows
+    cand = [u for u in urls if _ADECCO_SLUG_HINT.search(u)][:max_detail]
+
+    def _one(u: str):
+        tail = u.rstrip("/").split("/")[-1]
+        try:
+            d = _adecco_detail(tail)
+        except Exception as e:
+            print(f"[adecco detail {tail}] {type(e).__name__}: {e}", file=sys.stderr)
+            return None
+        return _adecco_row(d, u) if d else None
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for row in ex.map(_one, cand):
+            if row:
+                rows.append(row)
+    return rows
+
+
+# --- Robert Half (roberthalf.com/us/en/jobs) — its own AEM-rendered search page (backed by
+#     Salesforce). No usable JSON API (the raw /search 403s without server creds), but the SSR
+#     page embeds every result as a <rhcl-job-card> custom element and `remote=Remote` is a
+#     SERVER-SIDE filter. Apply is a mandatory Salesforce candidate account + reCAPTCHA
+#     Enterprise → COLLECT-ONLY. ---
+_RH_HOST = "https://www.roberthalf.com"
+
+
+def _rh_row(card) -> dict | None:
+    """One bs4 <rhcl-job-card> element → normalized row or None (remote worksite only)."""
+    jid = card.get("job-id")
+    if not jid:
+        return None
+    a = card.select_one('a[slot="headline"]')
+    title = a.get_text(strip=True) if a else ""
+    href = a.get("href") if a else ""
+
+    def li(name: str) -> str:
+        e = card.select_one(f'li[data-subslot="{name}"]')
+        return e.get_text(" ", strip=True) if e else ""
+
+    def sp(name: str) -> str:
+        e = card.select_one(f'span[data-subslot="{name}"]')
+        return e.get_text(strip=True) if e else ""
+
+    if "remote" not in li("worksite").lower():
+        return None                                      # remote-only (worksite subslot)
+    loc = li("location") or "United States"
+    period = sp("salary-period").lower()
+    unit = "hr" if period.startswith("hour") else ("yr" if period.startswith("year") else "")
+
+    def _num(s: str):
+        try:
+            return float((s or "").replace(",", ""))
+        except (TypeError, ValueError):
+            return None
+    lo, hi = _num(sp("salary-min")), _num(sp("salary-max"))
+    sraw = None
+    if lo:
+        sraw = (f"${lo:g}" + (f"–${hi:g}" if hi and hi != lo else "") + (f"/{unit}" if unit else ""))
+    row = _mk_row("roberthalf", jid, "Robert Half", title,
+                  f"Remote, {loc}, United States", href,
+                  salary_min=lo, salary_max=hi, salary_raw=sraw,
+                  employment_type=li("type"), posted_at=_iso_epoch(li("date")))
+    if row:
+        row["us_eligible"] = True
+    return row
+
+
+def fetch_roberthalf() -> list[dict]:
+    from bs4 import BeautifulSoup
+    rows, seen = [], set()
+    page = 1
+    while page <= 25:
+        try:
+            r = httpx.get(f"{_RH_HOST}/us/en/jobs", headers={"User-Agent": _BROWSER_UA}, timeout=30,
+                          params={"remote": "Remote", "pagenumber": page})
+            if r.status_code >= 400:
+                break
+            cards = BeautifulSoup(r.text, "html.parser").select("rhcl-job-card")
+        except Exception as e:
+            print(f"[roberthalf p={page}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not cards:
+            break
+        new = 0
+        for c in cards:
+            jid = c.get("job-id")
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            new += 1
+            row = _rh_row(c)
+            if row:
+                rows.append(row)
+        if new == 0:
+            break
+        page += 1
+    return rows
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
@@ -1465,7 +1837,10 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
             "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
-            "foundever": fetch_foundever}
+            "foundever": fetch_foundever,
+            # staffing agencies (fast-placement lane)
+            "randstad": fetch_randstad, "manpower": fetch_manpower, "experis": fetch_experis,
+            "adecco": fetch_adecco, "roberthalf": fetch_roberthalf}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

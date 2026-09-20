@@ -1388,8 +1388,15 @@ def main() -> None:
     ap.add_argument("--alert", action="store_true",
                     help="check and Telegram the owner if anything is DOWN (cron entry point)")
     ap.add_argument("--cooldown", type=int, default=14400, help="alert throttle seconds (default 14400)")
+    ap.add_argument("--heal", action="store_true",
+                    help="self-heal: auto-fix the safe failure modes, alert on the rest (backend.tools.health_heal)")
+    ap.add_argument("--dry-run", action="store_true", help="with --heal: report what would be healed, change nothing")
     args = ap.parse_args()
-    if args.alert:
+    if args.heal:
+        from backend.tools import health_heal
+        res = health_heal.run_locked(dry_run=args.dry_run)
+        print(json.dumps(res, ensure_ascii=False))
+    elif args.alert:
         res = check_and_alert(cooldown=args.cooldown)
         print(json.dumps(res, ensure_ascii=False))
     else:

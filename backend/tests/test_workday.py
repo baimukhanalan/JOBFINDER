@@ -198,6 +198,16 @@ def test_screener_answer_contact_preference():
     assert A("what is the best time of day to be contacted?", {})[0] == "Anytime"
 
 
+def test_screener_answer_concentrix_remaining():
+    # The rest of the Concentrix step-2 screeners that were left values=None (live 2026-09-20).
+    A = WorkdayMassHiringStrategy._screener_answer
+    assert A("do you have a high school diploma/ged?", {}) == ["Yes"]
+    assert A("how did you hear about us?", {})[0] == "Job Board"
+    assert A("to comfortably perform this job, you will be sitting, reaching, talking?", {}) == ["Yes"]
+    # the education-LEVEL select must still return the tiered answer, not a bare Yes
+    assert A("what is your highest level of education?", {})[0] == "Bachelor"
+
+
 def test_screener_answer_unknown_returns_none():
     A = WorkdayMassHiringStrategy._screener_answer
     assert A("describe a time you resolved a conflict", {}) is None

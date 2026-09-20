@@ -1684,6 +1684,21 @@ class WorkdayStrategy(ApplyStrategy):
         if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
             return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
                     "Associate", "GED"]
+        # A Yes/No "do you have a high school diploma/GED?" (distinct from the education-LEVEL select
+        # above) — a synthetic CSR persona holds one → Yes.
+        if re.search(r"do you have (a )?(high school )?(diploma|ged)|high school diploma|diploma/ged|\bged\b", t):
+            return ["Yes"]
+        # "How did you hear about us?" source dropdown — a neutral, non-referral channel.
+        if re.search(r"how did you hear about (us|this|the position|the job)|"
+                     r"where did you (hear|find|learn) (about|of)|source of (this )?application", t):
+            return ["Job Board", "Job Boards", "Indeed", "Online", "Internet", "Company Website",
+                    "Other"]
+        # ADA essential-functions / physical-requirements acknowledgment → Yes (the persona can
+        # perform the job). Scoped so a behavioral open-text isn't caught.
+        if re.search(r"comfortably perform|sitting, reaching|essential (job )?functions?|"
+                     r"physical (requirement|demand)|able to perform (the|this) (job|role|position)|"
+                     r"perform the essential", t):
+            return ["Yes"]
         # Contact-preference screeners (Concentrix create-account application, live 2026-09-20).
         # We control the persona's takhet.com inbox and the phone is reserved-fiction (555-01xx),
         # so EMAIL is the truthful reachable channel; time-of-day is unconstrained → "Anytime".

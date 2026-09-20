@@ -916,6 +916,19 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   cigna/humana/cvs are still `_BLOCKED` pending a live re-verify (they share the Workday create-account pattern — the same
   checkbox fix + no-captcha finding likely applies; drive one with `WORKDAY_DEBUG_SHOTS=1` to confirm the register captcha
   presence before assuming a solver/IP is needed). Tests: `test_workday.py`.
+  **CONCENTRIX SCREENER BATTERY (2026-09-20, job 328 "Licensed Health Insurance Rep"): the create-account → wizard now fills the
+  WHOLE application** — `_screener_answer` gained the job-328 screeners (contact-preference→Email/Anytime, diploma/GED→Yes,
+  how-did-you-hear→Job Board, essential-functions→Yes, schedule/availability/ISP/sales-comfort) + a NEW required "check all that
+  apply" CHECKBOX-GROUP handler (`_answer_checkbox_groups`/`_pick_checkbox_option`/`_CHECKBOX_GROUPS_JS`: ticks the CSR-relevant
+  option else "None of the above"; a restrictions/limitations group picks the "no restrictions" option). Walked job 328's
+  "Errors Found" from 8 → 1 across 5 live drives; every `PRE-CONTINUE emptyRequired:[]`. **STILL 1 RESIDUAL (not yet an ack):
+  the "Do you have any restrictions in your hours of availability?*" widget** — it is neither enumerated by the checkbox-group
+  JS NOR filled by the select/radio path NOR flagged empty by `_rescan_required`, yet Workday's server rejects it as required.
+  Needs LIVE DOM inspection of that one widget (dump its outerHTML/role) to characterize it — a widget type the current scans
+  miss. `clicked=True confirmed=False`, empty persona Maildir (no ack email). Job 328 is an atypically screener-HEAVY
+  licensed-insurance role; a general-CSR Concentrix job likely has far fewer screeners and may complete on the current battery —
+  worth trying a different `cnx` job id before more iteration on 328. NOT cron-wired (unproven to an ack). Tests: `test_workday.py`
+  (`_pick_checkbox_option`/`_screener_answer` battery + the checkbox-group required-detection).
   **Residential-egress + NopeCHA wiring for the 4 register-walled tenants (2026-09-20, `drive_apply`):** `_pick_proxy()` routes
   the headful create-account browser through a live phone/residential slot — `WORKDAY_PROXY=socks5://host:port` (or
   `direct`/`0` to force the datacenter IP), else the first `proxy_pool.residential_slots()` slot (phone slots …:10800/10801

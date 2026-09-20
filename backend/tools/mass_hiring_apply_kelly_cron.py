@@ -41,7 +41,7 @@ logger = logging.getLogger("kelly_apply_cron")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from backend.tools import mail_db, mass_hiring_apply as mha  # noqa: E402
+from backend.tools import mail_db, mass_hiring_apply as mha, offer_priority  # noqa: E402
 
 LOCK_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "kelly_apply_cron.lock")
 
@@ -77,8 +77,14 @@ def main() -> None:
     if not ids:
         logger.info("no Kelly (mykelly) jobs on the board")
         return
-    batch = ids * max(1, args.rounds)  # one application per id per round
-    logger.info("applying to %d Kelly jobs x %d round(s) = %d applications", len(ids), args.rounds, len(batch))
+    # High-pay-first order + STOP-ON-RESPONSE (skip jobs that already reached interview/offer) +
+    # `rounds` personas/run. Guarded — falls back to `ids * rounds` on any error (offer_priority).
+    batch = offer_priority.plan_mh_batch(ids, rounds=max(1, args.rounds))
+    logger.info("applying to %d Kelly jobs x %d round(s) = %d applications (pay-ordered, open-only)",
+                len(ids), args.rounds, len(batch))
+    if not batch:
+        logger.info("every Kelly job already reached interview/offer — nothing to apply")
+        return
     res = mha.run_batch_parallel(batch, workers=args.workers, gender=None,
                                  dry_run=False, per_job_timeout=args.per_job_timeout)
     conf = sum(1 for r in res if r.get("confirmed"))

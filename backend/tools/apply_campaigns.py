@@ -479,8 +479,22 @@ def _alive_ids(ids: list[int], jobs_by_ids, *, rows=None, have_rows=None) -> lis
     return [j for j in ids if j in rows and not (rows[j] or {}).get("dead")]
 
 
+def _landed_checker(ids, landed):
+    """A `furthest_stage_of(jobid) -> stage|None` for the STOP-ON-RESPONSE guard. An injected
+    `landed` callable wins (tests); else the guarded live `offer_priority.landed_check` over
+    `ids` (returns None for everything when uploads/prefill or the mail DB is unavailable — e.g.
+    a worktree — so nothing is ever WRONGLY treated as landed). Never raises."""
+    if landed is not None:
+        return landed
+    try:
+        from backend.tools.offer_priority import landed_check
+        return landed_check([int(x) for x in ids])
+    except Exception:
+        return lambda j: None
+
+
 def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
-                    jobs_by_ids=None, velocity_guard=None) -> list[int]:
+                    jobs_by_ids=None, velocity_guard=None, landed=None, order=None) -> list[int]:
     """The job ids to apply to on THIS run, honoring the per-day budget. Single-job → [job_id]
     × remaining. Jobs (a /catalog selection) → the next `remaining_today` ids round-robin from
     the persisted `cursor`, skipping (for this run only) rows that are missing/dead, already-LANDED
@@ -490,12 +504,33 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     for testing; default to the live catalog_db/bulk_log. `velocity_guard` (injectable; default
     `company_velocity.guard`) is the PER-COMPANY cap shared with the bulk drain: it drops companies
     already over `COMPANY_CAP_PER_DAY`/`_PER_WEEK` and limits this run to each company's remaining
-    budget — the guard that makes a 149-fills-on-Salmon re-hammer impossible from any path."""
+    budget — the guard that makes a 149-fills-on-Salmon re-hammer impossible from any path.
+
+    STOP-ON-RESPONSE (owner 2026-09-20): a position whose furthest inbound mail stage is already
+    interview/offer is dropped from every kind — once a posting produced the outcome we want, we
+    stop spending fresh personas on it. `landed` (a `jobid->stage|None` callable) is injectable;
+    the default is the guarded live `offer_priority.landed_check` (nothing landed when uploads/mail
+    are unavailable). `order` (default env `APPLY_ORDER`=pay_desc) pay-orders the SEARCH pool so the
+    highest-paying eligible NEW jobs are applied first (the `jobs` kind keeps the owner's cursor
+    round-robin so pay-ordering there would fight the rotation)."""
     n = remaining_today(camp, today)
     if n <= 0:
         return []
     if velocity_guard is None:
         from backend.tools.company_velocity import guard as velocity_guard
+    try:
+        from backend.tools import offer_priority as _op
+    except Exception:
+        _op = None
+
+    def _is_landed(stage_of, j) -> bool:
+        """True iff position j already reached interview/offer (guarded; never raises)."""
+        if _op is None:
+            return False
+        try:
+            return _op.is_landed(stage_of(int(j)))
+        except Exception:
+            return False
 
     def _capped(cands: list[int]) -> list[int]:
         try:
@@ -514,7 +549,12 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         # `per_day` (≤100) uncapped applications at one company/run: `_capped` drops it to that
         # company's remaining daily budget (and to [] once the company is over cap).
         jid = camp.get("job_id")
-        return _capped([int(jid)] * n) if jid else []
+        if not jid:
+            return []
+        # STOP-ON-RESPONSE: if this one posting already reached interview/offer, apply no more.
+        if _is_landed(_landed_checker([int(jid)], landed), int(jid)):
+            return []
+        return _capped([int(jid)] * n)
     if kind == "jobs":
         # owner-picked set: round-robin from the cursor. The applied/`submitted` exclusions of the
         # search kind do NOT apply (the owner chose these jobs), BUT a job this campaign already
@@ -538,9 +578,12 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
         # for one ATS can't re-hammer a wall we've deliberately parked. Reversible via quarantine_jobs.
         quarantined = set(int(x) for x in (camp.get("quarantine_jobids") or []))
         solve = _solve_captcha_on()
+        _stage_of = _landed_checker(ids, landed)   # STOP-ON-RESPONSE: interview/offer → skip
 
         def _eligible(j: int) -> bool:
             if j not in alive or j in confirmed or j in quarantined:
+                return False
+            if _is_landed(_stage_of, j):        # already produced an interview/offer — stop
                 return False
             # captcha-walled ATS skip: only when we actually know the ATS (have_rows) and no solver
             if not solve and have_rows and (rows.get(j) or {}).get("ats") not in _AUTO_ATS:
@@ -578,6 +621,16 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
     # this only widens what the resolver can SEE. (Bounded so a huge q='' pool stays cheap.)
     rows = list_jobs(q=(camp.get("q") or None), region=(camp.get("region") or None),
                      remote_only=True, limit=max(n * 8, 2000))
+    # HIGH-PAY FIRST (owner 2026-09-20): order the eligible pool by disclosed pay DESC (env
+    # APPLY_ORDER, default pay_desc) so the best-paying fresh jobs are attempted first. Stable
+    # (a no-comp pool keeps list_jobs order). Guarded — a bad row/module leaves the order as-is.
+    if _op is not None:
+        try:
+            rows = _op.order_by_pay(list(rows), _op.pay_key_catalog, order=order)
+        except Exception:
+            pass
+    # STOP-ON-RESPONSE checker over the candidate ids in this window.
+    _stage_of = _landed_checker([r.get("id") or r.get("jobid") or 0 for r in rows], landed)
     # per_job_per_day (owner opt-in, default 1): apply to EACH eligible vacancy this many times per
     # day under the campaign's fixed name. >1 is the owner's explicit "3×/vacancy, same name" mode —
     # it RE-APPLIES already-applied jobs and BYPASSES the per-company velocity cap (that cap exists to
@@ -594,6 +647,8 @@ def resolve_targets(camp: dict, today: str, *, list_jobs=None, submitted=None,
             continue
         jid = int(r.get("id") or r.get("jobid") or 0)
         if not jid:
+            continue
+        if _is_landed(_stage_of, jid):   # already reached interview/offer — stop applying to it
             continue
         if per_job <= 1 and (jid in applied or jid in submitted):
             continue                     # normal mode: never re-apply a job

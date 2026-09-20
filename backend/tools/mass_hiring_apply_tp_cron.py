@@ -41,7 +41,7 @@ logger = logging.getLogger("tp_apply_cron")
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO)
 
-from backend.tools import mail_db  # noqa: E402
+from backend.tools import mail_db, offer_priority  # noqa: E402
 
 LOCK_PATH = os.path.join(REPO, "logs", "tp_apply.lock")
 MAILROOT = "/var/mail/vhosts"
@@ -229,10 +229,15 @@ def main() -> None:
         logger.info("no Teleperformance (icims) jobs on the board")
         return
 
-    batch = ids * max(1, args.rounds)
+    # High-pay-first order + STOP-ON-RESPONSE (skip jobs that already reached interview/offer) +
+    # `rounds` personas/run. Guarded — falls back to `ids * rounds` on any error (offer_priority).
+    batch = offer_priority.plan_mh_batch(ids, rounds=max(1, args.rounds))
     workers = max(1, args.workers)
-    logger.info("applying to %d TP jobs x %d round(s) = %d applications (workers=%d)",
+    logger.info("applying to %d TP jobs x %d round(s) = %d applications (workers=%d, pay-ordered, open-only)",
                 len(ids), args.rounds, len(batch), workers)
+    if not batch:
+        logger.info("every TP job already reached interview/offer — nothing to apply")
+        return
 
     results = []
     if workers > 1:

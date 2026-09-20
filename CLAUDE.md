@@ -260,6 +260,34 @@ FILL is fixed, the human only solves the captcha). The dividing line is the fina
 **Mass-Hiring auto-apply feasibility.** Ceiling = "auto-fill + submit → a human does the assessment"; per-lane status in the
 Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-step reCAPTCHA needs a solver key + residential IP).
 
+## Offer-priority layer (`tools/offer_priority.py`) — high-pay-first · multi-candidate · stop-on-response
+Owner directives 2026-09-20 to make the apply engine offer/interview-efficient. PURE + injectable core (fully unit-tested,
+no DB/mail/net — `test_offer_priority.py`, 43 tests) + guarded live wrappers that do the joins and NEVER break a lane
+(any error / a worktree without `uploads/` → fall back to the caller's original behaviour).
+- **(1) HIGH-PAY FIRST.** Every apply queue is ordered by disclosed pay DESC — catalog via `pay_key_catalog` (highest of
+  posted `comp_*` + `est_total_*`/`est_base_*`), mass-hiring via `pay_key_masshiring` (top `mass_hiring.hourly_pay`, posted
+  edges out an estimate). Knob **`APPLY_ORDER`** (default `pay_desc`; also `pay_asc`, `none`/`as_is`).
+- **(2) MULTI-CANDIDATE PER POSITION, STOP-ON-RESPONSE.** Apply up to **K** distinct synthetic personas to ONE position to
+  raise the odds one lands, but STOP the moment ANY persona on it reached **interview/offer** (`LANDED_STAGES`). Detected by
+  joining position → prefill personas (`personas_by_jobid`, scans `uploads/prefill/<demo>/<jobid>/persona.json`, incl. the
+  `mh_<id>` namespace) → `mail_index` furthest stage (`_FURTHEST_STAGE_SQL`, `offer`>`interview`>…). Catalog K knob
+  **`APPLY_CANDIDATES_PER_POSITION`** (default 2, clamp 1..8); mass-hiring lifetime cap **`MH_CANDIDATES_PER_POSITION`**
+  (default **0 = OFF/unlimited** — those lanes are built for volume, each fresh persona mints a fresh assessment invite =
+  another offer shot; the STOP-ON-RESPONSE is the governor there, not a lifetime cap that would starve the SHL-OPQ/AMCAT
+  invite pipeline).
+- **SPAM/VELOCITY SAFETY.** Multiplying candidates is composed WITHIN `company_velocity.guard` (2/day·6/week), not a bypass:
+  `plan_positions` runs the whole flat K-per-position plan THROUGH the guard, so K copies of a position (one company) can never
+  exceed that company's remaining budget. Mass-hiring ATSes aren't in `job_catalog` so that cap is a deliberate no-op for them
+  (volume by design); identity is already unique per fill (`synth_persona`) — the correct anti-cluster lever (Salmon post-mortem).
+- **Wiring** (all guarded, all fall back to prior behaviour): the 8 mass-hiring lane crons call `plan_mh_batch(ids, rounds=)`
+  (Maximus/TP/Kelly/Taleo/Foundever replace `batch = ids*rounds`; SR/Workday/ORC reorder+stop-filter `ids` BEFORE `--limit`
+  so `--limit` keeps the top-N highest-paying OPEN jobs). `apply_campaigns.resolve_targets` gained STOP-ON-RESPONSE (all kinds,
+  additive like `confirmed_jobids`) + pay-order of the SEARCH pool (the `jobs` kind keeps its cursor round-robin — pay-order
+  there would fight the rotation). The `/catalog` bulk drain (`dashboard_app._fill_all_public`) drops landed positions + pay-
+  orders the kept set (skipped when `randomize` is on). **Restart to go live: `pm2 restart jobfinder-alan-dash` (bulk drain) +
+  no restart for the lane crons (fresh subprocess each run).** Cross-lane cadence (favour the fast-offer BPO lanes over the
+  operator-triggered catalog drain) is the CRONTAB's job and already the case; `lane_priority()` documents the intent.
+
 ## Gotchas
 
 **Process / infra**

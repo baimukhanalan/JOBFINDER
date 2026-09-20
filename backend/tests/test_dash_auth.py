@@ -79,13 +79,14 @@ def test_admin_login_then_root_passes_gate():
     assert cookie
 
     # With the admin session cookie, the gate PASSES — so we reach the "/" handler,
-    # whose OWN redirect points at /mail/candidates (NOT the gate's /login). The "/"
-    # handler uses RedirectResponse's default 307, so assert a redirect + the target,
-    # not a specific code — what matters is it wasn't bounced back to /login.
+    # whose OWN redirect points at the landing page /stats/today (NOT the gate's /login).
+    # The "/" handler uses RedirectResponse, so assert a redirect + the target, not a
+    # specific code — what matters is it wasn't bounced back to /login.
     client.cookies.set(auth.COOKIE_NAME, cookie)
     r2 = client.get("/", follow_redirects=False)
     assert 300 <= r2.status_code < 400
-    assert r2.headers["location"].endswith("/mail/candidates")
+    loc = r2.headers["location"]
+    assert loc.endswith("/stats/today") and not loc.endswith("/login")
 
 
 def test_employee_login_succeeds_but_is_confined_to_cabinet():

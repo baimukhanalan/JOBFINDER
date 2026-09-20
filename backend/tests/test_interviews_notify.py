@@ -72,17 +72,20 @@ def test_plan_empty():
 
 
 def test_tick_sends_and_marks_idempotent(monkeypatch):
-    state = {"announced": False, "r60": False, "r5": False}
+    # tick() now fires FOUR reminder windows (-120/-60/-15/-5) plus the assignment announce.
+    # -120 and -15 are ADMIN-facing (send_admin); assigned/-60/-5 go to the responsible bot.
+    from backend.interviews import service
+    state = {"announced": False, "60": False, "5": False, "120": False, "15": False}
     marks = {"announced": [], "reminded": []}
-    sends: list = []
+    resp_sends: list = []
+    admin_sends: list = []
 
     monkeypatch.setattr(db, "due_announcements",
                         lambda: [] if state["announced"] else [{"id": 1, "responsible_id": 10}])
 
     def fake_due_reminders(now, window):
-        if int(window) == 60:
-            return [] if state["r60"] else [{"id": 2, "responsible_id": 10}]
-        return [] if state["r5"] else [{"id": 3, "responsible_id": 10}]
+        w = str(int(window))
+        return [] if state[w] else [{"id": int(w), "responsible_id": 10}]
 
     monkeypatch.setattr(db, "due_reminders", fake_due_reminders)
     monkeypatch.setattr(db, "get_responsible", lambda rid: {"name": "R"})
@@ -93,24 +96,36 @@ def test_tick_sends_and_marks_idempotent(monkeypatch):
 
     def fake_mark_reminded(iid, which):
         marks["reminded"].append((iid, which))
-        state["r60" if which == "60" else "r5"] = True
+        state[which] = True
 
     monkeypatch.setattr(db, "mark_announced", fake_mark_announced)
     monkeypatch.setattr(db, "mark_reminded", fake_mark_reminded)
     monkeypatch.setattr(notify, "poll_updates", lambda: 0)  # no Telegram network in tests
+    # hermetic: record which bot each pair went to; never touch the network / build a pack
     monkeypatch.setattr(notify, "notify_responsible",
-                        lambda iv, text: (sends.append((iv["id"], text)), True)[1])
+                        lambda iv, text: (resp_sends.append(iv["id"]), True)[1])
+    monkeypatch.setattr(notify, "send_admin", lambda text: admin_sends.append(text) or True)
+    monkeypatch.setattr(notify, "send_document", lambda *a, **k: True)
+    monkeypatch.setattr(notify, "target_chat", lambda iv: None)
+    monkeypatch.setattr(notify, "assigned_text", lambda *a, **k: "assigned")
+    monkeypatch.setattr(notify, "walkin_prep_text", lambda *a, **k: "walkin")
+    monkeypatch.setattr(notify, "rich_reminder_text", lambda *a, **k: "rich")
+    monkeypatch.setattr(notify, "reminder_text", lambda *a, **k: "rem")
+    monkeypatch.setattr(service, "interview_pack", lambda iv: {})
 
     attempted = reminders.tick()
-    assert attempted == 3
-    assert len(sends) == 3
+    # 1 announce + 4 reminders (120/60/15/5)
+    assert attempted == 5
+    assert sorted(resp_sends) == [1, 5, 60]      # assigned + -60 + -5 → responsible bot
+    assert len(admin_sends) == 2                 # -120 + -15 → admin bot
     assert marks["announced"] == [1]
-    assert set(marks["reminded"]) == {(2, "60"), (3, "5")}
+    assert set(marks["reminded"]) == {(60, "60"), (5, "5"), (120, "120"), (15, "15")}
 
     # second tick: everything already marked -> nothing sent
-    sends.clear()
+    resp_sends.clear()
+    admin_sends.clear()
     assert reminders.tick() == 0
-    assert sends == []
+    assert resp_sends == [] and admin_sends == []
 
 
 def test_message_builders_are_neutral():

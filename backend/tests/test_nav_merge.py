@@ -6,8 +6,9 @@ from backend.tools import mailcrm_ui as m
 
 def test_nav_collapsed_to_vacancies():
     keys = [k for _h, k, _l, _s in m._NAV]
-    assert len(m._NAV) == 5
-    assert "vacancies" in keys
+    # 6 rail entries: Кандидаты · События найма · Вакансии · Статистика · Пользователи · Health
+    assert len(m._NAV) == 6
+    assert "vacancies" in keys and "hiring" in keys
     assert "masshiring" not in keys and "unfinished" not in keys and "catalog" not in keys
     vac = next(r for r in m._NAV if r[1] == "vacancies")
     assert vac[0] == "/catalog" and vac[2] == "Вакансии"

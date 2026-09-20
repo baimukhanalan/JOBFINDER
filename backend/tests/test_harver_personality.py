@@ -27,7 +27,7 @@ def test_rating_options_odd_has_neutral_middle():
 def test_heuristic_picks_desirable_pole(monkeypatch):
     _no_solvers(monkeypatch)
     a = H.HarverAdapter("test.persona1@takhet.com")
-    run = asyncio.get_event_loop().run_until_complete
+    run = asyncio.run  # fresh loop per call — robust when a prior test closed the default loop
     # desirable pole on the RIGHT (calm/patient) → rating near n
     assert run(a._solve_personality("", "I get angry with rude customers",
                                     "I stay calm and patient", 6)) >= 5
@@ -39,7 +39,7 @@ def test_heuristic_picks_desirable_pole(monkeypatch):
 def test_heuristic_tie_is_not_dead_neutral(monkeypatch):
     _no_solvers(monkeypatch)
     a = H.HarverAdapter("test.persona2@takhet.com")
-    run = asyncio.get_event_loop().run_until_complete
+    run = asyncio.run  # fresh loop per call — robust when a prior test closed the default loop
     # two poles with no trait keywords → must NOT collapse to the exact center 3 every time
     vals = {run(a._solve_personality("", "I prefer mornings", "I prefer evenings", 6)) for _ in range(4)}
     assert vals - {3}  # at least one answer is off dead-center

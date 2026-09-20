@@ -49,6 +49,9 @@ _PORT = 9222                   # local tunnel port
 _LOCK = "/tmp/jf_assess_supervisor.lock"
 _ATTEMPTS = os.path.join(_ROOT, "backend", "data", "sutherland_attempts.json")
 _SKIP_AFTER = 3                # low-yield attempts before a stuck invite is skipped
+_TRANSIENT_SKIP_AFTER = 12     # transient (Mac/CDP hiccup) attempts with 0 progress EVER before a
+                               # churned/dead-egress token is retired (HIGH so a one-off hiccup on a
+                               # live invite is still retried many times; tracked under the "t:" key)
 # Sutherland's AMCAT battery is personality-heavy (AMPI/OPQ forced-choice, ~140-160 items at ~8s each);
 # the harvester's 1200s (20-min) default session cap left a real battery UNFINISHED at ~141 items
 # (`partial_timeout`). Only ONE invite is live at a time (the rest expire), so a longer per-drive budget
@@ -366,7 +369,7 @@ def run(dry: bool, max_jobs: int) -> None:
         completed, items, camera, transient, expired = _drive(mbx, url)
         if completed:
             passed += 1
-            attempts.pop(mbx, None)
+            attempts.pop(mbx, None); attempts.pop("t:" + mbx, None)
             # harvest_runner's --url path only marks the CRM «пройдено» when --mailbox has an '@'
             # (we pass the local-part), and core/adapters never mark done — so the supervisor MUST
             # record the completion itself, else a real Mac-lane pass stays in «Действие» + is re-driven.
@@ -387,19 +390,32 @@ def run(dry: bool, max_jobs: int) -> None:
             # token "transient" forever — never retiring it. link-expired is terminal; it wins.
             from backend.tools import mailcrm
             mailcrm.mark_assessment_skipped(mbx)
-            attempts.pop(mbx, None)
+            attempts.pop(mbx, None); attempts.pop("t:" + mbx, None)
             skipped += 1
             _log(f"SKIP {mbx} (link-expired — dead SHL token, unrecoverable)")
         elif transient:
-            # a CDP/Mac/proxy hiccup or a partial hang — retry, do NOT accrue toward the skip cap.
-            _log(f"transient {mbx} — Mac/CDP hiccup, NOT skipping (retry later)")
+            # a CDP/Mac/proxy hiccup or a partial hang — normally retry, do NOT accrue toward the
+            # low-yield cap. BUT a token that is transient MANY times with 0 progress EVER is not a
+            # one-off hiccup — it's a churned/dead-egress invite monopolizing the lane (keeps _fresh()
+            # non-empty forever → the Mac never idles + OBS never closes). Retire it after a HIGH cap
+            # (separate "t:" counter) so a genuine one-off hiccup on a LIVE invite is still retried.
+            tkey = "t:" + mbx
+            attempts[tkey] = int(attempts.get(tkey, 0)) + 1
+            if attempts[tkey] >= _TRANSIENT_SKIP_AFTER:
+                from backend.tools import mailcrm
+                mailcrm.mark_assessment_skipped(mbx)
+                attempts.pop(tkey, None)
+                skipped += 1
+                _log(f"SKIP {mbx} ({_TRANSIENT_SKIP_AFTER} transient attempts, 0 progress — churned/dead egress)")
+            else:
+                _log(f"transient {mbx} — Mac/CDP hiccup, NOT skipping (attempt {attempts[tkey]}/{_TRANSIENT_SKIP_AFTER})")
         elif items < 3:
             # reached the assessment but nothing to answer — genuinely stuck (submitted/«evaluating»).
             attempts[mbx] = int(attempts.get(mbx, 0)) + 1
             if attempts[mbx] >= _SKIP_AFTER:
                 from backend.tools import mailcrm
                 mailcrm.mark_assessment_skipped(mbx)
-                attempts.pop(mbx, None)
+                attempts.pop(mbx, None); attempts.pop("t:" + mbx, None)
                 skipped += 1
                 _log(f"SKIP {mbx} ({_SKIP_AFTER} low-yield attempts — stuck/«evaluating»)")
             else:
@@ -408,14 +424,16 @@ def run(dry: bool, max_jobs: int) -> None:
             # made real progress (banked items) but didn't finish — a long battery that outran the
             # session cap RESUMES server-side next run; clear any accrued low-yield attempts.
             partial += 1
-            attempts.pop(mbx, None)
+            attempts.pop(mbx, None); attempts.pop("t:" + mbx, None)
             _log(f"partial {mbx} ({items} items) — retry/resume next run")
         _save_attempts(attempts)
-    if not _fresh():
-        _log("OBS: " + _stop_obs())   # nothing left to drive → close OBS so the Mac can idle/sleep
-        _tunnel_down()
-        _log("queue drained → OBS + tunnel DOWN")
-    _log(f"done: passed={passed} skipped={skipped} partial={partial}")
+    # Close OBS + tunnel at the END of every run — OBS is up ONLY during the active drive window, down
+    # between */15 ticks. (Otherwise churned/«evaluating» invites that stay `transient` on a flappy Mac
+    # egress keep _fresh() non-empty forever → OBS/tunnel would sit up 24/7.) Both are guarded — a no-op
+    # if a drive is somehow still running — and reopen next tick when there is fresh work.
+    _log("OBS: " + _stop_obs())
+    _tunnel_down()
+    _log(f"done: passed={passed} skipped={skipped} partial={partial} → OBS + tunnel DOWN")
 
 
 def main() -> None:

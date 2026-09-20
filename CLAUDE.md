@@ -1077,13 +1077,26 @@ touch the classifier and does NOT write `iv_interviews` (pool stays clean).
   `backend/data/hiring_events_zoom.json`. `grouped_events()` groups invites by Zoom room; `render_page()` = the «События найма»
   surface (reuses `mailcrm_ui._page`/`_page_head`; neutral RU, «Zoom» is the recruiter's tool = allowed, no stack names).
   `extract_join` MUST never return the unsubscribe link (footer «please go to:») as the join link — that's a tested invariant.
-- Route `routes_hiring_events.py` (`GET /hiring-events` page + `POST /hiring-events/refresh`), guarded-included in
-  `dashboard_app` like the other interview routers; admin-gated (not on the dash_auth allowlist). Nav entry key `hiring`.
+- Route `routes_hiring_events.py` (`GET /hiring-events` page + `POST /hiring-events/refresh` + `GET /hiring-events/resume?mbx=`),
+  guarded-included in `dashboard_app` like the other interview routers; admin-gated (not on the dash_auth allowlist). Nav entry key `hiring`.
+- **Per-candidate résumé + detail (2026-09-20).** Each persona ROW on the card carries a **«Скачать резюме»** button and an
+  **expand chevron** that toggles an inline panel «Штат: … · ФИО: … · Возраст: ~N г.». Data comes from the persona's newest
+  `uploads/prefill/<demo_id>/<jobid>/` ({`resume.pdf`, `persona.json`}). Mailbox→demo_id via `candidate_apps.id_for_email`,
+  else a deterministic localpart guess (`first.last123@…` → `demo_first_last123`) — NO full-tree scan. Helpers in
+  `hiring_events.py` (all pure/injectable-root so they unit-test off disk): `prefill_dir_for`/`load_persona`/`resume_pdf_path`/
+  `resume_filename` + PURE `candidate_detail(persona)` ({full_name,state,age}) + PURE `estimate_age(resume)` (earliest
+  education-grad / experience-start year as an ~age-22 anchor: `age≈now−anchor+22`, 18–75 guard band, None → age omitted).
+  `GET /hiring-events/resume?mbx=<email>` streams the persona's `resume.pdf` (attachment, filename = candidate name), falling
+  back to a fresh `drafts_ui.render_resume_pdf` from `persona.json`; **404 → the page HIDES the button** (has_resume gate).
+  Expand toggle = ONE delegated inline `click` listener, jfSwap-idempotent (`window.jfPage.signal`), keyboard-accessible
+  (`<button>` + `aria-expanded`/`aria-controls`); must stay green under `test_inline_js_syntax.py`. NOTE: `uploads/` is
+  gitignored PII → ABSENT from worktrees, so résumé/detail resolve only where the tree exists (the live deploy) — verify there.
 - CLI: `PYTHONPATH=. sg mail -c 'python3 -m backend.tools.hiring_events --refresh --list'` (pre-warm the Zoom cache + print).
-- **Restart to go live:** `pm2 restart jobfinder-alan-dash` (new route + nav; NO indexer/copilot restart — read-only, no
-  classifier change). Optional cron to keep the cache warm as invites land, e.g. `*/30 … python3 -m backend.tools.hiring_events
-  --refresh` (page also resolves misses lazily, so a cron is optional). Live 2026-09-19: 31 invites → 2 Zoom rooms, all resolved.
-  Tests: `test_hiring_events.py` (pure matcher/extractor/zoom-id).
+- **Restart to go live:** `pm2 restart jobfinder-alan-dash` (new route + nav + résumé/detail; NO indexer/copilot restart —
+  read-only, no classifier change). Optional cron to keep the Zoom cache warm as invites land, e.g. `*/30 … python3 -m
+  backend.tools.hiring_events --refresh` (page also resolves misses lazily, so a cron is optional). Live 2026-09-19: 31 invites
+  → 2 Zoom rooms, all resolved; 2026-09-20: all 31 personas resolve résumé + Штат/ФИО/~Возраст (e.g. samuel.nash3785 → Ohio /
+  Samuel Nash / ~30 г.). Tests: `test_hiring_events.py` (matcher/extractor/zoom-id + résumé-resolution/age/detail pure helpers).
 
 ## Live findings (reality checks — don't re-conclude the opposite)
 - **Salmon (Ashby `salmon-group`) is ACCEPTING, degraded by VELOCITY — NOT a strict-tier wall.** `mail_index` has 49 real

@@ -84,6 +84,11 @@ uvicorn dashboard_app:app` is BROKEN).
 - `backend/.env` — `CRM_PG_DSN`, `DATABASE_URL` (legacy), `TELEGRAM_BOT_TOKEN/CHAT_ID`, `IV_BOT_TOKEN`,
   `INTERVIEW_SESSION_SECRET`, `LLM_URL/KEY/MODEL`, `ANTHROPIC_API_KEY` (empty), `PROXY_URL`, `DO_API_KEY`, `BRIGHTDATA_*`,
   `NOPECHA_KEY`, legacy Mailgun keys. `config.py` uses `extra="ignore"`.
+- **US-egress resolver env** (`us_egress.py`, all optional): `WEBSHARE_API_KEY` (arms the FREE Webshare US tier — owner signs
+  up at webshare.io free plan, ≤10 proxies, and pastes the API token); `US_PROXY` (a global explicit override — a proxy URL, or
+  `direct`/`none`/`off`/`""` to force DIRECT); `<LANE>_US=1` (a per-lane opt-in to the US resolver); `US_EGRESS_CACHE_TTL`
+  (validated-pick cache TTL, default 1800s). No key needed for the proxyscrape free-list fallback or the Bright Data fallback
+  (BD reuses `BRIGHTDATA_*`).
 - `backend/.assist_token` — the `X-Assist-Token`; **must match the hardcoded `ASSIST_TOKEN` in `extension/background.js`**.
 - Real identity: `extension/{profile.js,background.js}`, `data/{profiles.json,facts/*,etalons/*}`, `mailbox_passwords.json`,
   `uploads/`. Only `.example`/`.template`/`sample.json` committed.
@@ -367,6 +372,17 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
   (`brd.superproxy.io:33335`) + a session id in the username. Active `alibaba_dc` ($0.60/GB); `alibaba_res` ($4/GB,
   residential) — switch via `BRIGHTDATA_ZONE`. Daily cron `45 4` refreshes (aborts without wiping if the balance/zone is
   dead). Small balance — top up in the BD dashboard.
+- **US-IP egress resolver** (`tools/us_egress.py`, `us_proxy() -> dict|None`): a GUARDED chain for lanes that need a US-geo
+  egress (the US BPO reCAPTCHA/AWS-WAF walls — the KZ phones are geo-wrong and are NEVER returned here). Priority: (1) `US_PROXY`
+  env explicit override (a URL, or `direct`/`""` = force DIRECT); (2) FREE US source PRIMARY — Webshare free tier
+  (`WEBSHARE_API_KEY`) + a proxyscrape public list, **each VALIDATED live** (alive + geolocates to US via a probe through the
+  proxy) and the winner cached to gitignored `data/us_egress_cache.json` (TTL `US_EGRESS_CACHE_TTL`, default 1800s) so it isn't
+  re-probed every call; (3) Bright Data FALLBACK — a fresh session FORCE-pinned to US (`-country-us` in the username, regardless
+  of `BRIGHTDATA_COUNTRY`; uses whatever `BRIGHTDATA_ZONE` — `alibaba_dc` no-KYC / `alibaba_res`), valid by construction so not
+  re-probed; (4) DIRECT (None). Every network call degrades to the next tier, never raises into a lane. A lane opts in with
+  `us_egress.lane_us_egress("<LANE>_US", "<LANE>_PROXY")` — `<LANE>_US=1` turns on the resolver, `<LANE>_PROXY=<url>` is a hard
+  per-lane override; nothing set = DIRECT (no existing lane's default changes). Owner: to arm the free tier, sign up for a free
+  Webshare account + set `WEBSHARE_API_KEY`. Tests: `test_us_egress.py`.
 - **Mobile-proxy POOL** (`tools/mobile_proxy.py`, `data/mobile_proxy.json` gitignored): the owner's phones over a
   Tailscale tailnet as residential/mobile egress. `live_servers()` (TCP-alive) is appended by `proxy_pool.residential_
   slots()`, so `_do_fill` walks `egress_candidates()` (live phones · datacenter pool · direct) — a dead phone never

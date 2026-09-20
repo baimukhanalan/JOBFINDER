@@ -41,15 +41,16 @@ PAGE = 40
 # so a progressed candidate is counted only once under its latest stage.
 # The action_needed bucket is now SPLIT (mail_db._FUNNEL_STAGE_SQL): «Assessments» = candidates
 # whose pending action is a test/assessment (SHL/AMCAT/Harver/…), «Действия» = a genuine non-test
-# recruiter action (NDA / identity / complete-application). «Тест сдан» + «Пропущенные» stay as
-# the assessment OUTCOME buckets. The two split chips are disjoint and sum to the old «Действие».
+# recruiter action (NDA / identity / complete-application). «Тест сдан» stays as the passed-test
+# OUTCOME bucket. «Пропущенные» (skipped assessments) is MERGED into «Действия» (owner 2026-09-20):
+# a skipped test is a reminder to act on, and there were only ~3, so it no longer gets its own chip
+# (mail_db._FUNNEL_STAGE_SQL maps assessment_skipped→action_needed at the display layer).
 _FUNNEL = [
     ("", "Все"),
     ("sent", "Отправлено"),
     ("ack", "Принято"),
     ("assessment", "Assessments"),
     ("assessment_done", "Тест сдан"),
-    ("assessment_skipped", "Пропущенные"),
     ("action_needed", "Действия"),
     ("interview", "Собес"),
     ("offer", "Оффер"),

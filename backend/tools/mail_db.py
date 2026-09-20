@@ -394,7 +394,10 @@ _FUNNEL_STAGE_SQL = f"""
           WHEN bool_or(kind='assessment_done' AND NOT outbound) THEN 'assessment_done'
           WHEN bool_or(kind='rejection'     AND NOT outbound) THEN 'rejection'
           WHEN bool_or(kind='ack'           AND NOT outbound) THEN 'ack'
-          WHEN bool_or(kind='assessment_skipped' AND NOT outbound) THEN 'assessment_skipped'
+          -- «Пропущенные» is MERGED into «Действия» (owner 2026-09-20): a skipped-assessment
+          -- candidate with no higher stage is a reminder to act on, so bucket it as action_needed
+          -- (DISPLAY only — the per-message kind + _FURTHEST_STAGE_SQL that pool.py uses are unchanged).
+          WHEN bool_or(kind='assessment_skipped' AND NOT outbound) THEN 'action_needed'
           WHEN bool_or(kind='code'          AND NOT outbound) THEN 'code'
           WHEN bool_or(NOT outbound)                          THEN 'other'
           ELSE NULL

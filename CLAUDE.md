@@ -166,6 +166,14 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   ProxyCommand at a dynamically-chosen live slot. (3) A token already driven into an `/…/evaluating` state (griffin, hammered
   for hours) re-shows the SAME item and won't advance — the AMCAT battery-ADVANCE, not the transport, is the next barrier.
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
+- `5-55/10` `health_heal` (= `health --heal`; `backend/tools/health_heal.py`) — **SELF-HEALING watcher** (owner-requested
+  permanent agent, 2026-09-20). Runs `health.gather()`, auto-remediates ONLY the bounded/idempotent failure modes and
+  Telegram-alerts on the rest: pm2 `jobfinder-*` down → `pm2 restart`; local LLM unreachable → `pm2 restart llm-server` (but a
+  5xx = expired owner token → ALERT, never loop-restart); dead exit-node slot / Mac CDP tunnel down → `tailscale_egress --sync`
+  (de-duped to one run); leaked Chromium → `chrome_reaper --min-age 3600`; a pm2 cwd-mismatch or an unknown `down` → ALERT only.
+  Hard safety: per-target cooldown (`HEAL_COOLDOWN_SECS`=300) + circuit breaker (`HEAL_BREAKER_MAX`=3/`HEAL_BREAKER_WINDOW_SECS`
+  =3600 → stop + escalate), fcntl lock `logs/health_heal.lock` (NO shell `flock` — self-deadlocks the child), `--dry-run` runs/
+  sends/writes nothing. No `sg mail`/`DISPLAY` (each remediation subprocess handles its own). Tests: `test_health_heal.py`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
   dead daemons, boot-safe). Reads the REUSABLE key from `backend/.ts_authkey` (chmod 600, gitignored; owner-approved on disk
@@ -258,7 +266,9 @@ CODE, passable); LEVER ⛔ (hCaptcha) + WORKABLE ⛔ (Cloudflare Turnstile — a
 FILL is fixed, the human only solves the captcha). The dividing line is the final anti-bot step: email code vs live captcha.
 
 **Mass-Hiring auto-apply feasibility.** Ceiling = "auto-fill + submit → a human does the assessment"; per-lane status in the
-Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-step reCAPTCHA needs a solver key + residential IP).
+Auto-apply lanes section below. BLOCKED: cigna/humana/cvs (register-step reCAPTCHA — pending live re-verify; see the Workday lane).
+**Concentrix UNBLOCKED 2026-09-20** — its create-account has NO reCAPTCHA; the sole blocker was a required Terms checkbox, now
+ticked (`create-account: created=True` live on the plain server IP, no solver/US-IP needed).
 
 ## Offer-priority layer (`tools/offer_priority.py`) — high-pay-first · multi-candidate · stop-on-response
 Owner directives 2026-09-20 to make the apply engine offer/interview-efficient. PURE + injectable core (fully unit-tested,
@@ -469,7 +479,11 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
   preserved). The two are disjoint + sum to the old total; `_FURTHEST_STAGE_SQL` is UNCHANGED (pool.py depends on it).
   `_FUNNEL_STAGE_SQL` carries the `%%` from `_TEST_SUBJECT_SQL`, so a param-less query using it must `execute(sql, ())`.
   `_KIND['assessment']`=«Assessments» (owner-named, English is intentional). The flat `/mail` inbox keeps ONE «Действие» chip
-  whose count sums both (`render_inbox._n`). «Тест сдан»/«Пропущенные» stay the assessment OUTCOME buckets. **Dash-only change
+  whose count sums both (`render_inbox._n`). «Тест сдан» stays the passed-test OUTCOME bucket; **«Пропущенные» (assessment_skipped)
+  is MERGED into «Действия» (owner 2026-09-20)** — `_FUNNEL_STAGE_SQL` maps `assessment_skipped→action_needed` at the DISPLAY
+  layer (the per-message `kind` and `_FURTHEST_STAGE_SQL` are unchanged, so the skip mechanism + pool.py are untouched), the
+  «Пропущенные» chip is dropped from both funnels, and those candidates (~3) show under «Действия» as reminders to act on. Live
+  2026-09-20: action_needed 414→417, no `assessment_skipped` key. **Dash-only change
   (`pm2 restart jobfinder-alan-dash`); NO reindex, NO indexer/copilot restart** (query-time split, per-message `kind`
   unchanged). Tests: `test_candidates_inbox.py`.
 - **«Собес» = a PRIORITY surface** (`interview_priority.py`, route branch `eff=='interview'` → `candidates_inbox.render_interview_page`):
@@ -857,8 +871,17 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   — no register reCAPTCHA). `WORKDAY_ADVANCE=1`, `--workers 1`; partial per-attempt success. Gotcha: after the activation link
   the Sign-In button is covered by an invisible `<div data-automation-id="click_filter" role="button">` intercepting pointer
   events — `_sign_in` submits several ways (Enter, JS `.click()` on the div then the button) stopping when the URL leaves
-  `/login`; the generic submit is SKIPPED on `/login`/captcha/expired. cigna/humana/cvs/concentrix stay `_BLOCKED` (register
-  reCAPTCHA needs a solver key + US residential IP). Tests: `test_workday.py`.
+  `/login`; the generic submit is SKIPPED on `/login`/captcha/expired. **CONCENTRIX UNBLOCKED 2026-09-20 — its create-account
+  form has NO reCAPTCHA at all** (`register captcha presence: {grecaptcha:False, enterprise:False, frames:0}`, proven live on
+  the plain server IP 173.249.18.153, DIRECT, no residential); the ONLY blocker was the required Terms checkbox
+  ("Yes, I have read and consent to the terms and conditions" → "Please check the box to continue"). Its native `<input>` is
+  hidden behind a styled Workday widget and its label text is a sibling of the input's wrapper, so the old closest-div matcher
+  missed it and `.check()`/`.checked=true` never flipped the React state. `_tick_required_checkboxes` now gathers context from
+  `label[for]`/ancestors and `_force_check` escalates through label/wrapper clicks with per-step verification — **`create-account:
+  created=True` proven live** (cnx external_global, WORKDAY_ADVANCE=1). So Concentrix needs NEITHER a solver key NOR a US IP.
+  cigna/humana/cvs are still `_BLOCKED` pending a live re-verify (they share the Workday create-account pattern — the same
+  checkbox fix + no-captcha finding likely applies; drive one with `WORKDAY_DEBUG_SHOTS=1` to confirm the register captcha
+  presence before assuming a solver/IP is needed). Tests: `test_workday.py`.
   **Residential-egress + NopeCHA wiring for the 4 register-walled tenants (2026-09-20, `drive_apply`):** `_pick_proxy()` routes
   the headful create-account browser through a live phone/residential slot — `WORKDAY_PROXY=socks5://host:port` (or
   `direct`/`0` to force the datacenter IP), else the first `proxy_pool.residential_slots()` slot (phone slots …:10800/10801

@@ -1059,9 +1059,10 @@ def render_inbox(rows: list[dict], counts: dict, q: str = "", mailbox: str = "",
     ncand = counts.get("candidates", counts.get("mailboxes", 0))  # ALL candidates, not just those with mail
     inbox_badge = f' <b>{unread}</b>' if unread else ''
     sc = stage_counts or {}
+    # «Пропущенные» (assessment_skipped) is merged into «Действие» at the display layer
+    # (mail_db._FUNNEL_STAGE_SQL, owner 2026-09-20) — no separate chip.
     _stages = [("", "Все"), ("sent", "📤 Отправленные"), ("ack", "✅ Принято"),
                ("action_needed", "⚠️ Действие"), ("assessment_done", "🤖 Тест пройден"),
-               ("assessment_skipped", "⏭️ Пропущенные"),
                ("interview", "📞 Собес"), ("offer", "🎉 Оффер"), ("rejection", "✕ Отказ"),
                ("code", "🔑 Коды"), ("other", "📁 Прочее")]
     def _href(key: str) -> str:

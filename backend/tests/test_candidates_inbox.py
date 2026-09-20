@@ -368,8 +368,10 @@ def test_funnel_has_split_assessment_and_action_chips():
     labels = [l for _k, l in ci._FUNNEL]
     assert "assessment" in keys and "action_needed" in keys
     assert "Assessments" in labels and "Действия" in labels
-    # the assessment OUTCOME buckets are kept
-    assert "assessment_done" in keys and "assessment_skipped" in keys
+    # «Тест сдан» is kept; «Пропущенные» (assessment_skipped) is MERGED into «Действия»
+    # (owner 2026-09-20) so it no longer has its own chip.
+    assert "assessment_done" in keys
+    assert "assessment_skipped" not in keys and "Пропущенные" not in labels
 
 
 def test_funnel_renders_split_chip_counts():
@@ -388,15 +390,17 @@ def test_assessment_stage_dot_renders():
 @pytest.mark.skipif(not HAS_DB, reason="no CRM DB")
 def test_db_action_needed_splits_into_assessment_and_action():
     # «Assessments» + «Действия» must be DISJOINT and sum to the pre-split action_needed total
+    # PLUS the merged-in «Пропущенные» (assessment_skipped→action_needed at the display layer,
+    # owner 2026-09-20). The pool-critical _FURTHEST_STAGE_SQL still separates the two.
     sc = mail_db.stage_counts()
-    # the pre-split total = every candidate whose furthest inbound stage is action_needed
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(f"""
-            SELECT COUNT(*) FROM (
+            SELECT s, COUNT(*) FROM (
                 SELECT mailbox, {mail_db._FURTHEST_STAGE_SQL} AS s
                   FROM mail_index GROUP BY mailbox
-            ) f WHERE s = 'action_needed'""")
-        pre = cur.fetchone()[0]
+            ) f WHERE s IN ('action_needed', 'assessment_skipped') GROUP BY s""")
+        base = dict(cur.fetchall())
+    pre = base.get("action_needed", 0) + base.get("assessment_skipped", 0)
     assert sc.get("assessment", 0) + sc.get("action_needed", 0) == pre
 
 

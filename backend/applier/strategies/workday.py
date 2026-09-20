@@ -1798,11 +1798,15 @@ class WorkdayStrategy(ApplyStrategy):
                      r"perform the essential", t):
             return ["Yes"]
         # Sales-comfort screener (Concentrix "Licensed Health Insurance Rep" is a sales-target role):
-        # a synthetic persona DESIGNED to fit the job is comfortable in a sales environment → Yes.
-        # Scoped so a behavioral "describe a sale" open-text isn't caught.
+        # a synthetic persona DESIGNED to fit the job is comfortable in a sales environment. Concentrix
+        # renders this as a COMFORT SCALE select (not a clean Yes/No), so lead the strongest positive
+        # tiers ("Very/Extremely Comfortable") AND keep "Yes" for a binary rendering. Scoped so a
+        # behavioral "describe a sale" open-text isn't caught.
         if re.search(r"comfortable.{0,40}sales|sales (environment|goals?|targets?|quotas?)|"
                      r"meeting sales|work.{0,20}sales environment|commission.based", t):
-            return ["Yes"]
+            return ["Yes", "Very Comfortable", "Extremely Comfortable", "Very comfortable",
+                    "Extremely comfortable", "Comfortable", "Somewhat comfortable",
+                    "Yes, I am comfortable", "I am comfortable"]
         # Contact-preference screeners (Concentrix create-account application, live 2026-09-20).
         # We control the persona's takhet.com inbox and the phone is reserved-fiction (555-01xx),
         # so EMAIL is the truthful reachable channel; time-of-day is unconstrained → "Anytime".
@@ -1856,6 +1860,16 @@ class WorkdayStrategy(ApplyStrategy):
             return ["Yes"]
         if re.search(r"ethernet|hardwired|hard-wired|wired", t):
             return ["Yes, my home internet is hardwired", "Yes"]
+        # Home-office EQUIPMENT readiness (Concentrix WFH gate): separate router + modem w/ hardwire
+        # ability, an available USB port, a webcam, willingness to purchase/obtain required equipment →
+        # Yes for a synthetic persona DESIGNED to fit a remote CSR role (has/obtains the kit). Answered
+        # HERE (Yes) so the blanket residual-No fallback doesn't wrongly answer these equipment Yes/No
+        # selects "No" (a knockout). Scoped to equipment nouns so it can't catch a behavioral prompt.
+        if re.search(r"\busb\b|web ?cam|separate router|router (and|&) (a )?modem|"
+                     r"ability to hardwire|hardwire the router|dual monitor|headset|"
+                     r"(purchase|obtain|provide).{0,25}equipment|equipment.{0,25}(purchase|required)|"
+                     r"willing to (purchase|obtain|buy)", t):
+            return ["Yes"]
         # "Who is your current Internet Service Provider?" → a plausible US ISP. Checked BEFORE the
         # generic "internet" Yes/No below so an ISP-NAME select/typeahead isn't answered "Yes".
         # (Free-text renderings are filled by _screener_text_answer.)
@@ -1932,6 +1946,10 @@ class WorkdayStrategy(ApplyStrategy):
         if re.search(r"type of (internet|connection|service)|what (kind|type) of internet|"
                      r"internet.{0,15}type|connection type", t):
             return "Cable"
+        # Router brand (a conditional required free-text on the Concentrix WFH gate) — a common US brand.
+        if re.search(r"brand.{0,15}router|router.{0,15}(brand|make|model)|(make|model).{0,15}router|"
+                     r"name of your router|which router", t):
+            return "Netgear"
         # "Are you fluent in any other languages? If so, what languages?" (free text) — English-only
         # synthetic persona; a bilingual one names Spanish.
         if re.search(r"other language|fluent in any other|what (other )?language|do you speak|"

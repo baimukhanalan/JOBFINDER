@@ -215,13 +215,40 @@ def test_screener_answer_concentrix_job328_screeners():
     assert A("what schedule/hours are you looking for?", {})[0] == "Full-time"
     assert A("do you have any restrictions in your hours of availability?", {}) == ["No"]
     assert A("are you fluent in any other languages? if so, what languages?", {})[0] == "No"
-    assert A("are you comfortable working in a sales environment and meeting sales goals?", {}) == ["Yes"]
+    assert A("are you comfortable working in a sales environment and meeting sales goals?", {})[0] == "Yes"
     isp = A("who is your current internet service provider?", {})
     assert isp and isp[0] == "Comcast"
     itype = A("what type of internet service do you have?", {})
     assert itype and itype[0] == "Cable"
     # a bilingual persona (Spanish CSR role) answers the other-languages screener truthfully Yes
     assert A("are you fluent in any other languages?", {"bilingual": True})[0] == "Yes"
+
+
+def test_screener_answer_sales_comfort_is_scale_tolerant():
+    # Concentrix renders sales-comfort as a COMFORT SCALE select (not clean Yes/No) — the candidate
+    # list must lead a strong positive AND keep "Yes" so either rendering commits.
+    A = WorkdayMassHiringStrategy._screener_answer
+    cands = A("are you comfortable working in a sales environment and meeting sales goals?", {})
+    assert cands[0] == "Yes"
+    assert any("comfortable" in c.lower() for c in cands)
+
+
+def test_screener_answer_equipment_readiness_is_yes():
+    # Home-office equipment Yes/No selects → Yes (a WFH persona has/obtains the kit); must NOT fall to
+    # the blanket residual-No fallback (a knockout).
+    A = WorkdayMassHiringStrategy._screener_answer
+    assert A("do you have a separate router and a modem with the ability to hardwire the router to your pc?", {}) == ["Yes"]
+    assert A("does your computer have an available usb port?", {}) == ["Yes"]
+    assert A("some of our positions require the use of a webcam. will you use one?", {}) == ["Yes"]
+    assert A("some of our positions require you to purchase equipment. are you willing to purchase equipment?", {}) == ["Yes"]
+
+
+def test_screener_text_answer_router_brand():
+    T = WorkdayMassHiringStrategy._screener_text_answer
+    assert T("what is the brand name of your router?") == "Netgear"
+    assert T("router make and model?") == "Netgear"
+    # not every free-text field is a router — an unrelated one stays None
+    assert T("what is your favorite hobby?") is None
 
 
 def test_internet_provider_and_type_beat_the_generic_internet_yesno():

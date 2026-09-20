@@ -45,6 +45,40 @@ def test_unfinished_page_scripts_parse(tmp_path, monkeypatch):
     _check_scripts(html, tmp_path, "unfinished")
 
 
+def test_today_page_scripts_parse(tmp_path, monkeypatch):
+    # the «Сегодня» dashboard adds no page-specific inline JS, but render it with a stubbed
+    # blob (no DB/log I/O) so any future inline script it grows is checked, and confirm the
+    # shell scripts still parse under it.
+    from backend.tools import today_dash, today_ui
+    blob = {
+        "generated_at": 1789916244, "took_ms": 5, "day_label": "20.09.2026",
+        "submissions": {"total_confirmed": 141, "total_attempts": 286,
+                        "lanes": [{"key": "tp", "label": "Teleperformance",
+                                   "attempts": 115, "confirmed": 101}]},
+        "assessments": {
+            "invites": {"total_msgs": 32, "total_personas": 26,
+                        "by_source": [{"label": "Maximus", "msgs": 24, "personas": 18}],
+                        "by_role": [{"label": "Поддержка клиентов", "personas": 16}]},
+            "solved": {"total": 4, "by_source": [{"label": "TTEC", "n": 4}],
+                       "by_role": [{"label": "Прочее", "n": 4}],
+                       "cards": [{"email": "a.b1@takhet.com", "source_key": "ttec",
+                                  "source": "TTEC", "role": "Прочее",
+                                  "salary_label": "~$80k–$130k", "salary_estimated": True}]},
+        },
+        "interviews": {"total": 0, "cards": []},
+        "offers": {"arrived": {"total": 0, "cards": []},
+                   "pending": {"total": 4, "by_source": [{"label": "TTEC", "n": 4}],
+                               "cards": [{"email": "a.b1@takhet.com", "company": "TTEC",
+                                          "source": "TTEC", "role": "Прочее",
+                                          "salary_label": "~$80k–$130k", "salary_estimated": True}]}},
+        "candidates": [],
+    }
+    monkeypatch.setattr(today_dash, "get_today", lambda force=False: blob)
+    html = today_ui.render_page()
+    assert "Сегодня" in html and "Teleperformance" in html
+    _check_scripts(html, tmp_path, "today")
+
+
 def test_catalog_page_scripts_parse(tmp_path, monkeypatch):
     from backend.tools import catalog_ui as ui
     # stub the DB reads so the render is pure (a card + the sheets + the whole _CAT_JS)

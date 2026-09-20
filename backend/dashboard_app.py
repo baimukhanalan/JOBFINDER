@@ -997,6 +997,22 @@ def stats_page(refresh: int = 0):
                             status_code=502)
 
 
+@app.get("/stats/today", response_class=HTMLResponse)
+def stats_today_page(refresh: int = 0):
+    """«Сегодня» — a near-real-time snapshot of TODAY's work (since 00:00 server time):
+    submissions per lane, assessment invites + passes, interviews, offers and who may get an
+    offer. Read-only over the apply/harvest logs + mail_index (TTL-cached in
+    backend.tools.today_dash; ?refresh=1 forces)."""
+    from backend.tools import today_ui
+    try:
+        return HTMLResponse(today_ui.render_page(force=bool(refresh)))
+    except Exception as exc:
+        logging.getLogger("dashboard").exception("today page failed")
+        return HTMLResponse("<!doctype html><meta name='viewport' content='width=device-width, initial-scale=1'>"
+                            f"<p style='font-family:sans-serif;padding:16px'>«Сегодня» недоступно: {escape(str(exc))}</p>",
+                            status_code=502)
+
+
 @app.get("/health", response_class=HTMLResponse)
 def health_page():
     """«Health» tab — read-only health of every pm2 service, cron lane, data store, the :98

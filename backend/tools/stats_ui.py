@@ -317,7 +317,8 @@ def render_page(force: bool = False) -> str:
     body = f"""
 <style>{_CSS}</style>
 <div class="page-head"><h1 class="st-title">Статистика подач</h1>
-<span class="st-mute st-gen">обновлено {gen} · {_fmt(t['companies'])} компаний</span> <a href="/stats?refresh=1" class="ghost">Обновить</a></div>
+<span class="st-mute st-gen">обновлено {gen} · {_fmt(t['companies'])} компаний</span>
+<a href="/stats/today" class="st-today">Сегодня</a> <a href="/stats?refresh=1" class="ghost">Обновить</a></div>
 
 <div class="st-kpis">{kpis}</div>
 
@@ -360,6 +361,9 @@ def render_page(force: bool = False) -> str:
 _CSS = """
 .st-title{font-size:20px;font-weight:800;margin:0}
 .st-gen{font-size:12px}
+.st-today{display:inline-flex;align-items:center;height:32px;padding:0 14px;border-radius:9px;
+  background:#0c47c2;color:#fff;font-size:13px;font-weight:700;text-decoration:none}
+.st-today:hover{background:#0a3aa0;text-decoration:none}
 .st-mute{color:#80868b;font-weight:500}
 .st-card{background:#fff;border:1px solid #e8eaed;border-radius:12px;padding:16px 18px;margin-bottom:16px}
 .st-h{font-size:14px;font-weight:700;margin:0 0 12px}

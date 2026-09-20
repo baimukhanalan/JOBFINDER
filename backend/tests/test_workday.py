@@ -190,6 +190,14 @@ def test_screener_answer_language_and_education():
     assert A("highest level of education achieved?", {})[0] == "Bachelor"
 
 
+def test_screener_answer_contact_preference():
+    # Concentrix create-account application screeners (live 2026-09-20). Email is the reachable
+    # channel (we own the inbox; the phone is reserved-fiction), time-of-day is "Anytime".
+    A = WorkdayMassHiringStrategy._screener_answer
+    assert A("what is your preferred method of communication?", {})[0] == "Email"
+    assert A("what is the best time of day to be contacted?", {})[0] == "Anytime"
+
+
 def test_screener_answer_unknown_returns_none():
     A = WorkdayMassHiringStrategy._screener_answer
     assert A("describe a time you resolved a conflict", {}) is None

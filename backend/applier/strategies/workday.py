@@ -1684,6 +1684,15 @@ class WorkdayStrategy(ApplyStrategy):
         if re.search(r"highest level of education|education (you have )?achieved|level of education", t):
             return [facts.get("education_level") or "Bachelor", "Bachelor", "High School",
                     "Associate", "GED"]
+        # Contact-preference screeners (Concentrix create-account application, live 2026-09-20).
+        # We control the persona's takhet.com inbox and the phone is reserved-fiction (555-01xx),
+        # so EMAIL is the truthful reachable channel; time-of-day is unconstrained → "Anytime".
+        if re.search(r"preferred method of communication|preferred (means|way|method) of (contact|communication)|"
+                     r"how (would you like|do you prefer) to be contacted|best way to (reach|contact) you", t):
+            return ["Email", "E-mail", "E-Mail", "Phone"]
+        if re.search(r"best time of day to be contacted|preferred time (of day )?to be contacted|"
+                     r"when is the best time to (reach|contact)|best time to (reach|contact) you", t):
+            return ["Anytime", "Any time", "Any", "No preference", "Morning", "Afternoon"]
         # Customer-service / call-center / member-services experience — pick the HIGHEST believable
         # tier (the tailored résumé shows ~8 yrs), never a weak middle one that undersells +
         # contradicts it. Matched in BOTH orders: "experience ... as a CSR" AND "member services

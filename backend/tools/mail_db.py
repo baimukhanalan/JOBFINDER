@@ -362,27 +362,28 @@ _TEST_SUBJECT_SQL = (
     "OR subject ILIKE '%%video interview%%' OR subject ILIKE '%%magic link%%')"
 )
 
-# Assessment SENDERS whose post-apply mail is a TEST/assessment even when the subject is
-# generic (SHL/TalentCentral, TTEC/Harver, Maximus, Hallo, AMCAT/AspiringMinds, Conduent/
-# SkillCheck). A POSIX regex (no % wildcards), so it de-doubles cleanly whether the embedding
-# query binds params or not.
-_ASSESSMENT_SENDER_SQL = (
-    "from_email ~* "
-    "'(ttec|talentcentral|shl\\.com|hallo\\.ai|maximus|aspiringminds|amcat|conduent|harver|skillcheck)'"
-)
-# «Is an assessment» = a test-looking SUBJECT (SHL/AMCAT/SkillCheck/Harver/video…) OR a known
-# assessment SENDER. This is the signal that splits the `action_needed` funnel bucket into
-# «Assessments» (a pending test the human must complete) vs «Действия» (a genuine non-test
-# recruiter action: NDA / identity / complete-application). Contains the %% from
-# _TEST_SUBJECT_SQL, so any query using it must bind params or pass an empty () to execute().
-_ASSESSMENT_SIGNAL_SQL = f"(({_TEST_SUBJECT_SQL}) OR ({_ASSESSMENT_SENDER_SQL}))"
+# «Is an assessment» = a genuine test-looking SUBJECT ONLY (SHL/AMCAT/SkillCheck/Harver/aptitude/
+# proctor/video-interview/magic-link — see _TEST_SUBJECT_SQL). This is the signal that splits the
+# `action_needed` funnel bucket into «Assessments» (a pending TEST the human must complete) vs
+# «Действия» (a genuine non-test recruiter action: NDA / identity / complete-application / a "we
+# need more information" reminder). A bare assessment SENDER is deliberately NOT enough: an
+# assessment-platform sender (ttec / shl / talentcentral / hallo / maximus / aspiringminds / amcat /
+# conduent / harver / skillcheck) ALSO mails application reminders, address-update asks and
+# start-notifications that are NOT tests — most notably ttec's "Reminder, we need more information
+# for your application", which must land in «Действия», not «Assessments». So the signal keys on the
+# test SUBJECT alone; a real invite (ttec "Required Assessments", SHL/Hallo/Maximus test subjects)
+# still matches via its own subject. (Auto-drain of a genuine invite is triggered by SENDER in the
+# indexer — mail_indexer._maybe_trigger_shl/_hallo/_amcat — which is unaffected by this UI split.)
+# Contains the %% from _TEST_SUBJECT_SQL, so any query using it must bind params or pass an empty ()
+# to execute().
+_ASSESSMENT_SIGNAL_SQL = f"({_TEST_SUBJECT_SQL})"
 
 # The candidate-funnel stage — IDENTICAL ranking to _FURTHEST_STAGE_SQL, except the single
 # 'action_needed' bucket is SPLIT: a candidate whose furthest inbound stage is action_needed
-# lands in 'assessment' when any of its action mail is a test/assessment (subject or sender),
-# else in 'action_needed'. So «Assessments» and «Действия» count and filter to disjoint sets
-# that sum to the old «Действие» total. (_FURTHEST_STAGE_SQL itself is left UNCHANGED —
-# pool.py's interview pool depends on it and its exact ranking.)
+# lands in 'assessment' when any of its action mail is a test/assessment (a test-looking SUBJECT —
+# see _ASSESSMENT_SIGNAL_SQL), else in 'action_needed'. So «Assessments» and «Действия» count and
+# filter to disjoint sets that sum to the old «Действие» total. (_FURTHEST_STAGE_SQL itself is left
+# UNCHANGED — pool.py's interview pool depends on it and its exact ranking.)
 _FUNNEL_STAGE_SQL = f"""
         CASE
           WHEN bool_or(kind='offer'         AND NOT outbound) THEN 'offer'

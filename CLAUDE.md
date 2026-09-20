@@ -374,12 +374,21 @@ Auto-apply lanes section below. BLOCKED: cigna/humana/cvs/concentrix (register-s
   `candidate_apps.id_for_email`) · «✉ N».
 - **Funnel «Действие» SPLIT into «Assessments» + «Действия»** (`mail_db._FUNNEL_STAGE_SQL`, dash-only, no reindex): the
   `action_needed` furthest-stage bucket is split at QUERY time (per-message `kind` unchanged) — a candidate whose action mail
-  matches `_ASSESSMENT_SIGNAL_SQL` (`_TEST_SUBJECT_SQL` OR a known assessment SENDER: ttec/shl/talentcentral/hallo/maximus/
-  aspiringminds/amcat/conduent/harver/skillcheck) lands in `assessment`, else `action_needed`. The two are disjoint + sum to
-  the old total; `_FURTHEST_STAGE_SQL` is UNCHANGED (pool.py depends on it). `_FUNNEL_STAGE_SQL` carries the `%%` from
-  `_TEST_SUBJECT_SQL`, so a param-less query using it must `execute(sql, ())`. `_KIND['assessment']`=«Assessments» (owner-named,
-  English is intentional). The flat `/mail` inbox keeps ONE «Действие» chip whose count sums both (`render_inbox._n`).
-  «Тест сдан»/«Пропущенные» stay the assessment OUTCOME buckets. Tests: `test_candidates_inbox.py`.
+  matches `_ASSESSMENT_SIGNAL_SQL` lands in `assessment`, else `action_needed`. **`_ASSESSMENT_SIGNAL_SQL` is the test-looking
+  SUBJECT ONLY (`_TEST_SUBJECT_SQL`) — 2026-09-20: the bare-SENDER OR-clause was DROPPED.** «Assessments» = GENUINE test invites
+  only (subject signals a test: assessment/proctor/aptitude/amcat/harver/skillcheck/video-interview/magic-link…). An
+  assessment-PLATFORM sender (ttec/shl/talentcentral/hallo/maximus/aspiringminds/amcat/conduent/harver/skillcheck) ALSO mails
+  application reminders / address-update asks / start-notifications that are NOT tests — most notably ttec «Reminder, we need
+  more information for your application» (89 rows) — which used to inflate «Assessments» via the sender clause and now correctly
+  land in «Действия». A real invite (ttec «Required Assessments», SHL/Hallo/Maximus test subjects) still matches via its subject.
+  Auto-drain of a genuine invite is triggered by SENDER in the indexer (`mail_indexer._maybe_trigger_shl/_hallo/_amcat`),
+  UNAFFECTED by this UI-only split. Live 2026-09-20: assessment 94→49, action_needed 369→414 (45 mailboxes moved OUT, sum 463
+  preserved). The two are disjoint + sum to the old total; `_FURTHEST_STAGE_SQL` is UNCHANGED (pool.py depends on it).
+  `_FUNNEL_STAGE_SQL` carries the `%%` from `_TEST_SUBJECT_SQL`, so a param-less query using it must `execute(sql, ())`.
+  `_KIND['assessment']`=«Assessments» (owner-named, English is intentional). The flat `/mail` inbox keeps ONE «Действие» chip
+  whose count sums both (`render_inbox._n`). «Тест сдан»/«Пропущенные» stay the assessment OUTCOME buckets. **Dash-only change
+  (`pm2 restart jobfinder-alan-dash`); NO reindex, NO indexer/copilot restart** (query-time split, per-message `kind`
+  unchanged). Tests: `test_candidates_inbox.py`.
 - **«Собес» = a PRIORITY surface** (`interview_priority.py`, route branch `eff=='interview'` → `candidates_inbox.render_interview_page`):
   the whole interview set is loaded + enriched with a booking DEADLINE, a potential SALARY («$Xk–$Yk/год» chip: exact
   `job_catalog` comp, else the role-category MEDIAN via `est_comp.estimate`), and IT/non-IT `direction`; split into «IT-специальности»

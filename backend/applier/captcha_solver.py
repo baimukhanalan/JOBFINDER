@@ -8,8 +8,18 @@ It does NOT and CANNOT solve a human video/voice assessment (HireVue/Versant/Ama
 Config (env, all optional — absent key => disabled, every call is a graceful no-op):
   CAPTCHA_SOLVER_PROVIDER  capsolver (default) | twocaptcha
   CAPTCHA_SOLVER_KEY       the provider API key
+  AWSWAF_BROWSER           1/true => the FREE, no-key AWS WAF path (solve_aws_waf lets the page's
+                           OWN AWS WAF SDK mint the token — no external service). Default off.
 Supported: reCAPTCHA v2, reCAPTCHA v3, hCaptcha, Cloudflare Turnstile. NOT DataDome/PerimeterX
 (those need a full residential/browser-fingerprint path, out of scope here).
+
+Cost note (CapSolver, 2026-09): AWS WAF $2.0/1k · Turnstile $1.2/1k · reCAPTCHA v2 $0.8/1k ·
+v3 $1.0/1k. There is NO free/open solver for Cloudflare *Managed* Turnstile or an *invisible
+enterprise* hCaptcha — those gate on Cloudflare/hCaptcha server-side browser-integrity + IP
+reputation, so a paid API (its own residential browser farm) is the cheapest working path.
+The AWS WAF *challenge* (silent JS proof-of-work) is the exception: a real browser mints the
+`aws-waf-token` itself for FREE (AWSWAF_BROWSER) — only a hard visual WAF puzzle needs the paid
+AntiAwsWafTask.
 
 The module is import-safe and side-effect-free until `solve_on_page`/`solve_*` is called with
 a key present. All network calls are best-effort and never raise into the caller.
@@ -40,6 +50,24 @@ def _key() -> str:
 def is_enabled() -> bool:
     """True only when a provider API key is configured — callers no-op otherwise."""
     return bool(_key())
+
+
+def _awswaf_browser_enabled() -> bool:
+    """FREE, no-key AWS WAF path: let the page's OWN AWS WAF SDK mint the `aws-waf-token`
+    (the documented `window.AwsWafIntegration.getToken()` + the cookie the SDK auto-sets). It
+    clears the common AWS WAF *challenge* (a silent JS proof-of-work) with NO external service —
+    a real browser solves AWS's own PoW. A hard visual WAF puzzle still falls through to the paid
+    AntiAwsWafTask. OFF by default; enable with AWSWAF_BROWSER=1 (or provider `awswaf_browser`)."""
+    if (os.getenv("AWSWAF_BROWSER") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return (os.getenv("CAPTCHA_SOLVER_PROVIDER") or "").strip().lower() == "awswaf_browser"
+
+
+def aws_waf_available() -> bool:
+    """True when solve_aws_waf can do SOMETHING for an AWS WAF gate — either a paid provider key
+    (visual puzzle) OR the free in-browser token path (challenge). Lanes gate account bootstrap on
+    THIS, not is_enabled(), so `AWSWAF_BROWSER=1` alone (no key) can attempt an AWS WAF challenge."""
+    return is_enabled() or _awswaf_browser_enabled()
 
 
 # ---- CapSolver task types ------------------------------------------------------
@@ -285,16 +313,100 @@ async def _capsolver_solution(task: dict) -> dict | None:
     return None
 
 
+async def _inject_aws_waf_cookie(page, page_url: str, token) -> bool:
+    """Set the `aws-waf-token` cookie on the browser context. Scopes it domain-wide on
+    *.amazon.jobs so it also satisfies the account/passport XHRs the SPA fires. Never raises."""
+    if isinstance(token, str) and token.startswith("aws-waf-token="):
+        token = token.split("=", 1)[1]
+    if not token:
+        return False
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(page_url).hostname or "").lower()
+        domain = ".amazon.jobs" if host.endswith("amazon.jobs") else host
+        if not domain:
+            return False
+        await page.context.add_cookies(
+            [{"name": "aws-waf-token", "value": token, "domain": domain, "path": "/"}])
+        return True
+    except Exception as exc:
+        logger.warning("aws-waf token injection failed: %s", exc)
+        return False
+
+
+# The documented AWS WAF SPA integration API: window.AwsWafIntegration.getToken() returns a Promise
+# resolving to the aws-waf-token (AWS runs the challenge JS proof-of-work in-page). It is the
+# INTENDED way an SPA obtains a token to attach to API calls — free, no external service. A hard
+# visual puzzle exposes only window.AwsWafCaptcha (renderCaptcha) and getToken won't silently
+# resolve; we detect that and fall through to the paid solver.
+_AWS_WAF_GETTOKEN_JS = r"""
+async () => {
+  const I = window.AwsWafIntegration;
+  if (!I || typeof I.getToken !== 'function') return null;
+  try {
+    const t = await Promise.race([
+      I.getToken(),
+      new Promise(r => setTimeout(() => r(null), 20000)),
+    ]);
+    return (typeof t === 'string' && t) ? t : null;
+  } catch (e) { return null; }
+}"""
+
+
+async def _awswaf_browser_token(page) -> bool:
+    """FREE: mint the `aws-waf-token` via the page's own AWS WAF SDK (no external solver, no key).
+    Returns True only when a token was obtained AND set as the cookie. A cheap no-op (False) when
+    the SDK / getToken API is absent (e.g. a hard visual puzzle exposes only AwsWafCaptcha, or the
+    page isn't AWS-WAF-gated). Never raises. LIVE-PROVEN 2026-09-20: on a real AWS-WAF page,
+    getToken() returned a 390-char aws-waf-token headless from a datacenter IP."""
+    try:
+        token = await page.evaluate(_AWS_WAF_GETTOKEN_JS)
+    except Exception:
+        token = None
+    try:
+        page_url = page.url
+    except Exception:
+        page_url = ""
+    if token:
+        ok = await _inject_aws_waf_cookie(page, page_url, token)
+        if ok:
+            logger.info("aws-waf token minted via AwsWafIntegration.getToken() (free path)")
+        return ok
+    # getToken() unavailable/None, but challenge.js may have set the cookie itself already.
+    try:
+        for c in await page.context.cookies():
+            if c.get("name") == "aws-waf-token" and c.get("value"):
+                logger.info("aws-waf token present from the page SDK cookie (free path)")
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def solve_aws_waf(page) -> bool:
-    """Detect an AWS WAF CAPTCHA on `page`, solve it via CapSolver's AntiAwsWafTask, and inject
-    the resulting `aws-waf-token` cookie onto the browser context. Returns True only if a
-    challenge was found AND solved AND the token injected. A graceful no-op (False) when the
-    solver is disabled, no AWS WAF challenge is present, the provider is 2captcha (its Amazon-WAF
-    method is not wired here), or anything fails — so it is always safe to call before a register
-    or submit click. Never raises.
+    """Make an `aws-waf-token` available for `page` (Amazon Passport register / apply). Two paths:
+
+    1. FREE (AWSWAF_BROWSER=1, no key): the page's own AWS WAF SDK mints the token via
+       `AwsWafIntegration.getToken()` — solves the silent WAF *challenge* with no external service.
+    2. PAID (CapSolver AntiAwsWafTask, CAPTCHA_SOLVER_KEY): solves a hard visual WAF *puzzle*.
+
+    The free path is tried first (when enabled) and, if it yields nothing (a visual puzzle), falls
+    through to the paid solver. Returns True only if a token was obtained AND injected. A graceful
+    no-op (False) when neither path is armed, no AWS WAF challenge is present, the provider is
+    2captcha (its Amazon-WAF method is not wired here), or anything fails — so it is always safe to
+    call before a register or submit click. Never raises.
 
     The token is IP-bound: solve it through the SAME (residential) session the page uses, and do
     it immediately before the gated request — it expires fast."""
+    # 1) FREE in-browser path first (no key needed).
+    if _awswaf_browser_enabled():
+        try:
+            if await _awswaf_browser_token(page):
+                return True
+        except Exception as exc:
+            logger.warning("aws-waf browser token failed: %s", exc)
+        # else fall through to the paid solver (if keyed) for a hard visual puzzle
+    # 2) PAID CapSolver path.
     if not is_enabled():
         return False
     if _provider() == "twocaptcha":
@@ -325,21 +437,10 @@ async def solve_aws_waf(page) -> bool:
         logger.warning("aws-waf solve failed: %s", exc)
         return False
     token = (sol or {}).get("cookie") or (sol or {}).get("token") if sol else None
-    if isinstance(token, str) and token.startswith("aws-waf-token="):
-        token = token.split("=", 1)[1]
     if not token:
         logger.info("aws-waf captcha present but not solved")
         return False
-    try:
-        from urllib.parse import urlparse
-        host = (urlparse(page_url).hostname or "").lower()
-        # Scope the cookie domain-wide when on *.amazon.jobs so the token also satisfies the
-        # account.amazon.jobs / passport.amazon.jobs XHRs the SPA fires.
-        domain = ".amazon.jobs" if host.endswith("amazon.jobs") else host
-        await page.context.add_cookies(
-            [{"name": "aws-waf-token", "value": token, "domain": domain, "path": "/"}])
+    ok = await _inject_aws_waf_cookie(page, page_url, token)
+    if ok:
         logger.info("aws-waf captcha solved + token injected")
-        return True
-    except Exception as exc:
-        logger.warning("aws-waf token injection failed: %s", exc)
-        return False
+    return ok

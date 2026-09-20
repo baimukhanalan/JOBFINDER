@@ -150,9 +150,10 @@ class AmazonStrategy(ApplyStrategy):
         # Passport register/login SPA. Dismiss the cookie banner FIRST (before any fill, so it
         # never resets a filled field or intercepts a click).
         await self._dismiss_cookie_banner(page)
-        if not (self.advance_wizard and captcha_solver.is_enabled()):
-            # No live account creation on a dry-run (or without a captcha key): leave the run on
-            # the Passport wall — analyze_page will report login_required and stop cleanly.
+        if not (self.advance_wizard and captcha_solver.aws_waf_available()):
+            # No live account creation on a dry-run (or without any AWS WAF path armed — neither a
+            # CapSolver key nor the free AWSWAF_BROWSER token): leave the run on the Passport wall —
+            # analyze_page will report login_required and stop cleanly.
             return
         try:
             await self._bootstrap_account(page)

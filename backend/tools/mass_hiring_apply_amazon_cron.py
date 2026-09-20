@@ -6,14 +6,19 @@ headless), which creates the Passport account, verifies the emailed OTP, fills t
 fully armed — clicks the recorded Submit and awaits the Amazon "application received" email.
 
 INERT UNTIL ARMED (mirrors the Oracle-ORC lane's `ORC_PHONE`-inert guard): Amazon's Passport account
-creation is gated by an **AWS WAF CAPTCHA** that only CapSolver's AntiAwsWafTask can open, so this
-cron REFUSES to run (logs the ceiling + exits 0) unless BOTH:
+creation is gated by an **AWS WAF challenge/CAPTCHA**, so this cron REFUSES to run (logs the ceiling
++ exits 0) unless BOTH:
   * AMAZON_ADVANCE=1              — the owner explicitly enabled live submission, AND
-  * CAPTCHA_SOLVER_KEY is set     — the AWS WAF solver is armed (captcha_solver.is_enabled()).
+  * an AWS WAF path is armed      — EITHER AWSWAF_BROWSER=1 (FREE: the page's own AWS WAF SDK mints
+                                    the token for a silent WAF *challenge*, no key) OR
+                                    CAPTCHA_SOLVER_KEY (CapSolver AntiAwsWafTask, a hard visual WAF
+                                    *puzzle*). Checked via captcha_solver.aws_waf_available().
 It is therefore safe to add to the crontab NOW: it no-ops (never spams the account wall) until the
-owner supplies the key + a US residential egress. Datacenter IPs are risk-flagged by the WAF/
-reCAPTCHA score, so a live phone egress slot (proxy_pool) is strongly recommended for a non-flagged
-run; amazon_recon uses one when live, DIRECT otherwise.
+owner arms a path + a US residential egress. Datacenter IPs are risk-flagged by the WAF/reCAPTCHA
+score (a flagged IP is likelier to be shown the visual puzzle, which the free path can't pass), so a
+live US phone egress slot (proxy_pool) is strongly recommended for a non-flagged run — with it the
+gate is usually the silent challenge the FREE path clears; amazon_recon uses a slot when live, DIRECT
+otherwise.
 
     python backend/tools/mass_hiring_apply_amazon_cron.py               # 1 application per Amazon job
     python backend/tools/mass_hiring_apply_amazon_cron.py --only 9434
@@ -22,11 +27,13 @@ run; amazon_recon uses one when live, DIRECT otherwise.
 Run HEADFUL under `DISPLAY=:98 sg mail` (amazon_recon needs the mail group for mailbox provisioning +
 the Maildir OTP/confirmation read; the subprocess inherits that group — do NOT re-wrap in `sg mail`).
 
-Cron line (report-only; INERT until CAPTCHA_SOLVER_KEY is set — hour-staggered off the other lanes,
-minute 30 so it doesn't collide with the :00/:12/:24/:36/:42/:48/:54 lanes; one lane per phase):
+Cron line (report-only; INERT until an AWS WAF path is armed — hour-staggered off the other lanes,
+minute 30 so it doesn't collide with the :00/:12/:24/:36/:42/:48/:54 lanes; one lane per phase).
+FREE path (no key — best with a US residential slot so the gate is the silent challenge):
   30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 \
-    AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY='<capsolver-key>' sg mail -c \
+    AMAZON_ADVANCE=1 AWSWAF_BROWSER=1 sg mail -c \
     'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1
+PAID fallback for a hard visual WAF puzzle — swap AWSWAF_BROWSER=1 for CAPTCHA_SOLVER_KEY='<key>'.
 """
 from __future__ import annotations
 
@@ -63,10 +70,11 @@ def _advance_enabled() -> bool:
 
 
 def _solver_armed() -> bool:
-    """True when CapSolver's AWS-WAF solver is configured (the account-creation gate)."""
+    """True when an AWS-WAF path is configured for the account-creation gate — EITHER a CapSolver
+    key (visual puzzle) OR AWSWAF_BROWSER=1 (the free in-browser challenge token)."""
     try:
         from backend.applier import captcha_solver
-        return captcha_solver.is_enabled()
+        return captcha_solver.aws_waf_available()
     except Exception:
         return False
 
@@ -167,8 +175,10 @@ def main() -> None:
                     "Exiting without applying.")
         return
     if not _solver_armed():
-        logger.info("CAPTCHA_SOLVER_KEY not set — the Amazon Passport account cannot be created "
-                    "(AWS WAF gate; NopeCHA does NOT solve AWS WAF). Lane INERT. Exiting.")
+        logger.info("No AWS WAF path armed (set CAPTCHA_SOLVER_KEY for the visual puzzle, or "
+                    "AWSWAF_BROWSER=1 for the free in-browser challenge token) — the Amazon "
+                    "Passport account cannot be created (NopeCHA does NOT solve AWS WAF). "
+                    "Lane INERT. Exiting.")
         return
 
     os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)

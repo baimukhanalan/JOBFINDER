@@ -946,8 +946,16 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   e.g. "Bilingual Technical Customer Support, Ring", "Virtual, <State>, USA")** — reachable (200) but SAML-redirects to the
   **Amazon Passport** account wall. Account creation `POST /api/createAccountWithEmail` is gated by an **AWS WAF CAPTCHA**
   (403 without a valid `aws-waf-token`, proven; `captcha-sdk.awswaf.com`, NOT reCAPTCHA/hCaptcha) → **NopeCHA CANNOT open it**
-  (NopeCHA does reCAPTCHA/hCaptcha/Turnstile only); it needs **CapSolver's `AntiAwsWafTask`** = `CAPTCHA_SOLVER_KEY`
-  (`applier/captcha_solver.solve_aws_waf`, NOT set). Verification is **EMAIL OTP** (read from the persona Maildir via
+  (NopeCHA does reCAPTCHA/hCaptcha/Turnstile only). TWO WAF gate types + TWO solver paths in
+  `applier/captcha_solver.solve_aws_waf` (both default OFF): **(FREE) `AWSWAF_BROWSER=1`** — the page's OWN AWS WAF SDK mints
+  the token via the documented `window.AwsWafIntegration.getToken()` (a real browser runs AWS's silent JS proof-of-work
+  *challenge*), NO key, NO external service — **LIVE-PROVEN 2026-09-20** (a real AWS-WAF page returned a 390-char `aws-waf-token`
+  headless from the datacenter IP; see `test_captcha_solver.py`). **(PAID) `CAPTCHA_SOLVER_KEY`** — CapSolver's `AntiAwsWafTask`
+  ($2/1k) for a hard visual WAF *puzzle*. The free path is tried first + falls through to the paid one. Whether Amazon shows the
+  silent challenge (free path clears it) or the visual puzzle depends on IP reputation — a US-residential egress makes the
+  silent challenge likely; a flagged datacenter IP is likelier to force the visual puzzle (paid). No free/open solver exists for
+  the visual WAF puzzle, Cloudflare *Managed* Turnstile, or *invisible enterprise* hCaptcha — those need a paid API
+  (CapSolver Turnstile $1.2/1k, else 2captcha), already wired via `captcha_solver.solve`/`solve_on_page`. Verification is **EMAIL OTP** (read from the persona Maildir via
   `verify_code.read_code`) — NO real SMS number needed (the corporate apply form's phone is a plain contact field, so the
   reserved-fiction 555-01xx phone is fine there; if Amazon ever adds a phone-SMS step at submit, THAT would need a real US
   number). From the datacenter IP the wall is served in **French** (Paris CloudFront PoP) — an IP/locale mismatch that raises
@@ -955,11 +963,12 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   live, DIRECT else) is required for a non-flagged run. **Dry-run (AMAZON_ADVANCE off) is LIVE-PROVEN to reach the ceiling:**
   `amazon_recon` navigates the collected apply URL → Passport wall → `AmazonStrategy` flags `needs_account`/`login_required`
   (fixed 2026-09-20: the wall is detected by HOST via `_on_passport`, since `analyzer.detect_page_type` returns `unknown` on the
-  localized FR wall) and stops — nothing created, no PII sent. **GO-LIVE (owner-side): set `CAPTCHA_SOLVER_KEY` (CapSolver) +
-  bring a US phone egress slot online**; then `AMAZON_ADVANCE=1` lets the strategy create the account (email OTP), fill the
-  wizard, and the driver clicks the recorded Submit ONLY when `unfilled==[]`. Ground truth = the Amazon "Thank you for
-  applying" email in the persona Maildir. Cron is **INERT until BOTH `AMAZON_ADVANCE=1` AND `CAPTCHA_SOLVER_KEY`** are set
-  (mirrors ORC's `ORC_PHONE`-inert guard; exits 0 → safe to add now, never spams the wall). `AMAZON_NOPECHA=1` arms the vendored
+  localized FR wall) and stops — nothing created, no PII sent. **GO-LIVE (owner-side): arm an AWS WAF path (`AWSWAF_BROWSER=1` free, or
+  `CAPTCHA_SOLVER_KEY` CapSolver) + bring a US phone egress slot online**; then `AMAZON_ADVANCE=1` lets the strategy create the
+  account (email OTP), fill the wizard, and the driver clicks the recorded Submit ONLY when `unfilled==[]`. Ground truth = the
+  Amazon "Thank you for applying" email in the persona Maildir. Cron is **INERT until `AMAZON_ADVANCE=1` AND an AWS WAF path is
+  armed** (`captcha_solver.aws_waf_available()` = `AWSWAF_BROWSER=1` OR `CAPTCHA_SOLVER_KEY`; mirrors ORC's `ORC_PHONE`-inert
+  guard; exits 0 → safe to add now, never spams the wall). `AMAZON_NOPECHA=1` arms the vendored
   NopeCHA ext as a reCAPTCHA fallback for a later step (does not help the AWS-WAF gate). Cron line (report-only, HEADFUL :98,
   minute 30 so it doesn't collide with the :00/:12/:24/:36/:48/:54 lanes):
   `30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY='<capsolver-key>' sg mail -c 'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1`.

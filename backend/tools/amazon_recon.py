@@ -17,10 +17,12 @@ GATING (mirrors the Avature/Oracle-ORC lanes):
   * Default (AMAZON_ADVANCE unset) = a DRY-RUN: fill only to the Passport wall, report
     `needs_account`/`login_required`. NOTHING is created and NO PII is transmitted.
   * AMAZON_ADVANCE=1 lets the strategy bootstrap the account (create it, verify the email OTP) and
-    walk the wizard. It ALSO needs a CapSolver key (`CAPTCHA_SOLVER_KEY`, for the AWS WAF challenge)
-    and — for a non-flagged reCAPTCHA/WAF score — a US RESIDENTIAL egress (a live phone slot, else
-    DIRECT). Both are graceful no-ops otherwise, so an advance run without the key just lands on the
-    Passport wall like a dry-run.
+    walk the wizard. It ALSO needs an AWS WAF solver path — EITHER `AWSWAF_BROWSER=1` (FREE: the
+    page's own AWS WAF SDK mints the token for a silent WAF *challenge*, no key) OR a CapSolver key
+    (`CAPTCHA_SOLVER_KEY`, for a hard visual WAF *puzzle*) — and, for a non-flagged reCAPTCHA/WAF
+    score, a US RESIDENTIAL egress (a live phone slot, else DIRECT). All are graceful no-ops
+    otherwise, so an advance run with none of them armed just lands on the Passport wall like a
+    dry-run.
   * The final Submit is clicked by THIS driver only when advancing AND the solver is armed AND the
     wizard reached Submit with `unfilled==[]` (mirrors smartrecruiters_recon's "submit only when
     complete"); otherwise the recorded selector is left for a human. Ground truth of success = the
@@ -292,12 +294,15 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
     advance = _advance_enabled()
     try:
         from backend.applier import captcha_solver
-        solver_armed = captcha_solver.is_enabled()
+        # An AWS WAF path is armed by EITHER a CapSolver key (visual puzzle) OR AWSWAF_BROWSER=1
+        # (the free in-browser challenge token) — either lets the Passport account be created.
+        solver_armed = captcha_solver.aws_waf_available()
     except Exception:
         solver_armed = False
     if advance and not solver_armed:
-        print("[NOTE] AMAZON_ADVANCE set but no CAPTCHA_SOLVER_KEY — the Passport account CANNOT be "
-              "created (AWS WAF gate); this run will land on the account wall like a dry-run.",
+        print("[NOTE] AMAZON_ADVANCE set but no AWS WAF path armed (set CAPTCHA_SOLVER_KEY for the "
+              "visual puzzle, or AWSWAF_BROWSER=1 for the free in-browser challenge token) — the "
+              "Passport account CANNOT be created; this run lands on the account wall like a dry-run.",
               flush=True)
 
     p = _build_persona(row)

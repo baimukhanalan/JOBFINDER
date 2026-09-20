@@ -103,9 +103,16 @@ def test_hiring_events_page_scripts_parse(tmp_path, monkeypatch):
         "role": "Remote CSR", "date_text": "Mon-Fri", "time_text": "9-5 ET",
         "latest_ts": 0, "invites": [
             {"mailbox": "jane.doe1@takhet.com", "candidate": "Jane Doe",
-             "date_ts": 0, "path_hash": "abc123"}]}])
+             "date_ts": 0, "path_hash": "abc123",
+             "tracking_url": "https://tracking.icims.com/f/a/A~~/x/tokA",
+             "join_url": "https://us06web.zoom.us/j/7436255779",
+             "meeting_id": "7436255779", "resolved": True}]}])
     html = he.render_page()
     assert "he-exp-btn" in html and 'id="he-d-abc123"' in html
+    # the per-candidate «Ссылка» opens THAT persona's own Zoom room (same as the group here)
+    assert 'class="he-inv-link"' in html
+    assert 'href="https://us06web.zoom.us/j/7436255779" target="_blank"' in html
+    assert "др. комната" not in html  # same room → not flagged
     _check_scripts(html, tmp_path, "hiring")
 
 

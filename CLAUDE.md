@@ -1259,7 +1259,22 @@ touch the classifier and does NOT write `iv_interviews` (pool stays clean).
   Expand toggle = ONE delegated inline `click` listener, jfSwap-idempotent (`window.jfPage.signal`), keyboard-accessible
   (`<button>` + `aria-expanded`/`aria-controls`); must stay green under `test_inline_js_syntax.py`. NOTE: `uploads/` is
   gitignored PII → ABSENT from worktrees, so résumé/detail resolve only where the tree exists (the live deploy) — verify there.
-- CLI: `PYTHONPATH=. sg mail -c 'python3 -m backend.tools.hiring_events --refresh --list'` (pre-warm the Zoom cache + print).
+- **Per-candidate OWN join link (2026-09-20).** TP blasts the SAME Zoom room to many personas (30 → room `7436255779`), but
+  EACH invite carries a UNIQUE icims tracking link and a persona CAN resolve to a different room. So beside «Скачать резюме»
+  every persona ROW now shows its OWN green **«Ссылка»** (`target=_blank`, opens THAT persona's resolved `*.zoom.us` room —
+  keyed on their own invite, NOT the group room), and the expand panel adds «Комната: Zoom · <id>» + «Персональная ссылка:
+  открыть приглашение» (the persona's unique tracking link). PURE helper **`candidate_join(inv, group_meeting_id=)`** →
+  `{tracking_url, join_url, meeting_id, resolved, differs}` (`join_url` = resolved room else the tracking link, still opens
+  Zoom on click; `differs` = an amber **«др. комната»** badge when the persona's resolved room ≠ the group's — both must be
+  resolved to compare). Each `join_url`/`meeting_id`/`resolved` is already computed PER-INVITE in `events()` (its own
+  `tracking_url` via `resolve_many`), so no extra egress. Since `grouped_events()` groups BY room, within a group `differs`
+  is normally 0 (a differing persona lands in its OWN group card — e.g. `samuel.nash3785` → room `6086876287`, its own card);
+  the badge is the forward-guard for a mixed group. Neutral RU; «Zoom» is the recruiter's tool (allowed); the icims URL only
+  appears in an `href`, never as visible text. Tests: `test_hiring_events.py::test_candidate_join_*` (pure) +
+  `test_inline_js_syntax.py` asserts the rendered `he-inv-link`. **`pm2 restart jobfinder-alan-dash`** to go live (read-only,
+  no indexer/copilot restart).
+- CLI: `PYTHONPATH=. sg mail -c 'python3 -m backend.tools.hiring_events --refresh --list'` (pre-warm the Zoom cache + print;
+  `--list` now prints each persona's own resolved room + own join link, flagging a `[DIFFERENT ROOM]`).
 - **Restart to go live:** `pm2 restart jobfinder-alan-dash` (new route + nav + résumé/detail; NO indexer/copilot restart —
   read-only, no classifier change). Optional cron to keep the Zoom cache warm as invites land, e.g. `*/30 … python3 -m
   backend.tools.hiring_events --refresh` (page also resolves misses lazily, so a cron is optional). Live 2026-09-19: 31 invites

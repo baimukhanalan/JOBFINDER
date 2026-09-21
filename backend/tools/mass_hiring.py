@@ -312,6 +312,10 @@ def comp_type(title: str, category: str | None) -> str:
 # unmapped (aggregators remotive/himalayas/remoteok, mixed ATS) -> 'unknown'.
 _AUTO_STATUS = {
     "maximus": "auto", "alorica": "auto",
+    # Hilton = Oracle ORC (same ATS as Alorica) but a DIFFERENT tenant → collect-first: a per-tenant
+    # screener verify pass + broadening orc_recon.orc_job_ids past source='alorica' are needed before
+    # it's driven, so keep 'needs_laptop' (no misleading «Авто» badge; no lane auto-picks it).
+    "hilton": "needs_laptop",
     "kelly": "needs_laptop", "concentrix": "needs_laptop", "cvshealth": "needs_laptop",
     "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
     # Healthcare payers/BPOs on the driven Workday CxS lane (register-captcha probe pending).
@@ -812,6 +816,83 @@ def fetch_alorica() -> list[dict]:
         offset += limit
         if total is not None and offset >= total:
             break
+    return rows
+
+
+# --- Hilton — Oracle Recruiting Cloud (ORC), the SAME REST shape/host family as Alorica -----------
+# Recon 2026-09-21: careers.marriott.com is NOT ORC (it fronts Jibe, `marriott.jibeapply.com`), but
+# jobs.hilton.com IS Oracle Recruiting Cloud on `efet.fa.us2.oraclecloud.com` (site CX_1, ~4600 global
+# reqs across every brand/hotel). Hilton exposes a STRUCTURED `WorkplaceTypeCode`
+# (ORA_ON_SITE|ORA_HYBRID|ORA_REMOTE), so remote is read off that (not just title text). HONEST YIELD:
+# at a quiet time the whole board has only ~11 US-remote reqs and ALL are corporate/senior (Director /
+# Sr Manager / DevOps / Recruiter) which `categorize()` correctly drops → ~0 entry rows TODAY. The
+# collector is future-proof: Hilton Reservations & Customer Care (HRCC) work-from-home hiring is
+# SEASONAL and ramps for peak, and any Customer-Care-Coordinator-class remote role that passes
+# `categorize()` is captured automatically. Apply reuses the Oracle ORC lane (same `OracleORCStrategy`
+# host match) but is COLLECT-ONLY for now — a different ORC tenant than Alorica, so it needs a
+# per-tenant screener verify pass AND `orc_recon.orc_job_ids` is scoped to source='alorica' (so a
+# 'hilton' row is never auto-driven by the wrong screener battery). Hence auto_status='needs_laptop'.
+_HILTON_ORC_HOST = "efet.fa.us2.oraclecloud.com"
+_HILTON_ORC_SITE = "CX_1"
+
+
+def _hilton_row(j: dict) -> dict | None:
+    """PURE decision for one Hilton Oracle ORC requisition (network-free, unit-tested). Keep only
+    US + remote entry mass-hiring roles: US via PrimaryLocationCountry, remote via the structured
+    WorkplaceTypeCode (ORA_REMOTE; ORA_ON_SITE/ORA_HYBRID veto) with a title/location fallback when
+    the code is absent, and the two HARD RULES (`categorize()` entry bucket + REMOTE) via `_mk_row`."""
+    if (j.get("PrimaryLocationCountry") or "").upper() != "US":
+        return None
+    code = (j.get("WorkplaceTypeCode") or "").upper()
+    title = j.get("Title") or ""
+    loc = j.get("PrimaryLocation") or ""
+    if "ON_SITE" in code or "HYBRID" in code:
+        return None                                   # authoritative not-remote (structured signal wins)
+    is_remote = ("REMOTE" in code) or _is_remote(title, loc)
+    if not is_remote:
+        return None
+    jid = j.get("Id")
+    return _mk_row(
+        "hilton", jid, "Hilton", title, loc or "United States",
+        f"https://{_HILTON_ORC_HOST}/hcmUI/CandidateExperience/en/sites/{_HILTON_ORC_SITE}/job/{jid}",
+        posted_at=_iso_epoch(j.get("PostedDate")))
+
+
+def fetch_hilton() -> list[dict]:
+    """Hilton — Oracle Recruiting Cloud (ORC). Keyword-scoped to the CSR/reservations lexicon (so we
+    don't page all ~4600 global reqs) → `_hilton_row`. Work-at-home reservations / customer care."""
+    host, site = _HILTON_ORC_HOST, _HILTON_ORC_SITE
+    rows: list[dict] = []
+    seen: set = set()
+    for kw in ("reservations", "customer", "care", "member", "guest", "remote", "sales", "support"):
+        offset, limit = 0, 200
+        total = None
+        while offset < 600:
+            url = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+                   "?onlyData=true&expand=requisitionList.secondaryLocations,flexFieldsFacet.values"
+                   f"&finder=findReqs;siteNumber={site},limit={limit},offset={offset},"
+                   f"sortBy=POSTING_DATES_DESC,keyword=%22{kw}%22")
+            try:
+                r = httpx.get(url, timeout=30, headers={**_UA, "Accept": "application/json"})
+                it = (r.json().get("items") or [{}])[0]
+                reqs = it.get("requisitionList") or []
+                total = it.get("TotalJobsCount", total)
+            except Exception as e:
+                print(f"[hilton kw={kw} offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            if not reqs:
+                break
+            for j in reqs:
+                jid = j.get("Id")
+                if jid in seen:
+                    continue
+                seen.add(jid)
+                row = _hilton_row(j)
+                if row:
+                    rows.append(row)
+            offset += limit
+            if total is not None and offset >= total:
+                break
     return rows
 
 
@@ -2336,7 +2417,8 @@ def fetch_roberthalf() -> list[dict]:
 
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
-            "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
+            "conduent": fetch_conduent, "alorica": fetch_alorica, "hilton": fetch_hilton,
+            "concentrix": fetch_concentrix,
             "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
             "sutherland": fetch_sutherland, "wayfair": fetch_wayfair,
             "workingsolutions": fetch_working_solutions,

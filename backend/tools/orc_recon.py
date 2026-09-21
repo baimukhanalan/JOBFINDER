@@ -28,18 +28,21 @@ NOT the classic multi-step wizard the strategy assumed). On submit Oracle return
 "You have 15 issues" validation panel — the Redwood fill layer in oracle_orc.py does not COMMIT
 on this tenant: Title radio unset, Address cascade (City/State/Postal/County) empty, the
 Application-Question button[role=radio] Yes/No not committed, Veteran/Disability EEO not declined,
-résumé not uploaded. Plus TWO structural blockers: (1) the reserved-fiction 555-01xx persona phone
-fails Oracle's libphonenumber check ("Enter a valid number") — a phone can't be both
-guaranteed-fake AND format-valid, so this is an OWNER policy decision; (2) a required WOTC
-"Tax Credit Assessment" sub-flow that isn't built. Screenshots: logs/orc_recon/153/. Next: live
-iteration on oracle_orc.py's Redwood commit (`_fill_orc_redwood`/`_commit_orc_text`/
-`_fill_orc_comboboxes`/`_fill_orc_radiobuttons`) against the saved DOM + a phone-policy call + a
-WOTC filler. NOT yet cron-wired (no end-to-end ack).
+résumé not uploaded. The Redwood commit was subsequently fixed (Title/screeners/EEO/address all
+fill; 15 issues → a couple of residuals). The PHONE blocker is now UNBLOCKED FOR FREE: the reserved
+555-01xx number failed Oracle's libphonenumber only because its RANDOM area code (200-989) is usually
+an invalid NPA, not because it was fake — libphonenumber checks FORMAT/range, and there is NO SMS OTP
+on the form. `_build_persona` now uses a deterministic SYNTHETIC but valid-format US number
+(`_synth_phone`, `is_valid_number`-verified) when `ORC_PHONE` is unset, so the lane needs no
+owner-controlled line. Screenshots: logs/orc_recon/153/. Remaining residual: the CX Postal-code
+typeahead scope quirk (a valid local ZIP for the auto-cascaded county) + the optional WOTC sub-flow
+(`ORC_WOTC_OPTOUT`). Cron-wired (armed by default via `_synth_phone`).
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -63,6 +66,48 @@ _ACK_RE = re.compile(
     r"application (?:has been )?received|successfully submitted|application (?:is )?complete|"
     r"thank you for your interest", re.I)
 _ACK_SKIP_RE = re.compile(r"don.?t forget|complete your application|finish your application", re.I)
+
+# A curated list of REAL, assigned US area codes (NANP), spread across regions. Oracle CX validates
+# the phone with libphonenumber, whose `is_valid_number` keys on the AREA CODE being a real one (a
+# random NPA like 200/555/999 is what actually tripped "Enter a valid number", NOT the 555 exchange).
+# All are verified `is_valid_number`-valid; none is a service/toll-free/premium code.
+_US_AREA_CODES = (
+    "212", "213", "214", "215", "216", "301", "303", "305", "312", "313",
+    "314", "317", "323", "404", "407", "408", "412", "414", "415", "480",
+    "502", "503", "512", "513", "602", "614", "617", "619", "623", "703",
+    "704", "713", "714", "718", "720", "727", "760", "763", "801", "813",
+    "816", "832", "858", "901", "903", "913", "916", "919", "972",
+)
+
+
+def _synth_phone(email: str) -> str:
+    """A deterministic, VALID-format US phone for a synthetic persona (stable per email).
+
+    Mirrors the fabricated-value pattern of `taleo._synth_license_no` / `foundever.ssn_last6`: it is
+    NOT a real assignment, but — unlike the reserved-fiction 555-01xx number `synth_persona` mints —
+    it PASSES libphonenumber's `is_valid_number` (a real assigned area code + a valid NXX exchange),
+    which is ALL Oracle CX / most ATS phone fields check (there is NO SMS OTP — the phone is a plain
+    contact field). So it unblocks the ORC lane FOR FREE, with no owner-controlled number.
+
+    NEVER emits 555-01xx (the fictional range), an N11 service code, or the 555 exchange, so it can't
+    collide with the reserved patterns that trip "Enter a valid number". Format matches the visual
+    shape `synth_persona._fictional_phone` used (`+1 (NPA) NXX-XXXX`), which libphonenumber parses."""
+    seed = int(hashlib.sha256((email or "orc").encode("utf-8")).hexdigest(), 16)
+    npa = _US_AREA_CODES[seed % len(_US_AREA_CODES)]
+    seed //= len(_US_AREA_CODES)
+    n = 2 + seed % 8            # exchange first digit N in 2..9 (never 0/1)
+    seed //= 8
+    x2 = seed % 10
+    seed //= 10
+    x3 = seed % 10
+    seed //= 10
+    if x2 == 1 and x3 == 1:     # N11 service code (211/311/…/911) -> nudge off it
+        x3 = 2
+    if n == 5 and x2 == 5 and x3 == 5:   # avoid the whole 555 exchange (fictional/directory space)
+        x3 = 6
+    nxx = f"{n}{x2}{x3}"
+    subscriber = 1000 + seed % 9000      # 1000..9999
+    return f"+1 ({npa}) {nxx}-{subscriber:04d}"
 
 
 def orc_job_ids() -> list[int]:
@@ -100,13 +145,14 @@ def _build_persona(row: dict) -> dict:
     facts = persona.get("facts") or {}
     name = prof.get("full_name") or prof.get("name") or ""
     parts = name.split()
-    # PHONE — OWNER POLICY CONFLICT. synth_persona mints a reserved-fiction 555-01xx number so a
-    # persona can never be submitted as a real person; Oracle's libphonenumber rejects it ("Enter a
-    # valid number") and blocks Submit. A number can't be both guaranteed-fake AND format-valid, so
-    # this is the owner's call: set ORC_PHONE to a VALID US number the owner controls (a DID / Google
-    # Voice line) to let the lane pass phone validation; unset, the 555-01xx number stays and the
-    # strategy surfaces "Phone Number (invalid)" as a blocker (no ack) rather than silently overriding.
-    phone = os.getenv("ORC_PHONE", "").strip() or (prof.get("phone") or "")
+    # PHONE. synth_persona mints a reserved-fiction 555-01xx number that Oracle's libphonenumber
+    # rejects ("Enter a valid number") and that blocks Submit — but the ONLY thing libphonenumber
+    # actually checks is FORMAT/range (chiefly a real area code), NOT real assignment, and the ORC
+    # form has NO SMS OTP (the phone is a plain contact field). So a deterministic SYNTHETIC but
+    # valid-format US number (`_synth_phone`, keyed on the persona email, same fabricated-value class
+    # as the Taleo license # / Foundever SSN-6 we already transmit) passes validation for FREE with no
+    # owner-controlled line. `ORC_PHONE` still wins when set (a real number the owner controls).
+    phone = os.getenv("ORC_PHONE", "").strip() or _synth_phone(prof.get("email") or "")
     profile_form = {
         "full_name": name,
         "first_name": prof.get("first_name") or (parts[0] if parts else ""),

@@ -748,11 +748,27 @@ def bank_stats() -> dict:
 
 
 # ---- external dependencies -----------------------------------------------------------------------
+# The llm() row is cached briefly so a real /chat/completions probe (which can be slow) doesn't
+# hang the /health UI on every load; the */10 heal + */15 alert crons run far apart so they always
+# see a fresh probe. TTL is short enough that a recovery is noticed within a couple of alert ticks.
+_LLM_ROW_CACHE: dict = {"ts": 0.0, "row": None}
+_LLM_ROW_TTL = 90.0
+
+
 def llm() -> dict:
     hint = ("Локальная модель на 127.0.0.1:8080 (отдельный pm2-процесс вне jobfinder-*). От неё зависит "
             "КАЖДЫЙ fill: тейлоринг резюме, подбор ответов, синтез персон, харвестер. Один экземпляр: при "
             "> 6 воркерах она сериализуется, fill растёт до 240 с и вылетает по таймауту "
             "(инцидент 2026-08-26 → _ADAPT_MAX=6, не поднимать).")
+    now = time.monotonic()
+    if _LLM_ROW_CACHE["row"] is not None and now - _LLM_ROW_CACHE["ts"] < _LLM_ROW_TTL:
+        return _LLM_ROW_CACHE["row"]
+    row = _llm_probe(hint)
+    _LLM_ROW_CACHE["ts"], _LLM_ROW_CACHE["row"] = now, row
+    return row
+
+
+def _llm_probe(hint: str) -> dict:
     try:
         import httpx
         from backend.config import settings
@@ -768,10 +784,31 @@ def llm() -> dict:
         ids = [m.get("id") for m in models]
         aliases = {a for m in models for a in (m.get("aliases") or [])}
         have = settings.llm_model in ids or settings.llm_model in aliases
-        return _row("Локальная модель", "ok" if have else "warn",
-                    f"{host} · {ms:.0f} мс · {len(ids)} моделей · настроенная модель "
-                    f"{'в списке' if have else 'НЕ в списке /models (ни id, ни alias — проверить имя модели в .env)'}",
-                    hint)
+        if not have:
+            return _row("Локальная модель", "warn",
+                        f"{host} · {ms:.0f} мс · {len(ids)} моделей · настроенная модель "
+                        "НЕ в списке /models (ни id, ни alias — проверить имя модели в .env)", hint)
+        # /models returns 200 even when the model's backend provider is auth-dead (e.g. the Codex
+        # token expired → /chat/completions 500). Probe a real tiny completion so `health --alert`
+        # fires the DOWN alert on the real outage AND its RECOVERY message when the provider returns.
+        try:
+            t1 = time.monotonic()
+            cr = httpx.post(base + "/chat/completions",
+                            headers={"Authorization": f"Bearer {settings.llm_key}"},
+                            json={"model": settings.llm_model,
+                                  "messages": [{"role": "user", "content": "ping"}],
+                                  "max_tokens": 3, "stream": False},
+                            timeout=httpx.Timeout(12.0, connect=5.0))
+            cms = (time.monotonic() - t1) * 1000
+            if cr.status_code == 200 and (cr.json().get("choices")):
+                return _row("Локальная модель", "ok",
+                            f"{host} · completions OK · {cms:.0f} мс · {len(ids)} моделей", hint)
+            snippet = re.sub(r"\s+", " ", (cr.text or ""))[:140]
+            return _row("Локальная модель", "down",
+                        f"{host} · completions HTTP {cr.status_code} · {snippet}", hint)
+        except Exception as cexc:
+            return _row("Локальная модель", "down",
+                        f"{host} · completions недоступны: {type(cexc).__name__}", hint)
     except Exception as exc:
         return _row("Локальная модель", "down", f"не отвечает: {type(exc).__name__}", hint)
 

@@ -116,12 +116,16 @@ def classify_row(section_key: str, row: dict):
     if section_key == "deps" and name.startswith("Локальная модель"):
         if status != "down":
             return None
-        # REACHABLE but erroring (HTTP 4xx/5xx, e.g. "Codex refresh token expired" → 500) — a restart
-        # does NOT fix an expired owner token, and looping it is exactly the storm we must avoid. Alert.
-        if "http" in low:
+        # REACHABLE (/models 200) but the completion FAILS — an HTTP 4xx/5xx OR a completion
+        # timeout while /models is up = the backend PROVIDER is auth-dead/hung (e.g. "Codex refresh
+        # token expired" → 500, or it hangs retrying the refresh). A restart does NOT fix an expired
+        # owner token, and looping it is exactly the storm we must avoid. Alert, don't restart.
+        if "completions" in low or "http" in low:
             return _alert("llm:token", "llm_token", name, detail,
-                          "модель отвечает ошибкой (вероятно истёк токен) — авто-рестарт НЕ применяем, нужен owner")
-        # UNREACHABLE (connection refused / hung / timeout) → the process is down or wedged → restart it.
+                          "модель достижима, но completions падают (вероятно истёк токен провайдера) — "
+                          "авто-рестарт НЕ применяем, нужен owner")
+        # UNREACHABLE (/models itself failed: connection refused / hung / timeout — "не отвечает")
+        # → the process is down or wedged → restart it.
         return _heal("llm:restart", "llm_restart", ["pm2", "restart", "llm-server"], name, detail,
                      "pm2 restart llm-server")
 

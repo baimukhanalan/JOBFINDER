@@ -319,11 +319,12 @@ _AUTO_STATUS = {
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
     # Staffing agencies (recon 2026-09-20). Randstad: guest apply + résumé + a Friendly-Captcha
     # proof-of-work (self-solving, no image challenge) — the most auto-promising, but not yet
-    # proven end-to-end, so 'needs_laptop' until a live ack. Manpower/Experis: no captcha + a
-    # guest JobApplyNoAuth endpoint, but apply is a non-URL-addressable client SPA (needs deeper
-    # recon). Adecco: mandatory account on a custom candidate SPA. Robert Half: mandatory
-    # Salesforce account + reCAPTCHA Enterprise on submit. All four are COLLECT-ONLY today.
-    "randstad": "needs_laptop", "manpower": "needs_laptop", "experis": "needs_laptop",
+    # proven end-to-end, so 'needs_laptop' until a live ack. Adecco: mandatory account on a custom
+    # candidate SPA. Robert Half: mandatory Salesforce account + reCAPTCHA Enterprise on submit.
+    # Manpower/Experis: FULL-AUTO server-side (reverse-engineered 2026-09-21) — the guest apply is a
+    # plain multipart POST to `Applicant/JobApplyWithEmail` needing NO auth/CSRF/B2C/captcha/résumé,
+    # replicated with httpx by strategies/manpower.py + tools/manpower_recon.py (gated MANPOWER_ADVANCE).
+    "randstad": "needs_laptop", "manpower": "auto", "experis": "auto",
     "adecco": "needs_laptop", "roberthalf": "needs_laptop",
 }
 
@@ -1580,8 +1581,10 @@ def fetch_randstad() -> list[dict]:
 #     blank-location "Service Desk Analyst" was actually HYBRID), so remote is decided
 #     TITLE/description-first with a hard `hybrid` veto (same location-first philosophy as
 #     applier/regions.py). No structured salary — pay is free text in publicDescription, read
-#     via _parse_hourly_wage. Apply is a non-URL-addressable client SPA (guest JobApplyNoAuth
-#     exists) so this is COLLECT-ONLY for now (see _AUTO_STATUS / the report). ---
+#     via _parse_hourly_wage. Apply is now FULL-AUTO server-side (reverse-engineered 2026-09-21): the
+#     guest submit is a plain multipart POST to `Applicant/JobApplyWithEmail` (NOT the client-listed
+#     JobApplyNoAuth, which 404s) needing NO auth/CSRF/B2C/captcha/résumé — replicated with httpx by
+#     strategies/manpower.py + tools/manpower_recon.py (gated MANPOWER_ADVANCE). ---
 _MG_HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
 # description-only remote signal, kept tight so an incidental "remote" mention doesn't leak in
 _MG_DESC_REMOTE_RE = re.compile(

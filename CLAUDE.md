@@ -811,9 +811,9 @@ Source recipes (endpoint + gotcha):
 - **Humana** (Phenom `POST careers.humana.com/widgets`, `selected_fields.city=["Remote"]`): keep `country=="United States of America"` + (`isRemote=="Yes"` OR `city=="Remote"`). Seasonal (AEP Oct-Dec).
 - **Foundever** (ex-Sitel; SuccessFactors Recruiting Marketing `jobs.foundever.com/search-jobs/results?q=&startrow=N`): read the results TABLE (`tr.data-row`); US+remote from the location string's country code + workplace token; one job is PINNED per page so end-of-results = a repeated id set. `fetch_foundever`/`_foundever_row`/`_foundever_parse`. Apply = SuccessFactors careersection (see the Foundever auto-apply lane).
 - **himalayas:** RETRY the offset on intermittent non-JSON, don't `break` the pagination.
-- **STAFFING AGENCIES (fast-placement lane, added 2026-09-20; all COLLECT-ONLY — see the auto-apply note below).** Each is its OWN careers backend (recon'd from the site's network calls, verified with httpx); US-only inventory, so `us_eligible` is forced True and `categorize()`/`_is_remote` enforce the two HARD RULES. Salary stored raw (`to_hourly` normalizes by magnitude at display). Live yields are modest — these firms are mostly on-site/professional, so the genuinely-remote entry slice is small (nightly: randstad ~11, manpower ~6, roberthalf ~24, adecco ~a few, experis ~2).
+- **STAFFING AGENCIES (fast-placement lane, added 2026-09-20; Manpower + Experis are now FULL-AUTO server-side (2026-09-21, see the auto-apply lane), the rest COLLECT-ONLY — see the auto-apply note below).** Each is its OWN careers backend (recon'd from the site's network calls, verified with httpx); US-only inventory, so `us_eligible` is forced True and `categorize()`/`_is_remote` enforce the two HARD RULES. Salary stored raw (`to_hourly` normalizes by magnitude at display). Live yields are modest — these firms are mostly on-site/professional, so the genuinely-remote entry slice is small (nightly: randstad ~11, manpower ~6, roberthalf ~24, adecco ~a few, experis ~2).
   - **Randstad** (`fetch_randstad`/`_randstad_row`): first-party React "search-app" JSON — `POST www.randstadusa.com/api/search/search-results`, body `data.searchParams={query:<slug>,isRemote:true,page:N}` (query is a **lowercase-hyphenated slug**, `isRemote` is a **server-side** filter). Response `searchResults.hits[]` is at the **JSON top level** (NOT under `data` — the request wrapper isn't echoed). Hit: `atsReference`(job#)/`title`/`isRemote`/`jobLocation.{city,stateAbbreviation}`/`salary.{type "per hour"|"per year",min,max,fixed}`/`createdDate`(epoch **MILLIS**)/`applyUrl`/`lobId`/`lobName`. **DROP `lobId 1027`/"Randstad Careers"** (Randstad hiring its OWN staff → routes to `randstadnorthamerica.workgr8.com`, not a placement); keep the placement lobs (308 Office&Admin, 4 Digital, 337 Allied-Health) which apply natively.
-  - **ManpowerGroup — Manpower + Experis** (`fetch_manpower`/`fetch_experis` → `_fetch_manpowergroup`/`_manpowergroup_row`): both share `POST /api/services/Jobs/searchjobs` (brand resolved from the Host); body `{filter:{searchkeyword,offset,limit:50,haslocation:false,language:"en"}}`, page by `offset += len(items)` to `filters.totalCount`. `jobsItems[]`: `jobID`/`jobTitle`/`jobLocation`(branch city, NOT remote)/`jobURL`(relative)/`employmentType`/`publishfromDate`(ISO)/`publicDescription`(HTML, pay is free text → `_parse_hourly_wage`). **No reliable server remote field**, and a blank `jobLocation` is NOT a remote signal (one was HYBRID) → remote decided TITLE-first (`_is_remote`) else an explicit desc phrase (`_MG_DESC_REMOTE_RE`) with a hard `hybrid` veto. **`"remote"`/`"work from home"` LEAD the keyword lists** — a role keyword alone ranks the few remote postings below pages of on-site ones.
+  - **ManpowerGroup — Manpower + Experis** (`fetch_manpower`/`fetch_experis` → `_fetch_manpowergroup`/`_manpowergroup_row`): both share `POST /api/services/Jobs/searchjobs` (brand resolved from the Host); body `{filter:{searchkeyword,offset,limit:50,haslocation:false,language:"en"}}`, page by `offset += len(items)` to `filters.totalCount`. `jobsItems[]`: `jobID`/`jobTitle`/`jobLocation`(branch city, NOT remote)/`jobURL`(relative)/`employmentType`/`publishfromDate`(ISO)/`publicDescription`(HTML, pay is free text → `_parse_hourly_wage`). **No reliable server remote field**, and a blank `jobLocation` is NOT a remote signal (one was HYBRID) → remote decided TITLE-first (`_is_remote`) else an explicit desc phrase (`_MG_DESC_REMOTE_RE`) with a hard `hybrid` veto. **`"remote"`/`"work from home"` LEAD the keyword lists** — a role keyword alone ranks the few remote postings below pages of on-site ones. **Apply is now FULL-AUTO server-side** (`auto_status`→`auto`; the guest `JobApplyWithEmail` lane, see Auto-apply lanes).
   - **Adecco** (`fetch_adecco`/`_adecco_row`): its `jobs/summarized` list API returns 0 (broken), so DISCOVER from the sitemap — `GET www.adecco.com/jobsindex.xml` → the `sitemap-jobs-unitedstates-en.xml` `<loc>`s (~2600) → a **slug pre-filter** (`_ADECCO_SLUG_HINT`) bounds the per-job detail fetches (default cap 500, 8-worker pool) → `GET /api/data/jobs/job-description-details/<jobId-tail>/adecco/US/en-US/job-details`. Detail: `jobName`/`cityName`/`stateName`/`countryId`(USA)/`isRemote`(bool)/`minsalary`/`maxSalary`/`salaryTimeScale`/`jobStatusId`(OPEN)/`postedDate`.
   - **Robert Half** (`fetch_roberthalf`/`_rh_row`): no usable JSON API (the raw `/search` 403s without server creds), but the SSR page `GET www.roberthalf.com/us/en/jobs?remote=Remote&pagenumber=N` (`remote` is a **server-side** filter, keyword is NOT) embeds every result as a `<rhcl-job-card job-id=…>` custom element (bs4 `select("rhcl-job-card")`): `a[slot=headline]` (title+href), `li[data-subslot=worksite]` (`onsite`|`remote`), `location`, `type`, `date`, salary `span[data-subslot=salary-min|salary-max|salary-period]` (Hourly|Yearly). 25/page, `<rhcl-pagination total-items>`.
 - **E-Verify large-employer REFERENCE** (`tools/everify_employers.py`, keyless `h1btrack.com/e-verify/employers/`): yields EMPLOYERS (a mass-hiring SIGNAL), never feeds `mass_hiring_jobs`. Cached, refreshed by a guarded weekly hook at the TAIL of `mass_hiring.collect()`. Manual: `everify_employers --refresh`.
@@ -1059,19 +1059,42 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   `30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY='<capsolver-key>' sg mail -c 'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1`.
   No pm2 restart (fresh subprocess each run; the `amazon_apply.py` strategy is imported live by the runner but the lane drives
   its own browser). Tests: `test_amazon.py` (row decode / bilingual / confirmation matcher / screener logic, network-free).
-- **Staffing agencies (Randstad · Manpower · Experis · Adecco · Robert Half) — COLLECT-ONLY, auto-apply NOT built
-  (recon + live probe 2026-09-20; `_AUTO_STATUS`=`needs_laptop` for all five).** Per-job apply is account/SPA-walled on
-  every one — evidence: **Randstad** — the per-job "Apply" (`randstadusa.com/jobs/apply/308/<atsRef>/`) renders an
+- **ManpowerGroup — Manpower + Experis (`strategies/manpower.py`, driver `tools/manpower_recon.py`, cron
+  `tools/mass_hiring_apply_manpower_cron.py`, gated `MANPOWER_ADVANCE=1`) — FULL-AUTO SERVER-SIDE (httpx, NO browser), NO
+  captcha / NO auth token / NO CSRF / NO Azure-B2C session / NO résumé; LIVE-PROVEN 2026-09-21** (real submit → API
+  `status:1000`, `message:"SUCCESS"`, a created `entityID`). Reverse-engineered from the React SPA bundle + a headless
+  request capture: the apply page (`/en/candidate/jobapply?id=<jobItemID>`) is a client SPA, but the guest submit it fires
+  is a plain **multipart `POST https://<brand-host>/api/services/Applicant/JobApplyWithEmail`** (`el="/"` + the route; the
+  client also lists `Candidate/JobApplyNoAuth` but that endpoint 404s — `JobApplyWithEmail` is the live guest one). Two JSON
+  parts, NO file needed (the form's "NO RESUME" toggle):
+  - `profileData` = `{"Consent":{"NAConsentCheck":"false"},"PersonalInfo":{"address":{"city","state","zip"},"country":"United
+    States","firstName","lastName","email","personalContact":"<bare 10-digit phone>"},"EditExpertiseAndSkills":{"skills":[…≥1
+    REQUIRED]}}`
+  - `jobDetails` = `{"utmSource":"",…,"referer":"direct","jobId":"<numeric jobID>","jobItemID":"<GUID>"}`
+  Headers: `Content-Type: multipart/…`, `Accept: application/json, text/plain, */*`, `Origin`, `Referer:
+  https://<host>/en/candidate/jobapply?id=<jobItemID>` — **no token/subscription key**; only benign `sxa_site`/`OptanonConsent`
+  cookies (not a session gate — a bare httpx POST reaches the endpoint). Success = `data.status===1000` (`nl`); a
+  malformed/rejected body returns `status:0`. The **`jobItemID` GUID** (needed in `jobDetails` + the apply URL) is in the
+  stored job page JSON AND the search API (`manpower.extract_job_item_id`); the driver GETs the job page (cookie jar + the
+  GUID) then POSTs. The reserved-fiction 555-01xx synthetic phone is ACCEPTED (no libphonenumber gate, unlike ORC). At least
+  ONE skill is REQUIRED — `default_skills` uses the persona's résumé skills else `["Customer Service"]`. Experis shares the
+  code on its own host (`www.experis.com`). Ground truth = the API `status:1000`+`entityID` (the "application received"
+  on-page equivalent); a Maildir recruiter reply corroborates but Manpower sends no immediate auto-ack. **`MANPOWER_ADVANCE`
+  off ⇒ dry run** (builds the exact payload, transmits nothing). No pm2 restart (fresh subprocess each run; HTTP-only, no
+  `:98`/captcha). Cron line (report-only; HEADLESS, `sg mail` for mailbox provisioning + Maildir; no DISPLAY):
+  `18 2,8,14,20 * * * cd /home/projects/jobfinder && flock -n logs/manpower_cron.lock env sg mail -c 'MANPOWER_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_manpower_cron --limit 4' >> logs/manpower_apply.log 2>&1`
+  (the crontab `flock` file `logs/manpower_cron.lock` MUST differ from the cron's own fcntl `logs/manpower_apply.lock` — same
+  self-deadlock gotcha as the Foundever lane). Tests: `test_manpower.py` (payload shape / gate / extract, network-free).
+- **Staffing agencies still COLLECT-ONLY (Randstad · Adecco · Robert Half) — auto-apply NOT built
+  (recon + live probe 2026-09-20; `_AUTO_STATUS`=`needs_laptop`).** Per-job apply is account/SPA-walled on
+  each — evidence: **Randstad** — the per-job "Apply" (`randstadusa.com/jobs/apply/308/<atsRef>/`) renders an
   email/password + social-login step (live-probed); the "submit your resume" link goes to a GENERIC talent-pool résumé drop
   (`/job-seeker/submit-your-resume/`, a Drupal webform), NOT a targeted per-job application. Its captcha is **Friendly Captcha**
-  (a self-solving proof-of-work, not a human challenge — the most beatable of the five) but it sits behind the account/generic
+  (a self-solving proof-of-work, not a human challenge — the most beatable) but it sits behind the account/generic
   wall. **Robert Half** — mandatory Salesforce candidate account + email OTP + **reCAPTCHA Enterprise** on submit (recon).
-  **Adecco** — mandatory account on the custom `candidate.adecco.com` React SPA (no captcha seen, recon). **Manpower/Experis** —
-  NO captcha anywhere in the client bundle AND a guest `POST /api/services/Candidate/JobApplyNoAuth` endpoint EXISTS (recon), but
-  the apply page is a non-URL-addressable client SPA (state passed from the Apply button) and the guest POST body + any Azure-B2C
-  session gate are un-reverse-engineered. **Most promising future build = Manpower/Experis** (captcha-free + a documented guest
-  API) — needs one headful pass to capture the `JobApplyNoAuth` request body; Randstad next (Friendly-Captcha PoW is auto-solvable,
-  but the account/generic-form wall must be cleared first). Ground truth for any future lane = a real ack in the persona Maildir.
+  **Adecco** — mandatory account on the custom `candidate.adecco.com` React SPA (no captcha seen, recon). Randstad is the
+  next-most-promising (Friendly-Captcha PoW is auto-solvable, but the account/generic-form wall must be cleared first). Ground
+  truth for any future lane = the API/on-page ack or a real ack in the persona Maildir.
 
 ## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`)
 A separate engine (manual/cron, `DISPLAY=:98 sg mail`, nothing live imports it → no pm2 restart): enters a post-apply

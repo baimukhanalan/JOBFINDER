@@ -810,6 +810,7 @@ Source recipes (endpoint + gotcha):
 - **Centene** (`centene`) + **Cigna** (`cigna`): `_fetch_workday` with the US country facet (`us_confirmed=True`); remote in the location/path. Cigna's facet is `Location_Country`, Centene's `locationCountry`.
 - **Humana** (Phenom `POST careers.humana.com/widgets`, `selected_fields.city=["Remote"]`): keep `country=="United States of America"` + (`isRemote=="Yes"` OR `city=="Remote"`). Seasonal (AEP Oct-Dec).
 - **Foundever** (ex-Sitel; SuccessFactors Recruiting Marketing `jobs.foundever.com/search-jobs/results?q=&startrow=N`): read the results TABLE (`tr.data-row`); US+remote from the location string's country code + workplace token; one job is PINNED per page so end-of-results = a repeated id set. `fetch_foundever`/`_foundever_row`/`_foundever_parse`. Apply = SuccessFactors careersection (see the Foundever auto-apply lane).
+- **Gainwell Technologies** (Medicaid/Medicare BPO; the SAME SuccessFactors RMK family as Foundever, `jobs.gainwelltechnologies.com/search-jobs/results?q=&startrow=N`): the results table is BYTE-IDENTICAL to Foundever's, so **`_gainwell_parse = _foundever_parse`** (reused verbatim). TWO differences (recon 2026-09-21): (1) the LOCATION is `<city>, <state-code>, US, <zip>` (e.g. `Any city, MT, US, 99999`) so the country token is a MIDDLE token, NOT the last (that's the ZIP) → `_gainwell_is_us` scans every comma-token for `US`/`USA`/`United States`; (2) the REMOTE signal is in the TITLE (`- Remote MT`, `Remote, …`), NOT the location → `_gainwell_row` feeds `_is_remote(title, loc)`. `categorize()` still drops the clinical/pharmacy/lead/analyst titles Gainwell posts alongside its CSR pipeline. `fetch_gainwell`/`_gainwell_row`/`_gainwell_is_us`. **~28 remote-US mass-hiring rows** (of ~57 raw "Remote" on the board, after the entry filter). Apply = SuccessFactors careersection (see the Gainwell auto-apply lane).
 - **himalayas:** RETRY the offset on intermittent non-JSON, don't `break` the pagination.
 - **STAFFING AGENCIES (fast-placement lane, added 2026-09-20; all COLLECT-ONLY — see the auto-apply note below).** Each is its OWN careers backend (recon'd from the site's network calls, verified with httpx); US-only inventory, so `us_eligible` is forced True and `categorize()`/`_is_remote` enforce the two HARD RULES. Salary stored raw (`to_hourly` normalizes by magnitude at display). Live yields are modest — these firms are mostly on-site/professional, so the genuinely-remote entry slice is small (nightly: randstad ~11, manpower ~6, roberthalf ~24, adecco ~a few, experis ~2).
   - **Randstad** (`fetch_randstad`/`_randstad_row`): first-party React "search-app" JSON — `POST www.randstadusa.com/api/search/search-results`, body `data.searchParams={query:<slug>,isRemote:true,page:N}` (query is a **lowercase-hyphenated slug**, `isRemote` is a **server-side** filter). Response `searchResults.hits[]` is at the **JSON top level** (NOT under `data` — the request wrapper isn't echoed). Hit: `atsReference`(job#)/`title`/`isRemote`/`jobLocation.{city,stateAbbreviation}`/`salary.{type "per hour"|"per year",min,max,fixed}`/`createdDate`(epoch **MILLIS**)/`applyUrl`/`lobId`/`lobName`. **DROP `lobId 1027`/"Randstad Careers"** (Randstad hiring its OWN staff → routes to `randstadnorthamerica.workgr8.com`, not a placement); keep the placement lobs (308 Office&Admin, 4 Digital, 337 Allied-Health) which apply natively.
@@ -1018,6 +1019,36 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   `DISPLAY`/`:98` contention; the `sg mail` group is inherited by the `foundever_recon` subprocesses (do NOT re-wrap). Fits the
   hour-stagger: hour 1 pairs with TP(:12), hours 5/10/15/20 pair with Maximus(:00), all ≥30 min apart, ≤2 lanes/hour.
   Tests: `test_foundever.py`.
+- **Gainwell Technologies / SuccessFactors** (REUSES `strategies/foundever.py` `SuccessFactorsStrategy`; driver
+  `tools/gainwell_recon.py`, cron `tools/mass_hiring_apply_gainwell_cron.py`, gated `GAINWELL_ADVANCE=1`) — Medicaid/Medicare
+  BPO, the SAME captcha-free SuccessFactors RMK family as Foundever, so **minimal new code**: the whole apply is the shared
+  `SuccessFactorsStrategy`; only the collector row-decision + the driver/cron are new. **Careersection = `career41.sapsf.com`
+  (SAP-branded pod), company `gainwellte`** (Foundever's is `career4.successfactors.com`/`SitelPROD`) — recon'd from the RMK job
+  page's `j2w.init({ssoCompanyId:'gainwellte', ssoUrl:'https://career41.sapsf.com'})`. **Strategy generalization (kept
+  Foundever byte-compatible):** the single hardcoded `_CAREERSECTION_HOST` check became `_on_careersection()` (regex
+  `career\d*\.(?:successfactors|sapsf)\.com`) + `_on_rmk()` (a `_RMK_HOSTS` list — add each tenant's RMK host); `matches()`
+  accepts both `successfactors.com/careers` and `sapsf.com/careers`. **HANDOFF FIX (live-proven the divider):** Gainwell's
+  "Apply now" dropdown-toggle carries `aria-label="Apply Now"` (capital N — Foundever's is lowercase) so the toggle selector is
+  now case-insensitive (`[aria-label*="apply" i]`), AND the manual-apply menu item (`#applyOption-top-manual`, href=`#`, j2w
+  SSO-navigates on a REAL click) must be clicked only AFTER the dropdown actually opens — `open_form` now `wait_for(state=
+  "visible")`s it then does a REAL click (a force-click on the still-hidden item dispatches the event but does NOT trigger SF's
+  SSO nav → the old force-click landed on the RMK page = `login_required`). With the fix the real `open_form` reaches
+  `career41.sapsf.com/careers?company=gainwellte` (proven headless on this box). The one-page SF form (account `fbclc_*`, phone/
+  Country `<select>`s, address `tor__*` + SF paginated-select combos, `rcmpaginatedselect` screeners/EEO/consent, `fbjq_
+  question_N` Yes/No radios, submit `#fbqa_apply`) + the SSN-last6/decline-EEO/marketing-uncheck/data-privacy logic are ALL the
+  shared Foundever code (SF field ids are platform-wide, not tenant-specific), so it SHOULD complete to an ack exactly like
+  Foundever. **HONEST STATUS (2026-09-21): the full SF FILL + submit was NOT verified end-to-end this session** — the shared box
+  was under a load-23 spike AND the local Sumrak LLM was DOWN (persona-build résumé polish burned minutes in 500-backoff), and
+  the live drives were killed before the careersection fill completed. Proven: collector (28 remote-US rows, live-collected) +
+  RMK→careersection handoff. UNPROVEN here: `unfilled==[]` on the Gainwell careersection + the on-page "Your Application has
+  been sent" / SF welcome email. Re-verify on a quiet box with the LLM up: `GAINWELL_HEADLESS=1 GAINWELL_ADVANCE=1 sg mail -c
+  'python3 -m backend.tools.gainwell_recon --job <id> --keep 4'` → watch `report["unfilled"]` + `submitted`. `_state_from_row`
+  (reused from `foundever_recon`) resolves Gainwell's `<city>, <state-code>, US, <zip>` location (parts[1] 2-letter code →
+  `_us_state_full`). Egress DIRECT-default (`GAINWELL_RESIDENTIAL`/`GAINWELL_PROXY`). Licensed-insurance roles skipped
+  (`is_licensed`). Cron line (HEADLESS, no captcha — hour-staggered off Foundever's `42 1,5,10,15,20`; internal fcntl lock
+  `logs/gainwell_apply.lock` MUST differ from the crontab `flock` file):
+  `18 2,8,14,20 * * * cd /home/projects/jobfinder && flock -n logs/gainwell_cron.lock env sg mail -c 'GAINWELL_HEADLESS=1 GAINWELL_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_gainwell_cron --limit 4' >> logs/gainwell_apply.log 2>&1`
+  Tests: `test_foundever.py` (host helpers + `matches` + Gainwell `_state_from_row`), `test_mass_hiring.py` (`_gainwell_row`/`_gainwell_is_us`/`_gainwell_parse`).
 - **Amazon (corporate/virtual `account.amazon.jobs`)** (`strategies/amazon_apply.AmazonStrategy`, driver `tools/amazon_recon.py`,
   cron `tools/mass_hiring_apply_amazon_cron.py`, gated `AMAZON_ADVANCE=1`) — **INERT until owner-armed; live submit UNPROVEN.**
   **TWO DISTINCT Amazon systems — recon 2026-09-20:**

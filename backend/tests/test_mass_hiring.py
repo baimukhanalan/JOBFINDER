@@ -480,6 +480,104 @@ def test_foundever_parse_extracts_rows():
     assert row is not None and row["category"] == "customer_support"
 
 
+# ---- Gainwell Technologies (SuccessFactors RMK, same table as Foundever) --------
+# Location format is "<city>, <state-code>, US, <zip>" (e.g. "Any city, MT, US, 99999") — US comes
+# from the country token in the MIDDLE (not the last, which is the ZIP), and the REMOTE signal is in
+# the TITLE ("... - Remote MT", "Remote, ...") not the location. `_gainwell_row` reflects both.
+
+def test_gainwell_us_remote_from_title_is_kept():
+    row = mh._gainwell_row("1426420500", "Healthcare Contact Center Representative - Remote U.S.",
+                           "Any city, WI, US, 99999",
+                           "/job/Any-city-Healthcare-Contact-Center-Representative-Remote-U_S_-WI-99999/1426420500/",
+                           "Sep 3, 2026")
+    assert row is not None
+    assert row["source"] == "gainwell"
+    assert row["source_id"] == "1426420500"
+    assert row["company"] == "Gainwell Technologies"
+    assert row["company_key"] == "gainwelltechnologies"      # _slug of the company name
+    assert row["category"] == "customer_support"
+    assert row["auto_status"] == "auto"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == (
+        "https://jobs.gainwelltechnologies.com/job/"
+        "Any-city-Healthcare-Contact-Center-Representative-Remote-U_S_-WI-99999/1426420500/")
+    assert row["posted_at"] > 0
+
+
+def test_gainwell_data_entry_remote_is_kept():
+    row = mh._gainwell_row("1401833100", "Healthcare Data Entry Specialist - Remote MT",
+                           "Any city, MT, US, 99999", "/job/x/1401833100/")
+    assert row is not None
+    assert row["category"] == "data_entry"
+    assert row["us_eligible"] is True
+
+
+def test_gainwell_city_state_remote_in_title_is_kept():
+    # a physical home-office city in the location, remote signalled only in the title
+    row = mh._gainwell_row("1366764400", "Call Center Representative (Healthcare) - Baton Rouge, LA - Remote",
+                           "Baton Rouge, LA, US, 70809-0204", "/job/x/1366764400/")
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_gainwell_onsite_no_remote_token_is_dropped():
+    # a US location with NO remote token in the title → not remote → dropped
+    assert mh._gainwell_row("2", "Call Center Representative (Healthcare)",
+                            "Baton Rouge, LA, US, 70809-0204", "/job/x/2/") is None
+
+
+def test_gainwell_non_us_is_dropped():
+    assert mh._gainwell_row("3", "Customer Service Representative - Remote",
+                            "Any city, ON, CA, A1A1A1", "/job/x/3/") is None      # Canada
+    assert mh._gainwell_row("4", "Customer Service Representative - Remote",
+                            "Bangalore, KA, IN, 560001", "/job/x/4/") is None      # India
+
+
+def test_gainwell_senior_and_clinical_are_dropped():
+    # Gainwell posts these alongside its CSR pipeline; categorize() must drop them
+    assert mh._gainwell_row("5", "Provider Enrollment Team Lead Remote U.S.",
+                            "Any city, DE, US, 99999", "/job/x/5/") is None       # Lead
+    assert mh._gainwell_row("6", "Certified Senior Pharmacy Technician - Remote US",
+                            "Any city, WV, US, 99999", "/job/x/6/") is None       # Senior/clinical
+    assert mh._gainwell_row("7", "Drug Rebate Analyst - Remote West Virginia",
+                            "Any city, WV, US, 99999", "/job/x/7/") is None       # not a CSR bucket
+
+
+def test_gainwell_missing_id_or_title_is_dropped():
+    assert mh._gainwell_row(None, "Call Center Representative - Remote",
+                            "Any city, TX, US, 99999", "/x") is None
+    assert mh._gainwell_row("8", "", "Any city, TX, US, 99999", "/x") is None
+
+
+def test_gainwell_is_us_helper():
+    assert mh._gainwell_is_us("Any city, MT, US, 99999") is True
+    assert mh._gainwell_is_us("Baton Rouge, LA, US, 70809-0204") is True
+    assert mh._gainwell_is_us("Charleston, WV, US, 25311 +1 more…") is True
+    assert mh._gainwell_is_us("Any city, ON, CA, A1A1A1") is False
+    assert mh._gainwell_is_us("Bangalore, KA, IN, 560001") is False
+
+
+def test_gainwell_parse_extracts_rows():
+    # the results table is byte-identical to Foundever's (parser is shared)
+    html = """
+    <table><tbody>
+      <tr class="data-row">
+        <td class="colTitle"><span class="jobTitle"><a class="jobTitle-link"
+            href="/job/Any-city-Healthcare-Call-Center-Representative-Remote-MO-99999/1421281000/">Healthcare Call Center Representative - Remote</a></span>
+          <div class="jobdetail-phone"><span class="jobDate visible-phone">Sep 14, 2026</span></div></td>
+        <td class="colLocation"><span class="jobLocation">Any city, MO, US, 99999</span></td>
+        <td class="colDepartment"><span class="jobDepartment">Operations</span></td>
+      </tr>
+    </tbody></table>"""
+    parsed = mh._gainwell_parse(html)
+    assert len(parsed) == 1
+    jid, title, loc, href, date = parsed[0]
+    assert jid == "1421281000"
+    assert loc == "Any city, MO, US, 99999"
+    row = mh._gainwell_row(jid, title, loc, href, date)
+    assert row is not None and row["category"] == "customer_support"
+
+
 # ---- category: health-insurer entry roles + clinical drop -----------------------
 
 def test_care_and_member_roles_categorize():

@@ -339,6 +339,102 @@ def test_maximus_senior_remote_is_dropped():
     assert mh._maximus_row(_mx("Senior Manager, Remote Operations")) is None
 
 
+# ---- Transcom (classic Avature portal) ------------------------------------------
+# SearchJobs cards give title / location / jobId / a description snippet. US+remote is enforced
+# client-side (a global BPO board); apply_url is on apply.careers.transcom.com (NOT *.avature.net)
+# so the Maximus %avature% apply cron never touches it.
+
+def _tc_url(jid="13462"):
+    return f"https://apply.careers.transcom.com/en_US/careers/JobDetail/x/{jid}"
+
+
+def test_transcom_us_wfh_is_kept():
+    row = mh._transcom_row("13462", "Customer Service Advisor - Work-from-Home - US",
+                           "United States", _tc_url(), "100% REMOTE - Work-at-Home role")
+    assert row is not None
+    assert row["source"] == "transcom"
+    assert row["source_id"] == "13462"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["auto_status"] == "needs_laptop"       # collect-first: not a wired auto lane (no «Авто» badge)
+    assert "avature" not in row["apply_url"]          # must not trip the Maximus %avature% lane
+
+
+def test_transcom_offshore_remote_is_dropped():
+    assert mh._transcom_row("1", "Customer Service Representative", "Philippines",
+                            _tc_url("1"), "Remote role in Manila") is None
+
+
+def test_transcom_us_onsite_is_dropped():
+    # No remote signal in title / location / description → dropped even though US.
+    assert mh._transcom_row("2", "Customer Service Representative", "United States",
+                            _tc_url("2"), "On-site role in our contact centre") is None
+
+
+def test_transcom_senior_us_remote_is_dropped():
+    assert mh._transcom_row("3", "Senior Manager, Remote Operations", "United States",
+                            _tc_url("3"), "Remote") is None
+
+
+def test_transcom_remote_from_description_is_kept():
+    # Remote signalled only in the description snippet still counts (title/loc are neutral).
+    row = mh._transcom_row("4", "Customer Care Representative", "United States", _tc_url("4"),
+                           "This is a 100% work from home position")
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_transcom_missing_id_or_title_dropped():
+    assert mh._transcom_row("", "Customer Service Rep", "United States", _tc_url()) is None
+    assert mh._transcom_row("5", "", "United States", _tc_url("5")) is None
+
+
+# ---- Percepta (Taleo faceted REST) ----------------------------------------------
+# A requisition's `column` array holds [title, locations-json]; linkedColumn indexes the title,
+# locationsColumns the location column(s) whose value is a JSON array of Taleo codes.
+
+def _pc(title, codes, jid="2449908", linked=0, loccols=(1,)):
+    import json
+    col = [""] * (max([linked] + list(loccols)) + 1)
+    col[linked] = title
+    for i in loccols:
+        col[i] = json.dumps(codes)
+    return {"jobId": jid, "column": col, "linkedColumn": linked, "locationsColumns": list(loccols)}
+
+
+def test_percepta_us_remote_is_kept():
+    row = mh._percepta_row(_pc("Bilingual French Customer Care Representative - Remote",
+                               ["US-MI-Dearborn"]))
+    assert row is not None
+    assert row["source"] == "percepta"
+    assert row["source_id"] == "2449908"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["auto_status"] == "needs_laptop"       # collect-first: not a wired auto lane (no «Авто» badge)
+    assert "Dearborn, MI, United States" in row["location_raw"]
+    assert row["apply_url"].startswith(
+        "https://percepta.taleo.net/careersection/10300/jobdetail.ftl?job=2449908")
+
+
+def test_percepta_us_onsite_is_dropped():
+    # A site-based CSR req (no remote word) is dropped by the remote-only rule.
+    assert mh._percepta_row(_pc("Customer Service Representative", ["US-FL-Melbourne"])) is None
+
+
+def test_percepta_offshore_remote_is_dropped():
+    assert mh._percepta_row(
+        _pc("Customer Service Representative - Remote", ["GB-ENG-Daventry"], jid="9")) is None
+
+
+def test_percepta_senior_us_remote_is_dropped():
+    assert mh._percepta_row(_pc("Senior Team Leader - Remote", ["US-FL-Melbourne"], jid="10")) is None
+
+
+def test_percepta_empty_column_dropped():
+    assert mh._percepta_row(
+        {"jobId": "1", "column": [], "linkedColumn": 0, "locationsColumns": [1]}) is None
+
+
 # ---- UnitedHealth (TalentBrew) + Humana (Phenom) --------------------------------
 
 def test_talentbrew_row_is_kept():

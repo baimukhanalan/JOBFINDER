@@ -316,6 +316,12 @@ _AUTO_STATUS = {
     # Full-auto server-side via strategies/foundever.py + tools/foundever_recon.py; LIVE-PROVEN
     # 2026-09-19 ("Your Application has been sent" + a SuccessFactors account email in the persona box).
     "foundever": "auto",
+    # Transcom = Avature (like Maximus), Percepta = Taleo (like TTEC): the ATS is auto-applyable
+    # (no captcha) and reuses the existing strategy, BUT the live lane is tenant-specific so each
+    # needs a per-tenant verify pass before wiring — collect-first today. Kept 'needs_laptop' (like
+    # the not-yet-wired staffing agencies), NOT 'auto', so the board doesn't show a misleading «Авто»
+    # badge. NOT auto-picked by any lane (avature cron = %avature% URL, taleo cron = source='ttec').
+    "transcom": "needs_laptop", "percepta": "needs_laptop",
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
     # Staffing agencies (recon 2026-09-20). Randstad: guest apply + résumé + a Friendly-Captcha
     # proof-of-work (self-solving, no image challenge) — the most auto-promising, but not yet
@@ -1246,6 +1252,202 @@ def fetch_maximus() -> list[dict]:
     return []
 
 
+# Transcom — Avature careers portal (apply.careers.transcom.com; the CLASSIC server-rendered Avature
+# template, NOT Maximus's JS/qtvc `_portalList` flow). `GET /en_US/careers/SearchJobs` returns
+# `article.article--result` cards: title `h3 a` → /JobDetail/<slug>/<id>, location `.list-item-location`,
+# id `.list-item-jobId`, a description snippet `.article__content`. It is a GLOBAL BPO board (Philippines/
+# Europe/LatAm-heavy) whose default page size is flaky (6 vs 30), so US+remote is enforced client-side and
+# pagination advances by the count actually returned. Apply is Avature → reuses strategies/avature.py
+# after a per-tenant verify pass; the apply_url is on apply.careers.transcom.com (NOT *.avature.net), so
+# the Maximus apply cron — scoped to `apply_url ILIKE '%avature%'` — never touches it.
+_TRANSCOM_BASE = "https://apply.careers.transcom.com/en_US/careers"
+
+
+def _transcom_row(jid, title, location, apply_url, desc="") -> dict | None:
+    if not (jid and title):
+        return None
+    loc = location or ""
+    if not _is_remote(title, loc, desc):
+        return None                                   # remote-only rule
+    if not (us_eligible(loc) or _has_us_state(loc) or _title_us(title)):
+        return None                                   # US-only rule
+    row = _mk_row("transcom", jid, "Transcom", title, loc or "Remote, United States",
+                  apply_url or f"{_TRANSCOM_BASE}/SearchJobs")
+    if row:
+        row["us_eligible"] = True                     # US confirmed above (loc text / state / title)
+    return row
+
+
+def _transcom_cards(client, params) -> list[tuple]:
+    """Paginate one SearchJobs query → (jid, title, href, loc, desc) tuples. The portal's page-size
+    honoring is inconsistent (returns 6 or 30) and a past-the-end offset can REPEAT the last page, so
+    step the offset by the count returned and STOP as soon as a page adds no fresh job (bounded ≤300)."""
+    from bs4 import BeautifulSoup
+    out, seen, offset = [], set(), 0
+    while offset < 300:
+        p = {**params, "jobRecordsPerPage": 30, "jobOffset": offset}
+        try:
+            r = client.get(_TRANSCOM_BASE + "/SearchJobs", params=p)
+            arts = BeautifulSoup(r.text, "html.parser").select("article.article--result")
+        except Exception as e:
+            print(f"[transcom offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not arts:
+            break
+        new = 0
+        for a in arts:
+            link = a.select_one("h3 a")
+            if not link:
+                continue
+            href = link.get("href") or ""
+            if href in seen:
+                continue                              # a repeated page → skip
+            seen.add(href)
+            new += 1
+            id_el = a.select_one(".list-item-jobId")
+            loc_el = a.select_one(".list-item-location")
+            desc_el = a.select_one(".article__content")
+            out.append((
+                re.sub(r"\D", "", id_el.get_text()) if id_el else "",
+                link.get_text(strip=True), href,
+                loc_el.get_text(strip=True) if loc_el else "",
+                desc_el.get_text(" ", strip=True) if desc_el else ""))
+        if new == 0:                                  # nothing fresh on this page → end of results
+            break
+        offset += len(arts)
+    return out
+
+
+def fetch_transcom() -> list[dict]:
+    # US-remote is a tiny slice of a global board, so query the default board PLUS US/remote-targeting
+    # keywords to widen coverage; the client-side _transcom_row filter keeps only US+remote+mass-hiring.
+    rows, seen = [], set()
+    queries = [{}, {"search": "remote"}, {"search": "work from home"}, {"search": "work at home"},
+               {"search": "virtual"}, {"search": "United States"}, {"search": "customer service"}]
+    try:
+        with httpx.Client(headers={"User-Agent": _BROWSER_UA}, timeout=30,
+                          follow_redirects=True) as c:
+            for qi, q in enumerate(queries):
+                if qi:
+                    time.sleep(0.4)                   # light pacing (≤~70 GETs/run for a tiny yield)
+                for jid, title, href, loc, desc in _transcom_cards(c, q):
+                    if not jid or jid in seen:
+                        continue
+                    row = _transcom_row(jid, title, loc, href, desc)
+                    if row:
+                        seen.add(jid)
+                        rows.append(row)
+    except Exception as e:
+        print(f"[transcom] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+# Percepta — Ford-affiliated BPO on Taleo. TWO careersections: the US portal is 10300 (portal
+# 128160131726); 10400 is the international portal (0 US). Modern FACETED Taleo, so the whole board
+# comes from ONE JSON endpoint: POST /careersection/rest/jobboard/searchjobs?lang=en&portal=<id>
+# (NOTE: no careersection code in the path — /careersection/rest/…, not /careersection/10300/rest/…).
+# GET the jobsearch.ftl page first to set the session cookie. A requisition's `column` array holds
+# [title, locations-json]; `linkedColumn` indexes the title column, `locationsColumns` the location
+# column(s) whose value is a JSON array of Taleo codes ("US-MI-Dearborn"). Most US CSR reqs are
+# SITE-based (Melbourne FL / Dearborn MI) so the remote-only rule keeps just the genuinely-remote ones.
+# Apply is Taleo → reuses strategies/taleo.py after a per-tenant verify pass; the TTEC Taleo apply cron
+# is scoped to `source='ttec'`, so a source='percepta' row is never picked up by the wrong driver.
+_PERCEPTA_PORTAL = "128160131726"          # careersection 10300 = the US portal
+_PERCEPTA_EP = "https://percepta.taleo.net/careersection/rest/jobboard/searchjobs"
+
+
+def _percepta_loc(codes) -> str:
+    """Format Taleo location codes ('US-MI-Dearborn') into a readable string."""
+    out = []
+    for code in codes:
+        parts = (code or "").split("-")
+        if len(parts) >= 3 and parts[0] == "US":
+            out.append(f"{parts[2]}, {parts[1]}, United States")
+        elif len(parts) == 2 and parts[0] == "US":
+            out.append(f"{parts[1]}, United States")
+        elif code:
+            out.append(code)
+    return " / ".join(out)
+
+
+def _percepta_row(req: dict) -> dict | None:
+    import json
+    col = req.get("column") or []
+    if not col:
+        return None
+    li = req.get("linkedColumn", 0)
+    title = col[li] if 0 <= li < len(col) else col[0]
+    codes = []
+    for i in (req.get("locationsColumns") or []):
+        if 0 <= i < len(col):
+            try:
+                v = json.loads(col[i])
+                codes += v if isinstance(v, list) else [v]
+            except Exception:
+                codes.append(col[i])
+    is_us = any(
+        (c or "").upper().startswith("US-") or (c or "").upper() == "US"
+        or "UNITED STATES" in (c or "").upper() for c in codes) or _title_us(title or "")
+    loc = _percepta_loc(codes) or ("United States" if is_us else "")
+    if not _is_remote(title or "", loc):
+        return None                                   # remote-only rule
+    # US-only rule. `us_eligible("")` defaults True ("assume open") — safe ONLY because
+    # fetch_percepta queries the US-only portal 10300; a global Taleo tenant would need an
+    # explicit non-US reject here (don't copy this helper for one without that guard).
+    if not (is_us or us_eligible(loc)):
+        return None
+    jid = req.get("jobId")
+    if not (jid and title):
+        return None
+    apply_url = (f"https://percepta.taleo.net/careersection/10300/jobdetail.ftl?job={jid}&lang=en")
+    row = _mk_row("percepta", jid, "Percepta", title, loc or "Remote, United States", apply_url)
+    if row and is_us:
+        row["us_eligible"] = True
+    return row
+
+
+def fetch_percepta() -> list[dict]:
+    def body(pg):
+        return {"multilineEnabled": False,
+                "sortingSelection": {"ascendingSortingOrder": "false", "sortBySelectionParam": "3"},
+                "fieldData": {"fields": {"KEYWORD": "", "LOCATION": ""}, "valid": True},
+                "filterSelectionParam": {"searchFilterSelections": []},
+                "advancedSearchFiltersSelectionParam": {"searchFilterSelections": []}, "pageNo": pg}
+    hdr = {"Content-Type": "application/json", "Accept": "application/json", "Tz": "GMT"}
+    rows, seen = [], set()
+    try:
+        with httpx.Client(headers={"User-Agent": _BROWSER_UA}, timeout=30,
+                          follow_redirects=True) as c:
+            c.get("https://percepta.taleo.net/careersection/10300/jobsearch.ftl")   # session cookie
+            pg = 1
+            while pg <= 8:
+                try:
+                    r = c.post(_PERCEPTA_EP, params={"lang": "en", "portal": _PERCEPTA_PORTAL},
+                               json=body(pg), headers=hdr)
+                    d = r.json()
+                except Exception as e:
+                    print(f"[percepta pg={pg}] {type(e).__name__}: {e}", file=sys.stderr)
+                    break
+                reqs = d.get("requisitionList") or []
+                if not reqs:
+                    break
+                for req in reqs:
+                    jid = req.get("jobId")
+                    if not jid or jid in seen:
+                        continue
+                    seen.add(jid)
+                    row = _percepta_row(req)
+                    if row:
+                        rows.append(row)
+                total = (d.get("pagingData") or {}).get("totalCount") or 0
+                if len(seen) >= total:
+                    break
+                pg += 1
+    except Exception as e:
+        print(f"[percepta] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
 # The shared Workday US-country facet id (locationCountry / Location_Country = United States of America).
 _WD_US_FACET = "bc33aa3152ec42d4995f4791a106ed09"
 
@@ -1838,6 +2040,8 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
             "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
             "foundever": fetch_foundever,
+            # BPOs on already-supported ATSes (apply reuses the tenant's strategy after a verify pass)
+            "transcom": fetch_transcom, "percepta": fetch_percepta,
             # staffing agencies (fast-placement lane)
             "randstad": fetch_randstad, "manpower": fetch_manpower, "experis": fetch_experis,
             "adecco": fetch_adecco, "roberthalf": fetch_roberthalf}

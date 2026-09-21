@@ -362,28 +362,40 @@ def test_best_prompt_option_picks_from_open_listbox():
     assert B(["Indeed"], []) is None
 
 
-def test_wd_source_wants_are_leaf_first():
-    # The delegated "how did you hear" wants must LEAD with reliable leaf options (a leaf commits a
-    # pill directly; a category needs a drill) and keep Concentrix's proven flat "Job Board".
+def test_wd_source_wants_cover_the_real_sagility_options():
+    # The delegated "how did you hear" wants must include Sagility's REAL live option set (so a
+    # present option always matches) AND Concentrix's flat "Job Board". A leaf commits a pill
+    # directly; a category (Job Boards / Social Media) is drilled to a leaf.
     wants = list(WorkdayMassHiringStrategy._WD_SOURCE_WANTS)
-    assert wants[0] == "Indeed"
-    assert "Job Board" in wants
+    for real in ("Sagility Career Portal", "Job Boards", "Social Media", "Job Fair"):
+        assert real in wants, real                    # Sagility's live options
+    assert "Job Board" in wants                        # Concentrix's proven flat leaf
     assert "Company Website" in wants
-    assert "Employee Referral" in wants               # a non-referral answer is never LED with
+    # "Job Board" want must resolve Sagility's plural "Job Boards" option via _best_prompt_option
+    assert WorkdayMassHiringStrategy._best_prompt_option(
+        wants, ["Job Boards", "Job Fair", "Sagility Career Portal", "School Fair", "Social Media"]
+    ) in ("Sagility Career Portal", "Company Website", "Job Boards")
 
 
-def test_wd_prompt_js_constants_are_tenant_agnostic():
+def test_wd_prompt_js_constants_are_tenant_agnostic_and_scoped():
     # The prompt handler locates the field by LABEL (not a hardcoded formField-source id) so
-    # Sagility/Highmark/cvs/humana all resolve; the pill selector is embedded in both JS helpers.
+    # Sagility/Highmark/cvs/humana all resolve; the OPTION scan is scoped to the field's OWN listbox
+    # (via aria-controls), never a document-wide sweep that grabs the adjacent phone country prompt.
     from backend.applier.strategies import workday as w
     assert "formField-source" not in w._WD_TAG_PROMPT_JS       # located by label, not by id
     assert "data-jfprompt" in w._WD_TAG_PROMPT_JS
     assert "const pill='" in w._WD_TAG_PROMPT_JS               # pill selector embedded via repr()
     assert "const pill='" in w._WD_PROMPT_ANSWERED_JS
-    assert "promptOption" in w._WD_PROMPT_OPTIONS_JS and "menuItem" in w._WD_PROMPT_OPTIONS_JS
     # the widget's search input (moniker + legacy multiselect) is reachable
     assert "monikerSearchBox" in w._WD_TAG_PROMPT_JS
     assert "multiselectInputContainer" in w._WD_TAG_PROMPT_JS
+    # the OPTION scan is scoped (aria-controls + tags each option) and phone-prompt-excluded
+    tj = w._WD_PROMPT_TAG_OPTIONS_JS
+    assert "promptOption" in tj and "menuItem" in tj
+    assert "aria-controls" in tj                                # scope to the field's OWN listbox
+    assert "data-jfopt" in tj                                   # tags each option for an exact click
+    assert "phone|country|dial" in tj                           # never the phone country-code prompt
+    assert "document.querySelectorAll(sel)" not in tj          # NOT a document-wide option sweep
 
 
 def test_screener_answer_unknown_returns_none():

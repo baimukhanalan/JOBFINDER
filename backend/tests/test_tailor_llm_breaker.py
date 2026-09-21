@@ -129,7 +129,11 @@ def test_claude_cli_used_when_breaker_open(monkeypatch):
 
 def test_claude_cli_complete_gating(monkeypatch):
     import subprocess
-    # disabled by env → None, no shell-out
+    # OPT-IN: default OFF — env unset + a present binary still returns None
+    monkeypatch.delenv("TAILOR_CLAUDE_CLI", raising=False)
+    monkeypatch.setattr(t, "_claude_bin", lambda: "/x/claude")
+    assert _REAL_CLAUDE_CLI("hi") is None
+    # explicitly disabled → None, no shell-out
     monkeypatch.setenv("TAILOR_CLAUDE_CLI", "0")
     assert _REAL_CLAUDE_CLI("hi") is None
     # enabled + a resolvable binary + a fake subprocess → returns the trimmed stdout

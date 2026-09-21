@@ -389,10 +389,12 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
   locally-installed `claude` CLI (`~/.local/bin/claude -p … --model`) in headless print mode, which runs on the machine's
   Claude **SUBSCRIPTION** (on-disk creds, NO OpenAI/Anthropic API credit — same mechanism as `assessment_harvester/
   claude_cli_solver.py`). So a dead Sumrak degrades to CLAUDE (quality preserved), not the deterministic keyword path.
-  Default ON; `TAILOR_CLAUDE_CLI=0` disables it, `TAILOR_CLAUDE_MODEL` picks the model (default fast/cheap
-  `claude-haiku-4-5-20251001`), `TAILOR_CLAUDE_TIMEOUT` the per-call cap. The tailor's JSON parser already strips ```code
-  fences```/trailing prose, so the CLI output is drop-in. CAVEAT: at full lane volume every persona build shells `claude -p`,
-  drawing on the Claude subscription quota — toggle off if it rate-limits. **The Codex token itself:** the server's
+  **OPT-IN, default OFF** (owner will top up Codex instead): set `TAILOR_CLAUDE_CLI=1` to enable; `TAILOR_CLAUDE_MODEL` picks
+  the model (default fast/cheap `claude-haiku-4-5-20251001`; a sonnet id = higher quality, more subscription usage),
+  `TAILOR_CLAUDE_TIMEOUT` the per-call cap. It runs with `--allowedTools ""` (NO tools — cannot read files / run commands,
+  only the prompt text). The tailor's JSON parser already strips ```code fences```/trailing prose, so the CLI output is
+  drop-in. CAVEAT: while enabled, at full lane volume every persona build shells `claude -p`, drawing on the Claude
+  subscription quota — that's why it's opt-in. **The Codex token itself:** the server's
   `/var/lib/programmer/.codex/auth.json` (a ChatGPT-account OAuth token, `auth_mode=chatgpt`) can be refreshed by copying a live
   one from the Mac (`ssh macalan cat ~/.codex/auth.json` → that path); `codex login status` verifies. If the account is
   quota-capped it needs credits or another account. Lane subprocesses pick up tailor changes immediately (fresh each run); the

@@ -36,10 +36,12 @@ _llm_down_until = 0.0
 # Cerebras is out of credit), fall back to the locally-installed `claude` CLI in headless
 # print mode. It runs on the machine's Claude SUBSCRIPTION (on-disk creds) → NO OpenAI /
 # Anthropic API credit needed, the same mechanism the assessment harvester's
-# claude_cli_solver already uses. Default ON when Sumrak fails (so résumé/answer QUALITY is
-# restored instead of dropping to the deterministic keyword path); `TAILOR_CLAUDE_CLI=0`
-# disables it, `TAILOR_CLAUDE_MODEL` picks the model (fast/cheap haiku by default — the
-# tailor's callers already strip ```code fences``` + trailing prose, so it is drop-in).
+# claude_cli_solver already uses. OPT-IN, default OFF: set `TAILOR_CLAUDE_CLI=1` to enable it
+# (then a down Sumrak degrades to CLAUDE — quality preserved — instead of the deterministic
+# keyword path). `TAILOR_CLAUDE_MODEL` picks the model (fast/cheap haiku by default; set a
+# sonnet id for higher quality at more subscription usage). It runs with `--allowedTools ""`
+# (NO tools — cannot read files / run commands, only the prompt text). The tailor's callers
+# already strip ```code fences``` + trailing prose, so the CLI output is drop-in.
 _CLAUDE_BIN: str | None = None
 _CLAUDE_BIN_RESOLVED = False
 
@@ -63,8 +65,8 @@ def _claude_bin() -> str | None:
 def _claude_cli_complete(prompt: str) -> str | None:
     """One-shot completion via the local `claude` CLI (subscription, no API key). Returns the
     text, or None when disabled / no binary / the call fails (caller then uses the next tier)."""
-    if (os.getenv("TAILOR_CLAUDE_CLI", "1") or "1").strip().lower() in ("0", "false", "no", "off"):
-        return None
+    if (os.getenv("TAILOR_CLAUDE_CLI", "0") or "0").strip().lower() not in ("1", "true", "yes", "on"):
+        return None                                  # OPT-IN: default OFF (set TAILOR_CLAUDE_CLI=1)
     b = _claude_bin()
     if not b:
         return None
@@ -77,7 +79,9 @@ def _claude_cli_complete(prompt: str) -> str | None:
     env = dict(os.environ)
     env["PATH"] = os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
     try:
-        p = subprocess.run([b, "-p", prompt, "--model", model],
+        # `--allowedTools ""` = NO tools: a pure text completion that CANNOT read files/run
+        # commands — it only sees the prompt text (the résumé + JD are embedded in it).
+        p = subprocess.run([b, "-p", prompt, "--model", model, "--allowedTools", ""],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, env=env, timeout=to, text=True)
         out = (p.stdout or "").strip()

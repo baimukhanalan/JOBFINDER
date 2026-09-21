@@ -980,7 +980,27 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   python3 -m backend.tools.workday_recon --job <mass_hiring_jobs.id> --keep 7'`, read the `workday register captcha presence: {…}`
   log + `_debug/06_create_account_form.png`; if no captcha AND it reaches on-page "Application Submitted" (`confirmed=1`) like
   Concentrix → add to `_LIVE_TENANTS` + a hour-staggered cron line (mirror the Concentrix `mass_hiring_apply_workday_cron
-  --tenant <name>` line). **Molina is NOT Workday** (`careers.molinahealthcare.com` → Oracle Recruiting Cloud
+  --tenant <name>` line). **SAGILITY "How Did You Hear About Us?" PROMPT-WIDGET UNBLOCKED 2026-09-21 (`strategies/workday.py`
+  `_fill_wd_prompt`):** a live Sagility drive (job 15576, `WORKDAY_ADVANCE=1`) proved **NO reCAPTCHA** (`register captcha
+  presence: {grecaptcha:False, enterprise:False, frames:0}`, `create-account: created=True`, DIRECT server IP) — the ONLY
+  My-Information blocker was the required **"How Did You Hear About Us?*"** field, which Sagility renders as a Workday **MONIKER
+  multiselect** (`formField-source` → `data-uxi-widget-type="multiselect"` → `monikerSearchBox` → an `<input enterkeyhint=
+  "search">` + ☰ list icon that opens a SEARCHABLE, sometimes HIERARCHICAL listbox of `[data-automation-id=promptOption]`s),
+  NOT Concentrix's flat `menuItem` list — so the old `_fill_wd_source` (`formField-source`-hardcoded, `menuItem`-only, no
+  typed search) logged «SOURCE: NOT answered» and the wizard stalled («The field How Did You Hear About Us? is required»,
+  `wizard_blocked_step`). FIX: `_fill_wd_source` now delegates to the GENERIC **`_fill_wd_prompt(page, label_substr, wants)`**
+  — it LOCATES the prompt by its field `<label>` (tenant-agnostic, `_WD_TAG_PROMPT_JS`, not a hardcoded id, so
+  Highmark/cvs/humana benefit), TYPES a leaf `want` (Indeed/LinkedIn/Job Board/Company Website/…, `_WD_SOURCE_WANTS`, leaf-
+  first so a leaf commits a pill directly), clicks the surfaced `promptOption`/`menuItem`/`role=option` (`_click_prompt_option`,
+  pure picker `_best_prompt_option`), DRILLS a category → first leaf when the click didn't commit, and verifies a selection
+  PILL (`_WD_PROMPT_ANSWERED_JS`). Readonly-input fallback opens via the ☰ button. My-Information's other req (the
+  "previously worked for Sagility" Yes/No radio) was already answered "No" by `_answer_radio_screeners`+`_screener_answer`.
+  **The `workday_probe_promote` cron is the LIVE VERIFICATION** — it drives Sagility on a quiet `:98` and AUTO-PROMOTES it to
+  `_LIVE_TENANTS` on a confirmed on-page "Application Submitted"; do NOT manually add sagility to `_LIVE_TENANTS`. HONEST
+  STATUS: the fix is unit-proven (`test_workday.py` `_best_prompt_option`/wants/JS-constant tests, 60 passed) + the exact
+  widget DOM is confirmed from a live FIELD-DUMP; the full walk-to-submit is left for the probe cron's next quiet-window drive
+  (a live re-drive was deferred to avoid a 2nd Workday drive on a busy `:98`). Tests: `test_workday.py`. **Molina is NOT
+  Workday** (`careers.molinahealthcare.com` → Oracle Recruiting Cloud
   `hckd.fa.us2.oraclecloud.com`, Radancy; the `molinahealthcare.wd1.myworkdayjobs.com` host is stale/parked, 406/422) — it's an
   ORC lane, deliberately NOT collected here.
   **CONCENTRIX SCREENER BATTERY (2026-09-20, job 328 "Licensed Health Insurance Rep"): the create-account → wizard now fills the

@@ -1450,91 +1450,175 @@ class WorkdayStrategy(ApplyStrategy):
             except Exception:
                 continue
 
+    # A neutral, non-referral 'How Did You Hear About Us?' answer, LEAF options first (a leaf commits
+    # a pill on any tenant; a category needs a drill). Concentrix's flat menuItem "Job Board" is kept
+    # so that proven tenant still commits on an early try.
+    _WD_SOURCE_WANTS = ("Indeed", "LinkedIn", "Job Board", "Company Website", "Career Site",
+                        "Careers Website", "Glassdoor", "Google", "Search Engine",
+                        "Employee Referral", "Online", "Social Media", "Website", "Other")
+
     async def _fill_wd_source(self, page: Page) -> None:
-        """Answer the required 'How Did You Hear About Us?' multiselect prompt with a neutral
-        job-board source so My Information can advance (the analyzer leaves this Workday prompt
-        blank). Best-effort; a no-op when the field is absent or already answered."""
-        # 'How Did You Hear About Us?' is a Workday searchable multiselect: a text input (#source--source,
-        # placeholder 'Search', aria-required) that surfaces [data-automation-id=promptOption]s as you
-        # type. Type a source term and click its matching option; a chip then fills promptSelectionLabel.
-        async def _answered() -> bool:
-            # A selected source becomes a PILL in the source field (aria-label '…press delete to clear
-            # value.', id 'pill-…'), like the phone-code '+1' pill. Also accept the older chip markers.
+        """Answer the required 'How Did You Hear About Us?' Workday PROMPT so My Information can
+        advance. Delegates to the generic label-located _fill_wd_prompt so EVERY CxS tenant is
+        covered — not just the ones whose field id happens to be 'source' — and so the newer MONIKER
+        multiselect (an <input> + ☰ list icon that opens a searchable, sometimes HIERARCHICAL listbox
+        of promptOptions — e.g. Sagility/Highmark) is handled as well as Concentrix's flat menuItem
+        list. Best-effort; a no-op when the field is absent or already answered."""
+        try:
+            await self._fill_wd_prompt(page, "how did you hear", list(self._WD_SOURCE_WANTS))
+        except Exception as exc:
+            if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                logger.info("workday SOURCE (prompt) raised: %s", exc)
+
+    @staticmethod
+    def _best_prompt_option(wants, option_texts):
+        """PURE: from the option labels currently visible in an OPEN Workday prompt listbox, choose
+        which to click. Prefers an EXACT (case-insensitive) match to a want, then a want appearing as
+        a substring (a typed search having surfaced a longer leaf, e.g. want 'Indeed' → 'Indeed.com'),
+        then a want the option is a substring of. Returns the chosen option text or None (leave it)."""
+        opts = [o for o in (option_texts or []) if (o or "").strip()]
+        low = {o: o.lower().strip() for o in opts}
+        for w in wants or []:
+            wl = (w or "").lower().strip()
+            if not wl:
+                continue
+            for o in opts:
+                if low[o] == wl:
+                    return o
+        for w in wants or []:
+            wl = (w or "").lower().strip()
+            if not wl:
+                continue
+            for o in opts:
+                if wl in low[o] or low[o] in wl:
+                    return o
+        return None
+
+    async def _click_prompt_option(self, page: Page, text: str) -> bool:
+        """Click a currently-visible Workday prompt option (promptOption / menuItem / role=option)
+        whose text matches `text`; fall back to focus+Space (the moniker checkbox commit key)."""
+        sel = ('[data-automation-id="promptOption"], [data-automation-id="menuItem"], '
+               '[role="option"], [role="menuitemcheckbox"]')
+        opt = page.locator(sel).filter(
+            has_text=re.compile(rf"^\s*{re.escape(text)}\s*$", re.I)).first
+        try:
+            if not await opt.count():
+                opt = page.locator(sel).filter(has_text=re.compile(re.escape(text), re.I)).first
+            if not await opt.count():
+                return False
+            await opt.scroll_into_view_if_needed(timeout=1500)
+            await opt.click(timeout=2500)
+            return True
+        except Exception:
             try:
-                return await page.evaluate(
-                    "()=>{const f=document.querySelector('[data-automation-id=\"formField-source\"]');"
-                    "if(!f)return false;"
-                    "if(f.querySelector('[id^=\"pill-\"],[aria-label*=\"press delete\"],"
-                    "[data-automation-id=\"selectedItem\"],[data-automation-id=\"DELETE_charm\"],"
-                    "[data-automation-id$=\"-selectedItem\"],.css-selectedItem'))return true;"
-                    "const c=f.querySelector('[data-automation-id=\"promptSelectionLabel\"]');"
-                    "return !!(c&&c.innerText.trim());}")
+                await opt.focus()
+                await page.keyboard.press("Space")
+                return True
             except Exception:
                 return False
+
+    async def _fill_wd_prompt(self, page: Page, label_substr: str, wants: list) -> bool:
+        """Fill a Workday PROMPT / moniker multiselect widget — an <input> (with a ☰ list icon) under
+        [data-uxi-widget-type=multiselect] that opens a SEARCHABLE listbox of
+        [data-automation-id=promptOption]s (often a category→leaf HIERARCHY) — located by its field
+        <label> containing label_substr (so it's tenant-agnostic, not hardcoded to formField-source).
+        For each want: type it into the prompt's search box, click the surfaced matching option; if
+        that click merely DRILLED into a category (no pill committed yet), pick the first leaf; stop
+        once a selection pill appears. Returns True once answered. Best-effort; a no-op when the field
+        is absent or already answered. Covers Concentrix's flat menuItem list too (typing filters it,
+        _click_prompt_option matches a menuItem)."""
         _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
-        if await _answered():
-            return
-        inp = page.locator('#source--source, '
-                           '[data-automation-id="formField-source"] input[type="text"], '
-                           '[data-automation-id="formField-source"] '
-                           '[data-automation-id="multiselectInputContainer"] input').first
-        try:
-            if not await inp.count():
-                if _dbg:
-                    logger.info("workday SOURCE: input not found")
-                return
-            await inp.scroll_into_view_if_needed(timeout=2000)
-        except Exception:
-            return
-        # The option is a CHECKBOX-style menuItem: <div data-automation-id="menuItem" role="option"
-        # aria-label="Job Board not checked" aria-selected="false"> wrapping a promptOption label.
-        # Selecting toggles it to a PILL in the source field. Open the prompt, then toggle the wanted
-        # menuItem — click it, and if that doesn't take, focus + Space (the checkbox commit key).
-        wants = ["Job Board", "Employee Referral", "Online Advertising", "Company Website",
-                 "Careers Website", "Website", "Other"]
-        try:
-            # The base analyzer types a drafted 'how did you hear' string (e.g. 'Online job search')
-            # into this multiselect's search input, which FILTERS the option list to nothing — clear
-            # it first so every menuItem is visible again, then open the prompt.
-            await inp.click(timeout=2000)
-            await inp.fill("", timeout=1500)
-            await inp.click(timeout=2000)
-            await page.wait_for_timeout(900)
-        except Exception:
-            return
-        for want in wants:
-            if await _answered():
-                break
-            mi = page.locator('[data-automation-id="menuItem"][role="option"]').filter(
-                has_text=re.compile(rf"^\s*{re.escape(want)}\s*$", re.I)).first
+        info = await page.evaluate(_WD_TAG_PROMPT_JS, label_substr.lower())
+        if not info or info.get("answered"):
+            return bool(info and info.get("answered"))
+        if not info.get("tagged"):
+            if _dbg:
+                logger.info("workday PROMPT[%s]: field/input not found", label_substr)
+            return False
+        inp = page.locator('input[data-jfprompt="1"]').first
+
+        async def _answered() -> bool:
             try:
-                if not await mi.count():
-                    continue
-                await mi.scroll_into_view_if_needed(timeout=1500)
-                await mi.click(timeout=3000)
-                await page.wait_for_timeout(600)
-                if not await _answered():
+                return await page.evaluate(_WD_PROMPT_ANSWERED_JS, label_substr.lower())
+            except Exception:
+                return False
+
+        async def _open_options() -> list:
+            try:
+                return await page.evaluate(_WD_PROMPT_OPTIONS_JS)
+            except Exception:
+                return []
+
+        picked = False
+        try:
+            for want in wants or []:
+                if await _answered():
+                    picked = True
+                    break
+                # OPEN the prompt (click the input / its ☰ icon), then TYPE the search term so the
+                # listbox filters to matches. A readonly/non-typeable moniker input (some tenants)
+                # still OPENS on click — we then match the want against the full, unfiltered list.
+                try:
+                    await inp.scroll_into_view_if_needed(timeout=1500)
+                    await inp.click(timeout=2000)
+                except Exception:
+                    pass
+                try:
+                    await inp.fill("", timeout=1500)
+                    await inp.type(want, delay=25, timeout=3000)
+                except Exception:
+                    # readonly / not typeable — reveal the option list via the prompt/☰ button.
+                    for isel in ('[data-jfprompt="1"] ~ button', '[data-jfprompt="1"]'):
+                        try:
+                            b = page.locator(isel).first
+                            if await b.count():
+                                await b.click(timeout=1500)
+                                break
+                        except Exception:
+                            continue
+                await page.wait_for_timeout(800)
+                opts = await _open_options()
+                if _dbg:
+                    logger.info("workday PROMPT[%s]: typed=%r opts=%r", label_substr, want, opts[:14])
+                target = self._best_prompt_option([want], opts)
+                if not target:
                     try:
-                        await mi.focus()
-                        await page.keyboard.press("Space")
-                        await page.wait_for_timeout(600)
+                        await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(150)
                     except Exception:
                         pass
-                if _dbg:
-                    logger.info("workday SOURCE: menuItem want=%r answered=%s",
-                                want, await _answered())
+                    continue
+                await self._click_prompt_option(page, target)
+                await page.wait_for_timeout(500)
                 if await _answered():
+                    picked = True
                     break
-            except Exception as exc:
-                if _dbg:
-                    logger.info("workday SOURCE: menuItem want=%r raised %s", want, exc)
-                continue
-        try:
-            await page.keyboard.press("Escape")
-        except Exception:
-            pass
-        if _dbg and not await _answered():
-            logger.info("workday SOURCE: NOT answered")
+                # the click may have DRILLED into a category (no pill yet) — pick a leaf now.
+                opts2 = await _open_options()
+                if opts2:
+                    leaf = self._best_prompt_option([want], opts2) or opts2[0]
+                    if _dbg:
+                        logger.info("workday PROMPT[%s]: drilled, leaf=%r opts=%r",
+                                    label_substr, leaf, opts2[:14])
+                    await self._click_prompt_option(page, leaf)
+                    await page.wait_for_timeout(500)
+                    if await _answered():
+                        picked = True
+                        break
+                try:
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(150)
+                except Exception:
+                    pass
+        finally:
+            try:
+                await page.evaluate("()=>document.querySelectorAll('[data-jfprompt]')"
+                                    ".forEach(e=>e.removeAttribute('data-jfprompt'))")
+            except Exception:
+                pass
+        if _dbg and not picked:
+            logger.info("workday PROMPT[%s]: NOT answered", label_substr)
+        return picked
 
     async def _fill_wd_country(self, page: Page) -> None:
         """Set Country = United States on My Information. Workday CxS renders Country as a
@@ -2675,4 +2759,53 @@ _CHECKBOX_GROUPS_JS = r"""()=>{
       ||!!(g.querySelector&&g.querySelector('label abbr, legend abbr, abbr[title*="equired"], .css-required'));
     out.push({question:q,required:!!req,anyChecked:opts.some(o=>o.checked),
       options:opts.map(o=>({gi:o.gi,text:o.text}))});}
+  return out;}"""
+
+# ---- Workday PROMPT / moniker multiselect (e.g. "How Did You Hear About Us?") ----------------
+# A committed selection shows as a PILL / selectedItem inside the field (aria-label '…press delete
+# to clear value', id 'pill-…'), like the phone-code '+1' chip.
+_WD_PROMPT_PILL_SEL = ('[id^="pill-"],[aria-label*="press delete" i],'
+                       '[data-automation-id="selectedItem"],[data-automation-id="DELETE_charm"],'
+                       '[data-automation-id$="-selectedItem"],.css-selectedItem')
+
+# Locate the prompt field by its <label>/text containing `lbl`, and TAG its search <input> with
+# data-jfprompt=1 (so Python can type into it). Returns {answered, tagged}: already-answered when a
+# pill is present; tagged when we found + marked the input. Tenant-agnostic (NOT hardcoded to
+# formField-source) so Sagility/Highmark/cvs/humana all resolve.
+_WD_TAG_PROMPT_JS = (r"""(lbl)=>{const pill=""" + repr(_WD_PROMPT_PILL_SEL) + r""";
+  for(const ff of document.querySelectorAll('[data-automation-id^="formField"]')){
+    const lab=ff.querySelector('label');
+    const t=(((lab&&lab.innerText)||'')+' '+(ff.getAttribute('data-automation-id')||'')).toLowerCase();
+    if(!t.includes(lbl)) continue;
+    if(ff.querySelector(pill)) return {answered:true, tagged:false};
+    const inp=ff.querySelector('[data-automation-id="monikerSearchBox"] input,'
+      +'[data-automation-id="multiselectInputContainer"] input,input[enterkeyhint="search"],'
+      +'input[type="text"],input');
+    if(!inp) continue;
+    inp.setAttribute('data-jfprompt','1');
+    return {answered:false, tagged:true};}
+  return {answered:false, tagged:false};}""")
+
+# True once the labelled prompt field carries a selection pill.
+_WD_PROMPT_ANSWERED_JS = (r"""(lbl)=>{const pill=""" + repr(_WD_PROMPT_PILL_SEL) + r""";
+  for(const ff of document.querySelectorAll('[data-automation-id^="formField"]')){
+    const lab=ff.querySelector('label');
+    const t=(((lab&&lab.innerText)||'')+' '+(ff.getAttribute('data-automation-id')||'')).toLowerCase();
+    if(!t.includes(lbl)) continue;
+    return !!ff.querySelector(pill);}
+  return false;}""")
+
+# The option labels visible in the currently-OPEN prompt listbox (portaled anywhere in the doc),
+# de-noised of Workday's ' not checked'/' checked' aria-label suffix.
+_WD_PROMPT_OPTIONS_JS = r"""()=>{
+  const sel='[data-automation-id="promptOption"],[data-automation-id="menuItem"],'
+    +'[role="option"],[role="menuitemcheckbox"]';
+  const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};
+  const out=[];const seen=new Set();
+  for(const o of document.querySelectorAll(sel)){
+    if(!vis(o))continue;
+    let t=(o.getAttribute('aria-label')||o.innerText||'')
+      .replace(/\s+(not\s+)?checked\s*$/i,'').replace(/\s+/g,' ').trim();
+    if(!t||seen.has(t))continue;seen.add(t);out.push(t);
+    if(out.length>=40)break;}
   return out;}"""

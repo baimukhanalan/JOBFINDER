@@ -348,6 +348,44 @@ def test_checkgroup_answer_regex_matches_concentrix_prompts():
     assert not _CHECKGROUP_ANSWER_RE.search("What is your gender?")
 
 
+def test_best_prompt_option_picks_from_open_listbox():
+    # The "How Did You Hear About Us?" moniker prompt: after typing a want, choose which of the
+    # surfaced option labels to click. Exact match first, then a want that is a substring of a
+    # longer leaf (typed search surfaced a fuller label), then a category the want is a substring of.
+    B = WorkdayMassHiringStrategy._best_prompt_option
+    assert B(["Indeed"], ["Indeed", "LinkedIn", "Glassdoor"]) == "Indeed"
+    assert B(["Indeed"], ["indeed"]) == "indeed"                     # case-insensitive
+    assert B(["LinkedIn"], ["LinkedIn.com"]) == "LinkedIn.com"       # option is a longer leaf
+    assert B(["Job Board"], ["Job Boards"]) == "Job Boards"          # a category the want is inside
+    assert B(["Indeed"], ["LinkedIn", "Company Website"]) is None    # no match -> try the next want
+    assert B([], ["Indeed"]) is None
+    assert B(["Indeed"], []) is None
+
+
+def test_wd_source_wants_are_leaf_first():
+    # The delegated "how did you hear" wants must LEAD with reliable leaf options (a leaf commits a
+    # pill directly; a category needs a drill) and keep Concentrix's proven flat "Job Board".
+    wants = list(WorkdayMassHiringStrategy._WD_SOURCE_WANTS)
+    assert wants[0] == "Indeed"
+    assert "Job Board" in wants
+    assert "Company Website" in wants
+    assert "Employee Referral" in wants               # a non-referral answer is never LED with
+
+
+def test_wd_prompt_js_constants_are_tenant_agnostic():
+    # The prompt handler locates the field by LABEL (not a hardcoded formField-source id) so
+    # Sagility/Highmark/cvs/humana all resolve; the pill selector is embedded in both JS helpers.
+    from backend.applier.strategies import workday as w
+    assert "formField-source" not in w._WD_TAG_PROMPT_JS       # located by label, not by id
+    assert "data-jfprompt" in w._WD_TAG_PROMPT_JS
+    assert "const pill='" in w._WD_TAG_PROMPT_JS               # pill selector embedded via repr()
+    assert "const pill='" in w._WD_PROMPT_ANSWERED_JS
+    assert "promptOption" in w._WD_PROMPT_OPTIONS_JS and "menuItem" in w._WD_PROMPT_OPTIONS_JS
+    # the widget's search input (moniker + legacy multiselect) is reachable
+    assert "monikerSearchBox" in w._WD_TAG_PROMPT_JS
+    assert "multiselectInputContainer" in w._WD_TAG_PROMPT_JS
+
+
 def test_screener_answer_unknown_returns_none():
     A = WorkdayMassHiringStrategy._screener_answer
     assert A("describe a time you resolved a conflict", {}) is None

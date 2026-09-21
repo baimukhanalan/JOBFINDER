@@ -31,6 +31,66 @@ _LLM_BREAKER_COOLDOWN = float(os.getenv("LLM_BREAKER_COOLDOWN", "300"))  # secon
 _llm_fail_cycles = 0
 _llm_down_until = 0.0
 
+# --- Claude CLI fallback (subscription, NO API key) ------------------------------------
+# When the local Sumrak LLM is down (its Codex provider token expired / hit its quota, or
+# Cerebras is out of credit), fall back to the locally-installed `claude` CLI in headless
+# print mode. It runs on the machine's Claude SUBSCRIPTION (on-disk creds) → NO OpenAI /
+# Anthropic API credit needed, the same mechanism the assessment harvester's
+# claude_cli_solver already uses. Default ON when Sumrak fails (so résumé/answer QUALITY is
+# restored instead of dropping to the deterministic keyword path); `TAILOR_CLAUDE_CLI=0`
+# disables it, `TAILOR_CLAUDE_MODEL` picks the model (fast/cheap haiku by default — the
+# tailor's callers already strip ```code fences``` + trailing prose, so it is drop-in).
+_CLAUDE_BIN: str | None = None
+_CLAUDE_BIN_RESOLVED = False
+
+
+def _claude_bin() -> str | None:
+    """Locate the `claude` CLI once (cached). None if not installed."""
+    global _CLAUDE_BIN, _CLAUDE_BIN_RESOLVED
+    if _CLAUDE_BIN_RESOLVED:
+        return _CLAUDE_BIN
+    import shutil
+    b = shutil.which("claude")
+    if not b:
+        for c in (os.path.expanduser("~/.local/bin/claude"), "/usr/local/bin/claude"):
+            if os.path.exists(c):
+                b = c
+                break
+    _CLAUDE_BIN, _CLAUDE_BIN_RESOLVED = b, True
+    return b
+
+
+def _claude_cli_complete(prompt: str) -> str | None:
+    """One-shot completion via the local `claude` CLI (subscription, no API key). Returns the
+    text, or None when disabled / no binary / the call fails (caller then uses the next tier)."""
+    if (os.getenv("TAILOR_CLAUDE_CLI", "1") or "1").strip().lower() in ("0", "false", "no", "off"):
+        return None
+    b = _claude_bin()
+    if not b:
+        return None
+    import subprocess
+    model = (os.getenv("TAILOR_CLAUDE_MODEL") or "claude-haiku-4-5-20251001").strip()
+    try:
+        to = float(os.getenv("TAILOR_CLAUDE_TIMEOUT", "120") or "120")
+    except ValueError:
+        to = 120.0
+    env = dict(os.environ)
+    env["PATH"] = os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
+    try:
+        p = subprocess.run([b, "-p", prompt, "--model", model],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, env=env, timeout=to, text=True)
+        out = (p.stdout or "").strip()
+        if not out:
+            logger.warning("claude CLI empty output (rc=%s): %s", p.returncode, (p.stderr or "")[:120])
+        return out or None
+    except subprocess.TimeoutExpired:
+        logger.warning("claude CLI timeout after %.0fs", to)
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("claude CLI failed: %s", str(e)[:140])
+        return None
+
 
 def _resume_to_text(resume: dict) -> str:
     parts = [resume.get("summary", "")]
@@ -187,48 +247,55 @@ def _llm_complete(prompt: str) -> str:
     if settings.llm_url:
         global _llm_fail_cycles, _llm_down_until
         import httpx
-        if _time.monotonic() < _llm_down_until:
-            # breaker open (recent persistent 5xx) — skip the backoff, fall back now
-            raise RuntimeError("LLM circuit-breaker open — deterministic fallback")
         last_exc: Exception | None = None
-        for attempt in range(1, 5):  # up to 4 tries
-            try:
-                r = httpx.post(
-                    f"{settings.llm_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.llm_key}",
-                             "Content-Type": "application/json"},
-                    json={"model": settings.llm_model,
-                          "messages": [{"role": "user", "content": prompt}],
-                          "temperature": 0.2, "max_tokens": 2500, "stream": False},
-                    timeout=180,
-                )
-                if r.status_code == 429 or r.status_code >= 500:
-                    retry_after = r.headers.get("retry-after")
-                    wait = (float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit()
-                            else min(2 ** attempt, 20))
-                    logger.warning("LLM %s (attempt %d) — backing off %.1fs",
-                                   r.status_code, attempt, wait)
-                    last_exc = httpx.HTTPStatusError(
-                        f"{r.status_code}", request=r.request, response=r)
-                    _time.sleep(wait)
-                    continue
-                r.raise_for_status()
-                _llm_fail_cycles = 0            # a success closes the breaker
-                return r.json()["choices"][0]["message"]["content"]
-            except (httpx.TransportError, httpx.TimeoutException) as e:
-                last_exc = e
-                logger.warning("LLM transport error (attempt %d): %s", attempt, e)
-                _time.sleep(min(2 ** attempt, 20))
-        # the whole retry cycle failed — count it toward the breaker
-        _llm_fail_cycles += 1
-        if _llm_fail_cycles >= _LLM_BREAKER_THRESHOLD:
-            _llm_down_until = _time.monotonic() + _LLM_BREAKER_COOLDOWN
-            _llm_fail_cycles = 0
-            logger.warning("LLM circuit-breaker OPEN for %.0fs after %d failed cycles — "
-                           "using deterministic fallback until it probes again",
-                           _LLM_BREAKER_COOLDOWN, _LLM_BREAKER_THRESHOLD)
-        raise last_exc if last_exc else RuntimeError("LLM call failed")
+        # Try the local Sumrak LLM unless the breaker is open (recent persistent 5xx).
+        if _time.monotonic() >= _llm_down_until:
+            for attempt in range(1, 5):  # up to 4 tries
+                try:
+                    r = httpx.post(
+                        f"{settings.llm_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {settings.llm_key}",
+                                 "Content-Type": "application/json"},
+                        json={"model": settings.llm_model,
+                              "messages": [{"role": "user", "content": prompt}],
+                              "temperature": 0.2, "max_tokens": 2500, "stream": False},
+                        timeout=180,
+                    )
+                    if r.status_code == 429 or r.status_code >= 500:
+                        retry_after = r.headers.get("retry-after")
+                        wait = (float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit()
+                                else min(2 ** attempt, 20))
+                        logger.warning("LLM %s (attempt %d) — backing off %.1fs",
+                                       r.status_code, attempt, wait)
+                        last_exc = httpx.HTTPStatusError(
+                            f"{r.status_code}", request=r.request, response=r)
+                        _time.sleep(wait)
+                        continue
+                    r.raise_for_status()
+                    _llm_fail_cycles = 0            # a success closes the breaker
+                    return r.json()["choices"][0]["message"]["content"]
+                except (httpx.TransportError, httpx.TimeoutException) as e:
+                    last_exc = e
+                    logger.warning("LLM transport error (attempt %d): %s", attempt, e)
+                    _time.sleep(min(2 ** attempt, 20))
+            # the whole retry cycle failed — count it toward the breaker
+            _llm_fail_cycles += 1
+            if _llm_fail_cycles >= _LLM_BREAKER_THRESHOLD:
+                _llm_down_until = _time.monotonic() + _LLM_BREAKER_COOLDOWN
+                _llm_fail_cycles = 0
+                logger.warning("LLM circuit-breaker OPEN for %.0fs after %d failed cycles — "
+                               "using the Claude CLI / deterministic fallback until it probes again",
+                               _LLM_BREAKER_COOLDOWN, _LLM_BREAKER_THRESHOLD)
+        # Sumrak unavailable (just failed, or the breaker is open) → Claude CLI (subscription).
+        cli = _claude_cli_complete(prompt)
+        if cli:
+            return cli
+        raise last_exc if last_exc else RuntimeError("LLM unavailable (Sumrak down, no Claude CLI)")
 
+    # No local LLM configured: Claude CLI first (free/subscription), then the Anthropic API.
+    cli = _claude_cli_complete(prompt)
+    if cli:
+        return cli
     import anthropic
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=2500,

@@ -381,8 +381,22 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
 - **CRM Postgres pool:** `mail_db._get_pool()` maxconn **32** (`CRM_PG_POOL_MAX`), minconn 1; `conn()` wait-retries up to 5s.
   The parallel bulk lane + daemons + operator can exhaust a small pool → the blanket `except` falls to a slow live-Maildir
   disk scan + a `mail_health` alert. Do NOT lower maxconn to 8.
-- **Local LLM default:** `ANTHROPIC_API_KEY` empty; résumé polish + answer drafting hit Sumrak at `127.0.0.1:8080/v1`
-  (`sumrak-smart`); without the key, tailoring falls back to the deterministic keyword path.
+- **Local LLM default + fallbacks (`services/tailor/tailor.py::_llm_complete`):** résumé polish + answer drafting hit the
+  Sumrak router at `127.0.0.1:8080/v1` (`sumrak-smart`). When Sumrak is DOWN (its Codex provider token expires / hits quota,
+  or Cerebras 402s — the router at `/home/projects/LLM` has no other funded backend), two guards keep the lanes fast + quality:
+  **(1) a per-process circuit-breaker** trips after `LLM_BREAKER_THRESHOLD` (2) failed cycles → skips the 2+4+8+16=30s backoff
+  for `LLM_BREAKER_COOLDOWN` (300s), then re-probes; **(2) a Claude-CLI fallback** — `_claude_cli_complete` shells out to the
+  locally-installed `claude` CLI (`~/.local/bin/claude -p … --model`) in headless print mode, which runs on the machine's
+  Claude **SUBSCRIPTION** (on-disk creds, NO OpenAI/Anthropic API credit — same mechanism as `assessment_harvester/
+  claude_cli_solver.py`). So a dead Sumrak degrades to CLAUDE (quality preserved), not the deterministic keyword path.
+  Default ON; `TAILOR_CLAUDE_CLI=0` disables it, `TAILOR_CLAUDE_MODEL` picks the model (default fast/cheap
+  `claude-haiku-4-5-20251001`), `TAILOR_CLAUDE_TIMEOUT` the per-call cap. The tailor's JSON parser already strips ```code
+  fences```/trailing prose, so the CLI output is drop-in. CAVEAT: at full lane volume every persona build shells `claude -p`,
+  drawing on the Claude subscription quota — toggle off if it rate-limits. **The Codex token itself:** the server's
+  `/var/lib/programmer/.codex/auth.json` (a ChatGPT-account OAuth token, `auth_mode=chatgpt`) can be refreshed by copying a live
+  one from the Mac (`ssh macalan cat ~/.codex/auth.json` → that path); `codex login status` verifies. If the account is
+  quota-capped it needs credits or another account. Lane subprocesses pick up tailor changes immediately (fresh each run); the
+  persistent copilot/dash need `pm2 restart` to use the new fallback for interactive fills. Tests: `test_tailor_llm_breaker.py`.
 - **Co-pilot ports are per-deploy** (Xvfb `:98`, x11vnc `5901`, noVNC `6090`, copilot `8102`). Pick host ports with `nginx -T | grep -oE '127.0.0.1:PORT'` (a grep of `sites-enabled` misses symlinked vhosts).
 - **Proxy pool** (`tools/proxy_pool.py`): the `/catalog` 🛡️ panel parses+validates a pasted list → `data/proxies.json`.
   `next_proxy()` round-robins the lowest-`fails` tier; `_do_fill` picks one per fill; `copilot._use_proxy_context` builds a

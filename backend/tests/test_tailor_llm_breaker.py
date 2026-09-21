@@ -10,6 +10,16 @@ import pytest
 
 import backend.services.tailor.tailor as t
 
+# capture the real Claude-CLI fn BEFORE the autouse fixture stubs it (for the gating test)
+_REAL_CLAUDE_CLI = t._claude_cli_complete
+
+
+class _Proc:
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.stderr = ""
+        self.returncode = returncode
+
 
 class _Resp:
     def __init__(self, status):
@@ -33,6 +43,8 @@ def _reset_breaker(monkeypatch):
     monkeypatch.setattr(t, "_llm_down_until", 0.0, raising=False)
     monkeypatch.setattr(t.settings, "llm_url", "http://127.0.0.1:8080/v1", raising=False)
     monkeypatch.setattr(t._time, "sleep", lambda *_a, **_k: None)
+    # isolate the Sumrak/breaker behaviour from the Claude-CLI fallback (tested separately)
+    monkeypatch.setattr(t, "_claude_cli_complete", lambda *_a, **_k: None)
     yield
 
 
@@ -88,3 +100,43 @@ def test_healthy_llm_is_unchanged(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _Resp(200))
     assert t._llm_complete("hi") == "ok"
     assert t._llm_down_until == 0.0                       # never trips when healthy
+
+
+# ---- Claude CLI fallback (subscription, no API key) --------------------------------------
+def test_claude_cli_used_when_sumrak_5xxs(monkeypatch):
+    # Sumrak 500s every attempt → the Claude CLI serves the completion (no raise, no deterministic)
+    monkeypatch.setattr(t._time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _Resp(500))
+    monkeypatch.setattr(t, "_claude_cli_complete", lambda prompt: "FROM CLAUDE")
+    assert t._llm_complete("hi") == "FROM CLAUDE"
+
+
+def test_claude_cli_used_when_breaker_open(monkeypatch):
+    # breaker OPEN → Sumrak is skipped entirely, the Claude CLI serves it
+    monkeypatch.setattr(t._time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(t, "_llm_down_until", 999999.0, raising=False)
+    calls = {"n": 0}
+
+    def _post(*_a, **_k):
+        calls["n"] += 1
+        return _Resp(500)
+
+    monkeypatch.setattr(httpx, "post", _post)
+    monkeypatch.setattr(t, "_claude_cli_complete", lambda prompt: "CLI")
+    assert t._llm_complete("hi") == "CLI"
+    assert calls["n"] == 0                                # Sumrak never called while breaker open
+
+
+def test_claude_cli_complete_gating(monkeypatch):
+    import subprocess
+    # disabled by env → None, no shell-out
+    monkeypatch.setenv("TAILOR_CLAUDE_CLI", "0")
+    assert _REAL_CLAUDE_CLI("hi") is None
+    # enabled + a resolvable binary + a fake subprocess → returns the trimmed stdout
+    monkeypatch.setenv("TAILOR_CLAUDE_CLI", "1")
+    monkeypatch.setattr(t, "_claude_bin", lambda: "/x/claude")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Proc(stdout="  polished text  "))
+    assert _REAL_CLAUDE_CLI("hi") == "polished text"
+    # enabled but the CLI isn't installed → None (caller uses the next tier)
+    monkeypatch.setattr(t, "_claude_bin", lambda: None)
+    assert _REAL_CLAUDE_CLI("hi") is None

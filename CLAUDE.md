@@ -283,8 +283,10 @@ FILL is fixed, the human only solves the captcha). The dividing line is the fina
 
 **Mass-Hiring auto-apply feasibility.** Ceiling = "auto-fill + submit → a human does the assessment"; per-lane status in the
 Auto-apply lanes section below. BLOCKED: cigna/humana/cvs (register-step reCAPTCHA — pending live re-verify; see the Workday lane).
-**Concentrix UNBLOCKED 2026-09-20** — its create-account has NO reCAPTCHA; the sole blocker was a required Terms checkbox, now
-ticked (`create-account: created=True` live on the plain server IP, no solver/US-IP needed).
+**Concentrix LIVE end-to-end 2026-09-21** — create-account (NO reCAPTCHA) → 6-step wizard (all screeners incl. the check-all
+groups + the legend-based availability-restrictions TEXTAREA) → Submit → on-page **"Application Submitted / Thank you for
+applying"** success page (`confirmed=1`, plain server IP, no solver/US-IP). Now a LIVE cron tenant (`_LIVE_TENANTS` +
+`30 6,18 * * * mass_hiring_apply_workday_cron --tenant concentrix --limit 4`, ~8 synthetic apps/day).
 
 ## Offer-priority layer (`tools/offer_priority.py`) — high-pay-first · multi-candidate · stop-on-response
 Owner directives 2026-09-20 to make the apply engine offer/interview-efficient. PURE + injectable core (fully unit-tested,

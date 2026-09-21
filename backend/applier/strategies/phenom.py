@@ -896,6 +896,10 @@ class PhenomWorkdayStrategy(WorkdayStrategy):
                       facts: dict | None = None,
                       profile_id: str = "default", niche: str = "",
                       resume_parser_only: bool = False) -> dict:
+        # Stash what the inherited account-creation / wizard helpers read (they only receive `page`).
+        self._profile_form = profile_form or {}
+        self._facts = facts or {}
+        self._resume_path = resume_path
         # DEFAULT PATH (gate off): behave EXACTLY like the stock WorkdayStrategy — a plain
         # /catalog Workday fill must be untouched. super() resolves to the shared base.prefill
         # (WorkdayStrategy has no prefill override), which calls our open_form (identical clicks)
@@ -906,23 +910,24 @@ class PhenomWorkdayStrategy(WorkdayStrategy):
                 draft=draft, resume_summary=resume_summary, known_answers=known_answers,
                 facts=facts, profile_id=profile_id, niche=niche,
                 resume_parser_only=resume_parser_only)
-
-        # GATED LIVE PATH: Apply → Create Account (captcha) → fill → walk the wizard, recording
-        # the final Submit WITHOUT clicking it. Every step is best-effort/try-except so a DOM
-        # drift never raises into the caller.
+        # GATED LIVE PATH — now IDENTICAL to WorkdayMassHiringStrategy. Humana's apply_url is a plain
+        # Workday CxS `humana.wd5.myworkdayjobs.com` (same shape as cigna/centene), so this class
+        # DROPPED its stale, parallel account-create + wizard copies and reuses the MODERN shared
+        # WorkdayStrategy helpers: `_start_and_create_account` (legend-based required-Terms checkbox
+        # fix + register-captcha-presence log + created-wait loop + activation/sign-in), then the full
+        # `_fill_workday_gaps` / `_advance_wizard` (country/state, identity, source, experience, the
+        # EEO/demographic decline, CC-305 date signature, screeners). Records the final Submit WITHOUT
+        # clicking it. Every step is best-effort/try-except so a DOM drift never raises into the caller.
         try:
-            await self.open_form(page)   # Workday "Apply" / "Apply Manually"
+            await self.open_form(page)            # stock Workday "Apply"
         except Exception as exc:
             logger.debug("phenom_workday: open_form raised: %s", exc)
         try:
-            await self._create_account(page, profile_form)
+            await self._start_and_create_account(page)
         except Exception as exc:
-            logger.debug("phenom_workday: create_account raised: %s", exc)
-
-        # The shared pipeline fills whatever is now reachable (base.prefill re-runs open_form,
-        # which no-ops once the Apply button is gone). It returns login_required if the account
-        # gate is still up (e.g. no captcha key) — that is the honest "needs the captcha key"
-        # signal, surfaced below.
+            logger.debug("phenom_workday: account creation raised: %s", exc)
+        # The shared pipeline fills whatever is now reachable; it returns login_required if the account
+        # gate is still up (e.g. no captcha key) — the honest "needs the captcha key" signal.
         report = await super().prefill(
             page, profile_form, resume_path, cover_letter=cover_letter, job=job,
             draft=draft, resume_summary=resume_summary, known_answers=known_answers,
@@ -930,6 +935,9 @@ class PhenomWorkdayStrategy(WorkdayStrategy):
             resume_parser_only=resume_parser_only)
         report["strategy"] = self.name
         report["phenom_backend"] = "workday"
+        report["account_password"] = getattr(self, "_account_pw", "")
+        if report.get("mode") == "resume_parser_only":
+            return report
         if report.get("page_type") in ("login_required", "captcha", "expired"):
             report["note"] = ("phenom_workday: account gate not cleared "
                               "(needs CAPTCHA_SOLVER_KEY + a residential IP)")
@@ -944,192 +952,3 @@ class PhenomWorkdayStrategy(WorkdayStrategy):
         except Exception as exc:
             logger.debug("phenom_workday: wizard advance raised: %s", exc)
         return report
-
-    async def _create_account(self, page: Page, profile_form: dict) -> bool:
-        """Best-effort Workday account creation for a synthetic persona. Click "Create Account",
-        fill email (the persona's live @takhet.com box) + password (twice), solve the per-tenant
-        reCAPTCHA v2/Enterprise on this step via the solver (no-op without a key), and submit.
-        A verify-email link (if the tenant sends one) is finished downstream by the co-pilot's
-        emailed-code watcher, exactly like the Oracle PIN / GH-Ashby security code."""
-        email = (profile_form or {}).get("email") or ""
-        if not email:
-            return False
-        # Switch from the Sign-In panel to Create-Account when Workday defaults to sign-in.
-        for sel in ('[data-automation-id="createAccountLink"]',
-                    'button[data-automation-id="createAccountLink"]',
-                    'a:has-text("Create Account")', 'button:has-text("Create Account")'):
-            try:
-                b = page.locator(sel).first
-                if await b.count() and await b.is_visible(timeout=1000):
-                    await b.click()
-                    await page.wait_for_timeout(1500)
-                    break
-            except Exception:
-                continue
-        pw = getattr(self, "_account_pw", None) or _gen_password()
-        self._account_pw = pw
-        await self._fill_first(page, ('input[data-automation-id="email"]',
-                                      'input[type="email"]'), email)
-        await self._fill_first(page, ('input[data-automation-id="password"]',), pw)
-        await self._fill_first(page, ('input[data-automation-id="verifyPassword"]',
-                                      'input[data-automation-id="confirmPassword"]'), pw)
-        # Required "I have read and agree..." create-account checkbox, if present.
-        try:
-            await fill_required_consent(page)
-        except Exception:
-            pass
-        # Solve the account-create reCAPTCHA (v2 / v2-Enterprise) and inject the token BEFORE
-        # submitting the account. Graceful no-op without CAPTCHA_SOLVER_KEY.
-        try:
-            await captcha_solver.solve_on_page(page)
-        except Exception as exc:
-            logger.debug("phenom_workday: create-account captcha raised: %s", exc)
-        for sel in ('button[data-automation-id="createAccountSubmitButton"]',
-                    'button[data-automation-id="signInSubmitButton"]',
-                    'button:has-text("Create Account")'):
-            try:
-                b = page.locator(sel).first
-                if await b.count() and await b.is_visible(timeout=1000):
-                    await b.click()
-                    await page.wait_for_timeout(3000)
-                    return True
-            except Exception:
-                continue
-        return False
-
-    async def _fill_first(self, page: Page, selectors, value: str) -> bool:
-        """Fill the first present+visible input from `selectors` with `value` (auto-waits)."""
-        if not value:
-            return False
-        for sel in selectors:
-            try:
-                loc = page.locator(sel).first
-                if await loc.count() and await loc.is_visible(timeout=1000):
-                    await loc.fill(value, timeout=4000)
-                    return True
-            except Exception:
-                continue
-        return False
-
-    async def _fill_workday_gaps(self, page: Page, profile_form: dict, facts=None) -> None:
-        """Decline every EEO/Voluntary-Disclosure demographic (never claiming a protected
-        characteristic) and tick required consent on the current Workday step. Workday renders
-        these as native selects / radios / checkboxes the shared helpers already handle."""
-        for fn in (fill_demographics_decline, fill_demographic_checkboxes_decline,
-                   fill_required_consent):
-            try:
-                await fn(page)
-            except Exception:
-                pass
-
-    async def _rescan_required(self, page: Page) -> list:
-        """Labels of required-but-empty visible controls on the current step, so the report's
-        `unfilled` reflects the gap fill and the co-pilot's submit gate stays honest."""
-        try:
-            return await page.evaluate(
-                """()=>{const out=[];const seen=new Set();
-                  for(const el of document.querySelectorAll('input,select,textarea')){
-                    const t=(el.type||'').toLowerCase();
-                    if(['hidden','submit','button','file','reset'].includes(t)) continue;
-                    const r=el.getBoundingClientRect();
-                    if(r.width===0&&r.height===0) continue;
-                    const req=el.required||el.getAttribute('aria-required')==='true'
-                      ||!!el.closest('[data-automation-id="required"],[aria-required="true"]');
-                    if(!req) continue;
-                    let empty;
-                    if(t==='checkbox'||t==='radio'){const nm=el.name;
-                      empty=nm?![...document.querySelectorAll('[name="'+
-                        (window.CSS&&CSS.escape?CSS.escape(nm):nm)+'"]')].some(x=>x.checked):!el.checked;}
-                    else empty=!(el.value||'').trim();
-                    if(!empty) continue;
-                    let lab='';const id=el.id;
-                    if(id){const l=document.querySelector('label[for="'+
-                      (window.CSS&&CSS.escape?CSS.escape(id):id)+'"]');if(l)lab=l.innerText.trim();}
-                    if(!lab){const l=el.closest('label')||
-                      (el.parentElement&&el.parentElement.querySelector('label'));if(l)lab=l.innerText.trim();}
-                    lab=(lab||'').replace(/\\s*\\*\\s*$/,'').trim().slice(0,80)||(el.name||'field');
-                    if(!seen.has(lab)){seen.add(lab);out.push(lab);}
-                  } return out;}""")
-        except Exception:
-            return []
-
-    async def _step_signature(self, page: Page) -> str:
-        """Cheap fingerprint of the current Workday step (Workday re-renders in place, often
-        the same URL) — to tell whether a Continue click actually advanced."""
-        try:
-            return await page.evaluate(
-                "()=>{const h=document.querySelector("
-                "'[data-automation-id=\"jobApplicationProgressBarActiveStep\"],h1,h2,legend');"
-                "return h?h.innerText.trim().slice(0,50):(location.href||'');}")
-        except Exception:
-            return ""
-
-    async def _primary_button(self, page: Page):
-        """(handle, kind) for the step's primary button: 'submit' on the final Review step,
-        'advance' on Continue/Next/Save-and-Continue, else None."""
-        try:
-            for b in await page.query_selector_all(_WD_NAV_BTN):
-                if not await b.is_visible():
-                    continue
-                txt = ((await b.inner_text()) or "").strip()
-                if _WD_SUBMIT.search(txt) and not _WD_NEXT.search(txt):
-                    return b, "submit"
-                if _WD_NEXT.search(txt):
-                    return b, "advance"
-            sel = await find_submit_button(page)
-            if sel:
-                b = await page.query_selector(sel)
-                if b:
-                    txt = ((await b.inner_text()) or "").strip()
-                    return b, ("submit" if _WD_SUBMIT.search(txt) else "advance")
-        except Exception as exc:
-            logger.debug("phenom_workday: primary_button raised: %s", exc)
-        return None, None
-
-    async def _fill_current_step(self, page, profile_form, cover_letter, facts) -> None:
-        """Fill an ordinary / EEO / review Workday step: decline demographics + required
-        consent, then fill any matched fields the analyzer recognizes."""
-        await self._fill_workday_gaps(page, profile_form, facts)
-        try:
-            analysis = await analyze_page(page, profile_form, cover_letter, {}, facts or {})
-            await fill_form(page, analysis)
-        except Exception as exc:
-            logger.debug("phenom_workday: step fill raised: %s", exc)
-        await self._fill_workday_gaps(page, profile_form, facts)
-
-    async def _advance_wizard(self, page, report, profile_form, cover_letter, facts) -> None:
-        """Walk the Workday task flow (My Information → Experience → Application Questions →
-        Voluntary Disclosures → Self-Identify → Review), clicking Continue while it advances
-        and filling each new step. STOP at the final Submit — recording its selector WITHOUT
-        clicking it, after pre-solving any captcha that reappears there. If a Continue click
-        does NOT advance (a required field is still empty), stop and leave the gaps in
-        `unfilled` for the human / next iteration."""
-        for _ in range(8):
-            btn, kind = await self._primary_button(page)
-            if btn is None:
-                break
-            if kind == "submit":
-                await self._fill_current_step(page, profile_form, cover_letter, facts)
-                # A per-tenant reCAPTCHA can reappear on the final submit — pre-solve+inject.
-                try:
-                    report["captcha_solved"] = await captcha_solver.solve_on_page(page)
-                except Exception as exc:
-                    logger.debug("phenom_workday: submit captcha raised: %s", exc)
-                report["submit_selector"] = (
-                    "button[data-automation-id='bottom-navigation-next-button'], "
-                    "button[data-automation-id='pageFooterNextButton'], "
-                    "button:has-text('Submit')")
-                report["wizard_at_submit"] = True
-                report["unfilled"] = await self._rescan_required(page)
-                return
-            sig = await self._step_signature(page)
-            try:
-                await btn.click()
-                await page.wait_for_timeout(2500)
-            except Exception:
-                break
-            if await self._step_signature(page) == sig:
-                report["wizard_blocked_step"] = sig
-                report["unfilled"] = await self._rescan_required(page)
-                return
-            await self._fill_current_step(page, profile_form, cover_letter, facts)

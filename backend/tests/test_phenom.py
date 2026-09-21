@@ -118,6 +118,19 @@ def test_phenom_workday_subclasses_workday():
     assert PhenomWorkdayStrategy.name == "phenom_workday"
 
 
+def test_phenom_workday_reuses_the_modern_workday_account_and_wizard():
+    # Humana's apply_url is a plain Workday CxS host (humana.wd5.myworkdayjobs.com), identical in
+    # shape to cigna/centene, so PhenomWorkdayStrategy must NOT keep its own stale copies of the
+    # account-create + wizard walk — it inherits the MODERN shared WorkdayStrategy versions (the
+    # legend-based required-Terms checkbox fix, the register-captcha-presence log, the CC-305 date
+    # signature + demographic-decline handling). A drifted private copy silently regressed Humana.
+    for meth in ("_create_account", "_start_and_create_account", "_fill_workday_gaps",
+                 "_fill_current_step", "_advance_wizard", "_rescan_required", "_primary_button"):
+        assert getattr(PhenomWorkdayStrategy, meth) is getattr(WorkdayStrategy, meth), meth
+    # it still overrides prefill (its own gated live path) but NOT the shared helpers.
+    assert PhenomWorkdayStrategy.prefill is not WorkdayStrategy.prefill
+
+
 # ---- advance gates (live-submit switches, default OFF) -----------------------
 
 def test_env_advance_default_off(monkeypatch):

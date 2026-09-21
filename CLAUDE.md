@@ -46,6 +46,14 @@ uvicorn dashboard_app:app` is BROKEN).
   pre-fills. Separate app (routes `/ /load /release /mark_submitted /state`).
 - `jobfinder-alan-display` → `vnc/copilot_display.sh`: Xvfb **`:98`** + x11vnc **`:5901`** + noVNC **`:6090`**.
 - `jobfinder-alan-ivremind` → `python -m backend.interviews.reminders` — Telegram interview notifier (own process; no `sg mail`).
+- `jobfinder-shl-watch` → `shl_assess_runner --watch --interval 90 --concurrency 1` (`DISPLAY=:98` + `sg mail`) — the
+  always-on Maximus SHL-OPQ auto-pass drainer. **Made a pm2 service 2026-09-21** (was a FRAGILE manual scratchpad process,
+  ppid 1 — invisible to `health_heal`, nothing restarted it if it died). As a `jobfinder-*` pm2 service it is now SUPERVISED:
+  `health_heal` restarts it on `down` (every 10 min). Recreate exactly like the others: `pm2 start /usr/bin/bash --name
+  jobfinder-shl-watch --cwd /home/projects/jobfinder -- -c "cd /home/projects/jobfinder && exec env DISPLAY=:98 sg mail -c
+  'PYTHONPATH=. python3 -m backend.tools.shl_assess_runner --watch --interval 90 --concurrency 1'"` → `pm2 save`. NB: a
+  watcher that's UP but whose drives fail (stuck/error) is NOT a pm2-`down` — that's the health «Ассессменты» group's ALERT,
+  fixed in code (the DIRECT-first egress, `_shl_proxy`), not by a restart.
 - nginx vhost `jobs.systeam.kz` (certbot SSL): `/`→8099, `/copilot/`→8102, `/vnc/`→6090. `location /` is `auth_basic off`,
   gated in-app (`dash_auth.py` fail-closed middleware; unauth → `/login`). **basic-auth (`/etc/nginx/.htpasswd-jobs`, user
   `job2026`) kept ONLY on `/copilot/` + `/vnc/`.** Extension endpoints (`/draft /assist /profile_form /job_pack /resume_file

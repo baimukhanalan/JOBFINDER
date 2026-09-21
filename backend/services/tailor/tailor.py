@@ -7,12 +7,29 @@ Two paths, both NO-FABRICATION (only facts already in the base résumé are used
     the JD's wording. Validated so no new company/skill/number is introduced.
 """
 import logging
+import os
 import re
+import time as _time
 
 from backend.config import settings
 from backend.services.tailor import keywords as kw
 
 logger = logging.getLogger(__name__)
+
+# --- LLM circuit-breaker (per-process) -------------------------------------------------
+# When the local LLM 5xx's PERSISTENTLY (e.g. the Codex/Sumrak provider refresh token has
+# expired), the naive retry burns 2+4+8+16 = 30s PER CALL before the caller falls back to
+# the deterministic keyword path — and one persona build makes SEVERAL LLM calls, so a
+# single fill wastes minutes while the LLM is down (starving the offer lanes at volume).
+# This breaker trips after a few consecutive full-cycle failures, then makes _llm_complete
+# raise IMMEDIATELY (→ instant deterministic fallback) for a cooldown, then probes once
+# more. Behaviour is IDENTICAL while the LLM is healthy — it only makes the already-
+# happening fallback fast. Long-lived processes (dash/copilot) self-recover after the
+# cooldown; short-lived lane subprocesses simply skip the wasted backoff.
+_LLM_BREAKER_THRESHOLD = int(os.getenv("LLM_BREAKER_THRESHOLD", "2"))    # consecutive failed cycles to trip
+_LLM_BREAKER_COOLDOWN = float(os.getenv("LLM_BREAKER_COOLDOWN", "300"))  # seconds the breaker stays open
+_llm_fail_cycles = 0
+_llm_down_until = 0.0
 
 
 def _resume_to_text(resume: dict) -> str:
@@ -168,9 +185,11 @@ def _llm_complete(prompt: str) -> str:
     why the application looked "not fully assembled".
     """
     if settings.llm_url:
-        import time as _time
-
+        global _llm_fail_cycles, _llm_down_until
         import httpx
+        if _time.monotonic() < _llm_down_until:
+            # breaker open (recent persistent 5xx) — skip the backoff, fall back now
+            raise RuntimeError("LLM circuit-breaker open — deterministic fallback")
         last_exc: Exception | None = None
         for attempt in range(1, 5):  # up to 4 tries
             try:
@@ -194,11 +213,20 @@ def _llm_complete(prompt: str) -> str:
                     _time.sleep(wait)
                     continue
                 r.raise_for_status()
+                _llm_fail_cycles = 0            # a success closes the breaker
                 return r.json()["choices"][0]["message"]["content"]
             except (httpx.TransportError, httpx.TimeoutException) as e:
                 last_exc = e
                 logger.warning("LLM transport error (attempt %d): %s", attempt, e)
                 _time.sleep(min(2 ** attempt, 20))
+        # the whole retry cycle failed — count it toward the breaker
+        _llm_fail_cycles += 1
+        if _llm_fail_cycles >= _LLM_BREAKER_THRESHOLD:
+            _llm_down_until = _time.monotonic() + _LLM_BREAKER_COOLDOWN
+            _llm_fail_cycles = 0
+            logger.warning("LLM circuit-breaker OPEN for %.0fs after %d failed cycles — "
+                           "using deterministic fallback until it probes again",
+                           _LLM_BREAKER_COOLDOWN, _LLM_BREAKER_THRESHOLD)
         raise last_exc if last_exc else RuntimeError("LLM call failed")
 
     import anthropic

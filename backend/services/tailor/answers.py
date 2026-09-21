@@ -12,7 +12,7 @@ import re
 import time
 
 from backend.services.tailor.choices import _extract_array
-from backend.services.tailor.tailor import _llm_complete
+from backend.services.tailor.tailor import _join_and, _llm_complete
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +79,14 @@ def _header(profile_form: dict, job: dict, resume_summary: str,
                 f"facts): {jd[:1200]}\n\n") if jd else ""
     return (
         f"You are drafting short job-application answers for a candidate applying to "
-        f"{role} at {company}.{focus} Use ONLY the candidate facts below; tailor relevance "
-        f"to the role description. Rules:\n"
+        f"{role} at {company}.{focus} Write answers that make a recruiter see a reliable, "
+        f"enthusiastic, customer-oriented candidate who fits THIS role. Use ONLY the "
+        f"candidate facts below; tailor relevance to the role description. Rules:\n"
         "- Use ONLY facts present in the profile/experience. Do NOT invent employers, "
         "dates, certifications, or specific numbers/metrics.\n"
-        "- Each answer 1-3 sentences, professional, first person.\n"
+        "- Each answer 1-3 sentences, professional, positive, first person. For "
+        "'why this role/company' answers, connect a REAL strength to what the role needs "
+        "and show genuine motivation — never generic filler.\n"
         "- Write in the candidate's natural voice, as if filling the form himself. NEVER "
         "refer to 'my profile', 'the information provided', 'not listed', or that a fact "
         "is missing. If a detail isn't available, give a sensible professional default "
@@ -142,15 +145,78 @@ _SOFT_RE = re.compile(
     r"this role|this company|this position|work (?:here|with|for))")
 
 
+def _resume_section(resume_text: str, header: str) -> str:
+    """Pull one UPPERCASE section (e.g. 'SUMMARY', 'SKILLS') out of the plain-text
+    résumé that render_text produces (header on its own line, body until a blank line
+    or the next UPPERCASE header). Returns '' when absent."""
+    if not resume_text:
+        return ""
+    lines = resume_text.splitlines()
+    body: list[str] = []
+    capture = False
+    for ln in lines:
+        s = ln.strip()
+        if not capture:
+            if s.upper() == header.upper():
+                capture = True
+            continue
+        # stop at a blank line or the next section header (ALL-CAPS word line)
+        if not s or (s.isupper() and len(s) <= 24 and s.replace(" ", "").isalpha()):
+            break
+        body.append(s)
+    return " ".join(body).strip()
+
+
+def _top_resume_skills(resume_text: str, n: int = 4) -> list[str]:
+    """The first few skills listed in the résumé's SKILLS section (already ordered
+    JD-relevant-first by the tailor). Verbatim — never fabricated."""
+    skills_block = _resume_section(resume_text, "SKILLS")
+    if not skills_block:
+        return []
+    # SKILLS renders as 'Group: a, b, c' lines joined; split on ':' then ','.
+    tail = skills_block.split(":", 1)[-1] if ":" in skills_block else skills_block
+    out: list[str] = []
+    for chunk in re.split(r"[,;]", tail):
+        s = chunk.strip(" .·")
+        if s and 2 <= len(s) <= 40 and s.lower() not in {o.lower() for o in out}:
+            out.append(s)
+        if len(out) >= n:
+            break
+    return out
+
+
 def _letter_body(job: dict, resume_summary: str) -> str:
-    role = job.get("title") or "the role"
-    company = job.get("company") or "your company"
-    first = (resume_summary.strip().split(". ")[0] if resume_summary else "").strip(". ")
-    return (
-        f"Dear {company} Hiring Team, I am excited to apply for the {role} position. "
-        f"{first + '. ' if first else ''}I bring strong communication, issue-resolution, "
-        "and CRM experience across support and financial services, and I would welcome "
-        "the chance to contribute to your team. Thank you for your consideration.")
+    """A role-SPECIFIC deterministic cover letter (used verbatim, or as the [review]
+    fallback for a soft question). References the actual company + role and the
+    persona's OWN top strengths — every candidate fact comes from the résumé; only
+    the company/role (the posting we are applying to) come from the job. Nothing is
+    fabricated."""
+    role = (job.get("title") or "the role").strip()
+    company = (job.get("company") or "your company").strip()
+    summary = _resume_section(resume_summary, "SUMMARY")
+    if not summary and resume_summary:
+        # fall back to the first real sentence of whatever text we were given
+        summary = resume_summary.strip().split(". ")[0].strip(". ")
+    first = summary.split(". ")[0].strip(". ") if summary else ""
+    skills = _top_resume_skills(resume_summary, 4)
+    strengths = _join_and(skills[:3]) if skills else ""
+
+    parts = [f"Dear {company} Hiring Team,"]
+    parts.append(f"I am excited to apply for the {role} position at {company}.")
+    if first:
+        parts.append(first + ".")
+    if strengths:
+        parts.append(
+            f"My background in {strengths} maps directly to what this role calls for, "
+            "and I take pride in responsive, reliable, customer-focused work.")
+    else:
+        parts.append(
+            "I bring strong communication, problem-solving, and a reliable, "
+            "customer-focused approach to every interaction.")
+    parts.append(
+        f"I would welcome the chance to contribute to {company} and grow with the team. "
+        "Thank you for your consideration.")
+    return " ".join(parts)
 
 
 def _soft_fallback(q: str, profile_form: dict, job: dict, resume_summary: str) -> str:
@@ -166,12 +232,20 @@ def cover_letter(job: dict, resume_summary: str, profile_form: dict,
         name = profile_form.get("full_name", "")
         role = job.get("title") or "the role"
         company = job.get("company") or "the company"
+        jd = re.sub(r"\s+", " ", (job.get("description") or "")).strip()
+        jd_block = (f"\nJOB DESCRIPTION (reference its real priorities; add NO new candidate "
+                    f"facts): {jd[:900]}\n") if jd else ""
         prompt = (
-            f"Write a concise professional cover letter (110-150 words, one paragraph) "
-            f"for {name} applying to {role} at {company}. Ground it ONLY in this "
-            f"experience summary — invent no employers, dates, or metrics:\n"
-            f"{resume_summary[:1200]}\n"
-            "First person, warm but professional. Return ONLY the letter text.")
+            f"Write a concise, compelling cover letter (110-150 words, one paragraph) for "
+            f"{name} applying to {role} at {company} that makes a recruiter want to "
+            f"interview them. Open by naming the role and one specific reason the "
+            f"candidate fits it; connect the candidate's REAL strengths to what this role "
+            f"needs; close with genuine enthusiasm for {company}.\n"
+            f"Ground it ONLY in this experience summary — invent NO employers, titles, "
+            f"dates, numbers, or metrics not present here:\n{resume_summary[:1200]}\n"
+            f"{jd_block}"
+            "First person, warm and confident but professional, no clichés like 'I am "
+            "writing to'. Return ONLY the letter text.")
         try:
             txt = _llm_complete(prompt).strip()
             txt = re.sub(r"^```.*?\n|```$", "", txt).strip()
@@ -200,7 +274,8 @@ def _deterministic_answer(q: str, profile_form: dict, job: dict,
 
     if ("notice period" in ql or "when can you start" in ql or "earliest" in ql
             or ("available" in ql and "start" in ql) or "start date" in ql):
-        return facts.get("notice_period") or profile_form.get("available_start") or "Immediately"
+        return (facts.get("notice_period") or profile_form.get("available_start")
+                or "Immediately, and I am flexible with scheduling")
 
     if "salary" in ql or "compensation" in ql or "expected pay" in ql:
         return (profile_form.get("desired_salary") or facts.get("salary_annual")

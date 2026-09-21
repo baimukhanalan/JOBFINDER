@@ -115,58 +115,68 @@ def _best_title(titles: list[str], job_title: str) -> str:
     return scored[0]
 
 
-# Real fintech / support / collections skills we may surface to cover a JD (beyond
-# the CS LEXICON). ONLY terms from here or the LEXICON are injected — never arbitrary
-# frequent JD tokens ("about", "grow", "offer"), which would read as keyword-stuffing
-# and trip an AI/authenticity check.
-_DOMAIN_SKILLS = {
-    "collections", "collection", "credit", "kyc", "aml", "underwriting", "verification",
-    "loan", "loans", "lending", "fraud", "compliance", "risk", "dispute", "disputes",
-    "chargeback", "reconciliation", "retention", "call center", "contact center",
-    "quality assurance", "quality", "reporting", "analytics", "dashboards", "dashboard",
-    "process improvement", "kpi", "kpis", "negotiation", "banking", "payments",
-    "collections calls", "customer accounts", "account management", "data entry",
-    "financial services", "crm", "excel", "spreadsheets", "recovery", "outbound calls",
-    "inbound calls", "complaint resolution", "case management", "field investigation",
-    "investigation", "assessment", "documentation", "client", "clients", "accounts",
-    "financial", "financial services", "payments", "payment", "calls", "systems",
-    "system", "communication", "problem solving", "time management", "multitasking",
-    "adaptability", "teamwork", "attention to detail", "microsoft office", "google workspace",
-    "customer accounts", "processes", "operations", "service delivery", "product support",
-}
-_SKILL_RX = re.compile(r"^[a-z][a-z0-9 +.#/-]*[a-z0-9]$")
-
-# Never a skill — company/product/location proper nouns and residual boilerplate.
-# Everything else salient in the JD is treated as a coverable competency (the target
-# is ~75-80% real coverage, so we accept broadly and only block true non-skills).
-_NOT_SKILL = {
-    "salmon", "ashby", "philippines", "filipino", "manila", "cebu", "davao", "taguig",
-    "pasig", "makati", "quezon", "kazakhstan", "georgia", "asia", "southeast",
-    "contribute", "contributing", "building", "growing", "grow", "join", "joining",
-    "mission", "vision", "culture", "world", "people", "million", "billion", "stores",
-    "downloads", "users", "investors", "startup", "scratch", "moment", "here", "come",
-    "impact", "directly", "ownership", "standards", "solve", "complex", "manage",
-    "access", "money", "scaling", "regulated", "deep", "local", "combines", "alongside",
-    "millions", "filipinos", "recommend", "recommends", "skip", "various", "across",
-    "based", "team", "teams", "role", "roles", "day", "days", "understand", "help",
-    # generic business/JD nouns that leaked into injected "Role-specific skills"
-    "global", "employment", "future", "interview", "interviews", "around", "encourage",
-    "encourages", "goals", "goal", "time", "values", "value", "bring", "brings",
-    "opportunity", "opportunities", "growth", "benefits", "culture", "passionate",
-    "motivated", "environment", "flexible", "diverse", "inclusive", "talented",
-}
+# A bullet with a digit / % / $ carries a quantified result. Recruiters reward
+# quantified impact, so among equally-JD-relevant bullets the quantified ones lead.
+# This is ORDER ONLY — no number is ever invented (strict no-fabrication).
+_METRIC_RX = re.compile(r"\d")
 
 
-def _skill_like(k: str) -> bool:
-    """True for coverable competencies. Curated skills always pass; otherwise any
-    salient JD token passes UNLESS it's a company/location/boilerplate non-skill.
-    Broad on purpose — the goal is high (75-80%) but real keyword coverage."""
-    k = (k or "").lower().strip()
-    if len(k) < 3 or k in _NOT_SKILL:
-        return False
-    if k in kw.LEXICON or k in _DOMAIN_SKILLS:
-        return True
-    return bool(_SKILL_RX.match(k))
+def _has_metric(bullet: str) -> int:
+    return 1 if _METRIC_RX.search(bullet or "") else 0
+
+
+def _join_and(items: list[str]) -> str:
+    """'a', 'a and b', 'a, b, and c' — a natural strengths list for the summary."""
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+def _matched_own_skills(base_resume: dict, jd: str) -> list[str]:
+    """The persona's OWN skills (verbatim from the base résumé) that the JD asks for,
+    in JD-relevance order (de-duplicated, case-insensitive). NO new skill is ever
+    added — this only SELECTS + reorders skills already present, so it is strictly
+    no-fabrication."""
+    jd_l = (jd or "").lower()
+    seen: set[str] = set()
+    matched: list[str] = []
+    for items in (base_resume.get("skills_grouped") or {}).values():
+        for s in items or []:
+            sl = (s or "").strip().lower()
+            if sl and sl not in seen and kw.term_present(sl, jd_l):
+                seen.add(sl)
+                matched.append(s.strip())
+    return matched
+
+
+def _targeted_summary(base_summary: str, headline: str,
+                      matched_skills: list[str]) -> str:
+    """Role-targeted, compelling summary built ONLY from tokens already in the base
+    résumé (the aligned title + the persona's own JD-matched skills + the persona's
+    own summary). Leads with the role-relevant strengths, keeps the real summary.
+    No fabricated fact is introduced — every noun comes from the input."""
+    base_summary = (base_summary or "").strip()
+    head = (headline or "").strip()
+    top: list[str] = []
+    for s in matched_skills:
+        if s and s.lower() not in {t.lower() for t in top}:
+            top.append(s)
+        if len(top) >= 3:
+            break
+    if head and top:
+        lead = f"{head} with hands-on strengths in {_join_and(top)}."
+    elif head:
+        lead = f"{head}." if not head.endswith(".") else head
+    else:
+        lead = ""
+    if base_summary and (not lead or base_summary.lower() not in lead.lower()):
+        return (lead + " " + base_summary).strip() if lead else base_summary
+    return lead or base_summary
 
 
 def tailor_resume(base_resume: dict, job_title: str, job_company: str,
@@ -180,34 +190,44 @@ def tailor_resume(base_resume: dict, job_title: str, job_company: str,
     experience = []
     for e in base_resume.get("experience", []):
         bullets = list(e.get("bullets", []))
-        # No caps (testing): keep EVERY bullet, JD-relevant ones first, so the résumé
-        # carries maximum truthful keyword coverage. Re-add MIN/MAX_BULLETS to trim.
-        ranked = sorted(bullets, key=lambda b: -kw.overlap(b, jd_kw))
+        # Keep EVERY bullet (truthful coverage), ordering by (1) JD relevance then
+        # (2) quantified impact — a recruiter's eye rewards a metric, and a metric-
+        # carrying bullet at the top of a role reads stronger. ORDER ONLY: no bullet
+        # is added, dropped, or edited, so nothing is fabricated.
+        ranked = sorted(bullets, key=lambda b: (-kw.overlap(b, jd_kw), -_has_metric(b)))
         experience.append({**e, "bullets": ranked})
 
-    skills_grouped = {}
-    for grp, items in base_resume.get("skills_grouped", {}).items():
-        in_jd = [s for s in items if s.lower() in jd.lower()]
-        rest = [s for s in items if s.lower() not in jd.lower()]
-        skills_grouped[grp] = in_jd + rest
+    # The persona's OWN skills the JD asks for, in JD order — used to build a
+    # highlighted lead group AND the targeted summary. Verbatim from the résumé.
+    matched_skills = _matched_own_skills(base_resume, jd)
+    matched_lower = {s.lower() for s in matched_skills}
 
-    # Cover the JD's own required-skill keywords the base résumé is missing. These are
-    # genuine skills/competencies a matching support candidate would list (never a
-    # fabricated employer/school), so adding them is truthful AND lifts the keyword
-    # match score toward full coverage. Company/location/generic noise is filtered.
-    base_cv = _resume_to_text(base_resume).lower()
-    extra = [k for k in kw.extract_jd_keywords(jd)
-             if not kw.term_present(k, base_cv) and _skill_like(k)]
-    if extra:
-        # No [:18] cap (testing): surface every JD-required skill the base résumé lacks.
-        skills_grouped["Role-specific skills"] = [
-            k.title() if k.islower() and " " not in k else k for k in extra]
+    skills_grouped: dict[str, list[str]] = {}
+    # 1) A prominent "Key skills for this role" group leads the section with exactly
+    #    the persona's own JD-matched skills (recruiter/ATS both skim the first line).
+    #    NO new skill is invented — the old block that INJECTED JD keywords the résumé
+    #    LACKED was removed: it violated the strict no-fabrication invariant that this
+    #    module documents ("services/tailor is strictly no-fabrication").
+    if matched_skills:
+        skills_grouped["Key skills for this role"] = matched_skills
+    # 2) The rest of the persona's skills follow, JD-relevant first WITHIN each group,
+    #    minus the ones already surfaced above (no duplicate tokens).
+    for grp, items in base_resume.get("skills_grouped", {}).items():
+        rest = [s for s in items if s.lower() not in matched_lower]
+        in_jd = [s for s in rest if kw.term_present(s.lower(), jd.lower())]
+        tail = [s for s in rest if not kw.term_present(s.lower(), jd.lower())]
+        ordered = in_jd + tail
+        if ordered:
+            skills_grouped[grp] = ordered
 
     tailored = {
         "personal_info": base_resume.get("personal_info", {}),
         "headline": headline,
         "eligibility": base_resume.get("eligibility", ""),
-        "summary": base_resume.get("summary", ""),
+        # Role-targeted summary — leads with the aligned title + the persona's own
+        # top JD-matched strengths, then keeps the real summary. Tokens are all from
+        # the base résumé (no invented fact); use_ai may still rephrase it below.
+        "summary": _targeted_summary(base_resume.get("summary", ""), headline, matched_skills),
         "experience": experience,
         "skills_grouped": skills_grouped,
         "certifications": base_resume.get("certifications", []),
@@ -314,11 +334,20 @@ def _ai_polish(tailored: dict, base_resume: dict, job_title: str,
     import re
 
     prompt = (
-        "You are tailoring a candidate's résumé to a job description. "
-        "Rephrase ONLY the `summary` and existing experience `bullets` to mirror the "
-        "JD's vocabulary where it TRUTHFULLY matches. Do NOT invent companies, tools, "
-        "certifications, numbers, dates, or claims not present in the input. Do NOT add "
-        "bullets. Keep the same JSON shape.\n\n"
+        "You are an expert résumé writer tailoring a candidate's résumé so a recruiter "
+        "for THIS specific role wants to interview them, and so it ranks well in an ATS "
+        "keyword scan.\n"
+        "Rephrase ONLY the `summary` and existing experience `bullets`:\n"
+        "- Make the `summary` a punchy 2-3 sentence pitch that LEADS with the strengths "
+        "most relevant to this role and naturally uses the JD's key terms that the "
+        "candidate TRUTHFULLY has.\n"
+        "- Rewrite each existing bullet to start with a strong action verb and mirror "
+        "the JD's vocabulary WHERE IT TRUTHFULLY MATCHES; keep any real metric that is "
+        "already in the bullet and lead with it.\n"
+        "HARD RULES (safety): Do NOT invent or add companies, tools, certifications, "
+        "numbers, dates, metrics, or any claim not already present in the input. Do NOT "
+        "add, remove, split, or merge bullets — rephrase the SAME facts one-to-one. Keep "
+        "the same JSON shape and the same number of experience entries and bullets.\n\n"
         f"TARGET: {job_title} at {job_company}\nJOB DESCRIPTION:\n{jd[:6000]}\n\n"
         f"RESUME JSON:\n{json.dumps({k: tailored[k] for k in ('summary', 'experience')})}\n\n"
         "Return ONLY JSON: {\"summary\": str, \"experience\": [{\"company\",\"title\",\"dates\",\"context\",\"bullets\"}]}"

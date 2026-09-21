@@ -86,7 +86,12 @@ _BLOCKED: dict[str, str] = {
     # move to _LIVE_TENANTS. Do NOT add without a fresh live-validated ack.
     "elevance": "register-captcha probe pending (Elevance/Anthem + Carelon — likely shares Concentrix's no-captcha path)",
     "highmark": "register-captcha probe pending (Highmark Health — likely shares Concentrix's no-captcha path)",
-    "sagility": "register-captcha probe pending (Sagility healthcare BPO — likely shares Concentrix's no-captcha path)",
+    # SAGILITY: register-captcha CONFIRMED ABSENT 2026-09-21 (grecaptcha False + create-account
+    # created=True live, "Work from Home: Customer Service Representative"), same as Concentrix — but
+    # the wizard-walk→on-page-submit is NOT yet clean-proven (the probe died mid-step-0 under an
+    # external-project CPU load spike, not a Sagility block). Promote to _LIVE_TENANTS after ONE clean
+    # full drive on a quiet box reaches the on-page "Application Submitted" (confirmed=1). job id 15576.
+    "sagility": "no captcha (confirmed) + created=True; full submit unproven — one clean drive from promotion",
 }
 
 

@@ -383,6 +383,29 @@ def compute_stats() -> dict:
             key=lambda x: x["applied"], reverse=True),
         "trend": trend,
     }
+    # TRUE system-wide pipeline (ALL lanes incl. mass-hiring/TP), from the CRM funnel. The
+    # per-company `companies`/`totals` above are CATALOG-jobid-ATTRIBUTED only (a mass-hiring/TP
+    # persona has no catalog jobid, so its interview/offer can't be tied to a company) → they
+    # badly undercount interviews/offers. `funnel_true` is the honest headline; the by-company
+    # table stays catalog-attributed. (2026-09-21: catalog interview=2 while the funnel had 212.)
+    try:
+        from backend.tools import mail_db as _mdb
+        sc = _mdb.stage_counts()
+        blob["funnel_true"] = {
+            "candidates": sc.get("all", 0),
+            "sent": sc.get("sent", 0),
+            "ack": sc.get("ack", 0),
+            "assessment": sc.get("assessment", 0),
+            "assessment_done": sc.get("assessment_done", 0),
+            "action_needed": sc.get("action_needed", 0),
+            "interview": sc.get("interview", 0),
+            "offer": sc.get("offer", 0),
+            "rejection": sc.get("rejection", 0),
+        }
+    except Exception as e:
+        log.warning("stats: funnel_true failed: %s", e)
+        blob["funnel_true"] = {}
+
     log.info("stats computed in %sms: %s companies, %s jobs (%s attempts)",
              blob["took_ms"], len(companies), total_applied, scan["attempts"])
     return blob

@@ -287,22 +287,29 @@ def render_page(force: bool = False) -> str:
 
     comp_sub = (f'{_fmt_money(comp.get("p25"))}–{_fmt_money(comp.get("p75"))} · '
                 f'{_fmt(comp.get("coverage", 0))} вак.') if comp.get("median") else "нет данных"
+    # TRUE pipeline (all lanes) for the headline; the per-company table below is catalog-attributed
+    # only, so its interview/offer counts are shown as the "по каталогу" sub-line, not the headline.
+    ft = b.get("funnel_true") or {}
+    _hi = lambda key, fb: ft.get(key, fb) if ft else fb
     kpis = "".join([
-        _kpi("Подано", t["applied"], sub=f'{_fmt(t["attempts"])} попыток с повторами'),
-        _kpi("Сабмиты", t["submitted"], color=_C["mute"]),
-        _kpi("Ответили", t["replied"], sub=f'{t["reply_rate"]:.0f}% от поданных', color=_C["accent"]),
-        _kpi("Собеседования", t["invited"], sub=f'{t["interview_rate"]:.1f}% от поданных', color=_C["interview"]),
-        _kpi("Отказы", t["rejection"], color=_C["rejection"]),
-        _kpi("Офферы", t["offer"], color=_C["offer"]),
+        _kpi("Кандидаты", _hi("candidates", t["applied"]),
+             sub=f'{_fmt(t["applied"])} каталог · {_fmt(t["attempts"])} попыток'),
+        _kpi("Ответы", _hi("ack", t["replied"]), sub=f'{_fmt(t["replied"])} по каталогу', color=_C["accent"]),
+        _kpi("Тест сдан", _hi("assessment_done", 0),
+             sub=f'{_fmt(ft.get("assessment", 0))} в очереди', color=_C["mute"]),
+        _kpi("Собеседования", _hi("interview", t["invited"]),
+             sub=f'{_fmt(t["invited"])} по каталогу', color=_C["interview"]),
+        _kpi("Офферы", _hi("offer", t["offer"]), sub=f'{_fmt(t["offer"])} по каталогу', color=_C["offer"]),
+        _kpi("Отказы", _hi("rejection", t["rejection"]), color=_C["rejection"]),
         _kpi_raw("Медиана вилки", _fmt_money(comp.get("median")), sub=comp_sub, color=_C["offer"]),
     ])
 
     funnel = _funnel([
-        ("Подано", t["applied"], _C["accent"]),
-        ("Ответили", t["replied"], "#5b9bf0"),
-        ("Собеседования", t["invited"], _C["interview"]),
-        ("Офферы", t["offer"], _C["offer"]),
-    ], base=t["applied"])
+        ("Кандидаты", _hi("candidates", t["applied"]), _C["accent"]),
+        ("Ответы", _hi("ack", t["replied"]), "#5b9bf0"),
+        ("Собеседования", _hi("interview", t["invited"]), _C["interview"]),
+        ("Офферы", _hi("offer", t["offer"]), _C["offer"]),
+    ], base=_hi("candidates", t["applied"]))
 
     donut = _donut(
         [(_OUTCOME_LABELS[k], b["outcome_totals"].get(k, 0), _C[k])
@@ -338,6 +345,9 @@ def render_page(force: bool = False) -> str:
 
 <section class="st-card"><div class="st-h-row"><h2 class="st-h">По компаниям</h2>
 <span class="st-mute">клик — сортировка · сейчас: Собес.</span></div>
+<p class="st-note">Только каталожные вакансии (атрибуция по jobid). Масс-хайринг/BPO лейны
+(Teleperformance, TTEC, Foundever…) нельзя привязать к компании по jobid, поэтому их собесы/офферы
+здесь НЕ учитываются — смотри общий пайплайн в шапке (Собеседования {_hi("interview", t["invited"])}, Офферы {_hi("offer", t["offer"])}).</p>
 <div class="st-tbl-wrap">{_company_table(b['companies'])}</div>
 <p class="st-note">«% собес.» — доля поданных заявок, дошедших до собеседования или дальше;
 оффер входит сюда, поэтому у компании с «Собес.» = 0, но с офферами процент положительный.</p></section>

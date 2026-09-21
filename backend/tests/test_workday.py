@@ -16,9 +16,11 @@ from backend.applier.strategies.workday import (
     WorkdayMassHiringStrategy,
     WorkdayStrategy,
     _CONSENT_CB_RE,
+    _DECLINE_VALUES,
     _DEMOGRAPHIC_RE,
     _MARKETING_CB_RE,
     _MASSHIRING_HOST_RE,
+    _distinctive_token,
     _env_advance,
     _gen_password,
 )
@@ -434,3 +436,65 @@ def test_consent_checkbox_matches_generic_agree_and_privacy_policy():
     assert _CONSENT_CB_RE.search("I agree to the Terms of Use")
     assert _CONSENT_CB_RE.search("I have read the Privacy Policy")
     assert not _CONSENT_CB_RE.search("Please enter your email address")
+
+
+# ---- demographic-decline option matching (the _pick_tagged_select fuzzy fallback) ------------
+# Regression: the fuzzy fallback split a decline value on its FIRST word ("I do not wish to
+# answer" -> "I") and substring-matched the FIRST option in a demographic select — e.g. a live
+# Cigna Voluntary-Disclosures step picked "I am a protected veteran" / "American Indian or Alaska
+# Native" instead of the non-disclosure option. _distinctive_token skips the leading stopword so
+# the fuzzy match lands on the real decline option (or nothing), never a protected characteristic.
+
+def _fuzzy_hits(val: str, options: list[str]) -> list[str]:
+    """Mimic _pick_tagged_select's matching: exact-match first, else the distinctive-token
+    substring. Returns every option that would be selectable (the live code takes the FIRST)."""
+    exact = [o for o in options if re.fullmatch(rf"\s*{re.escape(val)}\s*", o, re.I)]
+    if exact:
+        return exact
+    tok = _distinctive_token(val)
+    if not tok:
+        return []
+    return [o for o in options if re.search(re.escape(tok), o, re.I)]
+
+
+def test_distinctive_token_skips_leading_stopwords():
+    assert _distinctive_token("I do not wish to answer") == "wish"
+    assert _distinctive_token("I don't wish to answer") == "wish"
+    assert _distinctive_token("I do not want to answer") == "want"
+    assert _distinctive_token("Prefer not to answer") == "Prefer"
+    assert _distinctive_token("Decline to self-identify") == "Decline"
+    assert _distinctive_token("Choose not to disclose") == "Choose"
+    assert _distinctive_token("Do not wish") == "wish"
+    # single distinctive word passes through; a too-short/all-stopword value yields "" (skip fuzzy)
+    assert _distinctive_token("Bachelor's Degree") == "Bachelor's"
+    assert _distinctive_token("Yes") == "Yes"
+    assert _distinctive_token("No") == ""
+    assert _distinctive_token("") == ""
+
+
+def test_decline_value_never_matches_protected_veteran_option():
+    veteran = ["I am a protected veteran", "I am not a protected veteran",
+               "I don't wish to answer"]
+    # The declared decline phrase whose first word is "I" must land ONLY on the non-disclosure
+    # option — never on "I am a protected veteran" (the old first-word "I" substring bug).
+    hits = _fuzzy_hits("I do not wish to answer", veteran)
+    assert hits == ["I don't wish to answer"], hits
+    assert "I am a protected veteran" not in hits
+
+
+def test_decline_value_never_matches_first_ethnicity_option():
+    ethnicity = ["American Indian or Alaska Native", "Asian",
+                 "Black or African American", "White", "I do not wish to answer"]
+    hits = _fuzzy_hits("I do not wish to answer", ethnicity)
+    assert hits == ["I do not wish to answer"], hits
+    assert "American Indian or Alaska Native" not in hits
+
+
+def test_every_decline_value_avoids_a_protected_veteran_first_option():
+    # No _DECLINE_VALUES entry may fuzzy-match the FIRST (protected) option of this veteran set.
+    veteran = ["I am a protected veteran", "I identify as one or more classifications",
+               "I am not a protected veteran", "I don't wish to answer"]
+    for val in _DECLINE_VALUES:
+        hits = _fuzzy_hits(val, veteran)
+        assert "I am a protected veteran" not in hits, (val, hits)
+        assert "I identify as one or more classifications" not in hits, (val, hits)

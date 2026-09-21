@@ -102,6 +102,30 @@ _DECLINE_VALUES = ("I do not wish to answer", "I don't wish to answer",
                    "I do not want to answer", "Prefer not to answer",
                    "Prefer not to say", "Decline to self-identify",
                    "Decline to answer", "Choose not to disclose", "Do not wish")
+# Generic leading words that must NEVER be the fuzzy substring we match an option on: a decline
+# value like "I do not wish to answer" split on its FIRST word ("I") substring-matches the FIRST
+# option in a demographic select (e.g. "I am a protected veteran" / "American Indian…"), so a
+# decline silently picks a protected characteristic. _distinctive_token skips these.
+_SELECT_STOPWORDS = frozenset({
+    "i", "a", "an", "the", "to", "do", "not", "no", "of", "or", "and", "is", "are", "in", "on",
+    "for", "with", "without", "my", "your", "am", "have", "has", "was", "were", "you", "we",
+    # contractions/negations (apostrophes stripped before the check) — so the token lands on the
+    # meaningful word ("wish"/"answer"), not the negation.
+    "dont", "doesnt", "didnt", "wont", "cant", "cannot", "im", "ive", "id",
+})
+
+
+def _distinctive_token(val: str) -> str:
+    """The first word in `val` distinctive enough to fuzzy-match a select option: a run of >=3
+    letters (apostrophes allowed) that is NOT a generic stopword. Returns "" when none — the
+    caller then SKIPS the substring fallback rather than matching a short leading stopword like
+    "I"/"Do", which would land on the FIRST option (the decline-picks-a-protected-value bug)."""
+    for w in re.findall(r"[A-Za-z']{3,}", val or ""):
+        if w.lower().replace("'", "") not in _SELECT_STOPWORDS:
+            return w
+    return ""
+
+
 # Create-account checkbox classification. Workday CxS gates the required Terms box via app-state,
 # NOT the native `required` attribute (Concentrix's "Yes, I have read and consent to the terms and
 # conditions" input is NOT DOM-required yet blocks Create Account with "Please check the box to
@@ -1314,8 +1338,13 @@ class WorkdayStrategy(ApplyStrategy):
                 target = opts.filter(
                     has_text=re.compile(rf"^\s*{re.escape(val)}\s*$", re.I)).first
                 if not await target.count():
-                    target = opts.filter(
-                        has_text=re.compile(re.escape(val.split()[0]), re.I)).first
+                    # Fuzzy fallback on a DISTINCTIVE token (skips leading stopwords), so a decline
+                    # value ("I do not wish to answer") matches its real option ("…wish to answer")
+                    # and NOT the first protected-characteristic option just because both start "I".
+                    tok = _distinctive_token(val)
+                    if tok:
+                        target = opts.filter(
+                            has_text=re.compile(re.escape(tok), re.I)).first
                 if not await target.count() and allow_first:
                     target = opts.filter(
                         has_not_text=re.compile("no matches|no results|searching", re.I)).first

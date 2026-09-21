@@ -64,6 +64,11 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # itself has none. Concentrix / CVS Health / Centene / Cigna.
                    "cnx.wd1.myworkdayjobs.com", "cvshealth.wd1.myworkdayjobs.com",
                    "centene.wd5.myworkdayjobs.com", "cigna.wd5.myworkdayjobs.com",
+                   # Healthcare payers/BPOs on the same Workday CxS lane (register-captcha probe
+                   # pending — collect + strategy-route now, promote to a live apply lane after a
+                   # clean create-account drive). Elevance/Anthem (+Carelon) / Highmark / Sagility.
+                   "elevancehealth.wd1.myworkdayjobs.com", "highmarkhealth.wd1.myworkdayjobs.com",
+                   "sagility.wd1.myworkdayjobs.com",
                    # iCIMS family: Teleperformance (careersus-teleperformance.icims.com) — the
                    # iframe iForm is account-gated with AWS-WAF + reCAPTCHA on submit
                    # (strategies/icims.py). Account creation + submit gated behind ICIMS_ADVANCE;

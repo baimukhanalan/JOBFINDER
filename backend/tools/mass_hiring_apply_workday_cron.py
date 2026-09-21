@@ -55,7 +55,9 @@ LOCK_PATH = os.path.join(REPO, "logs", "workday_apply.lock")
 
 # host-slug -> friendly tenant name
 _TENANT = {"cnx": "concentrix", "cvshealth": "cvshealth", "centene": "centene",
-           "cigna": "cigna", "humana": "humana"}
+           "cigna": "cigna", "humana": "humana",
+           # Healthcare payers/BPOs collected onto the same Workday lane (probe pending).
+           "elevancehealth": "elevance", "highmarkhealth": "highmark", "sagility": "sagility"}
 
 # Tenants live-validated to land a real Workday application ack — driven by the cron.
 #
@@ -77,6 +79,14 @@ _BLOCKED: dict[str, str] = {
     "cigna": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
     "humana": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
     "cvshealth": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
+    # Healthcare payers/BPOs — collected + strategy-routed 2026-09-21, register-captcha PROBE PENDING.
+    # Drive ONE create-account each with WORKDAY_DEBUG_SHOTS=1 on a QUIET :98 and read the
+    # "workday register captcha presence: {...}" log + _debug/06_create_account_form.png. If no
+    # captcha AND it reaches the on-page "Application Submitted" (confirmed=1) like Concentrix →
+    # move to _LIVE_TENANTS. Do NOT add without a fresh live-validated ack.
+    "elevance": "register-captcha probe pending (Elevance/Anthem + Carelon — likely shares Concentrix's no-captcha path)",
+    "highmark": "register-captcha probe pending (Highmark Health — likely shares Concentrix's no-captcha path)",
+    "sagility": "register-captcha probe pending (Sagility healthcare BPO — likely shares Concentrix's no-captcha path)",
 }
 
 

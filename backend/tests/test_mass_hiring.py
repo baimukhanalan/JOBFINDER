@@ -104,6 +104,71 @@ def test_workday_senior_wah_is_dropped():
         "concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "external_global") is None
 
 
+# ---- Concentrix jobs.concentrix.com jdq feed (_cnx_jdq_row, the real US frontline) -----------
+# The corporate Workday board (external_global) is global/senior — only ~1 US remote entry role.
+# The genuine US work-at-home frontline is on the first-party jdq feed, which aggregates BOTH the
+# Workday reqs AND the Talkpush frontline campaigns. `_cnx_jdq_row` decodes one row (network-free).
+
+def _jdq(**kw):
+    base = {"job_title": "Customer Service Rep – Healthcare (Remote)", "remote_type": "fully_remote",
+            "ats_external_id": "US-req-abc", "campaign_id": "req-abc", "id": "2100",
+            "city": "Work At Home", "state": "Work At Home", "country": "United States of America",
+            "apply_url": "https://concentrix.crew.talkpush.com/apply/concentrix/TOKEN",
+            "job_type": "full_time", "created_at": "2026-08-21T18:24:25.585Z", "long_description": ""}
+    base.update(kw)
+    return base
+
+
+def test_cnx_jdq_talkpush_frontline_csr_is_kept():
+    # a genuine remote-US frontline CSR campaign on Talkpush, pay disclosed only in the description.
+    row = mh._cnx_jdq_row(_jdq(
+        job_title="Licensed Health Insurance Rep (Remote)",
+        long_description="<p>The base salary range for this position is $21.00 – 23.00/hr.</p>"))
+    assert row is not None
+    assert row["source"] == "concentrix"
+    assert row["source_id"] == "US-req-abc"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True                          # country=USA is authoritative
+    assert "talkpush.com" in row["apply_url"]                  # native Talkpush apply flow preserved
+    assert row["salary_min"] == 21.0                           # hourly parsed from the prose
+
+
+def test_cnx_jdq_workday_apply_url_is_kept_for_the_cron():
+    # a jdq row whose apply_url is Workday keeps that host, so the Workday auto-apply cron
+    # (apply_url ILIKE '%myworkdayjobs.com%') still picks it up.
+    row = mh._cnx_jdq_row(_jdq(
+        job_title="Health Insurance Representative", remote_type="fully_remote",
+        ats_external_id="R1732661", city="", state="", street="USA Work at Home",
+        apply_url="https://cnx.wd1.myworkdayjobs.com/en-US/external_global/job/x/apply"))
+    assert row is not None
+    assert row["source_id"] == "R1732661"
+    assert "myworkdayjobs.com" in row["apply_url"]
+
+
+def test_cnx_jdq_onsite_and_hybrid_are_dropped():
+    assert mh._cnx_jdq_row(_jdq(remote_type="on_site")) is None
+    assert mh._cnx_jdq_row(_jdq(remote_type="hybrid")) is None
+
+
+def test_cnx_jdq_senior_remote_is_dropped():
+    # a fully-remote but senior/corporate role → categorize() drops it (not a mass-hiring entry role).
+    assert mh._cnx_jdq_row(_jdq(job_title="Principal Architect: AI & GCP Agentic Stack")) is None
+    assert mh._cnx_jdq_row(_jdq(job_title="Director, Sales, B2B Sales Practice")) is None
+
+
+def test_cnx_jdq_blank_remote_type_falls_back_to_text_scan():
+    # remote_type absent → decide remote from the title/location text.
+    kept = mh._cnx_jdq_row(_jdq(job_title="Customer Service Representative (Remote)", remote_type=None))
+    assert kept is not None and kept["category"] == "customer_support"
+    dropped = mh._cnx_jdq_row(_jdq(job_title="Customer Service Representative", remote_type=None,
+                                   city="Frisco", state="Texas"))
+    assert dropped is None                                      # no remote signal anywhere → drop
+
+
+def test_cnx_jdq_missing_id_is_dropped():
+    assert mh._cnx_jdq_row(_jdq(ats_external_id=None, campaign_id=None, id=None)) is None
+
+
 # ---- Teleperformance (Umbraco) --------------------------------------------------
 
 def test_tp_us_wfh_is_kept():

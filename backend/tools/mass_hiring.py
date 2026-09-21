@@ -850,17 +850,99 @@ def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str,
     return rows
 
 
-# Concentrix (Workday, tenant cnx). Apply the US locationCountry facet + EMPTY searchText — this
-# surfaces ALL 35 US rows (the old searchText='work at home' missed US WAH rows whose text lacks the
-# phrase, and the unfaceted `total` reads 0 which broke pagination). `external_global` is Concentrix's
-# PROFESSIONAL tier, so most WAH rows are senior and dropped by categorize (~2 mass-hiring entry).
+# Concentrix — its US remote ENTRY-level hiring is NOT (mostly) on the corporate Workday board.
+# `cnx.wd1/external_global` is a GLOBAL/PROFESSIONAL board (recon 2026-09-21: 1579 jobs, offshore-
+# dominated — PH 342 / MY 193 / ES 185 / IN 91 …; the US country facet is only ~27, and those are
+# almost all Director/Principal-Architect/Sr-Manager/Developer or on-site — exactly ONE remote entry
+# CSR). The real US work-at-home FRONTLINE (Licensed Health Insurance Rep, Customer Service / Tech
+# Support Rep, Insurance Agent, Inside Sales Rep, …, ~$21–23/hr, seasonal) lives on Concentrix's own
+# first-party careers feed `jobs.concentrix.com/wp-json/jdq/v1/search`, which AGGREGATES BOTH apply
+# channels: the Workday corporate reqs (apply_url on `cnx.wd1.myworkdayjobs.com`) AND the Talkpush
+# frontline campaigns (apply_url on `concentrix.crew.talkpush.com`). `country="USA"` returns ~68 US
+# rows with a structured `remote_type` (fully_remote / hybrid / on_site) and each row's native
+# `apply_url` — so the Workday auto-apply cron (which selects `apply_url ILIKE '%myworkdayjobs.com%'`)
+# is UNAFFECTED by the Talkpush rows, and the frontline entry roles feed the human/collect board.
+# We keep the legacy Workday-board fetch too, so the proven Workday-apply lane's categorized req is
+# never lost (jdq's own Workday-apply slice is all senior → 0 entry roles; `collect()` de-dups the
+# merge on (source, source_id)). Net: ~1 → ~7 remote-US entry roles.
 _CNX_US_FACET = "bc33aa3152ec42d4995f4791a106ed09"     # locationCountry = United States of America
+_CNX_JDQ_URL = "https://jobs.concentrix.com/wp-json/jdq/v1/search"
+
+
+def _cnx_jdq_row(d: dict) -> dict | None:
+    """PURE (network-free): decode ONE jobs.concentrix.com jdq row into a mass-hiring row, applying
+    the two HARD RULES (US-remote + categorize()). `country="USA"` already guarantees US, so
+    us_eligible is forced True; remote is read off the structured `remote_type` (hybrid/on_site are
+    dropped), falling back to a title/location text scan when the field is absent."""
+    rt = (d.get("remote_type") or "").strip().lower()
+    if rt in ("on_site", "onsite", "hybrid"):
+        return None                                    # explicitly not fully remote → drop
+    loc_txt = " ".join(str(d.get(k) or "") for k in ("street", "address", "city", "state") if d.get(k))
+    if rt != "fully_remote" and not _is_remote(d.get("job_title") or "", loc_txt):
+        return None
+    sid = d.get("ats_external_id") or d.get("campaign_id") or d.get("id")
+    if not sid:
+        return None
+    apply_url = d.get("apply_url") or d.get("landing_page_url")
+    # location string that reads as US (a "Work At Home" city carries no US signal on its own).
+    street = (d.get("street") or d.get("address") or "").strip()
+    city, state = (d.get("city") or "").strip(), (d.get("state") or "").strip()
+    if street and re.search(r"\bUSA\b|United States", street):
+        location = street
+    elif city and city.lower() != "work at home":
+        location = f"{city}, {state}, United States" if state else f"{city}, United States"
+    else:
+        location = "Remote, United States"
+    # frontline campaigns disclose the hourly rate only in the description prose ("$21.00 – 23.00/hr").
+    desc = re.sub(r"<[^>]+>", " ", d.get("long_description") or d.get("short_description") or "")
+    lo, hi, raw = _parse_hourly_wage(desc)
+    row = _mk_row("concentrix", sid, "Concentrix", d.get("job_title"), location, apply_url,
+                  salary_min=lo, salary_max=hi, salary_raw=raw,
+                  employment_type=d.get("job_type"), posted_at=_iso_epoch(d.get("created_at") or ""))
+    if row:
+        row["us_eligible"] = True                      # country="USA" facet is authoritative
+    return row
+
+
+def _fetch_concentrix_jdq(country: str = "USA") -> list[dict]:
+    """Concentrix first-party careers feed (jobs.concentrix.com jdq API). Paginates the whole US set
+    (per_page 100, to `meta.total_pages`, safety-capped) → `_cnx_jdq_row`. Fully guarded."""
+    rows, page, pages = [], 1, 1
+    hdr = {"User-Agent": _BROWSER_UA, "Accept": "application/json",
+           "Referer": "https://jobs.concentrix.com/"}
+    while page <= pages and page <= 30:                 # 30-page (~3000-row) safety ceiling
+        try:
+            r = httpx.get(_CNX_JDQ_URL, headers=hdr, timeout=30,
+                          params={"country": country, "per_page": 100, "page": page})
+            js = r.json()
+        except Exception as e:
+            print(f"[concentrix jdq page={page}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        for d in (js.get("data") or []):
+            row = _cnx_jdq_row(d)
+            if row:
+                rows.append(row)
+        pages = (js.get("meta") or {}).get("total_pages") or 1
+        page += 1
+    return rows
 
 
 def fetch_concentrix() -> list[dict]:
-    return _fetch_workday("concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "cnx",
-                          "external_global", search_texts=("",),
-                          applied_facets={"locationCountry": [_CNX_US_FACET]}, offset_cap=60, us_confirmed=True)
+    # Primary: the first-party careers feed (Workday corporate + Talkpush frontline, ~7 entry roles).
+    rows = _fetch_concentrix_jdq()
+    # Safety net: the legacy Workday board keeps the proven Workday-apply lane's categorized req even
+    # if the feed ever drops it. `collect()` de-dups the merge on (source, source_id); dedupe here too
+    # so a direct caller (mh_ondemand / tests) gets a clean set.
+    rows += _fetch_workday("concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "cnx",
+                           "external_global", search_texts=("",),
+                           applied_facets={"locationCountry": [_CNX_US_FACET]}, offset_cap=60,
+                           us_confirmed=True)
+    seen, out = set(), []
+    for r in rows:
+        if r["source_id"] not in seen:
+            seen.add(r["source_id"])
+            out.append(r)
+    return out
 
 
 # CVS Health (Workday, tenant cvshealth). The tenant has 8000+ jobs and NO remote/workType facet, so

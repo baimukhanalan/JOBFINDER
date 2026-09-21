@@ -358,5 +358,213 @@
     "slug": "docebo",
     "enabled": true,
     "note": "Funnel add (recon 2026-09-21). Ashby, 47 jobs / 7 remote-US. Customer Success Manager + eng."
+  },
+  {
+    "key": "instacart",
+    "company": "Instacart",
+    "ats": "greenhouse",
+    "slug": "instacart",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 110/110 remote-US. Eng 38 / Sales 19 / Product 12 / Marketing 8 / Finance 8 / Ops 6."
+  },
+  {
+    "key": "sezzle",
+    "company": "Sezzle",
+    "ats": "greenhouse",
+    "slug": "sezzle",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 208 jobs / 126 remote-US. Eng 69 / Ops 12 / Marketing 9 / Data 8 / Sales 8 / Legal 7."
+  },
+  {
+    "key": "mozilla",
+    "company": "Mozilla",
+    "ats": "greenhouse",
+    "slug": "mozilla",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 74 jobs / 55 remote-US. Eng 30 / Product 7 / Data 5 / Sales 5 / Design 3 / Ops 1."
+  },
+  {
+    "key": "mavenclinic",
+    "company": "Maven Clinic",
+    "ats": "greenhouse",
+    "slug": "mavenclinic",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 35 jobs / 31 remote-US. Eng 8 / Customer Success 6 / Marketing 4 / Ops 2 / People 2."
+  },
+  {
+    "key": "cloverhealth",
+    "company": "Clover Health",
+    "ats": "greenhouse",
+    "slug": "cloverhealth",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 66 jobs / 28 remote-US. Eng 8 / Finance 3 / Ops 2 / Sales 1 / mixed."
+  },
+  {
+    "key": "mongodb",
+    "company": "MongoDB",
+    "ats": "greenhouse",
+    "slug": "mongodb",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 402 jobs / 28 remote-US. Eng 11 / Sales 10 / Product 4 / Customer Success 2 / People 1."
+  },
+  {
+    "key": "swordhealth",
+    "company": "Sword Health",
+    "ats": "greenhouse",
+    "slug": "swordhealth",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 37 jobs / 23 remote-US. Sales 6 / Eng 4 / Customer Success 3 / Ops 3 / Marketing 2."
+  },
+  {
+    "key": "vannevarlabs",
+    "company": "Vannevar Labs",
+    "ats": "greenhouse",
+    "slug": "vannevarlabs",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 29 jobs / 18 remote-US. Eng 12 / Product 2 / Legal 1 / People 1."
+  },
+  {
+    "key": "talkspace",
+    "company": "Talkspace",
+    "ats": "greenhouse",
+    "slug": "talkspace",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 19 jobs / 18 remote-US. Eng 3 / Ops 3 / Sales 2 / Customer Success 2 / Marketing 2."
+  },
+  {
+    "key": "okta",
+    "company": "Okta",
+    "ats": "greenhouse",
+    "slug": "okta",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 327 jobs / 17 remote-US. Sales 15 / Customer Success 2 (GTM-heavy)."
+  },
+  {
+    "key": "tebra",
+    "company": "Tebra",
+    "ats": "greenhouse",
+    "slug": "tebra",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 19 jobs / 16 remote-US. Sales 5 / Eng 5 / Marketing 3 / Finance 1 / Customer Success 1 / Ops 1."
+  },
+  {
+    "key": "udacity",
+    "company": "Udacity",
+    "ats": "greenhouse",
+    "slug": "udacity",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 17 jobs / 15 remote-US. Eng 3 / Product 2 / Marketing 1 / People 1 / Data 1 / mixed."
+  },
+  {
+    "key": "extend",
+    "company": "Extend",
+    "ats": "greenhouse",
+    "slug": "extend",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 16 jobs / 14 remote-US. Data 5 / Eng 2 / People 2 / Customer Success 1 / Ops 1 / Legal 1."
+  },
+  {
+    "key": "life360",
+    "company": "Life360",
+    "ats": "greenhouse",
+    "slug": "life360",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 14/14 remote-US. Eng 3 / Marketing 2 / Data 2 / Legal 1 / Sales 1 / mixed."
+  },
+  {
+    "key": "tanium",
+    "company": "Tanium",
+    "ats": "greenhouse",
+    "slug": "tanium",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 55 jobs / 13 remote-US. Sales 6 / Finance 2 / Eng 2 / Marketing 1 / Legal 1."
+  },
+  {
+    "key": "newsela",
+    "company": "Newsela",
+    "ats": "greenhouse",
+    "slug": "newsela",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 14 jobs / 11 remote-US. Sales 7 / Eng 1 / Data 1 / Design 1 / Marketing 1."
+  },
+  {
+    "key": "stockx",
+    "company": "StockX",
+    "ats": "greenhouse",
+    "slug": "stockx",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 35 jobs / 10 remote-US. Ops 7 / Sales 1 / Marketing 1 / Finance 1."
+  },
+  {
+    "key": "hometap",
+    "company": "Hometap",
+    "ats": "greenhouse",
+    "slug": "hometap",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 9 jobs / 8 remote-US. Sales 4 / Ops 2 / Finance 2."
+  },
+  {
+    "key": "lithic",
+    "company": "Lithic",
+    "ats": "greenhouse",
+    "slug": "lithic",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 12 jobs / 8 remote-US. Eng 5 / Legal 2 / Customer Success 1."
+  },
+  {
+    "key": "planetscale",
+    "company": "PlanetScale",
+    "ats": "greenhouse",
+    "slug": "planetscale",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 13 jobs / 6 remote-US. Eng 5 / Design 1."
+  },
+  {
+    "key": "cleo",
+    "company": "Cleo",
+    "ats": "greenhouse",
+    "slug": "cleo",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 6 jobs / 5 remote-US. Customer Success 1 / Product 1 / Ops 1 / Design 1 / Sales 1."
+  },
+  {
+    "key": "wisetack",
+    "company": "Wisetack",
+    "ats": "greenhouse",
+    "slug": "wisetack",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Greenhouse, 5/5 remote-US. Sales 2 / Finance 1 / Customer Success 1 / Ops 1."
+  },
+  {
+    "key": "headway",
+    "company": "Headway",
+    "ats": "ashby",
+    "slug": "headway",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Ashby, 87 jobs / 55 remote-US. Ops 10 / Product 7 / Eng 6 / Sales 5 / Customer Success 4 / mixed."
+  },
+  {
+    "key": "hackerone",
+    "company": "HackerOne",
+    "ats": "ashby",
+    "slug": "hackerone",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Ashby, 16 jobs / 8 remote-US. Eng 2 / Sales 2 / Ops 2 / Marketing 1 / People 1."
+  },
+  {
+    "key": "abridge",
+    "company": "Abridge",
+    "ats": "ashby",
+    "slug": "abridge",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Ashby, 43 jobs / 6 remote-US. Eng 2 / Sales 1 / Ops 1 / mixed."
+  },
+  {
+    "key": "medely",
+    "company": "Medely",
+    "ats": "ashby",
+    "slug": "medely",
+    "enabled": true,
+    "note": "Diversity add (recon 2026-09-21). Ashby, 5/5 remote-US. Sales 2 / Product 1 / Customer Success 1 / Ops 1."
   }
 ]

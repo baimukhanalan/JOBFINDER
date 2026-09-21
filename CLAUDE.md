@@ -277,6 +277,23 @@ strategy → pre-fill every field → screenshot + `report.json`, then stop. Per
 `applier/` imported live by the dashboard extension endpoints + `copilot.py`. Tailoring (`services/tailor/`) is strictly
 no-fabrication. `/queue` defaults to `profile="michael"`.
 
+**Tailoring-attractiveness pass (2026-09-21, `services/tailor/tailor.py`+`answers.py`, deterministic-first):** every apply
+is made maximally recruiter-attractive for the SPECIFIC role WITHOUT fabrication (only facts already in the base résumé/persona;
+company+role come from the posting). Changes: (1) `tailor_resume` builds a **role-targeted summary** (`_targeted_summary`:
+leads with the persona's best-matching OWN title + its top JD-matched OWN skills, then keeps the real summary) and a leading
+**"Key skills for this role"** group (`_matched_own_skills`, the persona's OWN skills the JD asks for, verbatim, de-duped
+against the tail groups). **The old "Role-specific skills" block that INJECTED JD keywords the résumé LACKED was REMOVED — it
+fabricated skills, violating the documented no-fab invariant.** (2) Experience bullets order by (JD relevance, then quantified
+impact) — `_has_metric`, order-only, no invented numbers. (3) `answers.cover_letter`/`_letter_body` produce a **role-specific**
+letter (names the company+role, cites the persona's OWN top strengths parsed from the rendered résumé via `_resume_section`/
+`_top_resume_skills`). (4) Screener/draft prompts (`_header`, `_ai_polish`, `cover_letter`) tightened to optimize recruiter
+appeal + the specific JD while keeping the no-fab guardrails; the availability default reads positive.
+**HONEST ATS reality:** `ats_score` coverage is PRESENCE-based over the whole résumé, so deterministic reorder/highlight does
+NOT change it (the removed stuffing was the old, fabricated "lift"); the honest coverage of a well-built persona is already high
+(~78-84). The REAL truthful lift is the LLM `_ai_polish` path mirroring the JD's vocabulary onto competencies the persona
+genuinely has (mock-proven +60 ATS when wording, not competency, was the gap). Tests: `test_tailor_attractiveness.py` (asserts
+no skill/company/number in the output that isn't in the input).
+
 **Auto-submit end-to-end by ATS** (ground truth = the ATS "Thank you for applying" email): GREENHOUSE ✅ + ASHBY ✅ (EMAILED
 CODE, passable); LEVER ⛔ (hCaptcha) + WORKABLE ⛔ (Cloudflare Turnstile — a live captcha unsolvable from a datacenter IP; the
 FILL is fixed, the human only solves the captcha). The dividing line is the final anti-bot step: email code vs live captcha.

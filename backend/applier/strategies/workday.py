@@ -1033,10 +1033,64 @@ class WorkdayStrategy(ApplyStrategy):
         return out
 
     async def _set_wd_date(self, page: Page, d) -> bool:
-        """Set the disability form's 3-segment date widget (dateSectionMonth/Day/Year-input, scoped
-        to '…dateSignedOn-…') to date `d`. Playwright's is_visible/fill can no-op on these overlaid
-        segment inputs, so set each via the React-controlled-input protocol in JS (native value
-        setter + input/change/keyup events), then blur to commit. Returns True on a full readback."""
+        """Set the CC-305 disability 3-segment date widget (…dateSignedOn-dateSection{Month,Day,Year}-
+        input) to date `d`. These Workday spinbutton segments process REAL KEYSTROKES — a JS native-
+        value set reads back momentarily but React reverts it to EMPTY on re-render (the live-proven
+        symptom: '…DATE-SIG: filled 09/21/2026' logged yet the field stays empty + 'Enter today's
+        date'). So type each segment with the real keyboard first (focus via JS to beat the overlay,
+        then keyboard.type so the widget's own keydown handler commits it); fall back to the JS
+        native-value protocol only if that reads back empty. Returns True on a committed readback."""
+        mm, dd, yyyy = f"{d.month:02d}", f"{d.day:02d}", str(d.year)
+
+        async def _readback() -> dict:
+            try:
+                return await page.evaluate(
+                    "()=>{const g=k=>{const e=[...document.querySelectorAll('input')]"
+                    ".find(x=>(x.id||'').endsWith('dateSignedOn-dateSection'+k+'-input'));"
+                    "return e?(e.value||'').trim():'';};"
+                    "return {m:g('Month'),dd:g('Day'),y:g('Year')};}")
+            except Exception:
+                return {}
+
+        async def _seg(seg: str, val: str) -> None:
+            s = page.locator(f'input[id$="dateSignedOn-dateSection{seg}-input"]').first
+            try:
+                if not await s.count():
+                    return
+                await s.evaluate("e=>e.focus()")          # focus past any overlay (hit-test-proof)
+                try:                                       # clear stale digits in this segment
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Delete")
+                except Exception:
+                    pass
+                await page.keyboard.type(val, delay=45)    # REAL keystrokes -> the widget commits
+                await page.wait_for_timeout(120)
+            except Exception:
+                pass
+
+        # 1) REAL KEYBOARD per segment. Year + Day first, MONTH last (the widget re-assembles the
+        #    full date on the month's onChange — setting month first left the year uncommitted).
+        try:
+            if await page.locator('input[id$="dateSignedOn-dateSectionMonth-input"]').count():
+                await _seg("Year", yyyy)
+                await _seg("Day", dd)
+                await _seg("Month", mm)
+                try:
+                    await page.keyboard.press("Tab")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(250)
+                rb = await _readback()
+                if rb.get("m") and rb.get("dd") and rb.get("y"):
+                    if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                        logger.info("workday DATE-SIG kbd committed -> %r", rb)
+                    return True
+                if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                    logger.info("workday DATE-SIG kbd readback empty %r -> JS fallback", rb)
+        except Exception as exc:
+            if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                logger.info("workday DATE-SIG kbd raised: %s", exc)
+
         res = await page.evaluate(
             r"""(d)=>{
               const nat=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
@@ -1258,26 +1312,67 @@ class WorkdayStrategy(ApplyStrategy):
             except Exception as exc:
                 logger.debug("workday: checkbox group tick raised: %s", exc)
 
+    @staticmethod
+    def _needs_demo_redecline(cur: str) -> bool:
+        """PURE: does a Workday demographic select's CURRENT value need to be (re)declined? A synthetic
+        persona NEVER claims a protected characteristic. True when the value is an unanswered
+        placeholder OR a protected-characteristic CLAIM (e.g. Sagility DEFAULTS 'Please mention your
+        Veteran Status' to 'I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN…',
+        which the old 'skip answered' logic left standing). False when it already reads as a decline /
+        a safe negative (so gender/race that already declined are left untouched)."""
+        c = (cur or "").strip().lower()
+        if not c or re.match(r"select one|select\.\.\.|select a value|choose\b|^\s*$", c):
+            return True                                   # unanswered placeholder → decline it
+        if re.search(r"do not wish|don.?t wish|decline to|declines to|prefer not|choose not|"
+                     r"not a protected|not a veteran|do not want|don.?t want|i am not|i choose not|"
+                     r"no,? i (do not|don.?t)", c):
+            return False                                  # already a safe decline/negative
+        if re.search(r"identify as one or more|one or more of the clas|protected veteran|"
+                     r"i am a protected|yes,? i (have|am)|i have a disab", c):
+            return True                                   # a protected-characteristic CLAIM → redecline
+        return False                                      # a neutral value (e.g. Hispanic 'No') — leave
+
     async def _decline_wd_demographics(self, page: Page) -> None:
-        """Decline every UNANSWERED Workday demographic button[aria-haspopup=listbox] select
-        (gender / race / ethnicity / veteran / disability) with its explicit non-disclosure
-        option — never claiming a protected characteristic. A demographic with no decline option
-        is left blank (nothing safe to pick)."""
+        """Decline every Workday demographic button[aria-haspopup=listbox] select (gender / race /
+        ethnicity / veteran / disability) with its explicit non-disclosure option — never claiming a
+        protected characteristic. Handles a select that is UNANSWERED (placeholder) AND one Workday
+        DEFAULTED to a protected CLAIM (Sagility pre-sets Veteran Status to 'I IDENTIFY AS ONE OR
+        MORE…' — the old answered-skip left it standing): `_needs_demo_redecline` decides, and a
+        FORCE-tag re-opens even an 'answered' select so the decline replaces the claim. A demographic
+        with no decline option is left blank (nothing safe to pick)."""
         try:
             labels = await page.evaluate(_WD_SELECT_LABELS_JS)
         except Exception:
             return
+        _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
         for f in labels:
-            if f.get("answered"):
-                continue
             label = (f.get("label") or "").lower()
             if not _DEMOGRAPHIC_RE.search(label):
                 continue
+            cur = f.get("cur") or ""
+            if not self._needs_demo_redecline(cur):
+                continue
+            # Veteran-status decline wording differs from gender/race ('I DON'T WISH TO ANSWER' /
+            # 'I AM NOT A PROTECTED VETERAN'); lead with SHORT distinctive search terms so the typed
+            # listbox filter surfaces the decline (the full 'I do not wish to answer' over-filters a
+            # contraction option to nothing). A neutral persona is truthfully not a protected veteran.
+            is_vet = "veteran" in label
+            vals = (["not a protected veteran", "wish", "decline", "I am not a protected veteran"]
+                    if is_vet else list(_DECLINE_VALUES))
+            key = (f.get("key") or "").lower()
             try:
-                await self._fill_wd_select(page, f.get("key") or "", list(_DECLINE_VALUES),
-                                           allow_first=False)
-            except Exception:
-                pass
+                # FORCE-tag (ignore the 'answered' default) so a protected CLAIM is re-opened + replaced.
+                forced = await page.evaluate(_WD_FORCE_TAG_SELECT_JS, key)
+                if forced:
+                    ok = await self._pick_tagged_select(page, vals, allow_first=False)
+                    if _dbg:
+                        logger.info("workday DEMO-DECLINE: label=%r cur=%r -> picked=%s",
+                                    label[:40], cur[:40], ok)
+                elif _dbg:
+                    logger.info("workday DEMO-DECLINE: could not tag %r", label[:40])
+            except Exception as exc:
+                if _dbg:
+                    logger.info("workday DEMO-DECLINE raised for %r: %s", label[:40], exc)
 
     async def _fill_wd_select(self, page: Page, label_substr: str, values,
                               allow_first: bool = False) -> bool:
@@ -2681,7 +2776,7 @@ _WD_SELECT_LABELS_JS = (r"""()=>{""" + _WD_LABEL_JS_FN + r"""
     const answered=!!cur && !ph.test(cur);
     const key=t.slice(0,110);
     if(seen.has(key)) continue; seen.add(key);
-    out.push({label:t, key, answered});
+    out.push({label:t, key, answered, cur});
   } return out;}""")
 
 # Tag the FIRST unanswered Workday select whose label contains label_substr with data-jfwd=1.
@@ -2692,6 +2787,16 @@ _WD_TAG_SELECT_JS = (r"""(lbl)=>{""" + _WD_LABEL_JS_FN + r"""
     if(!n(_wdLabel(b)).includes(lbl)) continue;
     const cur=(b.innerText||'').trim();
     if(cur && !ph.test(cur)) continue;          // already answered — skip
+    b.setAttribute('data-jfwd','1'); return true;} return false;}""")
+
+# FORCE-tag the FIRST Workday select whose label contains label_substr with data-jfwd=1 — REGARDLESS
+# of whether it already shows a value. Used to REPLACE a protected-characteristic default (Sagility
+# pre-sets Veteran Status to 'I IDENTIFY AS ONE OR MORE…') with a decline; the normal _WD_TAG_SELECT_JS
+# skips an 'answered' select, so a defaulted protected claim would otherwise never be re-opened.
+_WD_FORCE_TAG_SELECT_JS = (r"""(lbl)=>{""" + _WD_LABEL_JS_FN + r"""
+  const n=s=>(s||'').toLowerCase();
+  for(const b of document.querySelectorAll('button[aria-haspopup="listbox"]')){
+    if(!n(_wdLabel(b)).includes(lbl)) continue;
     b.setAttribute('data-jfwd','1'); return true;} return false;}""")
 
 # Labels of REQUIRED Workday selects still on their placeholder (unanswered) — appended to the

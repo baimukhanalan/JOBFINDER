@@ -398,6 +398,44 @@ def test_wd_prompt_js_constants_are_tenant_agnostic_and_scoped():
     assert "document.querySelectorAll(sel)" not in tj          # NOT a document-wide option sweep
 
 
+def test_needs_demo_redecline_veteran_claim_and_placeholder():
+    # A synthetic persona NEVER claims a protected characteristic. Sagility DEFAULTS the Veteran
+    # Status select to 'I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN…',
+    # which the old answered-skip left standing → must be re-declined. Placeholders decline too;
+    # an already-declined / neutral value is left alone.
+    N = WorkdayMassHiringStrategy._needs_demo_redecline
+    # protected-characteristic CLAIMS → re-decline
+    assert N("I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN LISTED ABOVE") is True
+    assert N("Yes, I have a disability") is True
+    # unanswered placeholders → decline
+    assert N("Select One") is True
+    assert N("") is True
+    assert N("   ") is True
+    # already-safe declines / negatives → leave untouched
+    assert N("I do not wish to answer") is False
+    assert N("I DON'T WISH TO ANSWER") is False
+    assert N("I am not a protected veteran") is False
+    assert N("Decline to self-identify") is False
+    assert N("I do not wish to answer (United States of America)") is False
+    # a neutral non-protected value (Hispanic/Latino 'No') → left alone
+    assert N("No") is False
+
+
+def test_wd_force_tag_select_js_ignores_answered():
+    # The force-tag JS must NOT carry the 'already answered — skip' guard (so a DEFAULTED protected
+    # claim is re-opened + replaced); the normal tag JS still skips answered.
+    from backend.applier.strategies import workday as w
+    assert "already answered" not in w._WD_FORCE_TAG_SELECT_JS
+    assert "already answered" in w._WD_TAG_SELECT_JS
+    assert "data-jfwd" in w._WD_FORCE_TAG_SELECT_JS
+    # _WD_SELECT_LABELS_JS now surfaces the current value so _decline can judge a claim
+    assert "cur" in w._WD_SELECT_LABELS_JS
+    # the CC-305 date setter uses a real-keyboard path (keydown) before the JS native-value fallback
+    import inspect
+    src = inspect.getsource(WorkdayMassHiringStrategy._set_wd_date)
+    assert "keyboard.type" in src and "dateSectionMonth-input" in src
+
+
 def test_screener_answer_unknown_returns_none():
     A = WorkdayMassHiringStrategy._screener_answer
     assert A("describe a time you resolved a conflict", {}) is None

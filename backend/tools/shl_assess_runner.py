@@ -132,21 +132,26 @@ async def _already_done(page) -> bool:
     return (bool(re.search(r"\b0\s*assessment", body)) and "left" in body) or bool(sa._COMPLETE_RE.search(body))
 
 
-def _shl_proxy(name: str = ""):
-    """Route SHL's headful browser through a phone egress slot — the SHL portal TCP-BLOCKS the
-    datacenter IP (proven 2026-09-12: direct connect times out, a phone slot reaches it). `SHL_PROXY`
-    env overrides; else round-robin the LIVE phone slots (spreads concurrent sessions across phones so
-    one phone IP isn't overloaded into the same block). Returns a Playwright proxy dict or None (direct
-    — the old behavior — when no phone is live). socks5 is no-auth (Chromium can't auth socks5)."""
+def _shl_proxy(name: str = "", attempt: int = 1):
+    """Pick the SHL headful browser's egress for this attempt. The SHL portal was TCP-blocking the
+    datacenter IP (2026-09-12), but the KZ PHONE slots are slow and stick at 'landing' (the SPA never
+    hydrates), and the Mac slot (…:10802) is RESERVED for Sutherland + its mobile carrier errors here.
+    So: attempt 1 = DIRECT (fast — hydrates the SPA cleanly IF the datacenter block has since lifted);
+    later attempts round-robin the PHONE slots with the Mac EXCLUDED (`apply_slots()`), spreading load
+    and covering the case where direct is still blocked. `SHL_PROXY` overrides (a URL, or
+    `direct`/`none`/`0`/`off` to pin DIRECT). Returns a Playwright proxy dict or None (=DIRECT).
+    socks5 is no-auth (Chromium can't auth socks5)."""
     import os
     env = (os.getenv("SHL_PROXY") or "").strip()
     if env:
-        return {"server": env}
+        return None if env.lower() in ("direct", "none", "0", "off", "") else {"server": env}
+    if attempt <= 1:
+        return None  # DIRECT first — the fast path
     try:
         from backend.tools import proxy_pool
-        slots = [s for s in proxy_pool.residential_slots() if s.startswith("socks5://")]
+        slots = [s for s in proxy_pool.apply_slots() if s.startswith("socks5://")]  # Mac excluded
         if slots:
-            i = (abs(hash(name)) % len(slots)) if name else 0
+            i = (abs(hash(name)) + attempt) % len(slots)
             return {"server": slots[i]}
     except Exception:
         pass
@@ -160,10 +165,12 @@ async def run_one(name: str, link: str, *, max_retries: int = 6) -> str:
     for attempt in range(1, max_retries + 1):
         async with async_playwright() as p:
             _launch = {"headless": False, "args": ["--no-sandbox"], "timeout": 60000}
-            _px = _shl_proxy(name)
+            _px = _shl_proxy(name, attempt)
             if _px:
                 _launch["proxy"] = _px
-                logger.info("[%s] egress via %s", name, _px["server"])
+                logger.info("[%s] egress via %s (attempt %d)", name, _px["server"], attempt)
+            else:
+                logger.info("[%s] egress DIRECT (attempt %d)", name, attempt)
             b = await p.chromium.launch(**_launch)
             pg = await b.new_page(viewport={"width": 1280, "height": 850})
             try:

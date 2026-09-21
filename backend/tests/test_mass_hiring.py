@@ -1361,3 +1361,163 @@ def test_kaiser_missing_id_or_title_is_dropped():
     assert mh._kaiser_row(None, "Contact Center Specialist I - Remote",
                           "Spokane, WA, Remote", "/job/x/641/5") is None
     assert mh._kaiser_row("6", "", "Spokane, WA, Remote", "/job/x/641/6") is None
+
+
+# ---- TLS-fingerprint / JS-walled boards, cracked 2026-09-21 -------------------------------------
+# (the wall was the request fingerprint, NOT geo — US egress did not help). Each is COLLECT-FIRST.
+
+# GEICO — Workday CxS (shares _workday_row); us_confirmed + title_remote. Live: 285 postings, all
+# remote roles senior → 0 entry today (reachable + future-proof; entry CSR reps are onsite).
+def test_geico_workday_remote_us_entry_is_kept():
+    row = mh._workday_row(
+        {"locationsText": "Remote (United States)", "title": "Customer Service Representative",
+         "bulletFields": ["R0060001"], "externalPath": "/job/Remote-United-States/CSR_R0060001"},
+        "geico", "GEICO", "geico.wd1.myworkdayjobs.com", "External",
+        us_confirmed=True, title_remote=True)
+    assert row is not None
+    assert row["source"] == "geico"
+    assert row["source_id"] == "R0060001"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"].startswith("https://geico.wd1.myworkdayjobs.com/en-US/External")
+
+
+def test_geico_workday_wfh_title_at_office_is_kept():
+    # A "Remote"/"Virtual" TITLE at a physical office is kept via title_remote.
+    row = mh._workday_row(
+        {"locationsText": "Chevy Chase, MD", "title": "Customer Service Representative - Remote",
+         "bulletFields": ["R0060002"], "externalPath": "/job/Chevy-Chase/x_R0060002"},
+        "geico", "GEICO", "geico.wd1.myworkdayjobs.com", "External",
+        us_confirmed=True, title_remote=True)
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_geico_workday_remote_senior_is_dropped():
+    # GEICO's actual remote inventory is senior/professional → dropped by categorize().
+    assert mh._workday_row(
+        {"locationsText": "Remote (United States)", "title": "Senior Staff Software Engineer",
+         "bulletFields": ["R0060003"], "externalPath": "/x_R0060003"},
+        "geico", "GEICO", "geico.wd1.myworkdayjobs.com", "External",
+        us_confirmed=True, title_remote=True) is None
+    assert mh._workday_row(
+        {"locationsText": "Remote (United States)", "title": "Territory Sales Manager (Indiana)",
+         "bulletFields": ["R0060004"], "externalPath": "/x_R0060004"},
+        "geico", "GEICO", "geico.wd1.myworkdayjobs.com", "External",
+        us_confirmed=True, title_remote=True) is None
+
+
+def test_geico_workday_onsite_csr_is_dropped():
+    # GEICO's entry CSR reps are ONSITE (no remote signal) → dropped even though US + entry title.
+    assert mh._workday_row(
+        {"locationsText": "Poway, CA", "title": "Claims Service Specialist",
+         "bulletFields": ["R0060005"], "externalPath": "/job/Poway/x_R0060005"},
+        "geico", "GEICO", "geico.wd1.myworkdayjobs.com", "External",
+        us_confirmed=True, title_remote=True) is None
+
+
+# ---- Afni — ADP "myjobs" staffing API (_afni_row). Remote is TITLE-first; US from the requisition
+# location country (USA). Live 2026-09-21: 63 reqs → ~12 US-remote entry CSR/insurance-rep rows.
+def _afni_req(title, city="Dallas", state="TX", country="USA", reqid="5001224443200"):
+    return {"jobTitle": title, "reqId": reqid, "postingDate": "2026-09-10",
+            "requisitionLocations": [{"address": {
+                "cityName": city, "countrySubdivisionLevel1": {"codeValue": state},
+                "country": {"codeValue": country}}}]}
+
+
+def test_afni_us_remote_csr_is_kept():
+    row = mh._afni_row(_afni_req("Remote Customer Service Representative", city="", state="WI"))
+    assert row is not None
+    assert row["source"] == "afni"
+    assert row["source_id"] == "5001224443200"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["location_raw"] == "WI, United States"
+    assert row["apply_url"] == (
+        "https://myjobs.adp.com/afniexternalcareers/cx/job-details/5001224443200")
+
+
+def test_afni_remote_insurance_rep_is_kept():
+    row = mh._afni_row(_afni_req("Full-Time Remote Insurance Representative", city="", state="SC"))
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_afni_onsite_title_is_dropped():
+    # No remote signal in the TITLE (the ADP location is the recruiting office) → dropped.
+    assert mh._afni_row(_afni_req("On-Site Training Coach", city="Tucson", state="AZ")) is None
+    assert mh._afni_row(_afni_req("Inbound Customer Service Representative", city="Atlanta", state="GA")) is None
+
+
+def test_afni_offshore_is_dropped():
+    assert mh._afni_row(_afni_req("Remote Customer Service Representative", city="Quezon City",
+                                  state="", country="PHL")) is None
+
+
+def test_afni_remote_senior_is_dropped():
+    assert mh._afni_row(_afni_req("Remote Operations Manager - Insurance", city="", state="TX")) is None
+
+
+def test_afni_missing_id_or_title_is_dropped():
+    assert mh._afni_row({"jobTitle": "Remote Customer Service Representative", "reqId": None}) is None
+    assert mh._afni_row({"jobTitle": "", "reqId": "1"}) is None
+
+
+# ---- Cotiviti — iCIMS results row (_cotiviti_row). Structured location "US-Remote" = remote+US.
+# Live 2026-09-21: ~83 postings → ~1 US-remote entry (mostly senior healthcare-analytics).
+def test_cotiviti_us_remote_entry_is_kept():
+    row = mh._cotiviti_row(
+        "20277", "Marketing Business Operations Specialist", "US-Remote",
+        "https://careers-cotiviti.icims.com/jobs/20277/marketing-business-operations-specialist/job?in_iframe=1")
+    assert row is not None
+    assert row["source"] == "cotiviti"
+    assert row["source_id"] == "20277"
+    assert row["category"] == "operations"
+    assert row["us_eligible"] is True
+    # the ?in_iframe=1 query is stripped from the stored apply URL
+    assert row["apply_url"] == (
+        "https://careers-cotiviti.icims.com/jobs/20277/marketing-business-operations-specialist/job")
+
+
+def test_cotiviti_multi_location_us_remote_is_kept():
+    row = mh._cotiviti_row("20300", "Claims Processor", "US-Remote | US-UT-South Jordan", "")
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_cotiviti_onsite_only_is_dropped():
+    # A pure onsite structured location (no remote token) → dropped.
+    assert mh._cotiviti_row("20301", "Claims Processor", "US-UT-South Jordan", "") is None
+
+
+def test_cotiviti_senior_us_remote_is_dropped():
+    assert mh._cotiviti_row("20412", "Engagement and Ownership Culture Senior Manager",
+                            "US-Remote", "") is None
+    assert mh._cotiviti_row("20391", "Application Integration Engineer", "US-Remote", "") is None
+
+
+# ---- Progressive — Talemetry remote-facet card (_progressive_row). Fetched from the remote facet so
+# remoteness is guaranteed by the source; US forced (US-only insurer). Live 2026-09-21: ~7 remote, ~1 entry.
+def test_progressive_remote_entry_is_kept():
+    row = mh._progressive_row(
+        "17290054", "Claims Adjuster - Large Loss Injury Litigation",
+        "https://careers.progressive.com/jobs/17290054-claims-adjuster-large-loss-injury-litigation/",
+        "United States")
+    assert row is not None
+    assert row["source"] == "progressive"
+    assert row["source_id"] == "17290054"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == (
+        "https://careers.progressive.com/jobs/17290054-claims-adjuster-large-loss-injury-litigation/")
+
+
+def test_progressive_senior_is_dropped_by_categorize():
+    assert mh._progressive_row("1", "IT Director - Claims Platform",
+                               "https://careers.progressive.com/jobs/1-it-director/", "United States") is None
+
+
+def test_progressive_missing_fields_are_dropped():
+    assert mh._progressive_row("", "Customer Service Representative", "/jobs/x/", "United States") is None
+    assert mh._progressive_row("2", "", "/jobs/2/", "United States") is None
+    assert mh._progressive_row("3", "Customer Service Representative", "", "United States") is None

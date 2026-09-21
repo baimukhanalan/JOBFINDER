@@ -59,22 +59,24 @@ _TENANT = {"cnx": "concentrix", "cvshealth": "cvshealth", "centene": "centene",
 
 # Tenants live-validated to land a real Workday application ack — driven by the cron.
 #
-# Centene (centene.wd5) is proven KEYLESS end-to-end: its register step carries NO reCAPTCHA
-# (grecaptcha False / sitekey None on the live create-account page), so the headful recon creates
-# the guest account, confirms the emailed activation link, fills the 7-step wizard, and submits —
-# landing a real "Your Centene application is under review" receipt from centene@myworkday.com in
-# the persona's @takhet.com Maildir (validated 2026-09-03, fresh synthetic persona).
-_LIVE_TENANTS: set[str] = {"centene"}
+# Centene (centene.wd5) is proven KEYLESS end-to-end (validated 2026-09-03).
+# CONCENTRIX (cnx.wd1 external_global) is proven KEYLESS end-to-end 2026-09-21: its create-account
+# form carries NO reCAPTCHA (grecaptcha False / sitekey None on the live page) — the sole blocker was
+# the required Terms checkbox (a legend-based widget) + a legend-based free-text screener, both fixed;
+# the headful recon creates the account, fills the 6-step wizard (all screeners incl. the check-all
+# groups + the availability-restrictions textarea), submits, and reaches the on-page "Application
+# Submitted / Thank you for applying" success page (confirmed=1 on the plain server IP, DIRECT, no
+# solver, no US IP — `12_after_submit.png`). Both need NEITHER a solver key NOR a residential IP.
+_LIVE_TENANTS: set[str] = {"centene", "concentrix"}
 
-# Tenants NOT driven. The insurer/BPO tenants gate the account-create step behind a reCAPTCHA that
-# needs a CAPTCHA_SOLVER_KEY (capsolver/2captcha) AND a US residential IP (a datacenter IP is
-# risk-scored on the register step), so they cannot complete keyless from here. Do NOT add them
-# without a solver key + residential egress AND a fresh live-validated ack.
+# Tenants NOT driven. cigna/humana/cvs still gate the account-create step behind a reCAPTCHA (pending
+# a live re-verify — they share the Workday create-account pattern, so the same checkbox fix + a
+# no-captcha finding MAY apply; drive one with WORKDAY_DEBUG_SHOTS=1 and check the register-captcha
+# presence before assuming a solver/IP is needed). Do NOT add them without a fresh live-validated ack.
 _BLOCKED: dict[str, str] = {
-    "cigna": "register-step reCAPTCHA needs CAPTCHA_SOLVER_KEY + a US residential IP (not keyless)",
-    "humana": "register-step reCAPTCHA needs CAPTCHA_SOLVER_KEY + a US residential IP (not keyless)",
-    "cvshealth": "register-step reCAPTCHA needs CAPTCHA_SOLVER_KEY + a US residential IP (not keyless)",
-    "concentrix": "register-step reCAPTCHA needs CAPTCHA_SOLVER_KEY + a US residential IP (not keyless)",
+    "cigna": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
+    "humana": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
+    "cvshealth": "register-step reCAPTCHA (pending live re-verify — may share Concentrix's no-captcha path)",
 }
 
 

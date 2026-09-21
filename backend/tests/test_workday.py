@@ -362,28 +362,78 @@ def test_best_prompt_option_picks_from_open_listbox():
     assert B(["Indeed"], []) is None
 
 
-def test_wd_source_wants_are_leaf_first():
-    # The delegated "how did you hear" wants must LEAD with reliable leaf options (a leaf commits a
-    # pill directly; a category needs a drill) and keep Concentrix's proven flat "Job Board".
+def test_wd_source_wants_cover_the_real_sagility_options():
+    # The delegated "how did you hear" wants must include Sagility's REAL live option set (so a
+    # present option always matches) AND Concentrix's flat "Job Board". A leaf commits a pill
+    # directly; a category (Job Boards / Social Media) is drilled to a leaf.
     wants = list(WorkdayMassHiringStrategy._WD_SOURCE_WANTS)
-    assert wants[0] == "Indeed"
-    assert "Job Board" in wants
+    for real in ("Sagility Career Portal", "Job Boards", "Social Media", "Job Fair"):
+        assert real in wants, real                    # Sagility's live options
+    assert "Job Board" in wants                        # Concentrix's proven flat leaf
     assert "Company Website" in wants
-    assert "Employee Referral" in wants               # a non-referral answer is never LED with
+    # "Job Board" want must resolve Sagility's plural "Job Boards" option via _best_prompt_option
+    assert WorkdayMassHiringStrategy._best_prompt_option(
+        wants, ["Job Boards", "Job Fair", "Sagility Career Portal", "School Fair", "Social Media"]
+    ) in ("Sagility Career Portal", "Company Website", "Job Boards")
 
 
-def test_wd_prompt_js_constants_are_tenant_agnostic():
+def test_wd_prompt_js_constants_are_tenant_agnostic_and_scoped():
     # The prompt handler locates the field by LABEL (not a hardcoded formField-source id) so
-    # Sagility/Highmark/cvs/humana all resolve; the pill selector is embedded in both JS helpers.
+    # Sagility/Highmark/cvs/humana all resolve; the OPTION scan is scoped to the field's OWN listbox
+    # (via aria-controls), never a document-wide sweep that grabs the adjacent phone country prompt.
     from backend.applier.strategies import workday as w
     assert "formField-source" not in w._WD_TAG_PROMPT_JS       # located by label, not by id
     assert "data-jfprompt" in w._WD_TAG_PROMPT_JS
     assert "const pill='" in w._WD_TAG_PROMPT_JS               # pill selector embedded via repr()
     assert "const pill='" in w._WD_PROMPT_ANSWERED_JS
-    assert "promptOption" in w._WD_PROMPT_OPTIONS_JS and "menuItem" in w._WD_PROMPT_OPTIONS_JS
     # the widget's search input (moniker + legacy multiselect) is reachable
     assert "monikerSearchBox" in w._WD_TAG_PROMPT_JS
     assert "multiselectInputContainer" in w._WD_TAG_PROMPT_JS
+    # the OPTION scan is scoped (aria-controls + tags each option) and phone-prompt-excluded
+    tj = w._WD_PROMPT_TAG_OPTIONS_JS
+    assert "promptOption" in tj and "menuItem" in tj
+    assert "aria-controls" in tj                                # scope to the field's OWN listbox
+    assert "data-jfopt" in tj                                   # tags each option for an exact click
+    assert "phone|country|dial" in tj                           # never the phone country-code prompt
+    assert "document.querySelectorAll(sel)" not in tj          # NOT a document-wide option sweep
+
+
+def test_needs_demo_redecline_veteran_claim_and_placeholder():
+    # A synthetic persona NEVER claims a protected characteristic. Sagility DEFAULTS the Veteran
+    # Status select to 'I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN…',
+    # which the old answered-skip left standing → must be re-declined. Placeholders decline too;
+    # an already-declined / neutral value is left alone.
+    N = WorkdayMassHiringStrategy._needs_demo_redecline
+    # protected-characteristic CLAIMS → re-decline
+    assert N("I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN LISTED ABOVE") is True
+    assert N("Yes, I have a disability") is True
+    # unanswered placeholders → decline
+    assert N("Select One") is True
+    assert N("") is True
+    assert N("   ") is True
+    # already-safe declines / negatives → leave untouched
+    assert N("I do not wish to answer") is False
+    assert N("I DON'T WISH TO ANSWER") is False
+    assert N("I am not a protected veteran") is False
+    assert N("Decline to self-identify") is False
+    assert N("I do not wish to answer (United States of America)") is False
+    # a neutral non-protected value (Hispanic/Latino 'No') → left alone
+    assert N("No") is False
+
+
+def test_wd_force_tag_select_js_ignores_answered():
+    # The force-tag JS must NOT carry the 'already answered — skip' guard (so a DEFAULTED protected
+    # claim is re-opened + replaced); the normal tag JS still skips answered.
+    from backend.applier.strategies import workday as w
+    assert "already answered" not in w._WD_FORCE_TAG_SELECT_JS
+    assert "already answered" in w._WD_TAG_SELECT_JS
+    assert "data-jfwd" in w._WD_FORCE_TAG_SELECT_JS
+    # _WD_SELECT_LABELS_JS now surfaces the current value so _decline can judge a claim
+    assert "cur" in w._WD_SELECT_LABELS_JS
+    # the CC-305 date setter uses a real-keyboard path (keydown) before the JS native-value fallback
+    import inspect
+    src = inspect.getsource(WorkdayMassHiringStrategy._set_wd_date)
+    assert "keyboard.type" in src and "dateSectionMonth-input" in src
 
 
 def test_screener_answer_unknown_returns_none():

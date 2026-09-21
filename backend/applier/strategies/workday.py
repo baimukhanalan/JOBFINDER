@@ -1033,10 +1033,64 @@ class WorkdayStrategy(ApplyStrategy):
         return out
 
     async def _set_wd_date(self, page: Page, d) -> bool:
-        """Set the disability form's 3-segment date widget (dateSectionMonth/Day/Year-input, scoped
-        to '…dateSignedOn-…') to date `d`. Playwright's is_visible/fill can no-op on these overlaid
-        segment inputs, so set each via the React-controlled-input protocol in JS (native value
-        setter + input/change/keyup events), then blur to commit. Returns True on a full readback."""
+        """Set the CC-305 disability 3-segment date widget (…dateSignedOn-dateSection{Month,Day,Year}-
+        input) to date `d`. These Workday spinbutton segments process REAL KEYSTROKES — a JS native-
+        value set reads back momentarily but React reverts it to EMPTY on re-render (the live-proven
+        symptom: '…DATE-SIG: filled 09/21/2026' logged yet the field stays empty + 'Enter today's
+        date'). So type each segment with the real keyboard first (focus via JS to beat the overlay,
+        then keyboard.type so the widget's own keydown handler commits it); fall back to the JS
+        native-value protocol only if that reads back empty. Returns True on a committed readback."""
+        mm, dd, yyyy = f"{d.month:02d}", f"{d.day:02d}", str(d.year)
+
+        async def _readback() -> dict:
+            try:
+                return await page.evaluate(
+                    "()=>{const g=k=>{const e=[...document.querySelectorAll('input')]"
+                    ".find(x=>(x.id||'').endsWith('dateSignedOn-dateSection'+k+'-input'));"
+                    "return e?(e.value||'').trim():'';};"
+                    "return {m:g('Month'),dd:g('Day'),y:g('Year')};}")
+            except Exception:
+                return {}
+
+        async def _seg(seg: str, val: str) -> None:
+            s = page.locator(f'input[id$="dateSignedOn-dateSection{seg}-input"]').first
+            try:
+                if not await s.count():
+                    return
+                await s.evaluate("e=>e.focus()")          # focus past any overlay (hit-test-proof)
+                try:                                       # clear stale digits in this segment
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Delete")
+                except Exception:
+                    pass
+                await page.keyboard.type(val, delay=45)    # REAL keystrokes -> the widget commits
+                await page.wait_for_timeout(120)
+            except Exception:
+                pass
+
+        # 1) REAL KEYBOARD per segment. Year + Day first, MONTH last (the widget re-assembles the
+        #    full date on the month's onChange — setting month first left the year uncommitted).
+        try:
+            if await page.locator('input[id$="dateSignedOn-dateSectionMonth-input"]').count():
+                await _seg("Year", yyyy)
+                await _seg("Day", dd)
+                await _seg("Month", mm)
+                try:
+                    await page.keyboard.press("Tab")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(250)
+                rb = await _readback()
+                if rb.get("m") and rb.get("dd") and rb.get("y"):
+                    if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                        logger.info("workday DATE-SIG kbd committed -> %r", rb)
+                    return True
+                if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                    logger.info("workday DATE-SIG kbd readback empty %r -> JS fallback", rb)
+        except Exception as exc:
+            if os.getenv("WORKDAY_DEBUG_SHOTS"):
+                logger.info("workday DATE-SIG kbd raised: %s", exc)
+
         res = await page.evaluate(
             r"""(d)=>{
               const nat=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
@@ -1258,26 +1312,67 @@ class WorkdayStrategy(ApplyStrategy):
             except Exception as exc:
                 logger.debug("workday: checkbox group tick raised: %s", exc)
 
+    @staticmethod
+    def _needs_demo_redecline(cur: str) -> bool:
+        """PURE: does a Workday demographic select's CURRENT value need to be (re)declined? A synthetic
+        persona NEVER claims a protected characteristic. True when the value is an unanswered
+        placeholder OR a protected-characteristic CLAIM (e.g. Sagility DEFAULTS 'Please mention your
+        Veteran Status' to 'I IDENTIFY AS ONE OR MORE OF THE CLASSIFICATIONS OF PROTECTED VETERAN…',
+        which the old 'skip answered' logic left standing). False when it already reads as a decline /
+        a safe negative (so gender/race that already declined are left untouched)."""
+        c = (cur or "").strip().lower()
+        if not c or re.match(r"select one|select\.\.\.|select a value|choose\b|^\s*$", c):
+            return True                                   # unanswered placeholder → decline it
+        if re.search(r"do not wish|don.?t wish|decline to|declines to|prefer not|choose not|"
+                     r"not a protected|not a veteran|do not want|don.?t want|i am not|i choose not|"
+                     r"no,? i (do not|don.?t)", c):
+            return False                                  # already a safe decline/negative
+        if re.search(r"identify as one or more|one or more of the clas|protected veteran|"
+                     r"i am a protected|yes,? i (have|am)|i have a disab", c):
+            return True                                   # a protected-characteristic CLAIM → redecline
+        return False                                      # a neutral value (e.g. Hispanic 'No') — leave
+
     async def _decline_wd_demographics(self, page: Page) -> None:
-        """Decline every UNANSWERED Workday demographic button[aria-haspopup=listbox] select
-        (gender / race / ethnicity / veteran / disability) with its explicit non-disclosure
-        option — never claiming a protected characteristic. A demographic with no decline option
-        is left blank (nothing safe to pick)."""
+        """Decline every Workday demographic button[aria-haspopup=listbox] select (gender / race /
+        ethnicity / veteran / disability) with its explicit non-disclosure option — never claiming a
+        protected characteristic. Handles a select that is UNANSWERED (placeholder) AND one Workday
+        DEFAULTED to a protected CLAIM (Sagility pre-sets Veteran Status to 'I IDENTIFY AS ONE OR
+        MORE…' — the old answered-skip left it standing): `_needs_demo_redecline` decides, and a
+        FORCE-tag re-opens even an 'answered' select so the decline replaces the claim. A demographic
+        with no decline option is left blank (nothing safe to pick)."""
         try:
             labels = await page.evaluate(_WD_SELECT_LABELS_JS)
         except Exception:
             return
+        _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
         for f in labels:
-            if f.get("answered"):
-                continue
             label = (f.get("label") or "").lower()
             if not _DEMOGRAPHIC_RE.search(label):
                 continue
+            cur = f.get("cur") or ""
+            if not self._needs_demo_redecline(cur):
+                continue
+            # Veteran-status decline wording differs from gender/race ('I DON'T WISH TO ANSWER' /
+            # 'I AM NOT A PROTECTED VETERAN'); lead with SHORT distinctive search terms so the typed
+            # listbox filter surfaces the decline (the full 'I do not wish to answer' over-filters a
+            # contraction option to nothing). A neutral persona is truthfully not a protected veteran.
+            is_vet = "veteran" in label
+            vals = (["not a protected veteran", "wish", "decline", "I am not a protected veteran"]
+                    if is_vet else list(_DECLINE_VALUES))
+            key = (f.get("key") or "").lower()
             try:
-                await self._fill_wd_select(page, f.get("key") or "", list(_DECLINE_VALUES),
-                                           allow_first=False)
-            except Exception:
-                pass
+                # FORCE-tag (ignore the 'answered' default) so a protected CLAIM is re-opened + replaced.
+                forced = await page.evaluate(_WD_FORCE_TAG_SELECT_JS, key)
+                if forced:
+                    ok = await self._pick_tagged_select(page, vals, allow_first=False)
+                    if _dbg:
+                        logger.info("workday DEMO-DECLINE: label=%r cur=%r -> picked=%s",
+                                    label[:40], cur[:40], ok)
+                elif _dbg:
+                    logger.info("workday DEMO-DECLINE: could not tag %r", label[:40])
+            except Exception as exc:
+                if _dbg:
+                    logger.info("workday DEMO-DECLINE raised for %r: %s", label[:40], exc)
 
     async def _fill_wd_select(self, page: Page, label_substr: str, values,
                               allow_first: bool = False) -> bool:
@@ -1450,12 +1545,15 @@ class WorkdayStrategy(ApplyStrategy):
             except Exception:
                 continue
 
-    # A neutral, non-referral 'How Did You Hear About Us?' answer, LEAF options first (a leaf commits
-    # a pill on any tenant; a category needs a drill). Concentrix's flat menuItem "Job Board" is kept
-    # so that proven tenant still commits on an early try.
-    _WD_SOURCE_WANTS = ("Indeed", "LinkedIn", "Job Board", "Company Website", "Career Site",
-                        "Careers Website", "Glassdoor", "Google", "Search Engine",
-                        "Employee Referral", "Online", "Social Media", "Website", "Other")
+    # A neutral, non-referral 'How Did You Hear About Us?' answer. LEADS with the REAL Sagility
+    # option set (`Job Boards`/`Sagility Career Portal`/`Social Media`/…, live 2026-09-21) so a
+    # present option always matches, then generic leaves (`Job Board`/`Indeed`/… — Concentrix's flat
+    # menuItem "Job Board" stays covered). A leaf commits a pill directly; a category (Job Boards /
+    # Social Media) is drilled to its first leaf. `_best_prompt_option` matches case-insensitively /
+    # by substring, so "Job Board" also matches Sagility's plural "Job Boards".
+    _WD_SOURCE_WANTS = ("Sagility Career Portal", "Company Website", "Career Site", "Careers Website",
+                        "Job Boards", "Job Board", "Indeed", "LinkedIn", "Glassdoor", "Google",
+                        "Search Engine", "Social Media", "Job Fair", "Online", "Website", "Other")
 
     async def _fill_wd_source(self, page: Page) -> None:
         """Answer the required 'How Did You Hear About Us?' Workday PROMPT so My Information can
@@ -1494,39 +1592,22 @@ class WorkdayStrategy(ApplyStrategy):
                     return o
         return None
 
-    async def _click_prompt_option(self, page: Page, text: str) -> bool:
-        """Click a currently-visible Workday prompt option (promptOption / menuItem / role=option)
-        whose text matches `text`; fall back to focus+Space (the moniker checkbox commit key)."""
-        sel = ('[data-automation-id="promptOption"], [data-automation-id="menuItem"], '
-               '[role="option"], [role="menuitemcheckbox"]')
-        opt = page.locator(sel).filter(
-            has_text=re.compile(rf"^\s*{re.escape(text)}\s*$", re.I)).first
-        try:
-            if not await opt.count():
-                opt = page.locator(sel).filter(has_text=re.compile(re.escape(text), re.I)).first
-            if not await opt.count():
-                return False
-            await opt.scroll_into_view_if_needed(timeout=1500)
-            await opt.click(timeout=2500)
-            return True
-        except Exception:
-            try:
-                await opt.focus()
-                await page.keyboard.press("Space")
-                return True
-            except Exception:
-                return False
-
     async def _fill_wd_prompt(self, page: Page, label_substr: str, wants: list) -> bool:
         """Fill a Workday PROMPT / moniker multiselect widget — an <input> (with a ☰ list icon) under
         [data-uxi-widget-type=multiselect] that opens a SEARCHABLE listbox of
         [data-automation-id=promptOption]s (often a category→leaf HIERARCHY) — located by its field
         <label> containing label_substr (so it's tenant-agnostic, not hardcoded to formField-source).
-        For each want: type it into the prompt's search box, click the surfaced matching option; if
-        that click merely DRILLED into a category (no pill committed yet), pick the first leaf; stop
-        once a selection pill appears. Returns True once answered. Best-effort; a no-op when the field
-        is absent or already answered. Covers Concentrix's flat menuItem list too (typing filters it,
-        _click_prompt_option matches a menuItem)."""
+
+        SCOPING (the bug that left Sagility blank): the option scan + click are confined to THIS
+        field's OWN listbox (via the input's aria-controls, else its multiselect/formField ancestor),
+        NEVER a document-wide sweep that also grabs the adjacent phone country-code prompt. Each
+        option is tagged data-jfopt=<n> so the click lands on the EXACT scoped element.
+
+        Flow: OPEN the prompt (click the input) → read the scoped option labels → pick the best want-
+        match (`_best_prompt_option`) → click it by its tag → verify a selection PILL. If the click
+        merely DRILLED into a category (Job Boards / Social Media → leaves, no pill yet), pick a leaf
+        and click it. If opening shows no options (a tenant that needs typing), fall back to typing
+        each want to filter. Returns True once answered; best-effort, a no-op when absent/answered."""
         _dbg = bool(os.getenv("WORKDAY_DEBUG_SHOTS"))
         info = await page.evaluate(_WD_TAG_PROMPT_JS, label_substr.lower())
         if not info or info.get("answered"):
@@ -1543,77 +1624,106 @@ class WorkdayStrategy(ApplyStrategy):
             except Exception:
                 return False
 
-        async def _open_options() -> list:
+        async def _scoped_opts() -> list:
+            """[{n,text}] for the options visible in THIS field's own listbox (tagged data-jfopt)."""
             try:
-                return await page.evaluate(_WD_PROMPT_OPTIONS_JS)
+                return await page.evaluate(_WD_PROMPT_TAG_OPTIONS_JS)
             except Exception:
                 return []
 
+        async def _open() -> None:
+            try:
+                await inp.scroll_into_view_if_needed(timeout=1500)
+                await inp.click(timeout=2000)
+                await page.wait_for_timeout(600)
+            except Exception:
+                pass
+
+        async def _click_opt(n) -> bool:
+            el = page.locator(f'[data-jfopt="{n}"]').first
+            try:
+                if not await el.count():
+                    return False
+                await el.scroll_into_view_if_needed(timeout=1500)
+                await el.click(timeout=2500)
+                return True
+            except Exception:
+                try:
+                    await el.focus()
+                    await page.keyboard.press("Space")     # moniker checkbox-option commit key
+                    return True
+                except Exception:
+                    return False
+
+        async def _try_pick(opts) -> bool:
+            """Pick+click the best want-match in `opts`; on a category drill, pick a leaf. Pill=done."""
+            texts = [o["text"] for o in opts]
+            best = self._best_prompt_option(wants, texts)
+            if not best:
+                return False
+            n = next((o["n"] for o in opts if o["text"] == best), None)
+            if n is None:
+                return False
+            if _dbg:
+                logger.info("workday PROMPT[%s]: opts=%r pick=%r", label_substr, texts[:14], best)
+            await _click_opt(n)
+            await page.wait_for_timeout(550)
+            if await _answered():
+                return True
+            # a category click drilled into leaves (no pill yet) — pick a leaf from the NEW list.
+            opts2 = await _scoped_opts()
+            texts2 = [o["text"] for o in opts2]
+            if opts2 and texts2 != texts:
+                leaf = self._best_prompt_option(wants, texts2) or texts2[0]
+                n2 = next((o["n"] for o in opts2 if o["text"] == leaf), None)
+                if _dbg:
+                    logger.info("workday PROMPT[%s]: drilled leaf=%r opts=%r",
+                                label_substr, leaf, texts2[:14])
+                if n2 is not None:
+                    await _click_opt(n2)
+                    await page.wait_for_timeout(550)
+                    if await _answered():
+                        return True
+            return False
+
         picked = False
         try:
-            for want in wants or []:
-                if await _answered():
-                    picked = True
-                    break
-                # OPEN the prompt (click the input / its ☰ icon), then TYPE the search term so the
-                # listbox filters to matches. A readonly/non-typeable moniker input (some tenants)
-                # still OPENS on click — we then match the want against the full, unfiltered list.
-                try:
-                    await inp.scroll_into_view_if_needed(timeout=1500)
-                    await inp.click(timeout=2000)
-                except Exception:
-                    pass
-                try:
-                    await inp.fill("", timeout=1500)
-                    await inp.type(want, delay=25, timeout=3000)
-                except Exception:
-                    # readonly / not typeable — reveal the option list via the prompt/☰ button.
-                    for isel in ('[data-jfprompt="1"] ~ button', '[data-jfprompt="1"]'):
-                        try:
-                            b = page.locator(isel).first
-                            if await b.count():
-                                await b.click(timeout=1500)
-                                break
-                        except Exception:
-                            continue
-                await page.wait_for_timeout(800)
-                opts = await _open_options()
-                if _dbg:
-                    logger.info("workday PROMPT[%s]: typed=%r opts=%r", label_substr, want, opts[:14])
-                target = self._best_prompt_option([want], opts)
-                if not target:
-                    try:
-                        await page.keyboard.press("Escape")
-                        await page.wait_for_timeout(150)
-                    except Exception:
-                        pass
-                    continue
-                await self._click_prompt_option(page, target)
-                await page.wait_for_timeout(500)
-                if await _answered():
-                    picked = True
-                    break
-                # the click may have DRILLED into a category (no pill yet) — pick a leaf now.
-                opts2 = await _open_options()
-                if opts2:
-                    leaf = self._best_prompt_option([want], opts2) or opts2[0]
-                    if _dbg:
-                        logger.info("workday PROMPT[%s]: drilled, leaf=%r opts=%r",
-                                    label_substr, leaf, opts2[:14])
-                    await self._click_prompt_option(page, leaf)
-                    await page.wait_for_timeout(500)
+            # PASS 1 — open with NO typing and match against the full (small) scoped list.
+            try:
+                await inp.fill("", timeout=1200)          # clear any analyzer-typed junk
+            except Exception:
+                pass
+            await _open()
+            opts = await _scoped_opts()
+            if opts and await _try_pick(opts):
+                picked = True
+            # PASS 2 — a tenant whose list only surfaces on typing: type each want to filter.
+            if not picked:
+                for want in wants or []:
                     if await _answered():
                         picked = True
                         break
-                try:
-                    await page.keyboard.press("Escape")
-                    await page.wait_for_timeout(150)
-                except Exception:
-                    pass
+                    try:
+                        await inp.click(timeout=1500)
+                        await inp.fill("", timeout=1200)
+                        await inp.type(want, delay=25, timeout=3000)
+                    except Exception:
+                        await _open()
+                    await page.wait_for_timeout(700)
+                    topts = await _scoped_opts()
+                    if topts and await _try_pick(topts):
+                        picked = True
+                        break
+                    try:
+                        await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(120)
+                    except Exception:
+                        pass
         finally:
             try:
-                await page.evaluate("()=>document.querySelectorAll('[data-jfprompt]')"
-                                    ".forEach(e=>e.removeAttribute('data-jfprompt'))")
+                await page.evaluate("()=>document.querySelectorAll('[data-jfprompt],[data-jfopt]')"
+                                    ".forEach(e=>{e.removeAttribute('data-jfprompt');"
+                                    "e.removeAttribute('data-jfopt');})")
             except Exception:
                 pass
         if _dbg and not picked:
@@ -2666,7 +2776,7 @@ _WD_SELECT_LABELS_JS = (r"""()=>{""" + _WD_LABEL_JS_FN + r"""
     const answered=!!cur && !ph.test(cur);
     const key=t.slice(0,110);
     if(seen.has(key)) continue; seen.add(key);
-    out.push({label:t, key, answered});
+    out.push({label:t, key, answered, cur});
   } return out;}""")
 
 # Tag the FIRST unanswered Workday select whose label contains label_substr with data-jfwd=1.
@@ -2677,6 +2787,16 @@ _WD_TAG_SELECT_JS = (r"""(lbl)=>{""" + _WD_LABEL_JS_FN + r"""
     if(!n(_wdLabel(b)).includes(lbl)) continue;
     const cur=(b.innerText||'').trim();
     if(cur && !ph.test(cur)) continue;          // already answered — skip
+    b.setAttribute('data-jfwd','1'); return true;} return false;}""")
+
+# FORCE-tag the FIRST Workday select whose label contains label_substr with data-jfwd=1 — REGARDLESS
+# of whether it already shows a value. Used to REPLACE a protected-characteristic default (Sagility
+# pre-sets Veteran Status to 'I IDENTIFY AS ONE OR MORE…') with a decline; the normal _WD_TAG_SELECT_JS
+# skips an 'answered' select, so a defaulted protected claim would otherwise never be re-opened.
+_WD_FORCE_TAG_SELECT_JS = (r"""(lbl)=>{""" + _WD_LABEL_JS_FN + r"""
+  const n=s=>(s||'').toLowerCase();
+  for(const b of document.querySelectorAll('button[aria-haspopup="listbox"]')){
+    if(!n(_wdLabel(b)).includes(lbl)) continue;
     b.setAttribute('data-jfwd','1'); return true;} return false;}""")
 
 # Labels of REQUIRED Workday selects still on their placeholder (unanswered) — appended to the
@@ -2797,15 +2917,41 @@ _WD_PROMPT_ANSWERED_JS = (r"""(lbl)=>{const pill=""" + repr(_WD_PROMPT_PILL_SEL)
 
 # The option labels visible in the currently-OPEN prompt listbox (portaled anywhere in the doc),
 # de-noised of Workday's ' not checked'/' checked' aria-label suffix.
-_WD_PROMPT_OPTIONS_JS = r"""()=>{
+# Read the options of the tagged prompt input's OWN listbox and TAG each with data-jfopt=<n>, so the
+# Python click lands on the exact scoped element (NOT the adjacent phone country-code prompt). SCOPE
+# resolution: the input's aria-controls/aria-owns listbox id first, else the multiSelectContainer's
+# own listbox/activeListContainer, else (portaled elsewhere) the single visible listbox that is NOT
+# inside a phone/country/dial field, else the input's formField ancestor. Text de-noised of Workday's
+# ' not checked'/' checked' aria-label suffix + the '..., press delete to clear value.' pill suffix.
+_WD_PROMPT_TAG_OPTIONS_JS = r"""()=>{
+  const inp=document.querySelector('input[data-jfprompt="1"]');
+  document.querySelectorAll('[data-jfopt]').forEach(e=>e.removeAttribute('data-jfopt'));
+  if(!inp)return [];
   const sel='[data-automation-id="promptOption"],[data-automation-id="menuItem"],'
     +'[role="option"],[role="menuitemcheckbox"]';
   const vis=e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;};
-  const out=[];const seen=new Set();
-  for(const o of document.querySelectorAll(sel)){
+  const has=e=>e&&[...e.querySelectorAll(sel)].some(vis);
+  let scope=null;
+  const oc=inp.getAttribute('aria-controls')||inp.getAttribute('aria-owns');
+  if(oc){for(const id of oc.split(/\s+/)){const e=document.getElementById(id);if(has(e)){scope=e;break;}}}
+  if(!has(scope)){const c=inp.closest('[data-automation-id="multiSelectContainer"]');
+    if(c){const lb=c.querySelector('[role="listbox"],[data-automation-id="activeListContainer"]');
+      scope=has(lb)?lb:(has(c)?c:null);}}
+  if(!has(scope)){
+    const ff=id=>{const f=(id&&id.closest)?id.closest('[data-automation-id^="formField"]'):null;
+      return f?(f.getAttribute('data-automation-id')||'').toLowerCase():'';};
+    const boxes=[...document.querySelectorAll('[role="listbox"],[data-automation-id="activeListContainer"]')]
+      .filter(b=>has(b)&&!/phone|country|dial|region/.test(ff(b)));
+    if(boxes.length)scope=boxes[boxes.length-1];}
+  if(!has(scope))scope=inp.closest('[data-automation-id^="formField"]');
+  if(!has(scope))return [];
+  const out=[];let n=0;const seen=new Set();
+  for(const o of scope.querySelectorAll(sel)){
     if(!vis(o))continue;
     let t=(o.getAttribute('aria-label')||o.innerText||'')
-      .replace(/\s+(not\s+)?checked\s*$/i,'').replace(/\s+/g,' ').trim();
-    if(!t||seen.has(t))continue;seen.add(t);out.push(t);
-    if(out.length>=40)break;}
+      .replace(/,?\s*press delete.*$/i,'').replace(/\s+(not\s+)?checked\s*$/i,'')
+      .replace(/\s+/g,' ').trim();
+    if(!t||seen.has(t))continue;seen.add(t);
+    o.setAttribute('data-jfopt',String(n));out.push({n:n,text:t});n++;
+    if(n>=60)break;}
   return out;}"""

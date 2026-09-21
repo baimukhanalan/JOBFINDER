@@ -116,6 +116,16 @@ def _build_persona(row: dict) -> dict:
 
     name = prof.get("full_name") or ""
     parts = name.split()
+    # current employer/title for the portalcareer 'Current Company' / 'Current Title' required fields
+    # (read off the synthetic résumé; the strategy falls back to generic CSR defaults if absent).
+    _resume = prof.get("resume") or {}
+    _exp = (_resume.get("experience") or []) if isinstance(_resume, dict) else []
+    _e0 = _exp[0] if _exp and isinstance(_exp[0], dict) else {}
+    cur_company = (_e0.get("company") or "").strip() or "Self-Employed"
+    cur_title = ((_resume.get("headline") if isinstance(_resume, dict) else "")
+                 or _e0.get("title") or "").strip()
+    cur_title = re.sub(r"\s*[-–—]\s*Remote\b.*$", "", cur_title).strip() \
+        or "Customer Service Representative"
     profile_form = {
         "full_name": name,
         "first_name": prof.get("first_name") or (parts[0] if parts else ""),
@@ -124,18 +134,29 @@ def _build_persona(row: dict) -> dict:
         "street_address": prof.get("street_address") or "1200 Market Street",
         "address": prof.get("street_address") or "1200 Market Street",
         "city": city, "state": state, "zip": zc, "postal_code": zc, "country": "United States",
+        "current_company": cur_company, "current_title": cur_title,
     }
     return {"profile_form": profile_form, "facts": cand.get("facts") or {},
             "resume_path": str(out / "resume.pdf"), "state": state,
             "jobid": jobid, "profile_id": profile_id}
 
 
+# A genuine per-JOB application receipt — NOT the account-creation welcome or the OTP email (both of
+# which Gainwell's two-step flow sends BEFORE the application is submitted, so matching them would
+# falsely confirm a fill that never reached Apply). The on-page "successfully applied" (the strategy's
+# report["submitted"]) is the primary truth; this Maildir check only corroborates a real job receipt.
+_APP_RECEIPT_RE = re.compile(
+    r"thank you for applying|received your application|application received|"
+    r"application has been received|thank you for your application|"
+    r"your application (to|for)\b|you (have )?successfully applied|"
+    r"application (was )?successfully (submitted|received)", re.I)
+
+
 def _app_confirmed(email: str, since_ts: float) -> bool:
-    """True once a SuccessFactors/Gainwell confirmation email has landed in the persona's Maildir
-    (received at/after since_ts). For this careersection the submit creates the candidate account AND
-    submits the application in one step, so the mailbox receipt is the SF 'Welcome to … Career Portal'
-    account email (from system@successfactors.com) — only ever sent after a successful submit; a per-job
-    'application received' email is also matched if the tenant sends one."""
+    """True once a genuine per-JOB application-receipt email has landed in the persona's Maildir
+    (received at/after since_ts). Deliberately does NOT match the SF account-creation welcome email or
+    the account-verification passcode email — those are sent during the (pre-submit) account step, so
+    matching them would falsely confirm an application that never reached Apply."""
     local = (email or "").split("@", 1)[0]
     if not local:
         return False
@@ -151,17 +172,12 @@ def _app_confirmed(email: str, since_ts: float) -> bool:
                 if os.path.getmtime(p) < since_ts - 30:
                     continue
                 with open(p, "rb") as f:
-                    head = f.read(6000).decode("utf-8", "ignore")
+                    head = f.read(8000).decode("utf-8", "ignore")
             except Exception:
                 continue
             subj = re.search(r"^Subject:.*$", head, re.I | re.M)
-            frm = re.search(r"^From:.*$", head, re.I | re.M)
-            s = (subj.group(0).lower() if subj else "") + " " + (frm.group(0).lower() if frm else "")
-            if ("successfactors.com" in s or "sapsf" in s or "gainwellte" in s
-                    or "thank you for applying" in s or "received your application" in s
-                    or "application received" in s or "application has been received" in s
-                    or "thank you for your application" in s or "your application to gainwell" in s
-                    or "career portal" in s or ("gainwell" in s and ("appl" in s or "welcome" in s))):
+            s = subj.group(0) if subj else ""
+            if _APP_RECEIPT_RE.search(s):
                 return True
     return False
 
@@ -246,21 +262,28 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
                   f"page_type={result.get('page_type')} submitted={result.get('submitted')} "
                   f"note={result.get('note', '')}]", flush=True)
             await _shot("final")
-            # On-page "Your Application has been sent. Thank you!" is the primary ground truth.
-            if result.get("submitted"):
+            # The on-page confirmation (the application form is REPLACED by the "Back to Job Listings"
+            # page) is the ground truth for this careersection — it sends NO per-job "application
+            # received" email (only the account-creation "Account Created" mail), so a submit is CONFIRMED
+            # by result["submitted"]. We still briefly poll the Maildir to corroborate if the tenant ever
+            # sends a per-job receipt, but never block the full --keep on an email that won't come.
+            submitted = bool(result.get("submitted"))
+            if submitted:
                 print("[application SUBMITTED — on-page Gainwell confirmation]", flush=True)
             deadline = start_ts + keep_minutes * 60
+            # when already submitted on-page, only spend a short corroboration window
+            soft_deadline = time.time() + (90 if submitted else keep_minutes * 60)
             confirmed = False
-            while time.time() < deadline:
+            while time.time() < min(deadline, soft_deadline):
                 if _app_confirmed(pf["email"], start_ts - 60):
                     confirmed = True
-                    print("[application CONFIRMED — SuccessFactors receipt in the Maildir]", flush=True)
+                    print("[application CONFIRMED — Gainwell receipt in the Maildir]", flush=True)
                     break
-                if not result.get("submitted"):
+                if not submitted:
                     # fill didn't reach the confirmation page — no point waiting for a receipt
                     break
                 await asyncio.sleep(10)
-            if not confirmed and not result.get("submitted"):
+            if not submitted:
                 print("[no confirmation within --keep (expected if GAINWELL_ADVANCE is off, or the "
                       "SF ack lags / a field blocked submit — read the shots + unfilled)]", flush=True)
         except Exception as e:  # noqa: BLE001

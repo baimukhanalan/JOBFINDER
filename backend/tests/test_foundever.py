@@ -9,8 +9,15 @@ from backend.applier.strategies.foundever import (  # noqa: E402
     _phone_local,
     combobox_answer,
     job_question_answer,
+    portal_text_value,
     ssn_last6,
 )
+
+# Gainwell "portalcareer" screener combobox option lists (captured live 2026-09-21).
+_YESNO = ["No Selection", "No", "Yes"]
+_TRAVEL = ["No Selection", "0 - 10%", "11 - 25%", "26 - 50%", "51 - 75%"]
+_PHONE_TYPE = ["No Selection", "Business", "Cell", "Home", "Work"]
+_HEAR_DETAIL = ["No Selection", "Company Website", "Job Board", "Referral"]
 
 # The real combobox option lists captured live from the SuccessFactors careersection (2026-09-19).
 _HEAR = ["No Selection", "Career Fair", "Company Website", "Craigslist", "Email", "Employee Referral",
@@ -95,6 +102,124 @@ def test_race_never_returns_a_characteristic():
     # a synthetic persona must NEVER be assigned a real race/ethnicity
     ans = combobox_answer("Race or Ethnicity", _RACE)
     assert "wish" in ans.lower() and "hispanic" not in ans.lower().split("i do")[0]
+
+
+# ---- combobox_answer: Gainwell portalcareer eligibility/screener comboboxes ---------------------
+
+def test_work_authorized_is_yes_even_though_label_mentions_country():
+    # the label literally contains "country of the job" — it must answer Yes, NOT "United States"
+    q = "Are you legally authorized to work in the country of the job for which you are applying?"
+    assert combobox_answer(q, _YESNO) == "Yes"
+
+
+def test_sponsorship_is_no():
+    q = "Will you now or in the future require sponsorship for an employment Visa?"
+    assert combobox_answer(q, _YESNO) == "No"
+
+
+def test_current_or_former_employee_is_no():
+    assert combobox_answer("Current or former employee?", _YESNO) == "No"
+
+
+def test_family_or_friends_at_gainwell_is_no():
+    q = "Do any of your family members or close personal friends work for Gainwell?"
+    assert combobox_answer(q, _YESNO) == "No"
+
+
+def test_noncompete_agreement_is_no():
+    q = ("Have you signed an agreement in the last two years that might restrict your ability to work "
+         "for Gainwell?")
+    assert combobox_answer(q, _YESNO) == "No"
+
+
+def test_willingness_to_travel_picks_lowest():
+    assert combobox_answer("Willingness to travel", _TRAVEL) == "0 - 10%"
+
+
+def test_phone_type_prefers_cell_when_no_mobile():
+    assert combobox_answer("Primary Phone Type", _PHONE_TYPE) == "Cell"
+
+
+def test_how_hear_details_takes_first_real_option():
+    assert combobox_answer("Details", _HEAR_DETAIL) == "Company Website"
+
+
+def test_generic_yesno_screener_defaults_yes():
+    # an unrecognised Yes/No screener combobox (job-specific) -> Yes for an affirmative question
+    q = ("This role requires entering and validating claims-related information while meeting "
+         "productivity and quality standards. Are you able to work in this environment?")
+    assert combobox_answer(q, _YESNO) == "Yes"
+
+
+def test_generic_yesno_screener_is_no_for_negative_polarity():
+    assert combobox_answer("Have you ever been convicted of a felony?", _YESNO) == "No"
+
+
+def test_new_branches_do_not_disturb_foundever_referral():
+    # the Foundever "current ... employee refer you" label must NOT be caught by the new
+    # current-or-former-employee branch (it has no "or former")
+    assert combobox_answer("Did a current Foundever employee refer you to this position?",
+                           _REFERRAL) == "No"
+
+
+# ---- portal_text_value: label-driven text fields on the portalcareer page ------------------------
+
+_PF = {"email": "ann.bell1@takhet.com", "first_name": "Ann", "last_name": "Bell",
+       "full_name": "Ann Bell", "street_address": "12 Oak St", "address": "12 Oak St",
+       "city": "Austin", "zip": "78701", "postal_code": "78701"}
+_EX = {"phone_local": "5125550100", "company": "Acme Support Co", "title": "CSR",
+       "salary": "18", "years": "3"}
+
+
+def test_portal_text_identity_and_address():
+    assert portal_text_value("* Address", _PF, _EX) == "12 Oak St"
+    assert portal_text_value("* City", _PF, _EX) == "Austin"
+    assert portal_text_value("* Postal Code", _PF, _EX) == "78701"
+    assert portal_text_value("* Legal First Name", _PF, _EX) == "Ann"
+    assert portal_text_value("* Legal Last Name", _PF, _EX) == "Bell"
+    assert portal_text_value("* Email", _PF, _EX) == "ann.bell1@takhet.com"
+
+
+def test_portal_text_phone_company_title_signature():
+    assert portal_text_value("* Primary Phone", _PF, _EX) == "5125550100"
+    assert portal_text_value("* Current Company", _PF, _EX) == "Acme Support Co"
+    assert portal_text_value("* Current Title", _PF, _EX) == "CSR"
+    assert portal_text_value("* Typed Signature", _PF, _EX) == "Ann Bell"
+
+
+def test_portal_text_years_and_salary():
+    assert portal_text_value(
+        "* How many years of call center or high-volume customer service experience do you have?",
+        _PF, _EX) == "3"
+    assert portal_text_value("* What is your expected hourly salary for this role?", _PF, _EX) == "18"
+
+
+def test_portal_text_skips_optional_and_conditional():
+    assert portal_text_value("Address 2", _PF, _EX) is None
+    assert portal_text_value("Middle Name", _PF, _EX) is None
+    assert portal_text_value("Alternate Phone", _PF, _EX) is None
+    assert portal_text_value("If yes, please indicate Visa status", _PF, _EX) is None
+
+
+def test_portal_text_capability_question_affirms():
+    q = ("* This role requires entering and validating claims-related information while meeting "
+         "productivity and quality standards. Are you able to work in this environment?")
+    assert portal_text_value(q, _PF, _EX) == "Yes"
+    assert portal_text_value("Are you willing to work weekends?", _PF, _EX) == "Yes"
+
+
+def test_portal_text_open_question_left_blank():
+    # an open "describe/what" prompt is NOT auto-answered "Yes" (left for review / job skipped)
+    assert portal_text_value("Describe your customer service experience", _PF, _EX) is None
+    assert portal_text_value("What interests you about this role?", _PF, _EX) is None
+
+
+def test_portal_text_typing_speed_is_a_number_not_yes():
+    # a compound "This role requires … What is your average typing speed?" field validates as a NUMBER
+    q = ("* This role requires entering and validating claims-related information while meeting "
+         "production and quality standards. What is your average typing speed?")
+    v = portal_text_value(q, _PF, _EX)
+    assert v and v.isdigit()
 
 
 # ---- combobox_answer: address country/state -----------------------------------------------------

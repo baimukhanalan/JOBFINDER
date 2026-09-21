@@ -1092,28 +1092,53 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   page's `j2w.init({ssoCompanyId:'gainwellte', ssoUrl:'https://career41.sapsf.com'})`. **Strategy generalization (kept
   Foundever byte-compatible):** the single hardcoded `_CAREERSECTION_HOST` check became `_on_careersection()` (regex
   `career\d*\.(?:successfactors|sapsf)\.com`) + `_on_rmk()` (a `_RMK_HOSTS` list — add each tenant's RMK host); `matches()`
-  accepts both `successfactors.com/careers` and `sapsf.com/careers`. **HANDOFF FIX (live-proven the divider):** Gainwell's
-  "Apply now" dropdown-toggle carries `aria-label="Apply Now"` (capital N — Foundever's is lowercase) so the toggle selector is
-  now case-insensitive (`[aria-label*="apply" i]`), AND the manual-apply menu item (`#applyOption-top-manual`, href=`#`, j2w
-  SSO-navigates on a REAL click) must be clicked only AFTER the dropdown actually opens — `open_form` now `wait_for(state=
-  "visible")`s it then does a REAL click (a force-click on the still-hidden item dispatches the event but does NOT trigger SF's
-  SSO nav → the old force-click landed on the RMK page = `login_required`). With the fix the real `open_form` reaches
-  `career41.sapsf.com/careers?company=gainwellte` (proven headless on this box). The one-page SF form (account `fbclc_*`, phone/
-  Country `<select>`s, address `tor__*` + SF paginated-select combos, `rcmpaginatedselect` screeners/EEO/consent, `fbjq_
-  question_N` Yes/No radios, submit `#fbqa_apply`) + the SSN-last6/decline-EEO/marketing-uncheck/data-privacy logic are ALL the
-  shared Foundever code (SF field ids are platform-wide, not tenant-specific), so it SHOULD complete to an ack exactly like
-  Foundever. **HONEST STATUS (2026-09-21): the full SF FILL + submit was NOT verified end-to-end this session** — the shared box
-  was under a load-23 spike AND the local Sumrak LLM was DOWN (persona-build résumé polish burned minutes in 500-backoff), and
-  the live drives were killed before the careersection fill completed. Proven: collector (28 remote-US rows, live-collected) +
-  RMK→careersection handoff. UNPROVEN here: `unfilled==[]` on the Gainwell careersection + the on-page "Your Application has
-  been sent" / SF welcome email. Re-verify on a quiet box with the LLM up: `GAINWELL_HEADLESS=1 GAINWELL_ADVANCE=1 sg mail -c
-  'python3 -m backend.tools.gainwell_recon --job <id> --keep 4'` → watch `report["unfilled"]` + `submitted`. `_state_from_row`
+  accepts both `successfactors.com/careers` and `sapsf.com/careers`. **LIVE-PROVEN END-TO-END 2026-09-21** (jobs 15531 +
+  15533: `filled=N unfilled=[] submitted=True`, on-page confirmation, account created in the persona Maildir). **Gainwell is
+  NOT a one-page form like Foundever — it is a TWO-STEP ACCOUNT-FIRST SF tenant**, so `prefill` detects it (no `#fbqa_apply` on
+  the landing) and runs `_prefill_two_step` instead of the combined path (Foundever keeps `#fbqa_apply` → byte-identical). The flow:
+  1. **RMK "Apply now → manual apply"** (`open_form`, now RETRIED 3× — the dropdown is flaky: a force-click on the still-hidden
+     manual item fires the event WITHOUT the SSO nav → stuck on RMK; the retry re-opens the dropdown) → the careersection
+     **Sign-In** page (`career41.sapsf.com/careers?company=gainwellte`), NOT the application form.
+  2. Click **"Create an account"** → the account-create page: fill `fbclc_*` (email×2/pwd×2/name/country) + UNCHECK marketing +
+     **accept the Data-Privacy "Terms of Use"**. The DPCS dialog is a `<n>:container.globalContentForeground` overlay whose
+     **Accept** is `button.globalPrimaryButton "Accept"` (`dlgButton_NN:`) — a synthetic anchor click does NOT open it on this
+     page, so `_accept_data_privacy` calls the SF opener **`validateAndOpenDpcsDialog(true)` directly** (Foundever's anchor-click
+     path is still tried first). Then click **`#fbclc_createAccountButton`** ("Create Account").
+  3. **EMAIL OTP** — a 6-digit passcode from `myGainwell@gainwelltechnologies.com` ("…passcode for account verification is:
+     NNNNNN", subject "…One-Time Password…"). `_read_account_passcode` reads it from the persona Maildir (`verify_code.read_code`
+     does NOT match — SF's wording has no "code:"). Fill `#passcode` → `#continueBtn`.
+  4. **`career41.sapsf.com/portalcareer`** = the single application page. Its field ids are **DYNAMIC numeric** (`60:_txtFld`,
+     `85:_input`), NOT `tor__*`/`fbclc_*`/`fbjq_*`, so the fill is LABEL-DRIVEN: `portal_text_value` for text
+     (address/phone/`Current Company`+`Current Title` from the persona résumé/`_build_persona`/typed-signature/`years`→3/
+     `expected salary`→18/**`typing speed`→a NUMBER 45**/an unrecognised capability question "…Are you able to…?"→Yes); the 15 SF
+     paginated-select **comboboxes** via `combobox_answer` (Country/State + auth-to-work→Yes · sponsorship→No · current-or-former
+     -employee→No · family→No · non-compete→No · EEO decline · how-hear/Details/Willingness-to-travel/Phone-Type + a generic
+     Yes/No fallback); and the Yes/No screener **ARIA radiogroups** (`role=radiogroup`/`role=radio` + `aria-checked`, NOT native
+     `<input type=radio>`) via `_fill_aria_radiogroups` (Gender's "No Selection" default = decline, left). `_fill_portalcareer`
+     LOOPS ≤4× until `_rescan_required` is clean (opening one paginated-select's dropdown occasionally leaves an ADJACENT one
+     blank; `_rescan_required` also now flags empty ARIA radiogroups so the gate is honest).
+  5. **Submit = the Apply `<span role=button id="<n>:_submitBtn" onclick="juic.fire(…'_submit'…)">Apply</span>`** (NOT
+     `#fbqa_apply`). **Confirmation is STRUCTURAL, NOT textual** — a successful Apply REPLACES the form with a bare "Back to Job
+     Listings"/"View Profile" page (the success graphic is a broken IMAGE, there is NO "application submitted" text on the page),
+     so `_submit_portal` = (Apply button + comboboxes GONE) + "Back to Job Listings" + NO error banner + NOT the Sign-In page. A
+     validation miss keeps the form + "Please correct the errors below" (hard NO); a logout lands on Sign-In (NO).
+  **Gainwell sends NO per-job application email** — only the account "Account Created" mail — so the ON-PAGE structural
+  confirmation (`report["submitted"]`) is the ground truth; the driver short-circuits the `--keep` wait when submitted (it only
+  briefly polls the Maildir to corroborate a receipt that never comes). **KEY BUG FIXED:** `_pick_combobox`'s `needs_filter`
+  used to TYPE "United States" into the auth-to-work combobox (its label literally contains "…work in the **country** of the
+  job…") — now length-guarded (≤40 chars = an address label, not the question sentence). **A dry run (GAINWELL_ADVANCE off) stops
+  at the account page — side-effect-free (no account created).** Re-verify: `GAINWELL_HEADLESS=1 GAINWELL_ADVANCE=1 sg mail -c
+  'python3 -m backend.tools.gainwell_recon --job <id> --keep 4'` → watch `submitted` + the `logs/gainwell_recon/<id>/03_final.png`
+  shot (form gone + "Back to Job Listings" = success). All the new portalcareer logic lives in the shared `foundever.py` but is
+  DOM-gated (Foundever's `#fbqa_apply` combined page never hits it). `_state_from_row`
   (reused from `foundever_recon`) resolves Gainwell's `<city>, <state-code>, US, <zip>` location (parts[1] 2-letter code →
   `_us_state_full`). Egress DIRECT-default (`GAINWELL_RESIDENTIAL`/`GAINWELL_PROXY`). Licensed-insurance roles skipped
   (`is_licensed`). Cron line (HEADLESS, no captcha — hour-staggered off Foundever's `42 1,5,10,15,20`; internal fcntl lock
   `logs/gainwell_apply.lock` MUST differ from the crontab `flock` file):
   `18 2,8,14,20 * * * cd /home/projects/jobfinder && flock -n logs/gainwell_cron.lock env sg mail -c 'GAINWELL_HEADLESS=1 GAINWELL_ADVANCE=1 python3 -m backend.tools.mass_hiring_apply_gainwell_cron --limit 4' >> logs/gainwell_apply.log 2>&1`
-  Tests: `test_foundever.py` (host helpers + `matches` + Gainwell `_state_from_row`), `test_mass_hiring.py` (`_gainwell_row`/`_gainwell_is_us`/`_gainwell_parse`).
+  Tests: `test_foundever.py` (host helpers + `matches` + Gainwell `_state_from_row` + the portalcareer pure helpers:
+  `combobox_answer` eligibility/screener branches incl. the auth-to-work-≠-country regression + `portal_text_value`
+  address/phone/typing-speed/capability-question mapping), `test_mass_hiring.py` (`_gainwell_row`/`_gainwell_is_us`/`_gainwell_parse`).
 - **Amazon (corporate/virtual `account.amazon.jobs`)** (`strategies/amazon_apply.AmazonStrategy`, driver `tools/amazon_recon.py`,
   cron `tools/mass_hiring_apply_amazon_cron.py`, gated `AMAZON_ADVANCE=1`) — **INERT until owner-armed; live submit UNPROVEN.**
   **TWO DISTINCT Amazon systems — recon 2026-09-20:**

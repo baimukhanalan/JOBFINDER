@@ -1974,6 +1974,12 @@ class WorkdayStrategy(ApplyStrategy):
         if re.search(r"other language|fluent in any other|what (other )?language|do you speak|"
                      r"additional language|second language", t):
             return "Spanish" if facts.get("bilingual") else "English only"
+        # "Do you have any restrictions in your hours of availability?" — a REQUIRED free-text
+        # <textarea> whose question sits in a <legend> (not a <label>), so every select/checkbox/
+        # label-based scan missed it (live dump 2026-09-21). A fully-available synthetic persona.
+        if re.search(r"restrictions?.{0,30}(hours|availab)|any restrictions? (in|on|to|with|regarding)|"
+                     r"(limitations?|constraints?).{0,30}(hours|availab)", t):
+            return "No restrictions. I am fully available for any shift."
         return None
 
     async def _rescan_required(self, page: Page) -> list:
@@ -2348,6 +2354,25 @@ class WorkdayStrategy(ApplyStrategy):
                     logger.info("workday PRE-CONTINUE selects/empty: %r", st)
                 except Exception:
                     pass
+                # One-shot dump of a stubborn field the scans miss (env-selectable label substring).
+                try:
+                    _lbl = (os.getenv("WORKDAY_DUMP_LABEL") or "restrictions in your hours").lower()
+                    dump = await page.evaluate(
+                        "(lbl)=>{const ff=[...document.querySelectorAll('[data-automation-id^=\"formField\"]')]"
+                        ".find(f=>(f.innerText||'').toLowerCase().includes(lbl));"
+                        "if(!ff)return null;"
+                        "const els=[...ff.querySelectorAll('input,button,textarea,select,[role]')]"
+                        ".map(e=>({tag:e.tagName,type:e.type,role:e.getAttribute('role'),"
+                        "aid:e.getAttribute('data-automation-id'),name:e.name||null,checked:e.checked,"
+                        "haspopup:e.getAttribute('aria-haspopup'),val:(e.value||'').slice(0,24),"
+                        "txt:(e.innerText||'').trim().slice(0,24)})).slice(0,16);"
+                        "return {aid:ff.getAttribute('data-automation-id'),"
+                        "haslegend:!!ff.querySelector('legend'),hasfieldset:!!ff.querySelector('fieldset'),"
+                        "html:ff.outerHTML.replace(/\\s+/g,' ').slice(0,1100),els};}", _lbl)
+                    if dump:
+                        logger.info("workday FIELD-DUMP[%s]: %r", _lbl, dump)
+                except Exception as exc:
+                    logger.info("workday FIELD-DUMP raised: %s", exc)
             try:
                 await btn.scroll_into_view_if_needed(timeout=3000)
             except Exception:

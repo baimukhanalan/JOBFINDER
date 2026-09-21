@@ -269,6 +269,8 @@ def test_screener_text_answer_freetext_fields():
     assert T("what type of internet service do you have?") == "Cable"
     assert T("are you fluent in any other languages? if so, what languages?") == "English only"
     assert T("are you fluent in any other languages?", {"bilingual": True}) == "Spanish"
+    # the required free-text <textarea> (question in a <legend>) — fully-available synthetic persona
+    assert "restriction" in T("do you have any restrictions in your hours of availability?").lower()
     # identity/address fields (and unknowns) are left alone — never overwritten with a screener value
     assert T("first name") is None
     assert T("home address line 1") is None

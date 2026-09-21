@@ -332,6 +332,14 @@ _AUTO_STATUS = {
     # the not-yet-wired staffing agencies), NOT 'auto', so the board doesn't show a misleading «Авто»
     # badge. NOT auto-picked by any lane (avature cron = %avature% URL, taleo cron = source='ttec').
     "transcom": "needs_laptop", "percepta": "needs_laptop",
+    # molina: Oracle Recruiting Cloud (hckd.fa.us2.oraclecloud.com), the SAME lane as alorica — but the
+    # ORC cron `orc_recon.orc_job_ids()` selects `source='alorica'` only, so Molina is collect-first until
+    # that filter is widened + a per-tenant screener verify pass (its ORC form differs from Alorica's).
+    # kaiser: Radancy front (kaiserpermanentejobs.org) → Taleo apply (kp.taleo.net); reuses
+    # strategies/taleo.py after a per-tenant Basics-mapping verify (TTEC cron is scoped source='ttec').
+    # Both kept 'needs_laptop' (NOT 'auto') so the board shows no misleading «Авто» badge — no live lane
+    # drives them yet.
+    "molina": "needs_laptop", "kaiser": "needs_laptop",
     # gainwell: the SAME SuccessFactors RMK careersection family as foundever (careersection host
     # career41.sapsf.com, company gainwellte) — captcha-free, reuses strategies/foundever.py via
     # tools/gainwell_recon.py. Medicaid/Medicare BPO CSR/member-services.
@@ -813,6 +821,63 @@ def fetch_alorica() -> list[dict]:
         if total is not None and offset >= total:
             break
     return rows
+
+
+# --- Oracle Recruiting Cloud (ORC), generic — Molina Healthcare rides the SAME public REST board as
+#     Alorica (fetch_alorica above, kept inline for the original lane). `recruitingCEJobRequisitions`
+#     returns one requisition list; US comes off `PrimaryLocationCountry`, remote off the title/location
+#     (or a bare-country national posting). Apply reuses the Alorica ORC strategy (tools/orc_recon.py +
+#     strategies/oracle_orc.py) after a per-tenant verify pass — `orc_recon.orc_job_ids()` currently
+#     selects `source='alorica'` only, so a new ORC source is COLLECT-FIRST until that filter is widened
+#     (mirrors how percepta/transcom collect-first without being auto-driven). ---
+def _orc_row(j: dict, source: str, company: str, host: str) -> dict | None:
+    """One Oracle Recruiting Cloud requisition -> normalized row or None. US from
+    `PrimaryLocationCountry`, remote from the title/location (or a bare-country national posting);
+    categorize() then enforces the mass-hiring entry rule. Network-free (unit-testable)."""
+    loc = j.get("PrimaryLocation") or ""
+    if (j.get("PrimaryLocationCountry") or "").upper() != "US":
+        return None
+    if not (_is_remote(j.get("Title"), loc) or loc.strip().lower() in ("united states", "us")):
+        return None
+    return _mk_row(source, j.get("Id"), company, j.get("Title"), loc or "United States",
+                   f"https://{host}/hcmUI/CandidateExperience/en/sites/CX_1/job/{j.get('Id')}",
+                   posted_at=_iso_epoch(j.get("PostedDate")))
+
+
+def _fetch_orc(source: str, company: str, host: str, *, offset_cap: int = 600) -> list[dict]:
+    rows, offset, limit, total = [], 0, 50, None
+    while offset < offset_cap:
+        url = (f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions"
+               "?onlyData=true&expand=requisitionList.secondaryLocations,flexFieldsFacet.values"
+               f"&finder=findReqs;siteNumber=CX_1,limit={limit},offset={offset},sortBy=POSTING_DATES_DESC")
+        try:
+            r = httpx.get(url, timeout=30, headers={**_UA, "Accept": "application/json"})
+            it = (r.json().get("items") or [{}])[0]
+            reqs = it.get("requisitionList") or []
+            total = it.get("TotalJobsCount", total)
+        except Exception as e:
+            print(f"[{source} offset={offset}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        if not reqs:
+            break
+        for j in reqs:
+            row = _orc_row(j, source, company, host)
+            if row:
+                rows.append(row)
+        offset += limit
+        if total is not None and offset >= total:
+            break
+    return rows
+
+
+def fetch_molina() -> list[dict]:
+    """Molina Healthcare — Oracle Recruiting Cloud (hckd.fa.us2.oraclecloud.com, siteNumber CX_1;
+    LIVE-VERIFIED 2026-09-21: board 341, remote+US 133, remote-US ENTRY CSR ~3 — Pharmacy CSR /
+    Pharmacy Customer Service Rep / Provider-Engagement Specialist; the rest is Director/RN/clinical,
+    correctly dropped by categorize). NOTE: `careers.molinahealthcare.com` fronts THIS ORC board — the
+    `molinahealthcare.wd1.myworkdayjobs.com` Workday host is stale/parked (406/422). Reuses the Alorica
+    ORC apply strategy (host swap); collect-first until orc_recon widens to `source IN ('alorica',…)`."""
+    return _fetch_orc("molina", "Molina Healthcare", "hckd.fa.us2.oraclecloud.com", offset_cap=400)
 
 
 # --- Workday CxS (generic) — Concentrix + CVS Health share the same /wday/cxs/<tenant>/<site>/jobs
@@ -1681,6 +1746,65 @@ def fetch_unitedhealth() -> list[dict]:
     return rows
 
 
+# Kaiser Permanente — Radancy TalentBrew front (`kaiserpermanentejobs.org`, like TTEC/UnitedHealth):
+# GET /search-jobs/results returns a JSON envelope whose `results` key is an HTML fragment of job tiles
+# (`a[data-job-id]`). Kaiser's `.job-location` cell is a COMMA LIST "City, ST, <workplace>, <schedule>…"
+# where <workplace> is Remote / Onsite / Flexible, so remote-ness is read off that token (or the title)
+# and the onsite/flexible clinical roles fall out; US is forced True (the site is US-only). APPLY forwards
+# to Oracle Taleo (`kp.taleo.net`) — reuses `strategies/taleo.py` after a per-tenant Basics-mapping verify
+# pass (the TTEC Taleo cron is scoped to source='ttec', so a source='kaiser' row is never driven by the
+# wrong tuning) → COLLECT-FIRST today, like percepta.
+def _kaiser_row(jid, title, loc, href) -> dict | None:
+    """One Kaiser Permanente Radancy tile -> normalized row or None. Remote from the location's
+    workplace token (or the title); categorize() enforces the mass-hiring entry rule; US forced True
+    (kaiserpermanentejobs.org is US-only). Network-free (unit-testable)."""
+    if not jid or not title:
+        return None
+    if not _is_remote(title, loc):
+        return None                                    # remote-only (the workplace token in the loc)
+    url = ("https://www.kaiserpermanentejobs.org" + href) if (href or "").startswith("/") else (href or "")
+    row = _mk_row("kaiser", jid, "Kaiser Permanente", title, loc or "Remote, United States", url)
+    if row:
+        row["us_eligible"] = True                      # US-only careers site → force True
+    return row
+
+
+def fetch_kaiser() -> list[dict]:
+    from bs4 import BeautifulSoup
+    rows, seen = [], set()
+    for kw in ("remote", "work from home"):
+        page = 1
+        while page <= 5:
+            try:
+                r = httpx.get("https://www.kaiserpermanentejobs.org/search-jobs/results",
+                              headers={"User-Agent": _BROWSER_UA}, timeout=30,
+                              params={"SearchResultsModuleName": "Search Results", "CurrentPage": page,
+                                      "RecordsPerPage": 100, "Keyword": kw, "SearchType": 5,
+                                      "IsPagination": True})
+                html = r.json().get("results") or ""
+            except Exception as e:
+                print(f"[kaiser kw={kw!r} p={page}] {type(e).__name__}: {e}", file=sys.stderr)
+                break
+            anchors = BeautifulSoup(html, "html.parser").select("a[data-job-id]")
+            new = 0
+            for a in anchors:
+                jid = a.get("data-job-id")
+                if not jid or jid in seen:
+                    continue
+                seen.add(jid)
+                new += 1
+                h2 = a.select_one("h2")
+                spanloc = a.select_one(".job-location")
+                row = _kaiser_row(jid, h2.get_text(strip=True) if h2 else "",
+                                  spanloc.get_text(strip=True) if spanloc else "", a.get("href"))
+                if row:
+                    rows.append(row)
+            if not anchors or new == 0:
+                break
+            page += 1
+    return rows
+
+
 # Centene + Cigna — Workday CxS via the generic helper. Neither tenant has a remote/workplace facet
 # (remote is encoded IN the location text, e.g. "Remote-AR" / "Tennessee Work at Home"), so we apply
 # the US-country facet and let _workday_row keep the remote+US rows. Cigna's country facet parameter
@@ -2343,6 +2467,7 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
             "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
             "elevance": fetch_elevance, "highmark": fetch_highmark, "sagility": fetch_sagility,
+            "molina": fetch_molina, "kaiser": fetch_kaiser,
             "foundever": fetch_foundever,
             # BPOs on already-supported ATSes (apply reuses the tenant's strategy after a verify pass)
             "transcom": fetch_transcom, "percepta": fetch_percepta,

@@ -1215,3 +1215,94 @@ def test_roberthalf_annual_salary_raw():
     row = mh._rh_row(_rh_card(html))
     assert row is not None
     assert row["salary_raw"] == "$45000–$55000/yr"
+
+
+# ---- Molina Healthcare — Oracle Recruiting Cloud (_orc_row, shared with the Alorica lane) ------------
+# US from `PrimaryLocationCountry`, remote from the Title/PrimaryLocation (or a bare-country national
+# posting); categorize() then enforces the mass-hiring entry rule. Live 2026-09-21: board 341, ~3 entry.
+def _orc(title, loc="Phoenix, AZ, United States", country="US", jid="R-1234"):
+    return {"Title": title, "PrimaryLocation": loc, "PrimaryLocationCountry": country,
+            "Id": jid, "PostedDate": "2026-09-15"}
+
+
+def test_orc_molina_us_remote_csr_is_kept():
+    row = mh._orc_row(_orc("Pharmacy CSR, Inbound (Remote)", "AZ, United States"),
+                      "molina", "Molina Healthcare", "hckd.fa.us2.oraclecloud.com")
+    assert row is not None
+    assert row["source"] == "molina"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == (
+        "https://hckd.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/R-1234")
+
+
+def test_orc_bare_country_national_remote_is_kept():
+    # A national posting whose location is just "United States" is treated as remote.
+    row = mh._orc_row(_orc("Customer Service Representative", "United States"),
+                      "molina", "Molina Healthcare", "hckd.fa.us2.oraclecloud.com")
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_orc_offshore_is_dropped():
+    assert mh._orc_row(_orc("Customer Service Rep (Remote)", "Manila, Philippines", country="PH"),
+                       "molina", "Molina Healthcare", "hckd.fa.us2.oraclecloud.com") is None
+
+
+def test_orc_us_onsite_is_dropped():
+    # US + entry title but NO remote signal (a physical office, not the bare country) → dropped.
+    assert mh._orc_row(_orc("Customer Service Representative", "Phoenix, AZ"),
+                       "molina", "Molina Healthcare", "hckd.fa.us2.oraclecloud.com") is None
+
+
+def test_orc_senior_and_clinical_us_remote_are_dropped():
+    host = "hckd.fa.us2.oraclecloud.com"
+    assert mh._orc_row(_orc("Director, Health Plan Provider Relations - Remote in Boise, ID",
+                            "Boise, ID, United States"), "molina", "Molina Healthcare", host) is None
+    assert mh._orc_row(_orc("Care Manager (RN) - Remote", "TX, United States"),
+                       "molina", "Molina Healthcare", host) is None
+
+
+# ---- Kaiser Permanente — Radancy TalentBrew front (_kaiser_row; apply forwards to kp.taleo.net) ------
+# The `.job-location` cell is a comma list "City, ST, <workplace>, <schedule>…"; remote from that
+# workplace token (or the title). US forced True (kaiserpermanentejobs.org is US-only). Live 2026-09-21: 6.
+def test_kaiser_us_remote_from_location_token_is_kept():
+    row = mh._kaiser_row("100892648768", "Contact Center Specialist I",
+                         "Spokane, WA, Remote, Regular, Full-time, Day shift, 40 hours",
+                         "/job/spokane/contact-center-specialist-i/641/100892648768")
+    assert row is not None
+    assert row["source"] == "kaiser"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == (
+        "https://www.kaiserpermanentejobs.org/job/spokane/contact-center-specialist-i/641/100892648768")
+
+
+def test_kaiser_absolute_href_kept_verbatim():
+    row = mh._kaiser_row("1", "Member Services Representative - Remote", "Remote, United States",
+                         "https://www.kaiserpermanentejobs.org/job/x/641/1")
+    assert row is not None
+    assert row["apply_url"] == "https://www.kaiserpermanentejobs.org/job/x/641/1"
+
+
+def test_kaiser_onsite_tile_is_dropped():
+    # A keyword-search match whose workplace token is Onsite (no remote signal) → dropped.
+    assert mh._kaiser_row("2", "Tele-Critical Care Nurse I",
+                          "Los Angeles, CA, Onsite, Regular, Full-time, Night shift, 24 hours",
+                          "/job/x/641/2") is None
+
+
+def test_kaiser_remote_clinical_is_dropped_by_categorize():
+    # A genuinely-remote tile whose title is clinical/senior is still dropped by categorize().
+    assert mh._kaiser_row("3", "Registered Nurse - Remote",
+                          "Denver, CO, Remote, Regular, Full-time, Day shift, 40 hours",
+                          "/job/x/641/3") is None
+    assert mh._kaiser_row("4", "Director, Contact Center - Remote",
+                          "Renton, WA, Remote, Regular, Full-time, Day shift, 40 hours",
+                          "/job/x/641/4") is None
+
+
+def test_kaiser_missing_id_or_title_is_dropped():
+    assert mh._kaiser_row(None, "Contact Center Specialist I - Remote",
+                          "Spokane, WA, Remote", "/job/x/641/5") is None
+    assert mh._kaiser_row("6", "", "Spokane, WA, Remote", "/job/x/641/6") is None

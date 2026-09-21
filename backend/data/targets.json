@@ -206,5 +206,157 @@
     "slug": "deel",
     "enabled": false,
     "note": "DEAD on the public Ashby board (0 jobs). Real board TBD — Phase 0."
+  },
+  {
+    "key": "tekmetric",
+    "company": "Tekmetric",
+    "ats": "greenhouse",
+    "slug": "tekmetric",
+    "enabled": true,
+    "note": "SDR/CX funnel add (recon 2026-09-21). GH, 30 jobs / 29 remote-US. Entry SDR (x2) + AE-SMB + Customer Success Ops — strongest entry auto-submit funnel of this batch."
+  },
+  {
+    "key": "grafanalabs",
+    "company": "Grafana Labs",
+    "ats": "greenhouse",
+    "slug": "grafanalabs",
+    "enabled": true,
+    "note": "SDR/CX funnel add (recon 2026-09-21). GH, 131 jobs / 76 remote-US (large). SDR | United States | Remote + eng + support. High auto-submit volume."
+  },
+  {
+    "key": "abnormalsecurity",
+    "company": "Abnormal Security",
+    "ats": "greenhouse",
+    "slug": "abnormalsecurity",
+    "enabled": true,
+    "note": "SDR/CX funnel add (recon 2026-09-21). GH, 78 jobs / 54 remote-US. ~9 Customer Success Manager reqs (Enterprise) + eng. Strong CX coverage."
+  },
+  {
+    "key": "brex",
+    "company": "Brex",
+    "ats": "greenhouse",
+    "slug": "brex",
+    "enabled": true,
+    "note": "SDR/CX funnel add (recon 2026-09-21). GH, 251 jobs / 25 remote-US. Sales Development + Business Development + eng. Large fintech board."
+  },
+  {
+    "key": "justworks",
+    "company": "Justworks",
+    "ats": "greenhouse",
+    "slug": "justworks",
+    "enabled": true,
+    "note": "SDR/CX funnel add (recon 2026-09-21). GH, 97 jobs / 15 remote-US. Account Development Executive (ADR) + ops. Research-recommended token."
+  },
+  {
+    "key": "verkada",
+    "company": "Verkada",
+    "ats": "greenhouse",
+    "slug": "verkada",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 297 jobs / 45 remote-US. Remote slice skews senior AE/SE (SDRs are on-site); large active board, broad auto-submit funnel. Research-recommended token."
+  },
+  {
+    "key": "apolloio",
+    "company": "Apollo.io",
+    "ats": "greenhouse",
+    "slug": "apolloio",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 47 jobs / 21 remote-US (all Remote-US). AE + eng + CX. Rotates SDR/support reqs; healthy remote-US board."
+  },
+  {
+    "key": "knowbe4",
+    "company": "KnowBe4",
+    "ats": "greenhouse",
+    "slug": "knowbe4",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 66 jobs / 11 remote-US. Onboarding Consultant + channel + marketing. Research-recommended token."
+  },
+  {
+    "key": "movableink",
+    "company": "Movable Ink",
+    "ats": "greenhouse",
+    "slug": "movableink",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 39 jobs / 19 remote-US. Entry Client Experience Associate + Implementation Manager + eng."
+  },
+  {
+    "key": "pandadoc",
+    "company": "PandaDoc",
+    "ats": "greenhouse",
+    "slug": "pandadoc",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 10 jobs / 8 remote-US (all Remote-USA). Support Ops + solutions + GTM."
+  },
+  {
+    "key": "amplitude",
+    "company": "Amplitude",
+    "ats": "greenhouse",
+    "slug": "amplitude",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 38 jobs / 7 remote-US. Technical Success Manager + AE. Active board, rotates CX reqs."
+  },
+  {
+    "key": "honeycomb",
+    "company": "Honeycomb",
+    "ats": "greenhouse",
+    "slug": "honeycomb",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). GH, 10 jobs / 8 remote-US (all Remote-US). Eng + sales + solution architect."
+  },
+  {
+    "key": "sierra",
+    "company": "Sierra",
+    "ats": "ashby",
+    "slug": "sierra",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 210 jobs / 36 remote-US. Enterprise Sales + Agent Development strategist. Large active AI-CX board."
+  },
+  {
+    "key": "perplexity",
+    "company": "Perplexity",
+    "ats": "ashby",
+    "slug": "perplexity",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 118 jobs / 1 remote-US now (entry Consumer Support Specialist); marquee board that rotates support reqs."
+  },
+  {
+    "key": "decagon",
+    "company": "Decagon",
+    "ats": "ashby",
+    "slug": "decagon",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 146 jobs / 5 remote-US. Account Director + Solutions Engineer. Large AI-CX board, rotates support."
+  },
+  {
+    "key": "lemonade",
+    "company": "Lemonade",
+    "ats": "ashby",
+    "slug": "lemonade",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 39 jobs / 4 remote-US. Entry CLX (Customer Experience) Property Advocate + analysts."
+  },
+  {
+    "key": "omni",
+    "company": "Omni",
+    "ats": "ashby",
+    "slug": "omni",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 23 jobs / 10 remote-US. Eng + AE + Engagement Manager (professional services)."
+  },
+  {
+    "key": "prefect",
+    "company": "Prefect",
+    "ats": "ashby",
+    "slug": "prefect",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 8 jobs / 8 remote-US (all remote). Customer Success + eng."
+  },
+  {
+    "key": "docebo",
+    "company": "Docebo",
+    "ats": "ashby",
+    "slug": "docebo",
+    "enabled": true,
+    "note": "Funnel add (recon 2026-09-21). Ashby, 47 jobs / 7 remote-US. Customer Success Manager + eng."
   }
 ]

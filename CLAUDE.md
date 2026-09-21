@@ -1133,21 +1133,32 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   `verify_code.read_code`) — NO real SMS number needed (the corporate apply form's phone is a plain contact field, so the
   reserved-fiction 555-01xx phone is fine there; if Amazon ever adds a phone-SMS step at submit, THAT would need a real US
   number). From the datacenter IP the wall is served in **French** (Paris CloudFront PoP) — an IP/locale mismatch that raises
-  the WAF/reCAPTCHA risk score, so a **US residential egress** (a live `proxy_pool` phone slot; `amazon_recon` uses one when
-  live, DIRECT else) is required for a non-flagged run. **Dry-run (AMAZON_ADVANCE off) is LIVE-PROVEN to reach the ceiling:**
-  `amazon_recon` navigates the collected apply URL → Passport wall → `AmazonStrategy` flags `needs_account`/`login_required`
-  (fixed 2026-09-20: the wall is detected by HOST via `_on_passport`, since `analyzer.detect_page_type` returns `unknown` on the
-  localized FR wall) and stops — nothing created, no PII sent. **GO-LIVE (owner-side): arm an AWS WAF path (`AWSWAF_BROWSER=1` free, or
-  `CAPTCHA_SOLVER_KEY` CapSolver) + bring a US phone egress slot online**; then `AMAZON_ADVANCE=1` lets the strategy create the
-  account (email OTP), fill the wizard, and the driver clicks the recorded Submit ONLY when `unfilled==[]`. Ground truth = the
-  Amazon "Thank you for applying" email in the persona Maildir. Cron is **INERT until `AMAZON_ADVANCE=1` AND an AWS WAF path is
-  armed** (`captcha_solver.aws_waf_available()` = `AWSWAF_BROWSER=1` OR `CAPTCHA_SOLVER_KEY`; mirrors ORC's `ORC_PHONE`-inert
-  guard; exits 0 → safe to add now, never spams the wall). `AMAZON_NOPECHA=1` arms the vendored
-  NopeCHA ext as a reCAPTCHA fallback for a later step (does not help the AWS-WAF gate). Cron line (report-only, HEADFUL :98,
-  minute 30 so it doesn't collide with the :00/:12/:24/:36/:48/:54 lanes):
-  `30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY='<capsolver-key>' sg mail -c 'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1`.
+  the WAF/reCAPTCHA risk score, so a **US egress** is wanted for a non-flagged run. **Dry-run (AMAZON_ADVANCE off) is LIVE-PROVEN
+  to reach the ceiling:** `amazon_recon` navigates the collected apply URL → Passport wall → `AmazonStrategy` flags
+  `needs_account`/`login_required` (fixed 2026-09-20: the wall is detected by HOST via `_on_passport`, since
+  `analyzer.detect_page_type` returns `unknown` on the localized FR wall) and stops — nothing created, no PII sent.
+  **ARMED 2026-09-21 — free AWS-WAF + Bright Data US egress, auto-on for an advance run.** The KZ-phone routing was REMOVED
+  (`_amazon_proxy` now = `us_egress.lane_us_egress("AMAZON_US","AMAZON_PROXY")` — a validated free US proxy, else a BD US-pinned
+  session from `BRIGHTDATA_*` in `.env`, NEVER a KZ residential phone slot, which geo-mismatches a US apply). On an advance run
+  BOTH `amazon_recon.run()` AND the cron `os.environ.setdefault` **`AWSWAF_BROWSER=1`** (free in-browser `getToken()` → the lane
+  is no longer inert; no CapSolver key needed) AND **`AMAZON_US=1`** (BD-US egress) — so **`AMAZON_ADVANCE=1` ALONE arms the whole
+  lane**. Overrides: `AWSWAF_BROWSER=0`+`CAPTCHA_SOLVER_KEY=<key>` (paid visual-puzzle path), `AMAZON_PROXY=direct` (force DIRECT),
+  `AMAZON_PROXY=<url>` (pin an exact US slot — e.g. a US-RESIDENTIAL IP, which scores better than BD datacenter US). Then the
+  strategy creates the account (email OTP), fills the wizard, and the driver clicks the recorded Submit ONLY when `unfilled==[]`.
+  Ground truth = the Amazon "Thank you for applying" email in the persona Maildir. Cron stays **INERT until `AMAZON_ADVANCE=1`**
+  (`captcha_solver.aws_waf_available()`; mirrors ORC's `ORC_PHONE`-inert guard; exits 0 → safe to add now, never spams the wall).
+  `AMAZON_NOPECHA=1` arms the vendored NopeCHA ext as a reCAPTCHA fallback for a later step (does not help the AWS-WAF gate).
+  **LIVE VERIFICATION STILL PENDING (2026-09-21): the wiring is code-complete + unit-tested, but the ONE careful live drive was
+  DEFERRED** — the shared `:98` was running 5+ headful drives at once (icims_recon ×3 + taleo_ttec harvests ×2 + shl-watch),
+  load ~12, and a git WORKTREE has no `backend/.env` (so BD-US + mailbox provisioning don't resolve there). Re-drive on a QUIET
+  `:98` FROM THE MAIN CHECKOUT: `DISPLAY=:98 AMAZON_ADVANCE=1 sg mail -c 'cd /home/projects/jobfinder && python3 -m
+  backend.tools.amazon_recon --job <id> --fresh --keep 8'` — watch the `egress:` line (should print `US proxy …`), whether the
+  free `getToken()` opens `/api/createAccountWithEmail`, whether the email-OTP verifies, and where the wizard stops. Cron line
+  (report-only, HEADFUL :98, minute 30 so it doesn't collide with the :00/:12/:24/:36/:48/:54 lanes) — `AMAZON_ADVANCE=1` alone:
+  `30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 AMAZON_ADVANCE=1 sg mail -c 'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1`.
   No pm2 restart (fresh subprocess each run; the `amazon_apply.py` strategy is imported live by the runner but the lane drives
-  its own browser). Tests: `test_amazon.py` (row decode / bilingual / confirmation matcher / screener logic, network-free).
+  its own browser). Tests: `test_amazon.py` (row decode / bilingual / confirmation matcher / screener logic + the `_amazon_proxy`
+  US-egress wiring + the cron free-AWS-WAF arm-by-default, network-free).
 - **ManpowerGroup — Manpower + Experis (`strategies/manpower.py`, driver `tools/manpower_recon.py`, cron
   `tools/mass_hiring_apply_manpower_cron.py`, gated `MANPOWER_ADVANCE=1`) — FULL-AUTO SERVER-SIDE (httpx, NO browser), NO
   captcha / NO auth token / NO CSRF / NO Azure-B2C session / NO résumé; LIVE-PROVEN 2026-09-21** (real submit → API

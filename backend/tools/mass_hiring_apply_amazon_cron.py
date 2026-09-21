@@ -7,18 +7,20 @@ fully armed — clicks the recorded Submit and awaits the Amazon "application re
 
 INERT UNTIL ARMED (mirrors the Oracle-ORC lane's `ORC_PHONE`-inert guard): Amazon's Passport account
 creation is gated by an **AWS WAF challenge/CAPTCHA**, so this cron REFUSES to run (logs the ceiling
-+ exits 0) unless BOTH:
-  * AMAZON_ADVANCE=1              — the owner explicitly enabled live submission, AND
-  * an AWS WAF path is armed      — EITHER AWSWAF_BROWSER=1 (FREE: the page's own AWS WAF SDK mints
-                                    the token for a silent WAF *challenge*, no key) OR
-                                    CAPTCHA_SOLVER_KEY (CapSolver AntiAwsWafTask, a hard visual WAF
-                                    *puzzle*). Checked via captcha_solver.aws_waf_available().
-It is therefore safe to add to the crontab NOW: it no-ops (never spams the account wall) until the
-owner arms a path + a US residential egress. Datacenter IPs are risk-flagged by the WAF/reCAPTCHA
-score (a flagged IP is likelier to be shown the visual puzzle, which the free path can't pass), so a
-live US phone egress slot (proxy_pool) is strongly recommended for a non-flagged run — with it the
-gate is usually the silent challenge the FREE path clears; amazon_recon uses a slot when live, DIRECT
-otherwise.
++ exits 0) unless AMAZON_ADVANCE=1 (the owner explicitly enabled live submission). Once it is, this
+cron ARMS the lane by DEFAULT (both `os.environ.setdefault`, both overridable, both inherited by the
+amazon_recon subprocess):
+  * AWSWAF_BROWSER=1 — the FREE, no-key path: the page's own AWS WAF SDK mints the token for the
+                       silent WAF *challenge* (aws_waf_available() → True, so the lane is no longer
+                       inert). Override with AWSWAF_BROWSER=0 + CAPTCHA_SOLVER_KEY=<key> to force the
+                       paid CapSolver AntiAwsWafTask (a hard visual WAF *puzzle*).
+  * AMAZON_US=1     — route through us_egress (Bright Data US-pinned, from BRIGHTDATA_* in .env) so
+                       the wall is served in English from a US IP (a non-flagged score). Override
+                       with AMAZON_PROXY=direct (force DIRECT) or AMAZON_PROXY=<url> (an exact slot).
+It is therefore safe to add to the crontab NOW: it no-ops until AMAZON_ADVANCE=1. Datacenter IPs are
+risk-flagged by the WAF/reCAPTCHA score (a flagged IP is likelier to be shown the visual puzzle,
+which the free path can't pass), so the BD-US egress the advance run auto-arms is what keeps the gate
+the silent challenge the FREE path clears; a US-RESIDENTIAL IP would be stronger still if one exists.
 
     python backend/tools/mass_hiring_apply_amazon_cron.py               # 1 application per Amazon job
     python backend/tools/mass_hiring_apply_amazon_cron.py --only 9434
@@ -27,13 +29,13 @@ otherwise.
 Run HEADFUL under `DISPLAY=:98 sg mail` (amazon_recon needs the mail group for mailbox provisioning +
 the Maildir OTP/confirmation read; the subprocess inherits that group — do NOT re-wrap in `sg mail`).
 
-Cron line (report-only; INERT until an AWS WAF path is armed — hour-staggered off the other lanes,
-minute 30 so it doesn't collide with the :00/:12/:24/:36/:42/:48/:54 lanes; one lane per phase).
-FREE path (no key — best with a US residential slot so the gate is the silent challenge):
+Cron line (report-only; INERT until AMAZON_ADVANCE=1 — hour-staggered off the other lanes, minute 30
+so it doesn't collide with the :00/:12/:24/:36/:42/:48/:54 lanes; one lane per phase). The advance run
+auto-arms the FREE AWS-WAF path + BD-US egress, so AMAZON_ADVANCE=1 alone is enough:
   30 5 * * * cd /home/projects/jobfinder && flock -n logs/amazon_apply.lock env DISPLAY=:98 \
-    AMAZON_ADVANCE=1 AWSWAF_BROWSER=1 sg mail -c \
+    AMAZON_ADVANCE=1 sg mail -c \
     'python3 -m backend.tools.mass_hiring_apply_amazon_cron --limit 4' >> logs/amazon_apply.log 2>&1
-PAID fallback for a hard visual WAF puzzle — swap AWSWAF_BROWSER=1 for CAPTCHA_SOLVER_KEY='<key>'.
+PAID fallback for a hard visual WAF puzzle — add AWSWAF_BROWSER=0 CAPTCHA_SOLVER_KEY='<key>'.
 """
 from __future__ import annotations
 
@@ -168,15 +170,24 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=1, help="concurrent applications (per-pid profile)")
     args = ap.parse_args()
 
-    # INERT until armed: without AMAZON_ADVANCE + a CapSolver AWS-WAF key the account can never be
-    # created, so a live run would only burn attempts on the Passport wall. Exit 0 (safe in crontab).
+    # INERT until armed: without AMAZON_ADVANCE the account is never created, so a live run would
+    # only burn attempts on the Passport wall. Exit 0 (safe in crontab).
     if not _advance_enabled():
         logger.info("AMAZON_ADVANCE not set — Amazon apply lane INERT (dry-run only via amazon_recon). "
                     "Exiting without applying.")
         return
+    # ARM the FREE AWS-WAF path + Bright Data US egress by DEFAULT once the owner set AMAZON_ADVANCE
+    # (both overridable, both inherited by the amazon_recon subprocess via os.environ):
+    #   * AWSWAF_BROWSER=1 — the page's own AwsWafIntegration.getToken() clears the silent WAF
+    #     *challenge* with no key, so aws_waf_available() is True (the lane is no longer inert).
+    #     Set AWSWAF_BROWSER=0 + CAPTCHA_SOLVER_KEY=<key> to force the paid visual-puzzle path.
+    #   * AMAZON_US=1 — route through us_egress (Bright Data US-pinned, from BRIGHTDATA_* in .env) so
+    #     the wall is served in English from a US IP (a non-flagged score). AMAZON_PROXY=direct forces
+    #     DIRECT; AMAZON_PROXY=<url> pins an exact US slot.
+    os.environ.setdefault("AWSWAF_BROWSER", "1")
+    os.environ.setdefault("AMAZON_US", "1")
     if not _solver_armed():
-        logger.info("No AWS WAF path armed (set CAPTCHA_SOLVER_KEY for the visual puzzle, or "
-                    "AWSWAF_BROWSER=1 for the free in-browser challenge token) — the Amazon "
+        logger.info("No AWS WAF path armed (AWSWAF_BROWSER=0 with no CAPTCHA_SOLVER_KEY) — the Amazon "
                     "Passport account cannot be created (NopeCHA does NOT solve AWS WAF). "
                     "Lane INERT. Exiting.")
         return

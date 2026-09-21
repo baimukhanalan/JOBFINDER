@@ -40,8 +40,25 @@ from backend.applier.strategies.base import ApplyStrategy
 
 logger = logging.getLogger(__name__)
 
-# The SF careersection landing the RMK "Apply now → manual apply" option navigates to.
-_CAREERSECTION_HOST = "career4.successfactors.com"
+# The SF careersection landing the RMK "Apply now → manual apply" option navigates to. SuccessFactors
+# careersections live on either the legacy `careerN.successfactors.com` pods (Foundever = career4) or
+# the newer SAP-branded `careerN.sapsf.com` pods (Gainwell = career41); both serve the SAME
+# careersection product (identical fbclc_*/tor__*/rcmpaginatedselect/fbjq_question_N field ids), so
+# ONE regex recognises the landing host for every SF tenant.
+_CAREERSECTION_HOST = "career4.successfactors.com"          # kept for reference (Foundever's pod)
+_CAREERSECTION_RE = re.compile(r"career\d*\.(?:successfactors|sapsf)\.com", re.I)
+# RMK ("Recruiting Marketing") job-page hosts that hand off to a careersection via the "Apply now →
+# manual apply" dropdown. Each new SuccessFactors tenant adds its RMK host here.
+_RMK_HOSTS = ("jobs.foundever.com", "jobs.gainwelltechnologies.com")
+
+
+def _on_careersection(url: str) -> bool:
+    return bool(_CAREERSECTION_RE.search(url or ""))
+
+
+def _on_rmk(url: str) -> bool:
+    u = (url or "").lower()
+    return any(h in u for h in _RMK_HOSTS)
 
 # ---- pure, testable answer logic (no network / no browser) --------------------------------------
 
@@ -162,22 +179,26 @@ class SuccessFactorsStrategy(ApplyStrategy):
     @classmethod
     def matches(cls, url: str) -> bool:
         u = (url or "").lower()
-        return ("jobs.foundever.com" in u
-                or _CAREERSECTION_HOST in u
-                or "successfactors.com/careers" in u)
+        return (_on_rmk(u)
+                or _on_careersection(u)
+                or "successfactors.com/careers" in u
+                or "sapsf.com/careers" in u)
 
     async def open_form(self, page: Page) -> None:
         """Reach the careersection application page. If we're on the RMK job page, accept cookies,
         open the "Apply now" dropdown and click the manual-apply option (same-tab navigation to
         career4.successfactors.com). If already on the careersection, no-op. Never raises."""
         url = page.url or ""
-        if _CAREERSECTION_HOST in url:
+        if _on_careersection(url):
             return
-        if "jobs.foundever.com" not in url:
+        if not _on_rmk(url):
             return
         await self._accept_cookies(page)
-        # open the "Apply now" dropdown-toggle, then its manual-apply menu item
-        for sel in ('button.dropdown-toggle[aria-label="Apply now"]',
+        # open the "Apply now" dropdown-toggle, then its manual-apply menu item. The aria-label casing
+        # varies per tenant (Foundever "Apply now", Gainwell "Apply Now"), so match it CASE-INSENSITIVELY
+        # (`[aria-label*="apply" i]`) with a class-based + text fallback.
+        for sel in ('button.dropdown-toggle[aria-label*="apply" i]',
+                    'button.dropdown-toggle:has-text("Apply")',
                     'button:has-text("Apply now")', 'a:has-text("Apply now")'):
             try:
                 loc = page.locator(sel).first
@@ -191,15 +212,27 @@ class SuccessFactorsStrategy(ApplyStrategy):
                     'a.applyOption:has-text("Apply Now")'):
             try:
                 loc = page.locator(sel).first
-                if await loc.count():
+                if not await loc.count():
+                    continue
+                # WAIT for the dropdown to actually open (the manual item becomes visible), then a REAL
+                # click — a force-click on the still-hidden item dispatches the event but does NOT trigger
+                # SuccessFactors' SSO navigation to the careersection (proven live on Gainwell). Fall back
+                # to force only if the real click can't land (keeps every previously-working tenant green).
+                try:
+                    await loc.wait_for(state="visible", timeout=4000)
+                except Exception:
+                    pass
+                try:
+                    await loc.click(timeout=5000)
+                except Exception:
                     await loc.click(timeout=5000, force=True)
-                    break
+                break
             except Exception:
                 continue
         # wait for the same-tab navigation to the careersection
         for _ in range(20):
             await page.wait_for_timeout(700)
-            if _CAREERSECTION_HOST in (page.url or ""):
+            if _on_careersection(page.url or ""):
                 break
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=20000)
@@ -236,7 +269,7 @@ class SuccessFactorsStrategy(ApplyStrategy):
             await self.open_form(page)
         except Exception as exc:
             logger.debug("foundever: open_form raised: %s", exc)
-        if _CAREERSECTION_HOST not in (page.url or ""):
+        if not _on_careersection(page.url or ""):
             report["page_type"] = "login_required"
             report["note"] = "did not reach the SuccessFactors careersection"
             return report

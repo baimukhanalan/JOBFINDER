@@ -324,6 +324,10 @@ _AUTO_STATUS = {
     # the not-yet-wired staffing agencies), NOT 'auto', so the board doesn't show a misleading «Авто»
     # badge. NOT auto-picked by any lane (avature cron = %avature% URL, taleo cron = source='ttec').
     "transcom": "needs_laptop", "percepta": "needs_laptop",
+    # gainwell: the SAME SuccessFactors RMK careersection family as foundever (careersection host
+    # career41.sapsf.com, company gainwellte) — captcha-free, reuses strategies/foundever.py via
+    # tools/gainwell_recon.py. Medicaid/Medicare BPO CSR/member-services.
+    "gainwell": "auto",
     "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
     # Staffing agencies (recon 2026-09-20). Randstad: guest apply + résumé + a Friendly-Captcha
     # proof-of-work (self-solving, no image challenge) — the most auto-promising, but not yet
@@ -1862,6 +1866,91 @@ def fetch_foundever() -> list[dict]:
     return rows
 
 
+# Gainwell Technologies — Medicaid/Medicare BPO. The SAME SuccessFactors Recruiting Marketing
+# (Jobs2Web) careers site family as Foundever, at jobs.gainwelltechnologies.com — the results
+# TABLE is byte-identical (<tr class="data-row"> / td.colTitle a.jobTitle-link href /job/<slug>/<id>/
+# / td.colLocation span.jobLocation / span.jobDate), so the Foundever parser is reused verbatim.
+# TWO differences vs Foundever, recon'd live 2026-09-21:
+#   1. LOCATION FORMAT is "<city>, <state-code>, US, <zip>" (e.g. "Any city, DE, US, 99999") — the
+#      country code is a MIDDLE token, NOT the last (that's the ZIP), so `_foundever_is_us`'s
+#      last-token check is wrong here. `_gainwell_is_us` scans every comma-token for a US signal.
+#   2. The REMOTE signal is in the TITLE ("... - Remote MT", "Remote, ...", "... Remote U.S."),
+#      NOT in the location string (which never carries a "Remote"/"Virtual" workplace token). So
+#      `_is_remote` is fed the TITLE (and the location, harmlessly). categorize() still enforces
+#      the mass-hiring entry rule (drops the clinical/pharmacy/lead titles Gainwell also posts).
+# Apply = the SuccessFactors careersection career41.sapsf.com/careers?company=gainwellte, driven by
+# tools/gainwell_recon.py reusing strategies/foundever.py::SuccessFactorsStrategy (captcha-free).
+_GAINWELL_HOST = "https://jobs.gainwelltechnologies.com"
+
+
+def _gainwell_is_us(loc: str) -> bool:
+    """US eligibility from Gainwell's '<city>, <state>, US, <zip>' location: a US country token
+    anywhere in the comma list, else a US state code/name (never the last token, which is the ZIP)."""
+    parts = [p.strip() for p in (loc or "").split(",") if p.strip()]
+    for p in parts:
+        if p.upper() in ("US", "USA") or "united states" in p.lower():
+            return True
+    return _has_us_state(loc)
+
+
+# The RMK results table is identical to Foundever's, so the parser is shared verbatim.
+_gainwell_parse = _foundever_parse
+
+
+def _gainwell_row(jid, title, loc, href, date="") -> dict | None:
+    """One Gainwell RMK results-table row → normalized row or None. US from the location's country
+    token; REMOTE from the TITLE (Gainwell's location carries no workplace token). categorize()
+    then enforces the mass-hiring entry rule."""
+    if not jid or not title:
+        return None
+    if not _gainwell_is_us(loc):
+        return None                                   # US-only (country token in the location)
+    if not _is_remote(title, loc):
+        return None                                   # remote-only (the signal is in the TITLE)
+    url = (_GAINWELL_HOST + href) if (href or "").startswith("/") else (href or "")
+    row = _mk_row("gainwell", jid, "Gainwell Technologies", title, loc, url,
+                  posted_at=_foundever_date(date))
+    if row:
+        # US already confirmed from the location's country token (authoritative) — force the flag so
+        # collect(us_only=True) keeps it even though the generic us_eligible() regex may not fire.
+        row["us_eligible"] = True
+    return row
+
+
+def fetch_gainwell() -> list[dict]:
+    rows, seen = [], set()
+    headers = {"User-Agent": _BROWSER_UA, "Accept": "text/html,application/xhtml+xml,*/*",
+               "Referer": _GAINWELL_HOST + "/search-jobs/"}
+    try:
+        with httpx.Client(timeout=30, headers=headers, follow_redirects=True) as c:
+            for kw in ("remote", "work from home"):
+                startrow, prev_ids = 0, None
+                while startrow < 1000:
+                    try:
+                        r = c.get(_GAINWELL_HOST + "/search-jobs/results",
+                                  params={"q": kw, "startrow": startrow})
+                        parsed = _gainwell_parse(r.text)
+                    except Exception as e:
+                        print(f"[gainwell kw={kw!r} startrow={startrow}] {type(e).__name__}: {e}",
+                              file=sys.stderr)
+                        break
+                    ids = tuple(p[0] for p in parsed)
+                    if not parsed or ids == prev_ids:      # empty OR the page repeated → end of results
+                        break
+                    prev_ids = ids
+                    for jid, title, loc, href, date in parsed:
+                        if not jid or jid in seen:
+                            continue
+                        seen.add(jid)
+                        row = _gainwell_row(jid, title, loc, href, date)
+                        if row:
+                            rows.append(row)
+                    startrow += 10
+    except Exception as e:
+        print(f"[gainwell] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
 # =====================================================================================
 # STAFFING AGENCIES — the fast-placement lane. Big US staffing firms place candidates
 # quickly with light screening (a recruiter phone-screen, not a multi-day assessment),
@@ -2239,6 +2328,7 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "foundever": fetch_foundever,
             # BPOs on already-supported ATSes (apply reuses the tenant's strategy after a verify pass)
             "transcom": fetch_transcom, "percepta": fetch_percepta,
+            "foundever": fetch_foundever, "gainwell": fetch_gainwell,
             # staffing agencies (fast-placement lane)
             "randstad": fetch_randstad, "manpower": fetch_manpower, "experis": fetch_experis,
             "adecco": fetch_adecco, "roberthalf": fetch_roberthalf}

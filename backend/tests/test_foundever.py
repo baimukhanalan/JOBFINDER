@@ -155,8 +155,30 @@ def test_matches_rmk_and_careersection():
     m = SuccessFactorsStrategy.matches
     assert m("https://jobs.foundever.com/job/Remote-CSR-Connecticut/1357356800/")
     assert m("https://career4.successfactors.com/careers?company=SitelPROD")
+    # Gainwell shares the strategy: its RMK host + its SAP-branded careersection pod (career41.sapsf.com)
+    assert m("https://jobs.gainwelltechnologies.com/job/Any-city-Healthcare-CSR-Remote-WI-99999/1426420500/")
+    assert m("https://career41.sapsf.com/careers?company=gainwellte")
+    assert m("https://career2.sapsf.com/careers?company=other")
     assert not m("https://boards.greenhouse.io/acme/jobs/123")
     assert not m("")
+
+
+def test_careersection_and_rmk_host_helpers():
+    from backend.applier.strategies.foundever import _on_careersection, _on_rmk
+    assert _on_careersection("https://career4.successfactors.com/careers?company=SitelPROD")
+    assert _on_careersection("https://career41.sapsf.com/careers?company=gainwellte")
+    assert not _on_careersection("https://jobs.gainwelltechnologies.com/job/x/1/")
+    assert _on_rmk("https://jobs.foundever.com/job/x/1/")
+    assert _on_rmk("https://jobs.gainwelltechnologies.com/job/x/1/")
+    assert not _on_rmk("https://career41.sapsf.com/careers?company=gainwellte")
+
+
+def test_gainwell_state_from_row_reads_two_letter_code():
+    from backend.tools.gainwell_recon import _state_from_row, gainwell_job_ids  # noqa: F401
+    # Gainwell's location is "<city>, <state-code>, US, <zip>" — parts[1] 2-letter code resolves
+    assert _state_from_row("Healthcare Data Entry Specialist - Remote MT", "Any city, MT, US, 99999") == "Montana"
+    assert _state_from_row("CSR (Healthcare) - Remote California", "Any city, CA, US, 99999") == "California"
+    assert _state_from_row("Provider Enrollment - REMOTE", "Hamilton, NJ, US, 08619-1288") == "New Jersey"
 
 
 # ---- driver eligibility (state placement + licensed skip) ---------------------------------------

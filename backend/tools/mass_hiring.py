@@ -219,6 +219,9 @@ _CATEGORIES = [
         r"claims (processor|specialist|associate|rep|examiner|agent|adjuster)|"
         r"enrollment (specialist|rep|coordinator|advisor)|intake (specialist|coordinator|rep)|"
         r"(healthcare|insurance|benefits|billing|financial services) (rep\b|representative|agent|associate|advisor)|"
+        # "Sales & Service" / "Sales and Service" = the retail-CSR entry title Wayfair-style direct-hire
+        # employers use (entry-noun-suffixed so a senior/lead brush is still _NOT_MASS-vetoed).
+        r"sales (and|&) service (consultant|rep\b|representative|associate|specialist|agent|advisor)|"
         r"trust (and|&) safety|content (review|moderat)|community (support|moderat)", re.I)),
     ("sales", re.compile(
         r"\bsdr\b|\bbdr\b|sales (development|dev) rep|business development rep|"
@@ -314,6 +317,11 @@ _AUTO_STATUS = {
     # Healthcare payers/BPOs on the driven Workday CxS lane (register-captcha probe pending).
     "elevance": "needs_laptop", "highmark": "needs_laptop", "sagility": "needs_laptop",
     "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
+    # Wayfair: DIRECT-HIRE (non-BPO) on the SAME SmartRecruiters lane as Sutherland — the SR apply cron
+    # (keyed on the smartrecruiters.com apply_url) drives it full-auto to an ack regardless of this badge;
+    # mirrors Sutherland's status. The pre-offer human gate (phone/video + sales assessment) sits AFTER
+    # the clean submit, so the ceiling is ack + assessment invite, not an offer.
+    "wayfair": "needs_laptop",
     # foundever: SuccessFactors careersection, single-page account-creation apply, NO captcha/résumé.
     # Full-auto server-side via strategies/foundever.py + tools/foundever_recon.py; LIVE-PROVEN
     # 2026-09-19 ("Your Application has been sent" + a SuccessFactors account email in the persona box).
@@ -1179,6 +1187,15 @@ def _fetch_smartrecruiters(source: str, company: str) -> list[dict]:
 
 def fetch_sutherland() -> list[dict]:
     return _fetch_smartrecruiters("sutherland", "Sutherland")
+
+
+# Wayfair — DIRECT-HIRE (NOT a BPO) remote "Virtual Sales & Service" / customer-service employer on the
+# SAME SmartRecruiters public postings API, so it reuses `_smartrecruiters_row` verbatim (remote-US +
+# `categorize()` mass-hiring ENTRY). Apply reuses `strategies/smartrecruiters.py`; the SR apply cron
+# (`mass_hiring_apply_sr_cron`) keys jobs on the `jobs.smartrecruiters.com` apply_url, NOT `source`, so
+# these rows are auto-picked up with no cron change.
+def fetch_wayfair() -> list[dict]:
+    return _fetch_smartrecruiters("wayfair", "Wayfair")
 
 
 # Working Solutions — 100%-remote independent-contractor CSR marketplace on an Algolia-backed apply
@@ -2321,7 +2338,8 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "concentrix": fetch_concentrix,
             "teleperformance": fetch_teleperformance, "ttec": fetch_ttec, "cvshealth": fetch_cvs,
-            "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
+            "sutherland": fetch_sutherland, "wayfair": fetch_wayfair,
+            "workingsolutions": fetch_working_solutions,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
             "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
             "elevance": fetch_elevance, "highmark": fetch_highmark, "sagility": fetch_sagility,

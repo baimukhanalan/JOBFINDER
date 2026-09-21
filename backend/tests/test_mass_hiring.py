@@ -332,6 +332,42 @@ def test_smartrecruiters_senior_is_dropped():
     }, "sutherland", "Sutherland") is None
 
 
+# ---- Wayfair (SmartRecruiters, direct-hire — reuses the same _smartrecruiters_row) --------
+
+def test_wayfair_us_remote_is_kept():
+    row = mh._smartrecruiters_row({
+        "id": "744000012345678", "name": "Virtual Sales & Service Representative",
+        "location": {"country": "us", "remote": True, "fullLocation": "Boston, MA, United States"},
+        "releasedDate": "2026-09-20T12:00:00.000Z",
+    }, "wayfair", "Wayfair")
+    assert row is not None
+    assert row["source"] == "wayfair"
+    assert row["us_eligible"] is True
+    # apply_url on jobs.smartrecruiters.com → the SR apply cron picks it up by host, no source scoping
+    assert row["apply_url"] == "https://jobs.smartrecruiters.com/Wayfair/744000012345678"
+
+
+def test_wayfair_us_onsite_is_dropped():
+    assert mh._smartrecruiters_row({
+        "id": "1", "name": "Customer Service Representative",
+        "location": {"country": "us", "remote": False, "fullLocation": "Boston, MA, United States"},
+    }, "wayfair", "Wayfair") is None
+
+
+def test_wayfair_offshore_is_dropped():
+    assert mh._smartrecruiters_row({
+        "id": "2", "name": "Customer Service Representative",
+        "location": {"country": "de", "remote": True, "fullLocation": "Berlin, Germany"},
+    }, "wayfair", "Wayfair") is None
+
+
+def test_wayfair_senior_is_dropped():
+    assert mh._smartrecruiters_row({
+        "id": "3", "name": "Senior Manager, Sales Operations (Remote)",
+        "location": {"country": "us", "remote": True, "fullLocation": "Boston, MA, United States"},
+    }, "wayfair", "Wayfair") is None
+
+
 # ---- Working Solutions (Algolia) ------------------------------------------------
 
 def test_working_solutions_us_is_kept():
@@ -822,6 +858,16 @@ def test_care_and_member_roles_categorize():
     assert mh.categorize("Claims Research & Resolution Representative") == "customer_support"
     assert mh.categorize("Clinical Administrative Coordinator") == "customer_support"
     assert mh.categorize("Collections Representative") == "customer_support"
+
+
+def test_sales_and_service_entry_roles_categorize():
+    # Wayfair-style direct-hire retail-CSR titles ("Sales & Service" / "Sales and Service" + entry noun).
+    assert mh.categorize("Virtual Sales & Service Representative") == "customer_support"
+    assert mh.categorize("Sales and Service Consultant") == "customer_support"
+    assert mh.categorize("Sales & Service Associate") == "customer_support"
+    # but a senior/lead brush is still dropped (_NOT_MASS veto)
+    assert mh.categorize("Sales & Service Team Lead") is None
+    assert mh.categorize("Senior Manager, Sales Operations") is None
 
 
 def test_clinical_and_senior_care_roles_are_dropped():

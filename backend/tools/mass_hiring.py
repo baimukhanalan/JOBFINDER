@@ -358,6 +358,12 @@ _AUTO_STATUS = {
     # replicated with httpx by strategies/manpower.py + tools/manpower_recon.py (gated MANPOWER_ADVANCE).
     "randstad": "needs_laptop", "manpower": "auto", "experis": "auto",
     "adecco": "needs_laptop", "roberthalf": "needs_laptop",
+    # TLS-fingerprint / JS-interstitial-walled boards cracked 2026-09-21 (curl_cffi Chrome impersonation
+    # for iCIMS/Cloudflare; plain httpx for the two mis-recon'd ones). All COLLECT-FIRST: geico = Workday
+    # (per-tenant create-account verify), cotiviti = iCIMS (TP lane is tenant-scoped), progressive =
+    # Talemetry (no strategy), afni = ADP (no strategy) → no lane auto-drives them, so 'needs_laptop'.
+    "geico": "needs_laptop", "afni": "needs_laptop",
+    "cotiviti": "needs_laptop", "progressive": "needs_laptop",
 }
 
 
@@ -2539,6 +2545,272 @@ def fetch_roberthalf() -> list[dict]:
     return rows
 
 
+# ---- TLS-fingerprint / JS-interstitial-walled boards (recon 2026-09-21) ---------
+# Four employers a prior recon marked "not httpx-collectable" turned out to be REACHABLE: the wall is
+# the request FINGERPRINT (a non-browser TLS/JA3 ClientHello, or Cloudflare's JS interstitial), NOT a
+# geo/IP block — a US-datacenter egress via Bright Data got the IDENTICAL rejection, so US egress does
+# NOT help and is not used. Two are cracked from the plain server IP with curl_cffi's Chrome TLS
+# impersonation; two were never really walled (a wrong-endpoint guess in the earlier recon):
+#   * Cotiviti (iCIMS)          — httpx got 405 "Human Verification"; impersonate="chrome" → 200 HTML.
+#   * Progressive (Talemetry SSR, Cloudflare) — impersonate="chrome124" in a WARMED Session → 200 HTML.
+#     (progressive.wd5.myworkdayjobs.com is a bot-walled DECOY tenant; the real board is Talemetry.)
+#   * GEICO                     — the careers.geico.com React SPA is behind Incapsula, but the JOBS live
+#                                 on an UNPROTECTED Workday tenant reachable by PLAIN httpx (the "Phenom
+#                                 /widgets" guess was wrong — "See Open Jobs" points at the Workday board).
+#   * Afni                      — ADP "myjobs" SPA; the job API is a plain httpx GET once you send the
+#                                 public `myjobstoken` minted by the keyless career-site config (the
+#                                 "withCredentials-gated" read was wrong — no login/cookie/geo gate).
+# curl_cffi is lazily imported + fully guarded so a missing wheel never breaks collect().
+def _cffi_session(impersonate):
+    """A curl_cffi Session with browser-TLS impersonation, or None if the wheel is missing (guarded)."""
+    try:
+        from curl_cffi import requests as _cr
+        return _cr.Session(impersonate=impersonate)
+    except Exception as e:                       # pragma: no cover - env-specific
+        print(f"[cffi] curl_cffi unavailable: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
+def _cffi_get(session, url, *, referer=None, params=None, retries=3):
+    """GET via a curl_cffi Session (browser TLS), retrying transient non-200s (a Cloudflare interstitial
+    is intermittent). Returns the response TEXT on a 200, else None. Never raises."""
+    if session is None:
+        return None
+    hdr = {"Accept": "text/html,application/json,*/*"}
+    if referer:
+        hdr["Referer"] = referer
+    for attempt in range(retries):
+        try:
+            r = session.get(url, headers=hdr, params=params, timeout=45)
+            if r.status_code == 200:
+                return r.text
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"[cffi {url[:60]}] {type(e).__name__}: {e}", file=sys.stderr)
+        time.sleep(3)
+    return None
+
+
+# GEICO — Workday CxS (plain httpx; the SPA's Incapsula does not guard the Workday board).
+def fetch_geico() -> list[dict]:
+    """GEICO — Workday CxS `geico.wd1.myworkdayjobs.com/geico/External`, PLAIN httpx (no wall, no proxy).
+    US-only employer (`us_confirmed`) + `title_remote` catches 'Remote (United States)' / a WFH title.
+    HONEST live yield 2026-09-21: 285 postings, ~28 remote — but every remote role is senior/professional
+    (Counsel / Senior Engineer / Sales MANAGER / Investigator) → **0 remote-US ENTRY today** (GEICO's
+    entry CSR/claims reps are ONSITE). Collect-first future-proof: GEICO runs seasonal remote CSR/sales
+    ramps that `categorize()` captures the moment they open. Apply would reuse the Workday create-account
+    lane after a per-tenant verify → 'needs_laptop'."""
+    return _fetch_workday("geico", "GEICO", "geico.wd1.myworkdayjobs.com", "geico", "External",
+                          search_texts=("", "remote"), title_remote=True, us_confirmed=True,
+                          offset_cap=320)
+
+
+# Afni — ADP "myjobs" staffing API (plain httpx + a public myjobstoken).
+_AFNI_DOMAIN = "afniexternalcareers"
+_AFNI_APPLY_BASE = "https://myjobs.adp.com/afniexternalcareers"
+
+
+def _afni_loc(req: dict) -> tuple[str, str]:
+    """(location string, country codeValue) from an ADP requisition's requisitionLocations[0]."""
+    rl = req.get("requisitionLocations") or []
+    if not rl:
+        return "", ""
+    addr = (rl[0] or {}).get("address") or {}
+    city = (addr.get("cityName") or "").strip()
+    state = ((addr.get("countrySubdivisionLevel1") or {}).get("codeValue") or "").strip()
+    country = ((addr.get("country") or {}).get("codeValue") or "").strip()
+    loc = ", ".join(x for x in (city, state, "United States") if x) or "Remote, United States"
+    return loc, country
+
+
+def _afni_row(req: dict) -> dict | None:
+    """PURE (network-free): one Afni ADP requisition dict → a normalized row or None. Remote is
+    TITLE-first (a "Remote"/"Work at Home"/"Virtual" title — the ADP feed has no structured remote
+    flag; its bare-city location is the recruiting office, not the work site), US off the requisition
+    location country code (USA); a blank country is kept (Afni is a US employer)."""
+    title = (req.get("jobTitle") or req.get("publishedJobTitle") or "").strip()
+    reqid = req.get("reqId")
+    if not title or not reqid:
+        return None
+    loc, country = _afni_loc(req)
+    if country and country != "USA":
+        return None
+    if not _is_remote(title):
+        return None
+    url = f"{_AFNI_APPLY_BASE}/cx/job-details/{reqid}"
+    row = _mk_row("afni", reqid, "Afni", title, loc, url,
+                  posted_at=_iso_epoch(req.get("postingDate") or ""))
+    if row:
+        row["us_eligible"] = True                # USA requisition → force True
+    return row
+
+
+def fetch_afni() -> list[dict]:
+    """Afni (US BPO) — ADP "myjobs" careers SPA. The job list is a PLAIN httpx GET: the keyless public
+    career-site config (`myjobs.adp.com/public/staffing/v1/career-site/afniexternalcareers`) mints a
+    `myJobsToken`; sending it as the `myjobstoken` header (+ `rolecode: manager` + `orgoid`) to the
+    staffing `job-requisitions/apply-custom-filters` endpoint returns every requisition — NO login /
+    cookie / geo gate. Recon 2026-09-21. Live yield: 63 reqs → ~12 US-remote ENTRY CSR/insurance-rep
+    rows ("Remote Customer Service Representative", "Full-Time Remote Insurance Representative"). ADP has
+    no apply strategy → collect-first 'needs_laptop'."""
+    rows: list[dict] = []
+    try:
+        with httpx.Client(headers={"User-Agent": _BROWSER_UA, "Accept": "application/json",
+                                   "Referer": "https://myjobs.adp.com/"}, timeout=40) as c:
+            cfg = c.get(f"https://myjobs.adp.com/public/staffing/v1/career-site/{_AFNI_DOMAIN}").json()
+            token, org = cfg.get("myJobsToken"), cfg.get("orgoid")
+            if not token or not org:
+                return rows
+            sel = ("reqId,jobTitle,publishedJobTitle,type,jobDescription,workLocations,"
+                   "clientRequisitionID,postingDate,requisitionLocations")
+            r = c.get("https://my.adp.com/myadp_prefix/mycareer/public/staffing/v1/"
+                      "job-requisitions/apply-custom-filters",
+                      headers={"myjobstoken": token, "rolecode": "manager", "orgoid": org},
+                      params={"$select": sel, "$top": "300", "$skip": "0", "$filter": "",
+                              "tz": "America/New_York"})
+            reqs = r.json().get("jobRequisitions") or []
+    except Exception as e:
+        print(f"[afni] {type(e).__name__}: {e}", file=sys.stderr)
+        return rows
+    for req in reqs:
+        row = _afni_row(req)
+        if row:
+            rows.append(row)
+    return rows
+
+
+# Cotiviti — iCIMS (curl_cffi Chrome TLS impersonation defeats the 405 "Human Verification").
+def _cotiviti_row(jid, title, loc, href) -> dict | None:
+    """PURE (network-free): one Cotiviti iCIMS results row → a normalized row or None. iCIMS carries a
+    STRUCTURED location token ("US-Remote", or "US-Remote | US-UT-South Jordan"); remote+US come off it.
+    `categorize()` enforces the entry rule; US forced True (careers-cotiviti postings are US)."""
+    if not jid or not title:
+        return None
+    if not _is_remote(loc):
+        return None
+    if "US-" not in (loc or "").upper() and not us_eligible(loc):
+        return None
+    url = (href.split("?")[0] if href else f"https://careers-cotiviti.icims.com/jobs/{jid}/job")
+    if url.startswith("/"):
+        url = "https://careers-cotiviti.icims.com" + url
+    row = _mk_row("cotiviti", jid, "Cotiviti", title, loc or "US-Remote", url)
+    if row:
+        row["us_eligible"] = True
+    return row
+
+
+def fetch_cotiviti() -> list[dict]:
+    """Cotiviti — iCIMS (careers-cotiviti.icims.com). The datacenter IP gets a 405 "Human Verification"
+    from httpx; curl_cffi's Chrome TLS impersonation returns the 200 results HTML from the SAME plain IP
+    (the wall is a TLS-fingerprint check, not geo — a US-datacenter egress got the identical 405). Recon
+    2026-09-21. Each results row is "Job Locations <loc> ID 2026-<id> Title <title> …"; loc "US-Remote"
+    = remote+US. HONEST live: ~83 postings → ~1 US-remote ENTRY today (Cotiviti is mostly senior
+    healthcare-analytics; the entry slice is thin) but future-proof. iCIMS apply exists (TP lane) but is
+    tenant-specific → collect-first 'needs_laptop'."""
+    from bs4 import BeautifulSoup
+    session = _cffi_session("chrome")
+    if session is None:
+        return []
+    rows, seen = [], set()
+    for pr in range(0, 6):
+        html = _cffi_get(session, "https://careers-cotiviti.icims.com/jobs/search",
+                         params={"ss": "1", "in_iframe": "1", "pr": str(pr)}, retries=3)
+        if not html:
+            break
+        anchors = [a for a in BeautifulSoup(html, "html.parser").select("a[href]")
+                   if re.search(r"/jobs/\d+/[^/]+/job", a.get("href", ""))]
+        if not anchors:
+            break
+        new = 0
+        for a in anchors:
+            href = a["href"]
+            m = re.search(r"/jobs/(\d+)/", href)
+            jid = m.group(1) if m else None
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            new += 1
+            title = re.sub(r"^Title\s+", "", a.get_text(" ", strip=True)).strip()
+            row_el = a
+            for _ in range(9):
+                row_el = row_el.parent
+                if row_el is None or "row" in " ".join(row_el.get("class") or []):
+                    break
+            rowtxt = re.sub(r"\s+", " ", row_el.get_text(" ", strip=True)) if row_el else ""
+            lm = re.search(r"Job Locations\s+(.*?)\s+ID\s", rowtxt)
+            row = _cotiviti_row(jid, title, lm.group(1).strip() if lm else "", href)
+            if row:
+                rows.append(row)
+        if new == 0:
+            break
+    return rows
+
+
+# Progressive — Talemetry SSR (curl_cffi chrome124 in a warmed Session clears Cloudflare).
+def _progressive_row(jid, title, href, loc) -> dict | None:
+    """PURE (network-free): one Progressive Talemetry card → a normalized row or None. Fetched from the
+    REMOTE facet (`/search/remote_work/remote/jobs/`) so remoteness is guaranteed by the source; US is
+    forced (a US-only insurer). `categorize()` enforces the entry rule."""
+    if not jid or not title or not href:
+        return None
+    row = _mk_row("progressive", jid, "Progressive", title, loc or "Remote, United States", href)
+    if row:
+        row["us_eligible"] = True
+    return row
+
+
+def fetch_progressive() -> list[dict]:
+    """Progressive — Talemetry SSR careers behind Cloudflare. httpx gets Cloudflare's "Just a moment"
+    403; curl_cffi impersonate="chrome124" in a WARMED Session clears it from the plain server IP (a
+    US-datacenter egress got the identical 403 — the wall is TLS/CF-JS, not geo; `progressive.wd5.
+    myworkdayjobs.com` is a bot-walled DECOY tenant, the real board is careers.progressive.com). Recon
+    2026-09-21. The clean REMOTE facet `/search/remote_work/remote/jobs/` returns only remote roles;
+    each `.jobs-section__item` → title + `/jobs/<id>-<slug>/`. HONEST live: only ~7 remote roles TOTAL →
+    ~1 entry today, but future-proof (Progressive runs large WFH claims/service/sales ramps). Talemetry
+    apply has no strategy → collect-first 'needs_laptop'."""
+    from bs4 import BeautifulSoup
+    session = _cffi_session("chrome124")
+    if session is None:
+        return []
+    try:                                          # warm the session so Cloudflare issues a clearance cookie
+        session.get("https://careers.progressive.com/", timeout=45)
+    except Exception:
+        pass
+    time.sleep(2)
+    rows, seen = [], set()
+    base = "https://careers.progressive.com/search/remote_work/remote/jobs/"
+    for page in range(0, 25):
+        url = base if page == 0 else f"{base}?page={page + 1}"
+        html = _cffi_get(session, url, referer=base, retries=4)
+        if not html:
+            break
+        items = BeautifulSoup(html, "html.parser").select(".jobs-section__item")
+        if not items:
+            break
+        new = 0
+        for it in items:
+            a = it.select_one("h3 a[href*='/jobs/']")
+            if not a:
+                continue
+            href = a["href"]
+            m = re.search(r"/jobs/(\d+)", href)
+            jid = m.group(1) if m else None
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            new += 1
+            cols = it.select("div.columns")
+            loc = ""
+            if len(cols) >= 2:
+                loc = re.sub(r"\s+", " ", cols[1].get_text(" ", strip=True)).replace("Location:", "").strip()
+            row = _progressive_row(jid, a.get_text(" ", strip=True), href, loc or "Remote, United States")
+            if row:
+                rows.append(row)
+        if new == 0 or len(items) < 20:
+            break
+    return rows
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "hilton": fetch_hilton,
@@ -2556,7 +2828,10 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "foundever": fetch_foundever, "gainwell": fetch_gainwell,
             # staffing agencies (fast-placement lane)
             "randstad": fetch_randstad, "manpower": fetch_manpower, "experis": fetch_experis,
-            "adecco": fetch_adecco, "roberthalf": fetch_roberthalf}
+            "adecco": fetch_adecco, "roberthalf": fetch_roberthalf,
+            # TLS-fingerprint / JS-interstitial-walled boards, cracked 2026-09-21 (see the connector list)
+            "geico": fetch_geico, "afni": fetch_afni,
+            "cotiviti": fetch_cotiviti, "progressive": fetch_progressive}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

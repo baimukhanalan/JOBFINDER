@@ -17,19 +17,22 @@ GATING (mirrors the Avature/Oracle-ORC lanes):
   * Default (AMAZON_ADVANCE unset) = a DRY-RUN: fill only to the Passport wall, report
     `needs_account`/`login_required`. NOTHING is created and NO PII is transmitted.
   * AMAZON_ADVANCE=1 lets the strategy bootstrap the account (create it, verify the email OTP) and
-    walk the wizard. It ALSO needs an AWS WAF solver path — EITHER `AWSWAF_BROWSER=1` (FREE: the
-    page's own AWS WAF SDK mints the token for a silent WAF *challenge*, no key) OR a CapSolver key
-    (`CAPTCHA_SOLVER_KEY`, for a hard visual WAF *puzzle*) — and, for a non-flagged reCAPTCHA/WAF
-    score, a US RESIDENTIAL egress (a live phone slot, else DIRECT). All are graceful no-ops
-    otherwise, so an advance run with none of them armed just lands on the Passport wall like a
-    dry-run.
+    walk the wizard. On an advance run this driver ARMS two defaults (both overridable):
+    `AWSWAF_BROWSER=1` (FREE: the page's own AWS WAF SDK mints the token for a silent WAF
+    *challenge*, no key) and `AMAZON_US=1` (route through the US-egress resolver — Bright Data
+    US-pinned — so the wall is served in English from a US IP, a non-flagged score). Override with
+    `AWSWAF_BROWSER=0` (force the paid-only path) / `CAPTCHA_SOLVER_KEY=<key>` (a hard visual WAF
+    *puzzle*) / `AMAZON_PROXY=direct` (force DIRECT) / `AMAZON_PROXY=<url>` (an exact US proxy). All
+    solver paths are graceful no-ops when a challenge/SDK isn't present, so a mis-armed run just
+    lands on the Passport wall like a dry-run.
   * The final Submit is clicked by THIS driver only when advancing AND the solver is armed AND the
     wizard reached Submit with `unfilled==[]` (mirrors smartrecruiters_recon's "submit only when
     complete"); otherwise the recorded selector is left for a human. Ground truth of success = the
     Amazon "Thank you for applying" / "application received" email in the persona Maildir.
 
-    DISPLAY=:98 sg mail -c 'cd /home/projects/jobfinder && \
-        AMAZON_ADVANCE=1 CAPTCHA_SOLVER_KEY=... python3 -m backend.tools.amazon_recon --job <id> --fresh'
+    # Free AWS-WAF + Bright Data US egress (both auto-armed on an advance run):
+    DISPLAY=:98 AMAZON_ADVANCE=1 sg mail -c 'cd /home/projects/jobfinder && \
+        python3 -m backend.tools.amazon_recon --job <id> --fresh --keep 8'
 
 Run under `sg mail` (mailbox provisioning + the Maildir OTP/confirmation read need the mail group).
 Headful on :98 by default (the Passport SPA + AWS WAF + reCAPTCHA scoring reject headless); headless
@@ -257,22 +260,24 @@ def _is_amazon_confirmation(from_hdr: str, subject: str) -> bool:
 
 
 def _amazon_proxy(name: str = ""):
-    """A LIVE residential phone egress slot (Playwright proxy dict) or None (DIRECT). Amazon
-    risk-flags datacenter IPs for the AWS WAF token + reCAPTCHA score, so a live phone slot is
-    preferred; AMAZON_PROXY overrides; None when no phone is live (DIRECT — still reaches the
-    Passport wall for a dry-run)."""
-    override = (os.getenv("AMAZON_PROXY") or "").strip()
-    if override:
-        return {"server": override}
+    """Resolve the egress for the Amazon Passport wall — DIRECT-default, US-egress opt-in.
+
+    The AWS WAF / reCAPTCHA-Enterprise risk score wants a US-resident IP that MATCHES the persona
+    (a US applicant), and from a NON-US IP the wall is even served in a localized language (FR from
+    a Paris CloudFront PoP) — a locale/IP mismatch that RAISES the WAF score. The owner's connected
+    phone slots are KAZAKHSTAN residential (a worse geo-mismatch — see the us_egress/proxy_pool
+    notes), so this lane routes ONLY through the US-egress resolver (a validated free US proxy, else
+    a Bright Data US-pinned session), NEVER a residential phone slot:
+      * AMAZON_PROXY=<url>   → that EXACT proxy (`direct`/`none`/`off`/`0`/`false`/`''` → DIRECT)
+      * AMAZON_US truthy     → us_egress.us_proxy()  (validated free US → Bright Data US → DIRECT)
+      * nothing set          → DIRECT (the server's own datacenter IP)
+    `run()` defaults AMAZON_US on for an ADVANCE run, so BD-US is used unless AMAZON_PROXY forces
+    otherwise. Guarded (any resolver error → DIRECT). Returns a Playwright proxy dict, or None."""
     try:
-        from backend.tools import proxy_pool
-        slots = [s for s in proxy_pool.residential_slots() if str(s).startswith("socks5://")]
+        from backend.tools import us_egress
+        return us_egress.lane_us_egress("AMAZON_US", "AMAZON_PROXY", name)
     except Exception:
-        slots = []
-    if not slots:
         return None
-    idx = abs(hash(name)) % len(slots) if name else 0
-    return {"server": slots[idx]}
 
 
 def _advance_enabled() -> bool:
@@ -292,6 +297,15 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
     print(f"=== Amazon apply: job {row['id']} — {row['title']}  [{row['location_raw']}]", flush=True)
 
     advance = _advance_enabled()
+    if advance:
+        # ARM the FREE AWS-WAF path + US egress by DEFAULT on a live run (both overridable):
+        #   * AWSWAF_BROWSER=1 — the page's own AwsWafIntegration.getToken() mints the token for
+        #     the silent WAF *challenge*, no key (aws_waf_available() then True → open_form creates
+        #     the account). Set AWSWAF_BROWSER=0 to force the paid-only path.
+        #   * AMAZON_US=1 — route through us_egress (Bright Data US-pinned) so the wall is served in
+        #     English from a US IP (a non-flagged score). Set AMAZON_PROXY=direct to force DIRECT.
+        os.environ.setdefault("AWSWAF_BROWSER", "1")
+        os.environ.setdefault("AMAZON_US", "1")
     try:
         from backend.applier import captcha_solver
         # An AWS WAF path is armed by EITHER a CapSolver key (visual puzzle) OR AWSWAF_BROWSER=1
@@ -323,7 +337,7 @@ async def run(job_id: int, keep_minutes: int = 12, fresh: bool = True) -> None:
     if nopecha_on and headless:
         headless = False  # a Chrome extension only loads in a non-headless persistent context
     px = _amazon_proxy(pf["email"])
-    print(f"egress: {'residential slot' if px else 'DIRECT (no live phone slot)'}", flush=True)
+    print(f"egress: {('US proxy ' + px['server']) if px else 'DIRECT (server IP)'}", flush=True)
 
     from playwright.async_api import async_playwright
 

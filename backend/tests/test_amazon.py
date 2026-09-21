@@ -275,3 +275,77 @@ def test_recon_confirmation_by_subject():
 def test_recon_confirmation_negative():
     assert _is_amazon_confirmation("From: recruiter@randombpo.com",
                                    "Subject: A job you might like") is False
+
+
+# ---- amazon_recon egress wiring (US-egress resolver, NEVER the KZ phone slots) --------------------
+# The Amazon lane routes ONLY through us_egress (Bright Data US / a validated free US proxy), never a
+# residential phone slot (the owner's phones are KAZAKHSTAN — a geo-mismatch that HURTS a US apply).
+
+import backend.tools.amazon_recon as _ar  # noqa: E402
+
+
+def _clear_amz_egress(monkeypatch):
+    for k in ("AMAZON_US", "AMAZON_PROXY", "US_PROXY", "WEBSHARE_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_recon_proxy_direct_by_default(monkeypatch):
+    _clear_amz_egress(monkeypatch)
+    # nothing opted in → DIRECT (None), and the resolver is never even consulted for a slot.
+    assert _ar._amazon_proxy("jane.doe1@takhet.com") is None
+
+
+def test_recon_proxy_explicit_override_wins(monkeypatch):
+    _clear_amz_egress(monkeypatch)
+    monkeypatch.setenv("AMAZON_PROXY", "http://u:p@1.2.3.4:8080")
+    assert _ar._amazon_proxy() == {
+        "server": "http://1.2.3.4:8080", "username": "u", "password": "p"}
+
+
+def test_recon_proxy_direct_keyword_forces_direct(monkeypatch):
+    _clear_amz_egress(monkeypatch)
+    monkeypatch.setenv("AMAZON_US", "1")          # opt-in ON…
+    monkeypatch.setenv("AMAZON_PROXY", "direct")  # …but AMAZON_PROXY=direct wins + is terminal
+    import backend.tools.us_egress as ue
+    monkeypatch.setattr(ue, "us_proxy",
+                        lambda: (_ for _ in ()).throw(AssertionError("resolver consulted")))
+    assert _ar._amazon_proxy() is None
+
+
+def test_recon_proxy_us_opt_in_uses_resolver(monkeypatch):
+    _clear_amz_egress(monkeypatch)
+    monkeypatch.setenv("AMAZON_US", "1")
+    import backend.tools.us_egress as ue
+    monkeypatch.setattr(ue, "us_proxy", lambda: {"server": "http://brd-us:33335",
+                                                 "username": "cust", "password": "pw"})
+    assert _ar._amazon_proxy() == {"server": "http://brd-us:33335",
+                                   "username": "cust", "password": "pw"}
+
+
+def test_recon_proxy_never_uses_kz_phones(monkeypatch):
+    """The KZ residential phone slots must NEVER be returned to a US Amazon application."""
+    _clear_amz_egress(monkeypatch)
+    monkeypatch.setenv("AMAZON_US", "1")
+    import backend.tools.proxy_pool as pp
+    monkeypatch.setattr(pp, "residential_slots",
+                        lambda: (_ for _ in ()).throw(AssertionError("KZ phone slots consulted")))
+    import backend.tools.us_egress as ue
+    monkeypatch.setattr(ue, "_free_us_proxy", lambda: None)
+    monkeypatch.setattr(ue, "_bd_us_proxy", lambda: None)
+    assert _ar._amazon_proxy() is None   # falls all the way through to DIRECT, no phone slot
+
+
+# ---- cron arm-by-default (free AWS-WAF path → no longer inert once AMAZON_ADVANCE is set) ---------
+
+from backend.tools import mass_hiring_apply_amazon_cron as _amz_cron  # noqa: E402
+
+
+def test_cron_solver_armed_by_free_awswaf_browser(monkeypatch):
+    monkeypatch.delenv("CAPTCHA_SOLVER_KEY", raising=False)
+    monkeypatch.delenv("CAPTCHA_SOLVER_PROVIDER", raising=False)
+    monkeypatch.delenv("AWSWAF_BROWSER", raising=False)
+    # No key, no free path → not armed (inert).
+    assert _amz_cron._solver_armed() is False
+    # The FREE in-browser AWS-WAF token path alone arms the lane (no CapSolver key needed).
+    monkeypatch.setenv("AWSWAF_BROWSER", "1")
+    assert _amz_cron._solver_armed() is True

@@ -431,9 +431,38 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
             _pt = (result or {}).get("page_type")
             poll_worthwhile = (advance and out.get("clicked")
                                and _pt not in ("login_required", "captcha", "expired"))
-            while time.time() < deadline:
+            # ON-PAGE confirmation: Concentrix/Workday shows a submission-SUCCESS page after Submit
+            # even when NO receipt email is sent (or it lags), so the email-only poll false-reported
+            # confirmed=False on a genuinely-submitted app. Capture a post-submit shot + read the DOM
+            # for a success indicator (and NOT an Errors-Found/validation page). One-time, best-effort.
+            if poll_worthwhile:
+                try:
+                    await page.wait_for_timeout(4000)
+                    try:
+                        _dbg = os.path.join(os.path.dirname(__file__), "..", "logs",
+                                            "workday_recon", "_debug")
+                        os.makedirs(_dbg, exist_ok=True)
+                        await page.screenshot(path=os.path.join(_dbg, "12_after_submit.png"))
+                    except Exception:
+                        pass
+                    onpage = await page.evaluate(
+                        "()=>{const t=(document.body.innerText||'').toLowerCase();"
+                        "const ok=/you have (successfully )?submitted|application (has been )?"
+                        "(submitted|received|complete)|thank you for (applying|your application|"
+                        "your interest)|successfully submitted|we(’|')?ve received your application|"
+                        "congratulations|submission (is )?complete|application status/i.test(t);"
+                        "const bad=/errors? found|is required|please (check|enter|complete|correct)|"
+                        "must have a value/i.test(t); return ok && !bad;}")
+                    if onpage:
+                        out["confirmed"] = True
+                        out["confirm_src"] = "on_page"
+                        print("[application CONFIRMED — on-page success page]", flush=True)
+                except Exception:
+                    pass
+            while time.time() < deadline and not out.get("confirmed"):
                 if email and confirm(email, started):
                     out["confirmed"] = True
+                    out["confirm_src"] = "email"
                     print("[application CONFIRMED — receipt in the persona mailbox]", flush=True)
                     break
                 if not poll_worthwhile:    # dry-run OR a failed/gated prefill: no receipt is coming

@@ -137,3 +137,5 @@ backend/.ts_api_token
 backend/.ts_authkey_public
 # Runtime cache — resolved Zoom links for TP hiring events (rebuilt by hiring_events --refresh)
 backend/data/hiring_events_zoom.json
+data/workday_verified_tenants.json
+data/workday_probe_blocked.json

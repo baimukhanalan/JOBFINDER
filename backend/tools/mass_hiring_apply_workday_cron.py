@@ -95,6 +95,41 @@ _BLOCKED: dict[str, str] = {
 }
 
 
+import json as _json
+
+# Tenants AUTO-VERIFIED live by tools/workday_probe_promote.py are appended here (gitignored), so a
+# probe-cron promotion is DATA-DRIVEN — no code edit needed. live_tenants() unions it with the base.
+_VERIFIED_PATH = os.path.join(REPO, "data", "workday_verified_tenants.json")
+
+
+def _read_verified() -> set:
+    try:
+        with open(_VERIFIED_PATH) as f:
+            v = _json.load(f)
+        return {str(t) for t in v} if isinstance(v, list) else set()
+    except Exception:
+        return set()
+
+
+def add_verified(tenant: str) -> None:
+    """Append an auto-verified tenant to the gitignored verified file (idempotent, atomic)."""
+    cur = _read_verified()
+    if tenant in cur:
+        return
+    cur.add(tenant)
+    os.makedirs(os.path.dirname(_VERIFIED_PATH), exist_ok=True)
+    tmp = _VERIFIED_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        _json.dump(sorted(cur), f)
+    os.replace(tmp, _VERIFIED_PATH)
+
+
+def live_tenants() -> set:
+    """Base _LIVE_TENANTS UNION any auto-verified tenants — the single source of truth for which
+    Workday tenants the cron drives. Probe-cron promotion writes the verified file; no code edit."""
+    return set(_LIVE_TENANTS) | _read_verified()
+
+
 def _tenant_of(url: str) -> str:
     host = _up.urlparse((url or "").lower()).netloc
     slug = host.split(".")[0]
@@ -115,7 +150,7 @@ def workday_ids(only: str | None = None) -> list[int]:
         tenant = _tenant_of(url)
         if only and tenant != only:
             continue
-        if tenant not in _LIVE_TENANTS:
+        if tenant not in live_tenants():
             continue
         out.append(jid)
     from backend.tools import mh_settings

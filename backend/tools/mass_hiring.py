@@ -311,6 +311,8 @@ _AUTO_STATUS = {
     "maximus": "auto", "alorica": "auto",
     "kelly": "needs_laptop", "concentrix": "needs_laptop", "cvshealth": "needs_laptop",
     "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
+    # Healthcare payers/BPOs on the driven Workday CxS lane (register-captcha probe pending).
+    "elevance": "needs_laptop", "highmark": "needs_laptop", "sagility": "needs_laptop",
     "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
     # foundever: SuccessFactors careersection, single-page account-creation apply, NO captcha/résumé.
     # Full-auto server-side via strategies/foundever.py + tools/foundever_recon.py; LIVE-PROVEN
@@ -799,20 +801,78 @@ def fetch_alorica() -> list[dict]:
 #     off that string: us_eligible() (USA/remote wording) OR _has_us_state() (state code/name). The
 #     bare board's `total` is unreliable (reads 0), so callers narrow with a facet or searchText and
 #     we paginate until jobPostings is empty (bounded by offset_cap; limit caps at 20/page). ---
+# A Workday CxS multi-location REMOTE job typically shows locationsText "N Locations" (or a primary
+# physical office) with NO remote word in the text — its remote-ness lives ONLY in the "Working at
+# Home"/"Remote"/"Virtual" LOCATION facet. `_wd_remote_location_ids` discovers those facet value ids
+# so `_fetch_workday(remote_location_facet=True)` can apply them and capture that hidden slice. Some
+# healthcare payers ALSO post a remote role at a physical office with "100% Virtual" only in the
+# TITLE (title_remote). Both are opt-in — the existing callers keep the loc/path-only behaviour.
+_WD_REMOTE_LOC_RE = re.compile(
+    r"working at home|work[- ]?from[- ]?home|work@home|work at home|\bremote\b|virtual|"
+    r"telecommut|home[- ]?based", re.I)
+_WD_ONSITE_RE = re.compile(r"\bon-?site\b", re.I)
+
+
+def _wd_remote_location_ids(host: str, tenant: str, site: str) -> list[str]:
+    """The `locations` facet value ids whose label reads remote / work-at-home, so a multi-location
+    Workday remote job (locationsText 'N Locations', no remote word in text) is captured. Returns []
+    on any error (the text-remote pass still runs)."""
+    url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
+    ref = f"https://{host}/{site}"
+    ids: list[str] = []
+    try:
+        r = httpx.post(url, json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""},
+                       timeout=30, headers={**_UA, "Content-Type": "application/json",
+                                            "Accept": "application/json", "Referer": ref})
+        facets = r.json().get("facets") or []
+    except Exception as e:
+        print(f"[{tenant} facet-discovery] {type(e).__name__}: {e}", file=sys.stderr)
+        return []
+
+    def _walk(v: dict) -> None:
+        d = v.get("descriptor") or ""
+        i = v.get("id")
+        if i and _WD_REMOTE_LOC_RE.search(d):
+            ids.append(i)
+        for sub in (v.get("values") or []):
+            _walk(sub)
+
+    for f in facets:
+        if "location" in (f.get("facetParameter") or "").lower():
+            for v in (f.get("values") or []):
+                _walk(v)
+    return ids
+
+
 def _workday_row(j: dict, source: str, company: str, host: str, site: str,
-                 us_confirmed: bool = False) -> dict | None:
+                 us_confirmed: bool = False, *, title_remote: bool = False,
+                 assume_remote: bool = False) -> dict | None:
     loc = j.get("locationsText") or ""
     ep = j.get("externalPath") or ""
-    # Remote can be encoded in the location OR in the externalPath slug (e.g. a multi-location row
-    # shows loc "16 Locations" while the path is /job/Tennessee-Work-at-Home/...).
-    if not (_is_remote(loc) or _is_remote(ep.replace("-", " "))):
-        return None
-    # US is guaranteed when the caller applied a US-country facet (us_confirmed); otherwise (e.g. CVS,
-    # narrowed only by a job-family facet) confirm it from the location text (US wording or a state).
+    title = j.get("title") or ""
+    if assume_remote:
+        # The caller already filtered to a remote LOCATION facet, so every row is remote — but a
+        # title that explicitly says "(Onsite)" is a mislabeled facet-tag, so require a real remote
+        # signal for those.
+        if _WD_ONSITE_RE.search(title) and not (
+                _is_remote(loc) or _is_remote(ep.replace("-", " ")) or _is_remote(title)):
+            return None
+    else:
+        # Remote can be encoded in the location OR the externalPath slug (e.g. a multi-location row
+        # shows loc "16 Locations" while the path is /job/Tennessee-Work-at-Home/...); with
+        # title_remote, also in the TITLE ("100% Virtual" at a physical office).
+        texts = [loc, ep.replace("-", " ")]
+        if title_remote:
+            texts.append(title)
+        if not any(_is_remote(t) for t in texts):
+            return None
+    # US is guaranteed when the caller applied a US-country facet OR the tenant is a US-only employer
+    # (us_confirmed); otherwise (e.g. CVS, narrowed only by a job-family facet) confirm it from the
+    # location text (US wording or a state).
     if not (us_confirmed or us_eligible(loc) or _has_us_state(loc)):
         return None
     jid = (j.get("bulletFields") or [None])[0] or ep.rstrip("/").split("_")[-1] or ep
-    row = _mk_row(source, jid, company, j.get("title"), loc or "Remote, United States",
+    row = _mk_row(source, jid, company, title, loc or "Remote, United States",
                   f"https://{host}/en-US/{site}" + ep)
     if row:
         # US already confirmed above (facet or loc text) — force the flag True so a state-coded /
@@ -823,15 +883,17 @@ def _workday_row(j: dict, source: str, company: str, host: str, site: str,
 
 def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str, *,
                    search_texts=("",), applied_facets=None, offset_cap: int = 200,
-                   us_confirmed: bool = False) -> list[dict]:
+                   us_confirmed: bool = False, title_remote: bool = False,
+                   remote_location_facet: bool = False) -> list[dict]:
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     ref = f"https://{host}/{site}"
     rows, seen = [], set()
-    for st in search_texts:
+
+    def _drain(facets, st, assume_remote) -> None:
         offset = 0
         while offset < offset_cap:
             try:
-                r = httpx.post(url, json={"appliedFacets": applied_facets or {}, "limit": 20,
+                r = httpx.post(url, json={"appliedFacets": facets or {}, "limit": 20,
                                           "offset": offset, "searchText": st}, timeout=30,
                                headers={**_UA, "Content-Type": "application/json",
                                         "Accept": "application/json", "Referer": ref})
@@ -842,11 +904,23 @@ def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str,
             if not js:
                 break
             for j in js:
-                row = _workday_row(j, source, company, host, site, us_confirmed)
+                row = _workday_row(j, source, company, host, site, us_confirmed,
+                                   title_remote=title_remote, assume_remote=assume_remote)
                 if row and row["source_id"] not in seen:
                     seen.add(row["source_id"])
                     rows.append(row)
             offset += 20
+
+    # Pass B (opt-in): rows tagged to a "Working at Home"/"Remote"/"Virtual" location facet — the
+    # only way to capture a multi-location Workday remote job whose text carries no remote word.
+    if remote_location_facet:
+        ids = _wd_remote_location_ids(host, tenant, site)
+        if ids:
+            _drain({**(applied_facets or {}), "locations": ids}, "", assume_remote=True)
+    # Pass A: text search (a remote signal in the location / externalPath, and with title_remote the
+    # title). Unchanged for the existing callers (remote_location_facet + title_remote default off).
+    for st in search_texts:
+        _drain(applied_facets, st, assume_remote=False)
     return rows
 
 
@@ -1315,6 +1389,43 @@ def fetch_cigna() -> list[dict]:
     return _fetch_workday("cigna", "Cigna", "cigna.wd5.myworkdayjobs.com", "cigna", "cignacareers",
                           search_texts=("",),
                           applied_facets={"Location_Country": [_WD_US_FACET]}, offset_cap=360, us_confirmed=True)
+
+
+# Healthcare payers / BPOs on Workday CxS (Elevance/Anthem + Carelon, Highmark, Sagility). Same
+# driven Workday lane as Centene/Concentrix (workday_recon + strategies/workday.py). Unlike Centene/
+# Cigna these tenants have NO country facet (their facets are timeType/jobFamilyGroup/
+# locationMainGroup) and are US-only employers → us_confirmed=True, and remote is read from BOTH:
+#   (a) remote_location_facet — the "Working at Home"/"Remote"/"Virtual" LOCATION facet, which is how
+#       a multi-location Workday remote job is encoded (its locationsText is "N Locations" or a
+#       physical office, with no remote word in the text); and
+#   (b) title_remote — a remote/virtual signal in the TITLE ("100% Virtual") for a role posted at a
+#       physical office.
+# The register-captcha PROBE still gates promotion to a live apply lane — these are added to the
+# cron's _BLOCKED (probe-pending), NOT _LIVE_TENANTS, until one drive reaches an on-page
+# "Application Submitted" with no register reCAPTCHA (like Concentrix/Centene).
+def fetch_elevance() -> list[dict]:
+    # Carelon (an Elevance subsidiary) rides the SAME tenant — surfaced via the "Carelon" searchText.
+    return _fetch_workday("elevance", "Elevance Health", "elevancehealth.wd1.myworkdayjobs.com",
+                          "elevancehealth", "ANT",
+                          search_texts=("member service", "customer care", "claims", "Carelon"),
+                          us_confirmed=True, title_remote=True, remote_location_facet=True,
+                          offset_cap=300)
+
+
+def fetch_highmark() -> list[dict]:
+    return _fetch_workday("highmark", "Highmark Health", "highmarkhealth.wd1.myworkdayjobs.com",
+                          "highmarkhealth", "highmark",
+                          search_texts=("customer service", "member", "claims"),
+                          us_confirmed=True, title_remote=True, remote_location_facet=True,
+                          offset_cap=300)
+
+
+def fetch_sagility() -> list[dict]:
+    return _fetch_workday("sagility", "Sagility", "sagility.wd1.myworkdayjobs.com",
+                          "sagility", "SagilityUSA",
+                          search_texts=("customer service", "member", "appeals", "fulfillment"),
+                          us_confirmed=True, title_remote=True, remote_location_facet=True,
+                          offset_cap=300)
 
 
 # Humana — Phenom (like Conduent). POST /widgets with selected_fields.city=["Remote"] (the exact
@@ -1837,6 +1948,7 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "sutherland": fetch_sutherland, "workingsolutions": fetch_working_solutions,
             "kelly": fetch_kelly, "maximus": fetch_maximus, "unitedhealth": fetch_unitedhealth,
             "centene": fetch_centene, "cigna": fetch_cigna, "humana": fetch_humana,
+            "elevance": fetch_elevance, "highmark": fetch_highmark, "sagility": fetch_sagility,
             "foundever": fetch_foundever,
             # staffing agencies (fast-placement lane)
             "randstad": fetch_randstad, "manpower": fetch_manpower, "experis": fetch_experis,

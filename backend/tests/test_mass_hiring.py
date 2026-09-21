@@ -104,6 +104,80 @@ def test_workday_senior_wah_is_dropped():
         "concentrix", "Concentrix", "cnx.wd1.myworkdayjobs.com", "external_global") is None
 
 
+# ---- Healthcare payers on Workday CxS (Elevance/Highmark/Sagility share _workday_row) -----------
+# These tenants encode remote in the TITLE ("100% Virtual") and/or a "Working at Home" LOCATION
+# facet (assume_remote), not the loc/path text — so the collector opts into title_remote +
+# remote_location_facet. us_confirmed=True (US-only employers, no country facet).
+
+def test_workday_elevance_title_remote_virtual_is_kept():
+    # Elevance posts a remote member-services role at a PHYSICAL office with "100% Virtual" only in
+    # the title. title_remote catches it (the loc/path have no remote word).
+    row = mh._workday_row(
+        {"locationsText": "TN-NASHVILLE, 501 GREAT CIRCLE RD",
+         "title": "Patient Enrollment Specialist I (100% Virtual)",
+         "bulletFields": ["JR203233"],
+         "externalPath": "/job/TN-NASHVILLE-501-GREAT-CIRCLE-RD/Patient-Enrollment-Specialist-I_JR203233"},
+        "elevance", "Elevance Health", "elevancehealth.wd1.myworkdayjobs.com", "ANT",
+        us_confirmed=True, title_remote=True)
+    assert row is not None
+    assert row["source_id"] == "JR203233"
+    assert row["us_eligible"] is True
+    assert row["apply_url"].startswith("https://elevancehealth.wd1.myworkdayjobs.com/en-US/ANT")
+
+
+def test_workday_title_remote_default_off_is_dropped():
+    # Regression guard: the SAME row without title_remote (the existing callers' behaviour) is
+    # dropped — a title-only remote signal never leaks into Concentrix/CVS/Centene/Cigna.
+    j = {"locationsText": "TN-NASHVILLE, 501 GREAT CIRCLE RD",
+         "title": "Patient Enrollment Specialist I (100% Virtual)",
+         "bulletFields": ["JR203233"], "externalPath": "/job/TN-NASHVILLE/x_JR203233"}
+    assert mh._workday_row(j, "elevance", "Elevance Health",
+                           "elevancehealth.wd1.myworkdayjobs.com", "ANT", us_confirmed=True) is None
+
+
+def test_workday_assume_remote_multiloc_is_kept():
+    # A multi-location Highmark remote job: locationsText "51 Locations", no remote word in text.
+    # assume_remote (the caller applied a remote LOCATION facet) keeps it; categorize matches
+    # "Community Health Worker" (member-services entry).
+    row = mh._workday_row(
+        {"locationsText": "51 Locations", "title": "Community Health Worker - Medicaid",
+         "bulletFields": ["J286859"], "externalPath": "/job/51-Locations/Community-Health-Worker_J286859"},
+        "highmark", "Highmark Health", "highmarkhealth.wd1.myworkdayjobs.com", "highmark",
+        us_confirmed=True, assume_remote=True)
+    assert row is not None
+    assert row["source_id"] == "J286859"
+    # Without assume_remote (and no title_remote) the same multi-loc row has no remote text -> dropped.
+    assert mh._workday_row(
+        {"locationsText": "51 Locations", "title": "Community Health Worker - Medicaid",
+         "bulletFields": ["J286859"], "externalPath": "/job/51-Locations/Community-Health-Worker_J286859"},
+        "highmark", "Highmark Health", "highmarkhealth.wd1.myworkdayjobs.com", "highmark",
+        us_confirmed=True) is None
+
+
+def test_workday_assume_remote_onsite_title_is_dropped():
+    # Sagility mislabels an onsite role onto a "Work@Home" facet — "(Onsite)" in the title + no real
+    # remote text signal => rejected even under assume_remote.
+    assert mh._workday_row(
+        {"locationsText": "El Paso, TX", "title": "Care Advocate (Onsite) - El Paso, TX",
+         "bulletFields": ["REQ-003714"], "externalPath": "/job/El-Paso/Care-Advocate_REQ-003714"},
+        "sagility", "Sagility", "sagility.wd1.myworkdayjobs.com", "SagilityUSA",
+        us_confirmed=True, assume_remote=True) is None
+
+
+def test_workday_sagility_wfh_title_is_kept():
+    # Sagility's loc "Work@Home USA" isn't matched by _is_remote ('@' != 'at'), but the TITLE says
+    # "Work from Home" -> title_remote keeps it; source_id from bulletFields.
+    row = mh._workday_row(
+        {"locationsText": "Work@Home USA",
+         "title": "Work from Home: Customer Service Representative (Healthcare)",
+         "bulletFields": ["REQ-026850"], "externalPath": "/job/WorkHome-USA/CSR_REQ-026850"},
+        "sagility", "Sagility", "sagility.wd1.myworkdayjobs.com", "SagilityUSA",
+        us_confirmed=True, title_remote=True)
+    assert row is not None
+    assert row["source_id"] == "REQ-026850"
+    assert row["category"] == "customer_support"
+
+
 # ---- Teleperformance (Umbraco) --------------------------------------------------
 
 def test_tp_us_wfh_is_kept():

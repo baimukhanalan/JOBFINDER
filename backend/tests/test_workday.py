@@ -34,6 +34,15 @@ _CENTENE = ("https://centene.wd5.myworkdayjobs.com/en-US/Centene_External/job/Re
 _CIGNA = ("https://cigna.wd5.myworkdayjobs.com/en-US/cignacareers/job/Tennessee-Work-at-Home/"
           "Customer-Service-Representative---Accredo---Remote_26009553")
 _TENANTS = (_CNX, _CVS, _CENTENE, _CIGNA)
+# Healthcare payers/BPOs collected onto the same Workday lane (register-captcha probe pending) —
+# they must route to WorkdayMassHiringStrategy (the account-create wizard) so the probe can drive it.
+_ELEVANCE = ("https://elevancehealth.wd1.myworkdayjobs.com/en-US/ANT/job/"
+             "TN-NASHVILLE/Patient-Enrollment-Specialist-I--100--Virtual-_JR203233")
+_HIGHMARK = ("https://highmarkhealth.wd1.myworkdayjobs.com/en-US/highmark/job/"
+             "PA-Working-at-Home---Pennsylvania/Community-Health-Worker_J286859")
+_SAGILITY = ("https://sagility.wd1.myworkdayjobs.com/en-US/SagilityUSA/job/"
+             "WorkHome-USA/Work-from-Home-Customer-Service-Representative_REQ-026850")
+_PAYER_TENANTS = (_ELEVANCE, _HIGHMARK, _SAGILITY)
 # A /catalog Workday job on some OTHER tenant, and Humana (handled by PhenomWorkdayStrategy).
 _GENERIC_WD = "https://acme.wd1.myworkdayjobs.com/en-US/careers/job/Remote/Engineer_R1"
 _HUMANA = "https://humana.wd5.myworkdayjobs.com/en-US/Humana_External/job/Remote/CSR_R2"
@@ -100,6 +109,18 @@ def test_stock_workday_has_no_prefill_override():
     assert WorkdayStrategy.prefill is ApplyStrategy.prefill
     # the mass-hiring subclass DOES override prefill (its account-create + wizard-walk flow).
     assert WorkdayMassHiringStrategy.prefill is not ApplyStrategy.prefill
+
+
+def test_masshiring_matches_the_healthcare_payer_tenants():
+    # Elevance/Anthem, Highmark, Sagility route to the account-create wizard (probe-pending lane).
+    for u in _PAYER_TENANTS:
+        assert WorkdayMassHiringStrategy.matches(u), u
+        assert isinstance(_pick_strategy(u), WorkdayMassHiringStrategy), u
+
+
+def test_mass_hiring_apply_supports_the_healthcare_payer_tenants():
+    for u in _PAYER_TENANTS:
+        assert mass_hiring_apply.is_supported(u), u
 
 
 def test_mass_hiring_apply_supports_the_four_tenants():

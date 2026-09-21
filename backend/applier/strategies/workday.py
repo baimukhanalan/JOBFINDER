@@ -68,11 +68,14 @@ _FOOTER_BTNS = (
 _WIZARD_BTN = ("button[data-automation-id='pageFooterNextButton'], "
                "button[data-automation-id='bottom-navigation-next-button'], "
                "button, a[role='button']")
-# The four validated Mass-Hiring Workday tenants (Concentrix / CVS Health / Centene / Cigna).
-# Precise on purpose (NOT a blanket myworkdayjobs.com) so only vetted tenants route to the
-# account-create + wizard-walk path — every other Workday URL falls through to WorkdayStrategy.
+# The Mass-Hiring Workday CxS tenants that route to the account-create + wizard-walk path: the four
+# validated ones (Concentrix / CVS Health / Centene / Cigna) + the healthcare payers/BPOs
+# (Elevance/Anthem+Carelon / Highmark / Sagility) collected onto the same lane (register-captcha
+# probe pending — routing them here lets the probe drive the create-account step). Precise on
+# purpose (NOT a blanket myworkdayjobs.com) so every other Workday URL falls through to WorkdayStrategy.
 _MASSHIRING_HOST_RE = re.compile(
-    r"(?:cnx\.wd1|cvshealth\.wd1|centene\.wd5|cigna\.wd5)\.myworkdayjobs\.com", re.I)
+    r"(?:cnx\.wd1|cvshealth\.wd1|centene\.wd5|cigna\.wd5|"
+    r"elevancehealth\.wd1|highmarkhealth\.wd1|sagility\.wd1)\.myworkdayjobs\.com", re.I)
 # A representative, real, in-state ZIP per US state (a major-city ZIP). Workday validates
 # 'X is not a valid postal code for <State>', so a synthetic persona's random ZIP (which may not
 # belong to its state) is overridden with the state's ZIP here to keep postal-vs-state consistent.

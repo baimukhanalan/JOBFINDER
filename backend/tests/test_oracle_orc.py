@@ -191,3 +191,77 @@ def test_opt_match_boundary():
     assert m("1-3 years", "1-3 years") is True
     assert m("3-5 years", "i do not have any experience") is False
     assert m("", "yes") is False
+
+
+# ---- synthetic phone (unblocks the ORC lane for free — no owner-controlled number) -----------
+
+def test_synth_phone_deterministic_and_format():
+    from backend.tools.orc_recon import _synth_phone, _US_AREA_CODES
+    import re as _re
+    e = "tyler.lawson1234@takhet.com"
+    p = _synth_phone(e)
+    assert p == _synth_phone(e)                       # stable per email
+    m = _re.fullmatch(r"\+1 \((\d{3})\) (\d)(\d)(\d)-(\d{4})", p)
+    assert m, f"unexpected format: {p!r}"
+    npa, n = m.group(1), m.group(2)
+    assert npa in _US_AREA_CODES                      # a real, assigned area code
+    assert n in "23456789"                            # exchange first digit N in 2..9 (never 0/1)
+
+
+def test_synth_phone_never_reserved():
+    # NEVER the fictional 555-01xx range, an N11 service code, or the 555 exchange — across many
+    # personas (the reserved patterns are exactly what tripped Oracle's "Enter a valid number").
+    from backend.tools.orc_recon import _synth_phone
+    import re as _re
+    for i in range(4000):
+        p = _synth_phone(f"persona.candidate{i}@takhet.com")
+        d = _re.sub(r"\D", "", p)[1:]                 # 10 national digits (drop the +1)
+        npa, nxx, sub = d[:3], d[3:6], d[6:]
+        assert not (nxx == "555" and sub.startswith("01")), p   # fictional 555-01xx
+        assert nxx[1:] != "11", p                                # N11 service code
+        assert nxx != "555", p                                   # 555 exchange
+        assert npa[0] in "23456789", p                           # NPA first digit 2..9
+
+
+def test_synth_phone_is_libphonenumber_valid():
+    # The real proof the lane is unblocked: every synthetic number passes libphonenumber's
+    # is_valid_number (the exact check Oracle CX runs). Skipped where the optional lib is absent.
+    pn = pytest.importorskip("phonenumbers")
+    from backend.tools.orc_recon import _synth_phone
+    for i in range(500):
+        p = _synth_phone(f"applicant{i}@takhet.com")
+        assert pn.is_valid_number(pn.parse(p, "US")), p
+
+
+def _patch_persona_build(monkeypatch, prof):
+    """Stub the DB/mailbox/disk deps of orc_recon._build_persona so only the phone logic is exercised."""
+    import json as _json
+    from backend.tools import orc_recon
+    from backend.tools import mass_hiring_apply
+    monkeypatch.setattr(orc_recon, "_pick_state", lambda t, l: ("Ohio", "OH", "Columbus", "43215"))
+    monkeypatch.setattr(mass_hiring_apply, "prepare",
+                        lambda row, gender=None: ("demo_tyler_lawson1234", "999"))
+    monkeypatch.setattr(orc_recon.Path, "read_text",
+                        lambda self, **k: _json.dumps({"profile": prof, "facts": {}}))
+    return orc_recon
+
+
+def test_build_persona_uses_synth_phone_when_no_orc_phone(monkeypatch):
+    # ORC_PHONE unset -> the persona phone is the valid synthetic number, NOT a reserved 555-01xx one.
+    monkeypatch.delenv("ORC_PHONE", raising=False)
+    prof = {"full_name": "Tyler Lawson", "first_name": "Tyler", "last_name": "Lawson",
+            "email": "tyler.lawson1234@takhet.com", "phone": "+1 (415) 555-0150"}
+    orc_recon = _patch_persona_build(monkeypatch, prof)
+    p = orc_recon._build_persona({"title": "CSR", "location_raw": "Remote, US"})
+    got = p["profile_form"]["phone"]
+    assert got == orc_recon._synth_phone(prof["email"])
+    assert "555-01" not in got                        # never the reserved fictional range
+
+
+def test_build_persona_honors_orc_phone_override(monkeypatch):
+    monkeypatch.setenv("ORC_PHONE", "+1 216 471 2200")
+    prof = {"full_name": "Tyler Lawson", "first_name": "Tyler", "last_name": "Lawson",
+            "email": "tyler.lawson1234@takhet.com", "phone": "+1 (415) 555-0150"}
+    orc_recon = _patch_persona_build(monkeypatch, prof)
+    p = orc_recon._build_persona({"title": "CSR", "location_raw": "Remote, US"})
+    assert p["profile_form"]["phone"] == "+1 216 471 2200"

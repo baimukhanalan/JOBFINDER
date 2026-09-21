@@ -1169,3 +1169,60 @@ def test_roberthalf_annual_salary_raw():
     row = mh._rh_row(_rh_card(html))
     assert row is not None
     assert row["salary_raw"] == "$45000–$55000/yr"
+
+
+# ---- Hilton (Oracle Recruiting Cloud, same REST shape as Alorica) -----------------
+# jobs.hilton.com is Oracle ORC (efet.fa.us2.oraclecloud.com, site CX_1). Remote is read off the
+# STRUCTURED WorkplaceTypeCode (ORA_REMOTE keep; ORA_ON_SITE/ORA_HYBRID veto), US off
+# PrimaryLocationCountry. Marriott, by contrast, is NOT ORC (it fronts Jibe) — no collector here.
+
+def _hilton_req(**kw):
+    d = {"Id": "220900", "Title": "Customer Care Coordinator", "PrimaryLocation": "United States",
+         "PrimaryLocationCountry": "US", "WorkplaceTypeCode": "ORA_REMOTE",
+         "PostedDate": "2026-09-20"}
+    d.update(kw)
+    return d
+
+
+def test_hilton_us_remote_entry_is_kept():
+    row = mh._hilton_row(_hilton_req())
+    assert row is not None
+    assert row["source"] == "hilton"
+    assert row["source_id"] == "220900"
+    assert row["company"] == "Hilton"
+    assert row["company_key"] == "hilton"
+    assert row["category"] == "customer_support"
+    assert row["auto_status"] == "needs_laptop"       # ORC tenant, collect-first (verify pass pending)
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == (
+        "https://efet.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/220900")
+    assert row["posted_at"] > 0
+
+
+def test_hilton_onsite_and_hybrid_vetoed():
+    # the structured code wins — an ON_SITE/HYBRID req is dropped even if the title says "Remote".
+    assert mh._hilton_row(_hilton_req(WorkplaceTypeCode="ORA_ON_SITE",
+                                      Title="Customer Care Coordinator (Remote)")) is None
+    assert mh._hilton_row(_hilton_req(WorkplaceTypeCode="ORA_HYBRID")) is None
+
+
+def test_hilton_non_us_dropped():
+    assert mh._hilton_row(_hilton_req(PrimaryLocationCountry="GB",
+                                      PrimaryLocation="London, United Kingdom")) is None
+
+
+def test_hilton_senior_corporate_remote_dropped_by_categorize():
+    # the real current inventory: US ORA_REMOTE but corporate/senior -> categorize() drops it.
+    for t in ("Director Sales and Marketing (Remote)", "Lead DevOps Engineer",
+              "Senior Manager Service Improvement Program", "Recruiter, Recruitment Operations Center"):
+        assert mh._hilton_row(_hilton_req(Title=t)) is None
+
+
+def test_hilton_remote_via_title_fallback_when_code_absent():
+    # a tenant that leaves WorkplaceTypeCode blank still passes when the title/location says remote.
+    row = mh._hilton_row(_hilton_req(WorkplaceTypeCode="", Title="Customer Care Coordinator - Remote"))
+    assert row is not None
+    assert row["category"] == "customer_support"
+    # …but a blank code with no remote signal anywhere is NOT assumed remote.
+    assert mh._hilton_row(_hilton_req(WorkplaceTypeCode="",
+                                      PrimaryLocation="McLean, VA, United States")) is None

@@ -12,19 +12,23 @@ so it unit-tests with no HTTP. The live driver is `talent_pool_drop.py`.
 RECON FINDINGS (live, 2026-09-22) — which pools expose a GENERIC (not-per-job) résumé drop that is
 reachable server-side WITHOUT an account, and whether a captcha walls it:
 
-  RANDSTAD ....... VIABLE (payload-mappable server-side) BUT invisible-reCAPTCHA-gated.
-     `www.randstadusa.com/job-seeker/submit-your-resume/` is a Drupal WEBFORM `join_randstad`
-     (NOT a per-job apply — the CLAUDE.md note that this generic form uses "Friendly Captcha" is
-     CORRECTED here: the served form carries an INVISIBLE reCAPTCHA v2 widget
-     `data-captcha-widget-id="cms_captcha" data-size="invisible"`). Two-step, NO account:
-       (1) résumé upload  → multipart `POST /dropzonejs/upload?token=<fresh, scraped per page load>`
-           (field name `file`), returns a file id that populates `resume[uploaded_files]`;
-       (2) form submit    → `POST /api/form/submit` (see `build_randstad_form` for the exact fields).
-     A bare httpx POST is thus NOT captcha-free — it needs a reCAPTCHA token (CapSolver
-     `ReCaptchaV2TaskProxyLess`, already wired in `applier/capsolver.py`, or a headless grecaptcha
-     exec). The sitekey is injected by the site's `captcha.js` at render (not in the initial HTML),
-     so it must be discovered at drive time. Session cookies (cms_user_id/userSessionID) are set on
-     the GET and must be carried into both POSTs.
+  RANDSTAD ....... REACHABLE + fully FILLABLE server-side, but WALLED by **FriendlyCaptcha** (a
+     browser-integrity proof-of-work) that **NopeCHA does NOT solve** — so no clean automated drop yet.
+     `www.randstadusa.com/job-seeker/submit-your-resume/` is a Drupal WEBFORM `join_randstad` (NOT a
+     per-job apply). The `data-captcha-widget-id="cms_captcha"` div is rendered by the site `captcha.js`
+     as **FriendlyCaptcha** (`class="bluex-friendly-captcha"`, "Anti-Robot Verification / Click to start
+     verification"), CONFIRMED LIVE 2026-09-22 (`friendly-challenge` script, NO `recaptcha/api.js`, no
+     reCAPTCHA iframe) — so CLAUDE.md's ORIGINAL "Friendly Captcha" note was RIGHT; the static-HTML recon
+     that briefly called it "invisible reCAPTCHA v2" was WRONG (the bare div before `captcha.js` runs).
+     Two-step, NO account: (1) résumé → the dropzone real input `input.dz-hidden-input`
+     `.set_input_files()` → `POST /dropzonejs/upload?token=<fresh>` → populates `resume[uploaded_files]`;
+     (2) `op="join randstad"` posts `/api/form/submit` (fields in `build_randstad_form`). The browser
+     driver (`talent_pool_drop.py`) fills every field, BUT on the automated browser FriendlyCaptcha
+     shows **"Browser check failed"** and NopeCHA (reCAPTCHA/hCaptcha/Turnstile only) can't act on it.
+     The location/job-title fields are ALSO autocomplete typeaheads that need a real dropdown pick.
+     HONEST WALL: FriendlyCaptcha. The unbuilt paths are (a) a legit HEADFUL browser whose FriendlyCaptcha
+     browser-check passes on its own (unproven — deferred under high `:98` load), or (b) CapSolver's
+     paid FriendlyCaptcha task (not wired). NopeCHA is NOT one of them.
 
   KELLY .......... NOT REACHABLE. `mykelly.com` 403s our IP (Akamai); talent-network URLs 404.
   ADECCO ......... ACCOUNT/SPA-WALLED. Talent-community URL redirects to the `/en-us` React SPA; reCAPTCHA present.
@@ -35,12 +39,13 @@ reachable server-side WITHOUT an account, and whether a captcha walls it:
   FOUNDEVER ...... EMAIL-ALERT ONLY, NO RÉSUMÉ. SuccessFactors RMK `/talentcommunity/subscribe/` is a
                    JS-rendered job-ALERT subscription (name/email/category), not a résumé drop.
 
-HONEST HEADLINE: of the surveyed pools, ONLY Randstad exposes a generic résumé DROP reachable
-server-side without an account — and it is invisible-reCAPTCHA-gated, so it is NOT a pure captcha-
-free httpx lane like the Manpower per-job `JobApplyWithEmail` lane. Every other BPO/staffing
-"talent community" is an email-alert subscription (no résumé), account-walled (Taleo/Salesforce),
-or a reCAPTCHA lead form. A talent-pool drop yields PASSIVE recruiter outreach (lower/slower
-conversion than a direct apply); its value is a new top-of-funnel that costs no assessment.
+HONEST HEADLINE: of the surveyed pools, ONLY Randstad exposes a generic résumé DROP reachable +
+fully FILLABLE server-side without an account — BUT it is walled by **FriendlyCaptcha**, which NopeCHA
+CANNOT solve (NopeCHA does reCAPTCHA/hCaptcha/Turnstile only), so there is no clean automated drop yet:
+the browser lane fills every field but the FriendlyCaptcha browser-check fails on the automated browser.
+Every other BPO/staffing "talent community" is an email-alert subscription (no résumé), account-walled
+(Taleo/Salesforce), or a reCAPTCHA lead form. A talent-pool drop yields PASSIVE recruiter outreach
+(lower/slower conversion than a direct apply); its value is a new top-of-funnel that costs no assessment.
 =================================================================================================
 """
 from __future__ import annotations
@@ -60,10 +65,11 @@ POOLS: dict[str, dict] = {
         "reachable_serverside": True,
         "resume_drop": True,
         "account_required": False,
-        "captcha": "recaptcha_v2_invisible",
-        "viable": True,
-        "note": "Server-reachable Drupal webform (dropzone upload + /api/form/submit). "
-                "Invisible reCAPTCHA v2 → needs a solved token (CapSolver/headless), not captcha-free.",
+        "captcha": "friendly_captcha",
+        "viable": True,  # the ONLY reachable+fillable résumé drop; captcha is the open wall (see note)
+        "note": "Drupal webform, fully fillable server-side (dropzone upload + /api/form/submit), NO "
+                "account. WALL = FriendlyCaptcha (browser-integrity PoW) — NopeCHA can't solve it; "
+                "'Browser check failed' on the automated browser. Unbuilt: headful pass / CapSolver-FRC.",
     },
     "kelly": {
         "label": "Kelly", "url": "https://www.mykelly.com/", "backend": "akamai",
@@ -246,6 +252,9 @@ _CAPTCHA_WIDGET_RE = re.compile(
     r'<div[^>]*data-captcha-widget-id="([^"]+)"[^>]*>', re.I)
 _CAPTCHA_SIZE_RE = re.compile(r'data-size="([^"]+)"', re.I)
 _SITEKEY_RE = re.compile(r'6L[0-9A-Za-z_\-]{38}')
+# FriendlyCaptcha signals (added by captcha.js at RENDER, so only visible in the live page.content()):
+_FRIENDLY_RE = re.compile(r'bluex-friendly-captcha|\bfrc-captcha\b|friendly-challenge|FriendlyCaptcha', re.I)
+_RECAPTCHA_RE = re.compile(r'recaptcha/api\.js|g-recaptcha|grecaptcha', re.I)
 
 
 def parse_upload_path(html: str) -> str | None:
@@ -255,7 +264,16 @@ def parse_upload_path(html: str) -> str | None:
 
 
 def parse_captcha(html: str) -> dict:
-    """Characterize the anti-bot widget on the served form: {present, widget_id, size, kind, sitekey}."""
+    """Characterize the anti-bot widget on the form: {present, widget_id, size, kind, sitekey}.
+
+    IMPORTANT — the Randstad `join_randstad` widget div `data-captcha-widget-id="cms_captcha"` is
+    rendered by the site `captcha.js` as **FriendlyCaptcha** (class `bluex-friendly-captcha`), NOT
+    reCAPTCHA — confirmed LIVE 2026-09-22 (`friendly-challenge` script present, NO `recaptcha/api.js`,
+    no reCAPTCHA iframe). Pass the LIVE `page.content()` (with the render-time classes) so this returns
+    `kind="friendly_captcha"`; a static initial-HTML fetch (before captcha.js runs) only sees the bare
+    `cms_captcha` div and falls back to `recaptcha_v2` — which is why the STATIC-only recon first
+    mislabeled it. `friendly_captcha` is NOT solvable by NopeCHA (reCAPTCHA/hCaptcha/Turnstile only).
+    """
     out = {"present": False, "widget_id": None, "size": None, "kind": None, "sitekey": None}
     m = _CAPTCHA_WIDGET_RE.search(html or "")
     if m:
@@ -263,7 +281,11 @@ def parse_captcha(html: str) -> dict:
         out["widget_id"] = m.group(1)
         sm = _CAPTCHA_SIZE_RE.search(m.group(0))
         out["size"] = sm.group(1) if sm else None
-        # cms_captcha (Randstad) => invisible reCAPTCHA v2 per the site captcha.js
+    if _FRIENDLY_RE.search(html or ""):
+        out["present"] = True
+        out["kind"] = "friendly_captcha"
+    elif _RECAPTCHA_RE.search(html or "") or (out["present"] and out["kind"] is None):
+        # reCAPTCHA scripts present, or the bare widget with no FriendlyCaptcha render yet
         out["kind"] = "recaptcha_v2_invisible" if out["size"] == "invisible" else "recaptcha_v2"
     sk = _SITEKEY_RE.search(html or "")
     if sk:

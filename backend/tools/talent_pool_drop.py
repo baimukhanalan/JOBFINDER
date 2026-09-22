@@ -1,28 +1,32 @@
-"""Driver: drop a synthetic persona's résumé + contact into a staffing/BPO TALENT POOL (server-side).
+"""Driver: drop a synthetic persona's résumé + contact into a staffing TALENT POOL (BROWSER lane).
 
 A talent-pool drop is a NEW inbound offer channel: instead of applying to a specific job
-(ATS → assessment → offer), we POST a persona's résumé into a recruiter POOL; recruiters then reach
-out with matching roles, and their mail lands in the persona's @takhet.com Maildir (the SAME CRM the
-apply lanes already feed). It bypasses per-job ATS + assessments entirely.
+(ATS → assessment → offer), we submit a persona's résumé into a recruiter POOL; recruiters then
+reach out with matching roles, and their mail lands in the persona's @takhet.com Maildir (the SAME
+CRM the apply lanes feed). It bypasses per-job ATS + assessments entirely.
 
 Per the recon (`talent_pool_recon.POOLS`) the ONE server-reachable generic résumé drop is **Randstad**
-(`join_randstad` Drupal webform), and it is INVISIBLE-reCAPTCHA-gated — so a live drop needs a solved
-reCAPTCHA token (CapSolver via `applier/capsolver.py`, or a headless grecaptcha exec). Every other
-surveyed pool is account-walled, an email-alert subscription (no résumé), or a reCAPTCHA lead form.
+(`join_randstad` Drupal webform). It carries an INVISIBLE reCAPTCHA v2 — so this driver is a REAL
+BROWSER (persistent context + the vendored **NopeCHA** extension, same free in-browser solver the
+TP/iCIMS/SmartRecruiters lanes use), NOT pure httpx: we navigate the page, fill the reverse-engineered
+fields, upload the résumé via the dropzone, and let NopeCHA solve the invisible reCAPTCHA on submit.
+`talent_pool_recon.py` stays the field/endpoint REFERENCE.
 
-    python3 -m backend.tools.talent_pool_drop --pool randstad            # DRY RUN (build payload, send nothing)
+    python3 -m backend.tools.talent_pool_drop --pool randstad            # DRY RUN (open+fill, do NOT submit)
     python3 -m backend.tools.talent_pool_drop --list                     # per-pool recon verdicts
-    TALENT_POOL_ADVANCE=1 python3 -m backend.tools.talent_pool_drop --pool randstad   # real drop (needs a captcha solver)
+    TALENT_POOL_ADVANCE=1 python3 -m backend.tools.talent_pool_drop --pool randstad   # real drop (NopeCHA solves)
 
-`TALENT_POOL_ADVANCE` off ⇒ DRY RUN: mints/uses a persona, builds the EXACT payload, transmits nothing.
-Run under `sg mail` (the mailbox provisioning + Maildir read need the mail group).
+`TALENT_POOL_ADVANCE` off ⇒ DRY RUN: mint/use a persona, open the page, fill every field + attach the
+résumé, screenshot, but NEVER click submit. `TALENT_POOL_HEADFUL=1` forces a headful browser (needs
+`DISPLAY=:98`); default tries new-headless (no `:98` contention). Run under `sg mail`.
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
+import glob
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -34,17 +38,33 @@ from backend.tools import talent_pool_recon as tpr  # noqa: E402
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PREFILL_ROOT = os.path.join(REPO, "uploads", "prefill")
 MAILROOT = "/var/mail/vhosts/takhet.com"
+NOPECHA_EXT = os.path.join(REPO, "backend", "vendor", "nopecha_ext")
+STEALTH_PROFILE = os.getenv("TALENT_POOL_PROFILE") or os.path.join(REPO, "backend", "data", "talent_pool_profile")
+LOGDIR = os.path.join(REPO, "logs", "talent_pool")
 
 _BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
                "Chrome/125.0.0.0 Safari/537.36")
 
-# a coherent US placement for the synthetic persona (any US state is fine for a remote-CSR pool)
 _STATE_PLACE = {
     "Ohio": ("Columbus", "43215"), "Texas": ("Austin", "78701"), "Florida": ("Orlando", "32801"),
     "Georgia": ("Atlanta", "30303"), "Arizona": ("Phoenix", "85004"), "Tennessee": ("Nashville", "37203"),
     "North Carolina": ("Charlotte", "28202"),
 }
 _DEFAULT_STATE = "Ohio"
+
+
+def _nopecha_key() -> str:
+    """The NopeCHA key from the env or backend/.env (os.getenv is EMPTY under pm2/sg-mail)."""
+    key = os.getenv("NOPECHA_KEY", "").strip()
+    if key:
+        return key
+    try:
+        for ln in (Path(REPO) / "backend" / ".env").read_text().splitlines():
+            if ln.strip().startswith("NOPECHA_KEY="):
+                return ln.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return ""
 
 
 def _build_persona(job_title: str, state: str = _DEFAULT_STATE) -> dict:
@@ -100,132 +120,6 @@ def _build_persona(job_title: str, state: str = _DEFAULT_STATE) -> dict:
             "profile_id": profile_id, "jobid": jobid, "resume_path": str(resume_path)}
 
 
-# --- Randstad live flow ---------------------------------------------------------------------------
-
-def _recaptcha_token(sitekey: str | None, page_url: str) -> str | None:
-    """Solve the invisible reCAPTCHA v2 via the project's CapSolver client, if a key is configured.
-    Returns None when no solver key / no sitekey / any failure (the honest captcha wall)."""
-    if not sitekey:
-        return None
-    try:
-        import asyncio
-
-        from backend.applier import capsolver
-        if not capsolver.is_enabled():
-            print("[talent_pool] CAPTCHA_SOLVER_KEY unset — cannot solve the invisible reCAPTCHA "
-                  "(the drop is captcha-gated).", flush=True)
-            return None
-        tok = asyncio.run(capsolver.solve("recaptcha_v2", page_url=page_url, site_key=sitekey))
-        return tok or None
-    except Exception as e:  # noqa: BLE001
-        print(f"[talent_pool] reCAPTCHA solve failed: {type(e).__name__}: {e}", flush=True)
-        return None
-
-
-def _upload_resume(client, upload_path: str, resume_path: str) -> str | None:
-    """Multipart-POST the résumé to the dropzone endpoint; return the uploaded file id/name."""
-    url = tpr.RANDSTAD_UPLOAD_BASE + upload_path
-    try:
-        with open(resume_path, "rb") as f:
-            data = f.read()
-        r = client.post(url, files={"file": ("resume.pdf", data, "application/pdf")},
-                        headers={"User-Agent": _BROWSER_UA, "Origin": tpr.RANDSTAD_ORIGIN,
-                                 "Referer": tpr.RANDSTAD_PAGE_URL,
-                                 "X-Requested-With": "XMLHttpRequest"}, timeout=60)
-        if r.status_code not in (200, 201):
-            print(f"[talent_pool] dropzone upload http={r.status_code}: {r.text[:160]}", flush=True)
-            return None
-        # Drupal dropzonejs returns {"jsonapi":..., "result": <fid or filename>} — be tolerant
-        try:
-            j = r.json()
-        except Exception:
-            j = {}
-        for k in ("result", "fid", "filename", "name"):
-            v = j.get(k) if isinstance(j, dict) else None
-            if v:
-                return str(v)
-        m = re.search(r'"(?:result|fid|filename)"\s*:\s*"([^"]+)"', r.text)
-        return m.group(1) if m else (r.text.strip()[:120] or None)
-    except Exception as e:  # noqa: BLE001
-        print(f"[talent_pool] dropzone upload failed: {type(e).__name__}: {e}", flush=True)
-        return None
-
-
-def run_randstad(*, advance: bool, keep_minutes: int) -> dict:
-    import httpx
-
-    job_title = "Customer Service Representative"
-    p = _build_persona(job_title)
-    prof = p["profile"]
-    print(f"persona: {prof.get('full_name')} <{prof.get('email')}> {prof.get('city')}, {p['state']} "
-          f"| TALENT_POOL_ADVANCE={os.getenv('TALENT_POOL_ADVANCE', '')}", flush=True)
-
-    report: dict = {"pool": "randstad", "advanced": False, "submitted": False, "success": False}
-    with httpx.Client(follow_redirects=True, headers={"User-Agent": _BROWSER_UA}, timeout=30) as client:
-        r = client.get(tpr.RANDSTAD_PAGE_URL)
-        html = r.text
-        upload_path = tpr.parse_upload_path(html)
-        captcha = tpr.parse_captcha(html)
-        form = tpr.build_randstad_form(prof, job_title=job_title)
-        report["form"] = form
-        report["upload_path_present"] = bool(upload_path)
-        report["captcha"] = captcha
-        report["missing"] = tpr.randstad_missing_fields(form)
-
-        print(f"page http={r.status_code} cookies={list(client.cookies.keys())}", flush=True)
-        print(f"upload_path={'<found>' if upload_path else None}  captcha={captcha}", flush=True)
-        print("[form_fields] " + json.dumps(form), flush=True)
-
-        if report["missing"]:
-            print(f"[missing required fields: {report['missing']} — persona incomplete]", flush=True)
-            return report
-        if not advance:
-            print("[dry run — payload built, nothing transmitted. Set TALENT_POOL_ADVANCE=1 to drop.]",
-                  flush=True)
-            return report
-
-        # --- advance: real drop ---
-        if not upload_path:
-            report["note"] = "no dropzone upload path on page"
-            print("[cannot advance: no dropzone upload path]", flush=True)
-            return report
-        fid = _upload_resume(client, upload_path, p["resume_path"])
-        print(f"resume upload -> file_id={fid}", flush=True)
-        if not fid:
-            report["note"] = "resume upload failed"
-            return report
-
-        token = ""
-        if captcha.get("present"):
-            token = _recaptcha_token(captcha.get("sitekey"), tpr.RANDSTAD_PAGE_URL) or ""
-            if not token:
-                report["note"] = "invisible reCAPTCHA required but unsolved — refusing to POST a doomed drop"
-                print(f"[{report['note']}]", flush=True)
-                return report
-        form = tpr.build_randstad_form(prof, job_title=job_title, resume_file_id=fid,
-                                       recaptcha_token=token)
-        rr = client.post(tpr.RANDSTAD_SUBMIT_URL, data=form,
-                         headers={"User-Agent": _BROWSER_UA, "Origin": tpr.RANDSTAD_ORIGIN,
-                                  "Referer": tpr.RANDSTAD_PAGE_URL,
-                                  "X-Requested-With": "XMLHttpRequest"})
-        report["advanced"] = True
-        report["submitted"] = True
-        report["http_status"] = rr.status_code
-        report["success"] = tpr.randstad_ack(rr.status_code, rr.text)
-        report["response_head"] = rr.text[:400]
-        print(f"[submit http={rr.status_code} success={report['success']}] {rr.text[:200]}", flush=True)
-
-    if report.get("success"):
-        # passive: recruiters reach out over days — a short Maildir watch only corroborates delivery.
-        deadline = time.time() + keep_minutes * 60
-        while time.time() < deadline:
-            if _any_recruiter_mail(prof.get("email", ""), time.time() - keep_minutes * 60 - 60):
-                report["mail_seen"] = True
-                break
-            time.sleep(15)
-    return report
-
-
 def _any_recruiter_mail(email: str, since_ts: float) -> bool:
     """True once ANY inbound mail lands in the persona Maildir since `since_ts` (recruiter outreach is
     passive/slow — this only corroborates the mailbox is live, not a per-drop ack)."""
@@ -241,6 +135,200 @@ def _any_recruiter_mail(email: str, since_ts: float) -> bool:
         except Exception:
             continue
     return False
+
+
+async def _configure_nopecha(ctx) -> str:
+    """Arm the vendored NopeCHA extension for reCAPTCHA (invisible v2). Returns 'key'/'free'/'err'."""
+    key = _nopecha_key()
+    cfg = ("input_method=javascript|enabled=true|hcaptcha_auto_solve=true|recaptcha_auto_solve=true|"
+           "recaptcha_auto_open=true|recaptcha_solve_delay_time=200|turnstile_auto_solve=true"
+           + (f"|key={key}" if key else ""))
+    try:
+        sp = await ctx.new_page()
+        await sp.goto("https://nopecha.com/setup#" + cfg, wait_until="domcontentloaded", timeout=45000)
+        await sp.wait_for_timeout(3500)
+        await sp.close()
+        return "key" if key else "free"
+    except Exception as e:  # noqa: BLE001
+        print(f"[nopecha config {type(e).__name__}: {e}]", flush=True)
+        return "err"
+
+
+async def _dismiss_cookies(page) -> None:
+    for sel in ('#onetrust-accept-btn-handler', 'button:has-text("accept all")',
+                'button:has-text("Accept All")', 'button:has-text("accept")'):
+        try:
+            b = page.locator(sel)
+            if await b.count():
+                await b.first.click(timeout=3000)
+                await page.wait_for_timeout(800)
+                return
+        except Exception:
+            pass
+
+
+async def _fill_typeahead(page, name: str, value: str) -> bool:
+    """location / job_title are AUTOCOMPLETE typeaheads — type the value, wait, pick the first
+    suggestion (ArrowDown+Enter). Free-typed text alone shows 'no results' and is NOT accepted."""
+    try:
+        loc = page.locator(f'[name="{name}"]')
+        if not (await loc.count()) or not value:
+            return False
+        el = loc.first
+        await el.click()
+        await el.fill("")
+        await el.type(str(value), delay=60)
+        await page.wait_for_timeout(1800)
+        # accept the first surfaced option
+        for _ in range(2):
+            await el.press("ArrowDown")
+            await page.wait_for_timeout(300)
+        await el.press("Enter")
+        await page.wait_for_timeout(500)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[typeahead {name} err {type(e).__name__}]", flush=True)
+        return False
+
+
+async def _fill_randstad(page, prof: dict, resume_path: str, report: dict) -> None:
+    """Fill the join_randstad webform fields + attach the résumé via the dropzone (no submit)."""
+    form = tpr.build_randstad_form(prof)
+    report["form"] = form
+    async def _fill(name, value):
+        try:
+            loc = page.locator(f'[name="{name}"]')
+            if await loc.count() and value:
+                await loc.first.fill(str(value))
+                return True
+        except Exception as e:  # noqa: BLE001
+            print(f"[fill {name} err {type(e).__name__}]", flush=True)
+        return False
+    filled = []
+    for name in ("first_name", "last_name", "email_address", "phone_number"):
+        if await _fill(name, form.get(name)):
+            filled.append(name)
+    # location + job_title are typeaheads (need a dropdown pick)
+    for name in ("job_location", "job_title"):
+        if await _fill_typeahead(page, name, form.get(name)):
+            filled.append(name)
+    report["filled_fields"] = filled
+    # résumé upload: dropzone.js creates `input.dz-hidden-input` (the original edit-resume becomes a
+    # click zone) — set files on the dz input, else fall back to any file input.
+    uploaded = False
+    try:
+        fi = page.locator('input.dz-hidden-input')
+        if not await fi.count():
+            fi = page.locator('input[type="file"]')
+        if await fi.count() and os.path.exists(resume_path):
+            await fi.first.set_input_files(resume_path)
+            for _ in range(25):
+                await page.wait_for_timeout(1000)
+                val = await page.evaluate(
+                    "() => { const e=document.querySelector('[name=\"resume[uploaded_files]\"]');"
+                    " return e ? e.value : ''; }")
+                if val:
+                    uploaded = True
+                    report["resume_file_id"] = val
+                    break
+    except Exception as e:  # noqa: BLE001
+        print(f"[resume upload err {type(e).__name__}: {e}]", flush=True)
+    report["resume_uploaded"] = uploaded
+
+
+async def run_randstad(*, advance: bool, keep_minutes: int) -> dict:
+    from playwright.async_api import async_playwright
+
+    os.makedirs(STEALTH_PROFILE, exist_ok=True)
+    os.makedirs(LOGDIR, exist_ok=True)
+    headful = os.getenv("TALENT_POOL_HEADFUL", "").strip().lower() in ("1", "true", "yes", "on")
+    job_title = "Customer Service Representative"
+    p = _build_persona(job_title)
+    prof = p["profile"]
+    print(f"persona: {prof.get('full_name')} <{prof.get('email')}> {prof.get('city')}, {p['state']} "
+          f"| ADVANCE={advance} headful={headful} resume={os.path.exists(p['resume_path'])}", flush=True)
+
+    report: dict = {"pool": "randstad", "advanced": False, "submitted": False, "success": False,
+                    "headful": headful}
+    ext = [f"--disable-extensions-except={NOPECHA_EXT}", f"--load-extension={NOPECHA_EXT}"]
+    args = ext + (["--start-maximized"] if headful else ["--headless=new", "--window-size=1400,1600"])
+    since = time.time()
+    async with async_playwright() as pw:
+        ctx = await pw.chromium.launch_persistent_context(
+            STEALTH_PROFILE, headless=not headful, channel="chromium", no_viewport=True,
+            locale="en-US", timezone_id="America/New_York", args=args)
+        try:
+            report["nopecha"] = await _configure_nopecha(ctx)
+            print(f"[nopecha armed: {report['nopecha']}]", flush=True)
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            await page.goto(tpr.RANDSTAD_PAGE_URL, wait_until="domcontentloaded", timeout=90000)
+            await page.wait_for_timeout(3000)
+            await _dismiss_cookies(page)
+            await page.wait_for_timeout(2500)
+            captcha = tpr.parse_captcha(await page.content())  # LIVE content → FriendlyCaptcha classes
+            report["captcha"] = captcha
+            print(f"[page loaded; captcha={captcha}]", flush=True)
+            if captcha.get("kind") == "friendly_captcha":
+                print("[WALL: the live captcha is FriendlyCaptcha — NopeCHA (reCAPTCHA/hCaptcha/"
+                      "Turnstile only) CANNOT solve it; a submit will hit 'Browser check failed'.]",
+                      flush=True)
+
+            await _fill_randstad(page, prof, p["resume_path"], report)
+            print(f"[filled={report.get('filled_fields')} resume_uploaded={report.get('resume_uploaded')}]",
+                  flush=True)
+            try:
+                await page.screenshot(path=os.path.join(LOGDIR, "01_filled.png"), full_page=True)
+            except Exception:
+                pass
+
+            if not advance:
+                print("[dry run — filled, NOT submitting. Set TALENT_POOL_ADVANCE=1 to drop.]", flush=True)
+                return report
+
+            # --- advance: submit; NopeCHA solves the invisible reCAPTCHA that fires on click ---
+            try:
+                btn = page.locator('[name="op"], button.webform-button--submit, #edit-actions-submit')
+                await btn.first.click(timeout=15000)
+                report["advanced"] = True
+                report["submitted"] = True
+            except Exception as e:  # noqa: BLE001
+                report["note"] = f"submit click failed: {type(e).__name__}: {e}"
+                print(f"[{report['note']}]", flush=True)
+                return report
+            # wait for the reCAPTCHA solve + navigation/confirmation
+            body = ""
+            for i in range(40):  # up to ~120s
+                await page.wait_for_timeout(3000)
+                try:
+                    body = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                except Exception:
+                    body = ""
+                if tpr.randstad_ack(200, body):
+                    break
+                low = (body or "").lower()
+                if "recaptcha" in low or "verification" in low or "not a robot" in low:
+                    continue  # NopeCHA still working
+            report["success"] = tpr.randstad_ack(200, body)
+            report["body_head"] = (body or "")[:500]
+            try:
+                await page.screenshot(path=os.path.join(LOGDIR, "02_after_submit.png"), full_page=True)
+            except Exception:
+                pass
+            print(f"[submit success={report['success']}] body[:200]={ (body or '')[:200]!r}", flush=True)
+        finally:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+
+    if report.get("success"):
+        deadline = time.time() + keep_minutes * 60
+        while time.time() < deadline:
+            if _any_recruiter_mail(prof.get("email", ""), since - 60):
+                report["mail_seen"] = True
+                break
+            time.sleep(15)
+    return report
 
 
 def main() -> None:
@@ -261,14 +349,12 @@ def main() -> None:
 
     advance = os.getenv("TALENT_POOL_ADVANCE", "").strip().lower() in ("1", "true", "yes", "on")
     if args.pool == "randstad":
-        run_randstad(advance=advance, keep_minutes=args.keep)
+        asyncio.run(run_randstad(advance=advance, keep_minutes=args.keep))
     else:
         meta = tpr.POOLS.get(args.pool)
         if not meta:
             ap.error(f"unknown pool '{args.pool}' (see --list)")
         print(f"[{args.pool}] NOT a built lane — {meta['note']}")
-        print(f"reachable_serverside={meta['reachable_serverside']} resume_drop={meta['resume_drop']} "
-              f"account_required={meta['account_required']} captcha={meta['captcha']}")
 
 
 if __name__ == "__main__":

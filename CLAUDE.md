@@ -1337,6 +1337,46 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   next-most-promising (Friendly-Captcha PoW is auto-solvable, but the account/generic-form wall must be cleared first). Ground
   truth for any future lane = the API/on-page ack or a real ack in the persona Maildir.
 
+- **SELF-VERIFYING PROBE→AUTO-PROMOTE lanes for collect-first sibling tenants (2026-09-22, commits ce416d2/0654a2a).** The
+  `workday_probe_promote` pattern is now REPLICATED for four ATS families so a NEW tenant sharing a PROVEN strategy auto-wires
+  itself with NO false claim: each family's apply cron gained `live_sources()` = a BASE source UNION a gitignored verified file
+  + a `--source`/`--exclude` filter (mirroring `workday_ids`), and a `*/30` `<lane>_probe_promote.py` (quiet-load-gated,
+  fcntl-locked, `--dry-run`; picks the NEWEST active staffable `mass_hiring_jobs` id at runtime, no-op on 0 rows like geico)
+  drives ONE job on a quiet box and writes the source to the verified file ONLY on a REAL ack — a mis-mapped tenant screener
+  just leaves a required field unset → no receipt → stays pending (honest by design). A catch-all cron (`--exclude <base>`)
+  drives ONLY the promoted extras so the pay-ordered `--limit` never starves a fresh promotion on the high-paying base tenant;
+  the base tenant keeps its own dedicated cron byte-identical. Families + PENDING tenants: **Workday** (`workday_probe_promote`,
+  base centene/concentrix; PENDING sagility/highmark/cvshealth/humana/everise/devoted/**cigna**/**elevance**), **ORC**
+  (`orc_probe_promote`, base alorica; PENDING **molina**/**hilton**), **Taleo** (`taleo_probe_promote`, base ttec; PENDING
+  **kaiser**/**percepta**), **iCIMS** (`icims_probe_promote`, base teleperformance; PENDING **cotiviti**), **Avature**
+  (`mass_hiring_apply_cron` `maximus_ids`, base maximus; PENDING **transcom** via the `apply.careers.transcom.com` host, which
+  the `%avature%` selector never matched). Verified files: `data/{workday,orc,taleo,icims,avature}_verified_sources.json`
+  (gitignored). **Crons (crontab, staggered probes :05/:10/:15/:20+30 off workday's :00/:30; catch-alls inert until promotion):**
+  the four probes + four `--exclude` catch-alls, all quiet-gated/inert. **ALORICA CRON SELF-DEADLOCK FIXED same day:** the
+  existing alorica line's outer `flock` file matched the cron's INTERNAL fcntl `logs/orc_apply.lock` (the Foundever gotcha) →
+  it exited without driving; now `flock -n logs/orc_alorica.lock … --source alorica` (distinct file; the catch-all shares the
+  internal lock so the two headful `:98` ORC runs still serialize). NONE of the probe lanes claims a live ack yet — each
+  promotes itself on the first confirmed ack on a quiet `:98`; watch `logs/<lane>_probe.log`. Add a tenant-specific truthful
+  screener answer ADDITIVELY to the shared strategy ONLY when a probe log shows the exact stall (never speculatively — it would
+  risk the proven base tenant). Tests: `test_{orc,taleo,icims,avature}_probe.py`.
+- **oscar/clover → the PROVEN Greenhouse lane (2026-09-22, `tools/oscar_clover_recon.py`, gated `OSCAR_CLOVER_ADVANCE=1`).**
+  Both MA insurers post on STANDARD Greenhouse (boards-api + `/embed/job_app`), not a custom form → NO new strategy: the recon
+  resolves each `mass_hiring_jobs` row to its GH embed URL, mints a synth persona, drafts screeners against the real GH
+  questions, writes the co-pilot prefill, and drives the proven `GreenhouseStrategy` fill→`_click_submit_after_fill`→emailed-code
+  path via the single co-pilot (headful `:98`, cron `33 7`). Dry-run (default) submits nothing. Tests: `test_oscar_clover.py`.
+- **afni / ADP — BLOCKED, an identity wall like UnitedHealth (recon 2026-09-22, nothing built).** `myjobs.adp.com/
+  afniexternalcareers` has NO guest apply POST (unlike Manpower): `easyApplyEnabled=False`, every apply path is gated on a
+  mandatory email/phone OTP account (`one-time-password.generate`, `user.authenticate` — which is what actually submits the
+  application, `withCredentials`), the "no account" branch routes to `ACCOUNT_CREATION`, and there is NO `applyWithoutAccount`/
+  `asGuest` bypass token. NO captcha at all — the wall is purely the mandatory OTP account. A server-side email-OTP registration
+  lane is theoretically buildable (the OTP lands in the persona Maildir, like the Amazon corporate lane) but that is a stateful
+  Angular/cookie flow, not the plain-POST guest lane, so `auto_status='needs_laptop'` (collect-only). roberthalf (Salesforce
+  account + reCAPTCHA-Enterprise + OTP), adecco (custom React SPA account + reCAPTCHA), progressive (Cloudflare + Talemetry
+  account, 1 senior row) are the SAME class — all reconfirmed account-walled 2026-09-22, no guest POST, collect-only. randstad's
+  résumé-drop is FriendlyCaptcha-walled and **CapSolver has NO FriendlyCaptcha task type** (2captcha does, unwired); its per-job
+  apply has a `GuestButton` but the submit is a client SPA XHR with no static endpoint — a headful XHR capture is the only way
+  to know if a Manpower-class guest POST exists (deferred). Do NOT re-recon these as "buildable" without new evidence.
+
 ## Talent-pool résumé-DROP lane (POC — `tools/talent_pool_recon.py` + `tools/talent_pool_drop.py`)
 A DIFFERENT, INBOUND offer channel from per-job ATS applies: drop a synthetic persona's résumé + contact
 into a staffing recruiter POOL (not a specific job) → recruiters reach out with matching roles → their

@@ -342,6 +342,13 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
             async def _shot(tag):
                 try:
                     await page.screenshot(path=_os.path.join(shotdir, f"{tag}.png"), full_page=False)
+                    # Dump the DOM too (parity with orc_recon) so a differing widget — e.g. a
+                    # Sagility résumé-upload field — can be characterized from the drive artifacts.
+                    try:
+                        with open(_os.path.join(shotdir, f"{tag}.html"), "w") as _fh:
+                            _fh.write(await page.content())
+                    except Exception:
+                        pass
                     print(f"[shot {tag}] url={page.url[:90]}", flush=True)
                 except Exception as _e:
                     print(f"[shot {tag} failed: {_e}]"[:100], flush=True)

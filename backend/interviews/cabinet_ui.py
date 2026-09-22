@@ -181,7 +181,8 @@ def _fmt_local(dt, tz=None) -> str:
         return str(dt)
 
 
-def dashboard_page(responsible: dict, interviews: list[dict], as_id=None) -> str:
+def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
+                   pool_sort: str = "salary", sort_base: str = "/cabinet") -> str:
     rtz = responsible.get("tz")
 
     def _item(iv: dict, past: bool = False) -> str:
@@ -218,8 +219,17 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None) -> str
         block = f'<ul class="iv-list">{"".join(items)}</ul>'
     else:
         block = '<div class="empty">Предстоящих собеседований нет.</div>'
-    body = (_topbar(responsible, "home", as_id) + _asview_banner(responsible, as_id) +
-            '<h1 class="cab-h">Мои собеседования</h1>' + block)
+    # priority card: the SAME urgency/priority filter as the «Собес» screen over the interviews
+    # assigned to this interviewer — «с чего начать» (по срочности брони / зарплате / давности).
+    from backend.interviews import priority_ui
+    pri = priority_ui.priority_card(
+        interviews, pool_sort, sort_base, anchor="cab-pri",
+        title="Приоритет: с чего начать",
+        blurb=("Ваши собеседования по приоритету — по зарплате, срочности брони слота или "
+               "давности заявки. Явно просроченные — в «Истёкшие»."),
+        empty="Назначенных собеседований пока нет.") if interviews else ""
+    body = (priority_ui.CSS + _topbar(responsible, "home", as_id) + _asview_banner(responsible, as_id) +
+            '<h1 class="cab-h">Мои собеседования</h1>' + block + pri)
     return _doc(body, "Мои собеседования")
 
 

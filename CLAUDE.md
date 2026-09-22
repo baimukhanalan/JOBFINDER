@@ -1535,6 +1535,21 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   at the bottom. `split({mid:N}, gender, direction)` blocks the MATCHING (bookable) pool newest-first; `allocate_specific(
   mailbox, mid)` sends one by its unique e-mail; both store `jobid` on the row so the manager portal recomputes direction.
   Allocation = `db.allocate_interview` → `status='pool'`, `responsible_id` NULL, `manager_id`=mid, `jobid`, `announced=TRUE`.
+- **Priority / «актуальные предстоящие» cards on EVERY portal (2026-09-22, shared `interviews/priority_ui.py`)** — the SAME
+  urgency/priority signal the «Собес» screen introduced (`interview_priority` deadline/salary/direction/`expired`), now on the
+  manager + interviewer portals too. `priority_ui.priority_card(rows, sort, sort_base, …)` = the IT/non‑IT split, sortable by
+  salary/urgency/age via `?pool_sort=` (self-contained `ivp-*` CSS + `.ivp-card` wrapper, drops into ANY shell); `upcoming_list(
+  rows, status_of=…)` = a flat «Актуальные предстоящие собеседования» list (urgency-first, EXPLICITLY-expired collapsed into
+  «Истёкшие», an optional status chip). Rows are enriched by **`pool.enrich_priority(iv_rows)`** = `enrich_iv_rows` +
+  **`pool.attach_interview_meta`** (fetches the invite mail's subject/snippet/date/hash/booking-link BY MAILBOX from mail_index,
+  since an `iv_interviews` row stores only the subject → without it the deadline/age/booking would be blank) + `interview_priority.
+  enrich_interview_groups(hash_key="source_hash")`. Surfaces: **/manage** — priority card over the manager's POOL (кого распределить
+  первым) + an «актуальные предстоящие» card over his whole scope (pool+own+team, status chip = в пуле / назначен: ФИО);
+  **/cabinet** — priority card «с чего начать» over the interviewer's assigned queue; **/users** — the existing free-pool priority
+  card PLUS an «actual all upcoming» card over free (`pool.unallocated`) + `pool.allocated_rows()` (every non-cancelled iv row,
+  status = в пуле / управл.: ФИО / назначен: ФИО). **`is_expired` = an EXPLICIT parsed past deadline ONLY** (an estimated one is
+  never «истёк»), so «актуальные» = everything except explicit-expired. Restart: `pm2 restart jobfinder-alan-dash` (all three
+  portals are served by the dash). Tests: `test_priority_ui.py` (pure render).
 - **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): **DELEGATION-FIRST layout** — the whole user
   LIST + the «Добавить пользователя» form live in a right-side slide-out DRAWER (the «Список» header toggle → `uDrawer`; scrim +
   Esc close; `#u-list` stays the auto-refresh swap target); the main column is the «Делегирование интервью» card + a

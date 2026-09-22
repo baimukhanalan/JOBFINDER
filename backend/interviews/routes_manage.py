@@ -53,12 +53,15 @@ def _acting(me: dict, as_id: str | int | None):
 
 
 def _render(manager: dict, is_admin_view: bool, notice=None,
-            q: str = "", gender: str = "", direction: str = "") -> HTMLResponse:
+            q: str = "", gender: str = "", direction: str = "",
+            pool_sort: str = "salary") -> HTMLResponse:
     mid = manager["id"]
     subs = db.subordinates(mid, active_only=False)
     sub_ids = {s["id"] for s in subs}
-    # enrich with gender (from mailbox) + direction (from stored jobid) for the chips/filters
-    interviews = pool.enrich_iv_rows(db.manager_interviews(mid))
+    # enrich with gender/direction AND the priority signals (booking deadline, salary, expired)
+    # so BOTH the «Пул на распределение» filter and the new priority + «актуальные предстоящие»
+    # cards read the same urgency/priority as the «Собес» screen.
+    interviews = pool.enrich_priority(db.manager_interviews(mid))
     pool_all = [iv for iv in interviews if not iv.get("responsible_id")]
     own = [iv for iv in interviews if iv.get("responsible_id") == mid]
     team_ivs = [iv for iv in interviews if iv.get("responsible_id") in sub_ids]
@@ -74,10 +77,17 @@ def _render(manager: dict, is_admin_view: bool, notice=None,
               "filtered": bool((q or "").strip() or g or d),
               "own": len(own), "team": len(team_ivs),
               "team_size": len([s for s in subs if s.get("active")])}
+    # sort_base = this /manage URL WITH its current query minus pool_sort, so the priority-card
+    # sort toggle keeps the admin read-through (?as) + the pool filter (?q/&gender/&direction).
+    from urllib.parse import urlencode
+    qs = {k: v for k, v in (("as", mid if is_admin_view else ""), ("q", q),
+                            ("gender", gender), ("direction", direction)) if v}
+    sort_base = "/manage" + ("?" + urlencode(qs) if qs else "")
     return HTMLResponse(manage_ui.portal_page(
         manager, subs, pool_ivs, own, team_ivs, loads, names, counts,
         q=q, gender=gender, direction=direction, notice=notice,
-        is_admin_view=is_admin_view))
+        is_admin_view=is_admin_view, pool_all=pool_all, scope_ivs=interviews,
+        pool_sort=pool_sort, sort_base=sort_base))
 
 
 def _allowed_interviewer_ids(manager: dict) -> set:
@@ -90,13 +100,15 @@ def _allowed_interviewer_ids(manager: dict) -> set:
 @router.get("/manage", response_class=HTMLResponse)
 def manage_home(as_: str = Query("", alias="as"), q: str = Query(""),
                 gender: str = Query(""), direction: str = Query(""),
+                pool_sort: str = Query("salary"),
                 me: dict = Depends(auth.current_responsible)):
     manager, is_admin_view = _acting(me, as_)
     if manager is None:
         # an admin with no (valid) target: send them to the roster where the managers +
         # their read-through links live.
         return RedirectResponse("/users", status_code=303)
-    return _render(manager, is_admin_view, q=q.strip(), gender=gender, direction=direction)
+    return _render(manager, is_admin_view, q=q.strip(), gender=gender, direction=direction,
+                   pool_sort=pool_sort)
 
 
 @router.post("/manage/subordinate/add", response_class=HTMLResponse)

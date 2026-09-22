@@ -299,6 +299,93 @@ def enrich_iv_rows(rows: list[dict]) -> list[dict]:
     return rows
 
 
+# latest interview message meta BY MAILBOX (subject/snippet/invite date/hash/self-schedule link)
+# — an iv_interviews row stores only the subject, so priority enrichment (booking deadline +
+# application age + booking link) needs the real invite mail, fetched here in ONE query.
+_IV_META_SQL = """
+SELECT DISTINCT ON (mailbox) mailbox, subject, snippet, date_ts, path_hash, booking_url, booking_provider
+  FROM mail_index
+ WHERE kind='interview' AND NOT outbound AND mailbox = ANY(%s)
+ ORDER BY mailbox, date_ts DESC, path_hash DESC
+"""
+
+
+def attach_interview_meta(rows: list[dict]) -> list[dict]:
+    """Attach the latest interview message's meta (subject/snippet/invite date/hash/booking link)
+    BY MAILBOX from mail_index onto iv_interviews rows, so `interview_priority.enrich_interview_
+    groups` has a real invite date (→ booking deadline + application age) and the self-schedule
+    link — the iv_interviews row itself carries only the subject. Best-effort; no-op on error."""
+    mbs = sorted({(r.get("mailbox") or "") for r in rows if r.get("mailbox")})
+    if not mbs:
+        return rows
+    meta: dict = {}
+    try:
+        with mail_db._cur() as cur:
+            cur.execute(_IV_META_SQL, (mbs,))
+            for m in cur.fetchall():
+                meta[m["mailbox"]] = dict(m)
+    except Exception:
+        return rows
+    for r in rows:
+        m = meta.get(r.get("mailbox"))
+        if not m:
+            continue
+        if not r.get("iv_subject"):
+            r["iv_subject"] = m.get("subject") or r.get("subject")
+        if not r.get("iv_snippet"):
+            r["iv_snippet"] = m.get("snippet")
+        r["iv_ts"] = m.get("date_ts")
+        if not r.get("source_hash"):
+            r["source_hash"] = m.get("path_hash") or r.get("source_message_hash")
+        r["iv_booking_url"] = m.get("booking_url")
+        r["iv_booking_provider"] = m.get("booking_provider")
+    return rows
+
+
+def enrich_priority(rows: list[dict]) -> list[dict]:
+    """Full priority enrichment for a set of iv_interviews rows: gender+direction (`enrich_iv_rows`),
+    the interview message meta (`attach_interview_meta`), then the `interview_priority` signals
+    (deadline_ts/deadline_days/deadline_estimated, salary_label, has_booking, `expired`). Reused by
+    the manager pool (/manage), interviewer queue (/cabinet) and the admin overview (/users).
+    Best-effort — a degraded interviews package still leaves every row renderable."""
+    if not rows:
+        return rows
+    try:
+        enrich_iv_rows(rows)
+    except Exception:
+        for r in rows:
+            r.setdefault("direction", "other")
+            r.setdefault("sex", "unknown")
+    attach_interview_meta(rows)
+    try:
+        from backend.tools import interview_priority
+        interview_priority.enrich_interview_groups(rows, hash_key="source_hash")
+        for r in rows:
+            r["expired"] = interview_priority.is_expired(r)
+    except Exception:
+        for r in rows:
+            r.setdefault("expired", False)
+    return rows
+
+
+_ALLOCATED_SQL = ("SELECT id, mailbox, jobid, subject, company, responsible_id, manager_id, "
+                  "start_ts, source_message_hash FROM iv_interviews "
+                  "WHERE status <> 'cancelled' ORDER BY created_at DESC")
+
+
+def allocated_rows() -> list[dict]:
+    """Every non-cancelled iv_interviews row (delegated to a manager and/or assigned to an
+    interviewer), fully priority-enriched — the ALLOCATED half of the admin «все актуальные
+    предстоящие» overview (the free half is `unallocated`). → [] on any error."""
+    try:
+        with mail_db._cur() as cur:
+            cur.execute(_ALLOCATED_SQL)
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+    return enrich_priority(rows)
+
+
 def _match(row: dict, q: str | None, gender: str | None, direction: str | None,
            include_expired: bool = False) -> bool:
     # an EXPIRED booking window (deadline strictly past) is not delegatable — exclude it from

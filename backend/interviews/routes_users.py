@@ -48,6 +48,8 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
     pool_rows: list[dict] = []
     pool_facets: dict = {}
     mgr_alloc: dict = {}
+    allocated_rows: list[dict] = []
+    names_by_id = {u["id"]: (u.get("name") or u.get("login") or "—") for u in users}
     try:
         # The WHOLE free pool (incl. EXPIRED) — the priority card SHOWS expired at the bottom
         # (dimmed, «делегировать нельзя»); pool.unallocated already enriched each row with
@@ -55,6 +57,10 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
         pool_rows = pool.unallocated(limit=None, include_expired=True)
         # counts + facets reflect only STILL-BOOKABLE interviews (expired can't be delegated).
         pool_count = pool.count_unallocated()
+        # ALLOCATED half of the «все актуальные предстоящие» overview: every non-cancelled
+        # interview already delegated to a manager / assigned to an interviewer (free half =
+        # pool_rows). Best-effort — a hiccup just omits the allocated rows.
+        allocated_rows = pool.allocated_rows()
         managers = db.list_managers(active_only=True)
         if managers:
             pool_facets = pool.facets()
@@ -69,7 +75,8 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
     return HTMLResponse(users_ui.list_page(
         users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
         managers=managers, pool_count=pool_count, pool_rows=pool_rows,
-        pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id, pool_sort=pool_sort))
+        pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id, pool_sort=pool_sort,
+        allocated_rows=allocated_rows, names_by_id=names_by_id))
 
 
 def _week_window():

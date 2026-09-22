@@ -88,12 +88,18 @@ def _not_found() -> HTMLResponse:
 
 
 @router.get("", response_class=HTMLResponse)
-def dashboard(as_: str = Query("", alias="as"),
+def dashboard(as_: str = Query("", alias="as"), pool_sort: str = Query("salary"),
               me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     responsible = _acting_cabinet(me, as_)
-    interviews = db.interviews_for_responsible(responsible["id"], upcoming_only=True)
-    return HTMLResponse(cabinet_ui.dashboard_page(responsible, interviews,
-                                                  as_id=_view_as(me, responsible)))
+    from backend.interviews import pool
+    # priority-enrich (booking deadline / salary / direction / expired) so the interviewer's
+    # assigned queue carries the SAME урочность/приоритет filter as the «Собес» screen.
+    interviews = pool.enrich_priority(
+        db.interviews_for_responsible(responsible["id"], upcoming_only=True))
+    as_id = _view_as(me, responsible)
+    sort_base = f"/cabinet?as={as_id}" if as_id else "/cabinet"
+    return HTMLResponse(cabinet_ui.dashboard_page(responsible, interviews, as_id=as_id,
+                                                  pool_sort=pool_sort, sort_base=sort_base))
 
 
 @router.get("/availability", response_class=HTMLResponse)

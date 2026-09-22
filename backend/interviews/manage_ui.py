@@ -299,7 +299,9 @@ def _filter_form(q: str, gender: str, direction: str, as_id=None) -> str:
 def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: list[dict],
                 team_ivs: list[dict], loads: dict, names: dict, counts: dict,
                 q: str = "", gender: str = "", direction: str = "", notice=None,
-                is_admin_view: bool = False) -> str:
+                is_admin_view: bool = False, pool_all: list[dict] | None = None,
+                scope_ivs: list[dict] | None = None, pool_sort: str = "salary",
+                sort_base: str = "/manage") -> str:
     as_id = manager["id"] if is_admin_view else None
     # team options for the assign dropdowns: the manager himself + his ACTIVE subordinates
     team: list[tuple] = [(manager["id"], manager.get("name") or manager.get("login") or "—", True)]
@@ -399,13 +401,40 @@ def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: 
                  f'<b>{escape(manager.get("name") or "")}</b> (режим главного админа).</div>'
                  if is_admin_view else "")
 
+    # priority + «актуальные предстоящие» cards (the SAME urgency/priority signal as the «Собес»
+    # screen). Priority card = the pool given to this manager, split IT/non-IT + sortable;
+    # upcoming card = every live (non-expired) собес in his scope with a status chip.
+    from backend.interviews import priority_ui
+    pool_all = pool_all if pool_all is not None else pool_ivs
+    scope_ivs = scope_ivs if scope_ivs is not None else (pool_ivs + own_ivs + team_ivs)
+
+    def _mg_status(iv: dict) -> str:
+        rid = iv.get("responsible_id")
+        if not rid:
+            return priority_ui.status_free()
+        return priority_ui.status_assigned(names.get(rid) or "—")
+
+    priority_card = priority_ui.priority_card(
+        pool_all, pool_sort, sort_base, anchor="mg-pri",
+        title="Приоритет: кого распределить первым",
+        blurb=("Выделенные вам собеседования по приоритету — сложные (IT) и простые (не‑IT), "
+               "по зарплате, срочности брони слота или давности заявки. Распределяйте сверху вниз."),
+        empty="Пул пуст — распределять пока нечего.")
+    upcoming_card = priority_ui.upcoming_list(
+        scope_ivs, anchor="mg-live", status_of=_mg_status,
+        title="Актуальные предстоящие собеседования",
+        blurb=("Все ваши живые собесы (пул + назначенные), у которых срок брони ещё не истёк, "
+               "— от самых срочных. Явно просроченные — в «Истёкшие»."),
+        empty="Актуальных предстоящих собеседований в вашем пуле нет.")
+
     body = (
+        priority_ui.CSS +
         _topbar(manager, "portal", is_admin_view) +
         admin_bar +
         '<h1 class="mg-h1">Портал управляющего</h1>'
         '<p class="mg-lead">Выделенные вам собеседования, ваша команда и её загрузка. '
         'Назначайте собесы себе или сотрудникам — только из выделенного вам пула.</p>'
-        + _note(notice) + stats +
+        + _note(notice) + stats + upcoming_card +
         '<div class="mg-card"><h3>Моя команда</h3>'
         '<p class="mg-hint">Сотрудники под вашим руководством. Вы можете назначать им '
         'собеседования и видеть их загрузку.</p>'
@@ -417,6 +446,7 @@ def portal_page(manager: dict, subs: list[dict], pool_ivs: list[dict], own_ivs: 
         'отфильтруйте по полу/направлению и назначьте себе или сотруднику.</p>'
         + _filter_form(q, gender, direction, as_id)
         + pool_block + '</div>'
+        + priority_card +
         # Section B
         '<div class="mg-card"><h3>Мои собеседования</h3>'
         '<p class="mg-hint">Собесы, которые проводите вы сами. Полный кабинет — вкладка '

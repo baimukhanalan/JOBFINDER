@@ -492,6 +492,32 @@ def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
             + "</div>")
 
 
+def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_id: dict) -> str:
+    """«Актуальный список ВСЕХ предстоящих собеседований» (part 2, admin): the FREE pool plus
+    every already-delegated/assigned interview, non-expired first, each with a status chip
+    (в пуле / у управляющего / назначен интервьюеру). Complements the free-pool priority card
+    above — here the admin sees the WHOLE live pipeline, not just the undelegated slice."""
+    from backend.interviews import priority_ui
+    rows = list(pool_rows or []) + list(allocated_rows or [])
+
+    def _status(r: dict) -> str:
+        rid = r.get("responsible_id")
+        if rid:
+            return priority_ui.status_assigned(names_by_id.get(rid) or "—")
+        mid = r.get("manager_id")
+        if mid:
+            return priority_ui.status_manager(names_by_id.get(mid) or "—")
+        return priority_ui.status_free()
+
+    return priority_ui.CSS + priority_ui.upcoming_list(
+        rows, anchor="u-live", status_of=_status,
+        title="Актуальные предстоящие собеседования",
+        blurb=("Весь живой поток: свободные в пуле, переданные управляющим и назначенные "
+               "интервьюерам — у которых срок брони ещё не истёк, от самых срочных. Явно "
+               "просроченные собраны в «Истёкшие»."),
+        empty="Актуальных предстоящих собеседований нет.")
+
+
 _LIST_ICON = ("<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' "
               "stroke-linecap='round'><line x1='8' y1='6' x2='21' y2='6'/>"
               "<line x1='8' y1='12' x2='21' y2='12'/><line x1='8' y1='18' x2='21' y2='18'/>"
@@ -504,12 +530,15 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
               managers: list[dict] | None = None, pool_count: int = 0,
               pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None,
               pool_facets: dict | None = None, me_id: int | None = None,
-              pool_sort: str = "salary") -> str:
+              pool_sort: str = "salary", allocated_rows: list[dict] | None = None,
+              names_by_id: dict | None = None) -> str:
     week_by_id = week_by_id or {}
     managers = managers or []
     pool_rows = pool_rows or []
     mgr_alloc = mgr_alloc or {}
     pool_facets = pool_facets or {}
+    allocated_rows = allocated_rows or []
+    names_by_id = names_by_id or {}
     cards = []
     for u in users:
         rid = u["id"]
@@ -601,6 +630,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         + _note(notice)
         + _allocate_card(managers, pool_count, pool_rows, mgr_alloc, pool_facets)
         + _pool_priority_card(pool_rows, pool_sort)
+        + _all_live_card(pool_rows, allocated_rows, names_by_id)
         + "</div>"
         + drawer
         + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))

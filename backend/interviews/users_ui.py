@@ -518,13 +518,18 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         tg = ('<span class="u-tag" style="color:#1e40af;background:#dbeafe">TG ✓</span>'
               if u.get("telegram_chat_id") else "")
         week_html = _week_calendar(week_by_id.get(rid, []), u.get("tz"), monday)
-        # a manager gets a read-through link into their delegation portal + an allocation count
+        # Admin read-through into ANY user's OWN portal by role: a manager → their delegation
+        # portal (/manage?as, + an allocation count badge); an employee-only user → their
+        # cabinet (/cabinet?as). Only the admin sees /users, and only the admin's ?as is
+        # honoured server-side, so these links can't let a non-admin peek at someone else.
         extra = ""
         if "manager" in roles:
             a = mgr_alloc.get(rid, {})
             badge = (f"<span class='u-tag' style='color:#6d28d9;background:#ede9fe'>"
                      f"собесов: {a.get('total', 0)}</span>" if a else "")
             extra = (f"{badge}<a class='hbtn' href='/manage?as={rid}'>Портал →</a>")
+        elif "employee" in roles:
+            extra = (f"<a class='hbtn' href='/cabinet?as={rid}'>Кабинет →</a>")
         # inline MULTI-ROLE editor + delete. NO delete button for the protected logins 1/2/3
         # NOR the acting admin's OWN card (self-delete is blocked server-side; don't offer it).
         protected = (u.get("login") or "") in ("1", "2", "3") or rid == me_id

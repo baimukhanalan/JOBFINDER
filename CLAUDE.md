@@ -1480,6 +1480,16 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   `candidates_inbox._clean_snippet` (same as the operator grouped inbox) so leaked CSS never shows to the interviewer. Each home
   interview card is one full-width tap `<a>` (`cabinet_ui.iv-card-link`); a missing time reads «время не указано» (matches the
   manager portal).
+  - **ADMIN READ-THROUGH `/cabinet?as=<id>`** (mirrors `/manage?as`): `routes_cabinet._acting_cabinet(me, as_id)` — ONLY when
+    `has_role(me,'admin')` AND a valid `?as` does the cabinet act AS that user (its ownership guards then key on the TARGET, so
+    the admin sees/replies/saves-availability FOR them); everyone else — incl. a manager/employee passing `?as=<other>`, or an
+    admin with a blank/bad target — acts on THEMSELVES (a non-admin can NEVER spoof `?as`). Threaded into all 5 routes (GET reads
+    `?as`, POST `/availability`+`/reply` read the `as` FORM field). `cabinet_ui` carries the `as_id` into every nav link + a
+    hidden `as` form field (`_cab_href`/`_as_field`) so navigation stays in-context, shows an amber «режим администратора»
+    banner (`_asview_banner`), and in read-through SKIPS the tz-auto-adopt script + hides the self-service TG connect control
+    (so the admin's device zone / Telegram never overwrites the viewed user's). `/users` renders a per-row portal link BY ROLE:
+    `has_role('manager')` → `/manage?as` (existing), else employee-only → `/cabinet?as`. Tests:
+    `test_interviews_cabinet_readthrough.py` (allow=admin, deny=manager/employee spoof + spoofed POST targets self).
 - **Auth** (`dash_auth.py` `AdminAuthMiddleware`, fail-closed, hierarchy **admin > manager > employee**, MULTI-ROLE = UNION):
   no session → `/login`; **holds `admin`** → full; **holds `manager`** → ONLY `/manage/*` + `/cabinet/*` (`_manager_allowed`)
   else 303 `/manage` (a manager also attends собесы assigned to himself, hence the cabinet); **holds `employee`** → ONLY

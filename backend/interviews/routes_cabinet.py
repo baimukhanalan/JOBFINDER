@@ -17,7 +17,7 @@ import logging
 import re
 import secrets
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from backend.interviews import auth, cabinet_ui, db, notify, slots
@@ -26,6 +26,31 @@ from backend.tools import mail_db, mailcrm
 log = logging.getLogger("cabinet")
 
 router = APIRouter(prefix="/cabinet")
+
+
+def _acting_cabinet(me: dict, as_id: str | int | None) -> dict:
+    """Resolve WHOSE cabinet a request acts on (admin read-through — mirrors
+    `routes_manage._acting`).
+
+    An ADMIN who passes a valid `?as=<id>` acts INSIDE that user's cabinet: sees their
+    schedule / inbox / threads and may save availability or reply FOR them (all the
+    ownership guards below then key on the TARGET). Everyone else — and an admin whose
+    `?as` is blank/invalid — acts on their OWN cabinet. A non-admin's `?as` is IGNORED, so
+    a manager/employee can NEVER spoof it to view or act as someone else."""
+    if as_id and db.has_role(me, "admin"):
+        try:
+            target = db.get_responsible(int(as_id))
+        except (TypeError, ValueError):
+            target = None
+        if target:
+            return target
+    return me
+
+
+def _view_as(me: dict, responsible: dict):
+    """The `as_id` to thread into links/forms so the admin read-through survives navigation —
+    the target id when acting as someone else, else None (a normal self-view)."""
+    return responsible["id"] if responsible["id"] != me["id"] else None
 
 _LINK_RE = re.compile(r'https?://[^\s"<>()\]}]+', re.I)
 _LINK_SKIP_RE = re.compile(r"unsubscribe|/preferences|list-manage|/track|/pixel|utm_|beacon|/wf/open", re.I)
@@ -63,15 +88,21 @@ def _not_found() -> HTMLResponse:
 
 
 @router.get("", response_class=HTMLResponse)
-def dashboard(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+def dashboard(as_: str = Query("", alias="as"),
+              me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    responsible = _acting_cabinet(me, as_)
     interviews = db.interviews_for_responsible(responsible["id"], upcoming_only=True)
-    return HTMLResponse(cabinet_ui.dashboard_page(responsible, interviews))
+    return HTMLResponse(cabinet_ui.dashboard_page(responsible, interviews,
+                                                  as_id=_view_as(me, responsible)))
 
 
 @router.get("/availability", response_class=HTMLResponse)
-def availability_get(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+def availability_get(as_: str = Query("", alias="as"),
+                     me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    responsible = _acting_cabinet(me, as_)
     rows = db.get_availability(responsible["id"])
-    return HTMLResponse(cabinet_ui.availability_page(responsible, rows))
+    return HTMLResponse(cabinet_ui.availability_page(responsible, rows,
+                                                     as_id=_view_as(me, responsible)))
 
 
 @router.post("/tg/connect")
@@ -115,8 +146,9 @@ def _hhmm_to_min(s: str) -> int:
 
 @router.post("/availability", response_class=HTMLResponse)
 async def availability_post(request: Request,
-                            responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+                            me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     form = await request.form()
+    responsible = _acting_cabinet(me, form.get("as"))
     # MULTIPLE windows per weekday: each is a start_<d>/end_<d> input PAIR (getlist + zip);
     # a blank window is skipped, a day with no windows is off. overnight/24h stay valid.
     rows = []
@@ -129,11 +161,14 @@ async def availability_post(request: Request,
                          "end_min": _hhmm_to_min(e), "enabled": True})
     db.set_availability(responsible["id"], rows)
     rows = db.get_availability(responsible["id"])
-    return HTMLResponse(cabinet_ui.availability_page(responsible, rows, saved=True))
+    return HTMLResponse(cabinet_ui.availability_page(responsible, rows, saved=True,
+                                                     as_id=_view_as(me, responsible)))
 
 
 @router.get("/inbox", response_class=HTMLResponse)
-def inbox(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+def inbox(as_: str = Query("", alias="as"),
+          me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    responsible = _acting_cabinet(me, as_)
     rows: list[dict] = []
     for m in sorted(db.assigned_mailboxes(responsible["id"])):
         try:
@@ -150,11 +185,14 @@ def inbox(responsible: dict = Depends(auth.current_responsible)) -> HTMLResponse
                 r["snippet"] = _clean_snippet(r["snippet"])
     except Exception as e:
         log.warning("snippet clean failed: %s", e)
-    return HTMLResponse(cabinet_ui.inbox_page(responsible, rows))
+    return HTMLResponse(cabinet_ui.inbox_page(responsible, rows,
+                                              as_id=_view_as(me, responsible)))
 
 
 @router.get("/thread", response_class=HTMLResponse)
-def thread(hash: str, responsible: dict = Depends(auth.current_responsible)):
+def thread(hash: str, as_: str = Query("", alias="as"),
+           me: dict = Depends(auth.current_responsible)):
+    responsible = _acting_cabinet(me, as_)
     # OWNERSHIP GUARD (security core): resolve the row first, verify its mailbox is
     # assigned to THIS responsible, and only then read the thread. Any miss → 404.
     row = None
@@ -169,12 +207,14 @@ def thread(hash: str, responsible: dict = Depends(auth.current_responsible)):
     thread = mailcrm.get_thread(hash, mark=False)
     if not thread:
         return _not_found()
-    return HTMLResponse(cabinet_ui.thread_page(responsible, thread, hash=hash))
+    return HTMLResponse(cabinet_ui.thread_page(responsible, thread, hash=hash,
+                                               as_id=_view_as(me, responsible)))
 
 
 @router.post("/reply", response_class=HTMLResponse)
-def reply(hash: str = Form(...), body: str = Form(...),
-          responsible: dict = Depends(auth.current_responsible)):
+def reply(hash: str = Form(...), body: str = Form(...), as_: str = Form("", alias="as"),
+          me: dict = Depends(auth.current_responsible)):
+    responsible = _acting_cabinet(me, as_)
     """An interviewer replies to a recruiter FROM the assigned persona's mailbox. Ownership
     guard identical to /thread: the thread must belong to one of THIS responsible's assigned
     personas, else 404. from/to/subject are derived server-side from the owned thread — the
@@ -221,4 +261,5 @@ def reply(hash: str = Form(...), body: str = Form(...),
             log.warning("cabinet reply send failed: %s", e)
             sent = "err"
     fresh = mailcrm.get_thread(hash, mark=False) or thread
-    return HTMLResponse(cabinet_ui.thread_page(responsible, fresh, hash=hash, sent=sent, links=links))
+    return HTMLResponse(cabinet_ui.thread_page(responsible, fresh, hash=hash, sent=sent,
+                                               links=links, as_id=_view_as(me, responsible)))

@@ -111,16 +111,44 @@ def _doc(body: str, title: str = "Кабинет") -> str:
         f"<body><main>{body}</main>" + mailcrm_ui._SW_REG + "</body></html>")
 
 
-def _topbar(responsible: dict, active: str) -> str:
+# ---- admin read-through (?as=<id>) helpers ----------------------------------------
+# When an ADMIN opens a user's cabinet via /cabinet?as=<id> (routes_cabinet._acting_cabinet),
+# every in-cabinet link + form must carry the same ?as so navigation stays in that user's
+# context. A normal self-view passes as_id=None → these are all no-ops.
+def _cab_href(path: str, as_id=None) -> str:
+    if not as_id:
+        return path
+    sep = "&" if "?" in path else "?"
+    return f"{path}{sep}as={as_id}"
+
+
+def _as_field(as_id=None) -> str:
+    """A hidden `as` form field so an admin's POST (save availability / reply) targets the
+    user being viewed, not the admin. Empty for a self-view."""
+    return f'<input type="hidden" name="as" value="{escape(str(as_id))}">' if as_id else ""
+
+
+def _asview_banner(responsible: dict, as_id=None) -> str:
+    if not as_id:
+        return ""
+    who = escape(responsible.get("name") or responsible.get("login") or "")
+    return ('<div class="cab-asview" style="background:#fef3c7;border:1px solid #f59e0b;'
+            'border-radius:10px;padding:8px 14px;margin:0 0 14px;font-size:13px;font-weight:600;'
+            'color:#92400e;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+            f'<span>Просмотр кабинета: {who} (режим администратора)</span>'
+            '<a class="hbtn" href="/users" style="margin-left:auto">← К пользователям</a></div>')
+
+
+def _topbar(responsible: dict, active: str, as_id=None) -> str:
     name = escape(responsible.get("name") or responsible.get("login") or "")
     # a manager attends interviews here too; give them a way back to their portal (multi-role
     # aware — an admin+manager or manager+employee still gets the link)
     _roles = responsible.get("roles") or ([responsible.get("role")] if responsible.get("role") else [])
-    portal = '<a href="/manage">← Портал</a>' if "manager" in _roles else ""
+    portal = (f'<a href="{_cab_href("/manage", as_id)}">← Портал</a>' if "manager" in _roles else "")
     nav = (portal +
-           f'<a class="{"active" if active=="home" else ""}" href="/cabinet">Собесы</a>'
-           f'<a class="{"active" if active=="availability" else ""}" href="/cabinet/availability">Расписание</a>'
-           f'<a class="{"active" if active=="inbox" else ""}" href="/cabinet/inbox">Почта</a>'
+           f'<a class="{"active" if active=="home" else ""}" href="{_cab_href("/cabinet", as_id)}">Собесы</a>'
+           f'<a class="{"active" if active=="availability" else ""}" href="{_cab_href("/cabinet/availability", as_id)}">Расписание</a>'
+           f'<a class="{"active" if active=="inbox" else ""}" href="{_cab_href("/cabinet/inbox", as_id)}">Почта</a>'
            f'<a href="/logout">Выход</a>')
     return (f'<div class="cab-top"><div class="brand">{mailcrm_ui._LOGO_IMG}</div>'
             f'<span class="who">{name}</span>'
@@ -153,7 +181,7 @@ def _fmt_local(dt, tz=None) -> str:
         return str(dt)
 
 
-def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
+def dashboard_page(responsible: dict, interviews: list[dict], as_id=None) -> str:
     rtz = responsible.get("tz")
 
     def _item(iv: dict, past: bool = False) -> str:
@@ -162,7 +190,8 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
         when = escape(_fmt_local(iv.get("start_ts"), rtz))
         h = iv.get("source_message_hash")
         # the WHOLE card is the tap target (a wrapping <a>), not just the small text link
-        href = (f"/cabinet/thread?hash={escape(str(h), quote=True)}" if h else "/cabinet/inbox")
+        href = (_cab_href(f"/cabinet/thread?hash={escape(str(h), quote=True)}", as_id) if h
+                else _cab_href("/cabinet/inbox", as_id))
         open_lbl = "Переписка →" if h else "Почта →"
         meta = mailbox + (f' · <b>{company}</b>' if company else "")
         li_open = '<li style="opacity:.62;">' if past else '<li>'
@@ -189,12 +218,20 @@ def dashboard_page(responsible: dict, interviews: list[dict]) -> str:
         block = f'<ul class="iv-list">{"".join(items)}</ul>'
     else:
         block = '<div class="empty">Предстоящих собеседований нет.</div>'
-    body = (_topbar(responsible, "home") +
+    body = (_topbar(responsible, "home", as_id) + _asview_banner(responsible, as_id) +
             '<h1 class="cab-h">Мои собеседования</h1>' + block)
     return _doc(body, "Мои собеседования")
 
 
-def _tg_card(responsible: dict) -> str:
+def _tg_card(responsible: dict, as_id=None) -> str:
+    if as_id:
+        # Admin read-through: Telegram linking is a SELF-SERVICE step (it mints a code the
+        # person opens in their own Telegram), so it makes no sense for an admin to do it FOR
+        # them — show status only, no interactive connect/unlink control.
+        status = ('✓ Telegram подключён' if responsible.get("telegram_chat_id")
+                  else 'Telegram не подключён')
+        return ('<div class="card tg-card"><div class="tg-h">Уведомления в Telegram</div>'
+                f'<div class="tg-sub">{status} (привязку делает сам сотрудник).</div></div>')
     if responsible.get("telegram_chat_id"):
         inner = ('<span style="color:#166534;font-weight:700;">✓ Telegram подключён</span>'
                  '<form method="post" action="/cabinet/tg/unlink" style="display:inline;margin-left:12px;">'
@@ -212,26 +249,29 @@ def _tg_card(responsible: dict) -> str:
             f'<div class="tg-act">{inner}</div></div>')
 
 
-def availability_page(responsible: dict, rows: list[dict], saved: bool = False) -> str:
+def availability_page(responsible: dict, rows: list[dict], saved: bool = False, as_id=None) -> str:
     note = '<div class="note">Расписание сохранено.</div>' if saved else ""
     import json as _json
     rtz = responsible.get("tz") or slots.DEFAULT_TZ
     # auto-adopt the device timezone: if the browser's zone differs from the stored one,
     # update it and reload so the schedule is shown/anchored to where the person is now.
-    tz_js = (
+    # SKIP this in the admin read-through (as_id set) — the admin's OWN device zone must NOT
+    # overwrite the viewed user's stored tz.
+    tz_js = "" if as_id else (
         "<script>(function(){var b;try{b=Intl.DateTimeFormat().resolvedOptions().timeZone;}"
         "catch(e){return;}var cur=" + _json.dumps(rtz) + ";if(b&&b!==cur){var f=new FormData();"
         "f.append('tz',b);fetch('/cabinet/tz',{method:'POST',body:f}).then(function(){"
         "location.reload();}).catch(function(){});}})();</script>")
-    body = (_topbar(responsible, "availability") +
+    body = (_topbar(responsible, "availability", as_id) + _asview_banner(responsible, as_id) +
             '<h1 class="cab-h">Расписание доступности</h1>' + note +
             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
             f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>). '
             'Можно добавить <b>несколько промежутков</b> в один день (напр. 06:30–14:00 и 18:00–01:00). '
             'День без промежутков — выходной. Конец раньше начала — ночное окно через полночь.</p>'
-            + _tg_card(responsible) +
+            + _tg_card(responsible, as_id) +
             f'<style>{avail_editor.CSS}</style>'
             '<form method="post" action="/cabinet/availability">'
+            + _as_field(as_id)
             + avail_editor.render_days(rows) +
             '<div class="avd-actions">'
             '<button class="primary" type="submit">Сохранить</button>'
@@ -240,16 +280,19 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False) 
     return _doc(body, "Расписание")
 
 
-def inbox_page(responsible: dict, rows: list[dict]) -> str:
+def inbox_page(responsible: dict, rows: list[dict], as_id=None) -> str:
     # Reuse the operator's row renderer in READ-ONLY mode: no «Собес» control, plain
     # non-interactive avatar (the operator `toggleSel` JS isn't in this shell), no
     # decorative 📎. Row links point to the operator route /mail/message; rewrite them to
     # the cabinet's own guarded /thread so navigation stays inside this app.
     listing = mailcrm_ui.render_rows(rows, show_mailbox=True, read_only=True)
-    listing = listing.replace("/mail/message?id=", "/cabinet/thread?hash=")
+    # In the admin read-through put `as` BEFORE the hash so the query splices cleanly
+    # (`/cabinet/thread?as=5&hash=...`) — the click keeps the admin in the user's context.
+    thread_link = f"/cabinet/thread?as={as_id}&hash=" if as_id else "/cabinet/thread?hash="
+    listing = listing.replace("/mail/message?id=", thread_link)
     inner = (f'<div class="maillist">{listing}</div>' if rows
              else '<div class="empty">Писем пока нет.</div>')
-    body = (_topbar(responsible, "inbox") +
+    body = (_topbar(responsible, "inbox", as_id) + _asview_banner(responsible, as_id) +
             '<h1 class="cab-h">Почта</h1>' + inner)
     return _doc(body, "Почта")
 
@@ -268,7 +311,7 @@ def _thread_card(m: dict) -> str:
         f'<div class="body">{body}</div></div>')
 
 
-def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, links=None) -> str:
+def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, links=None, as_id=None) -> str:
     subj = thread.get("subject") or "(без темы)"
     mailbox = thread.get("mailbox") or ""
     candidate = thread.get("candidate") or ""
@@ -303,13 +346,14 @@ def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, link
         reply_form = (
             '<form method="post" action="/cabinet/reply" class="cab-reply">'
             f'<input type="hidden" name="hash" value="{escape(hash, quote=True)}">'
+            + _as_field(as_id) +
             '<div class="cab-reply-h">Ответить рекрутёру</div>'
             '<textarea name="body" rows="4" placeholder="Ваш ответ…" required></textarea>'
             '<button class="primary" type="submit">Отправить ответ</button>'
             '</form>')
 
-    body = (_topbar(responsible, "inbox") +
-            '<a class="back-link" href="/cabinet/inbox">← К списку</a>'
+    body = (_topbar(responsible, "inbox", as_id) + _asview_banner(responsible, as_id) +
+            f'<a class="back-link" href="{_cab_href("/cabinet/inbox", as_id)}">← К списку</a>'
             f'<h1 class="tsubj">{escape(subj)}</h1>'
             f'<div class="tbox">Ящик: {box}</div>' + sent_banner + cards + reply_form)
     return _doc(body, subj)

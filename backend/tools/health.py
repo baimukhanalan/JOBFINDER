@@ -805,27 +805,16 @@ def _llm_probe(hint: str) -> dict:
                             f"{host} · completions пропущены (shared breaker открыт — LLM недоступен)", hint)
         except Exception:
             pass
-        # /models returns 200 even when the model's backend provider is auth-dead (e.g. the Codex
-        # token expired → /chat/completions 500). Probe a real tiny completion so `health --alert`
-        # fires the DOWN alert on the real outage AND its RECOVERY message when the provider returns.
-        try:
-            t1 = time.monotonic()
-            cr = httpx.post(base + "/chat/completions",
-                            headers={"Authorization": f"Bearer {settings.llm_key}"},
-                            json={"model": settings.llm_model,
-                                  "messages": [{"role": "user", "content": "ping"}],
-                                  "max_tokens": 3, "stream": False},
-                            timeout=httpx.Timeout(12.0, connect=5.0))
-            cms = (time.monotonic() - t1) * 1000
-            if cr.status_code == 200 and (cr.json().get("choices")):
-                return _row("Локальная модель", "ok",
-                            f"{host} · completions OK · {cms:.0f} мс · {len(ids)} моделей", hint)
-            snippet = re.sub(r"\s+", " ", (cr.text or ""))[:140]
-            return _row("Локальная модель", "down",
-                        f"{host} · completions HTTP {cr.status_code} · {snippet}", hint)
-        except Exception as cexc:
-            return _row("Локальная модель", "down",
-                        f"{host} · completions недоступны: {type(cexc).__name__}", hint)
+        # /models returns 200 even when the backend provider is dead (auth/quota → /chat/completions
+        # 500). The AUTHORITATIVE completion-health signal is the shared tailor breaker: a lane whose
+        # completions fail trips it (→ the branch above reports DOWN, so `health --alert` fires), a
+        # successful completion clears it (→ ok here, the RECOVERY). We do NOT probe a live completion
+        # here: codex first-token latency (5-15s) NEVER fits gather()'s 3s per-probe deadline, so an
+        # inline probe ALWAYS timed out to «warn · нет ответа за 3с» even while the model was fine,
+        # and each probe spawned a codex process onto the box every 90s. Breaker-closed + /models-200
+        # = the provider is serving completions (proven by real lane usage), report ok.
+        return _row("Локальная модель", "ok",
+                    f"{host} · {ms:.0f} мс · {len(ids)} моделей · провайдер активен (брейкер закрыт)", hint)
     except Exception as exc:
         return _row("Локальная модель", "down", f"не отвечает: {type(exc).__name__}", hint)
 

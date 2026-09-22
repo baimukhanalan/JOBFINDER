@@ -301,6 +301,52 @@ def salary_label(job: dict) -> str:
     return ""
 
 
+def salary_for_mail(mailbox: str, subject: str = "", body: str = "") -> dict:
+    """The estimated-but-accurate comp for a FRESH offer/interview mail, by COMPANY + POSITION —
+    for the owner's Telegram ping. Resolves the persona's APPLIED job (mailbox → jobid via
+    interviews.pool → job_catalog) for the posted comp + real company/title; when the job's own
+    comp is missing OR the job link is gone (retention), falls back to the role parsed from the
+    invite SUBJECT → the role-category MEDIAN (`est_comp`). Returns {'label','company','role',
+    'estimated'} — label is '' when nothing resolves. Best-effort, never raises (the caller is the
+    mail indexer's notify path)."""
+    out = {"label": "", "company": "", "role": "", "estimated": True}
+    try:
+        job = None
+        jobid = None
+        try:
+            from backend.interviews import pool
+            jobid = pool._base_meta(mailbox).get("jobid")
+        except Exception:
+            jobid = None
+        if jobid and str(jobid).isdigit():
+            try:
+                from backend.tools import catalog_db
+                job = (catalog_db.jobs_by_ids([int(jobid)]) or {}).get(int(jobid))
+            except Exception:
+                job = None
+        if job:
+            out["company"] = (job.get("company") or "").strip()
+            out["role"] = (job.get("title") or "").strip()
+        has_comp = bool(job) and any(job.get(k) for k in (
+            "comp_min", "comp_max", "est_total_min", "est_total_max", "est_base_min", "est_base_max"))
+        cat = (job or {}).get("role_category") or _role_from_email(subject, body)
+        if has_comp:
+            out["estimated"] = not any(job.get(k) for k in ("comp_min", "comp_max"))
+        else:
+            try:
+                from backend.applier import est_comp
+                job = est_comp.estimate(cat, ["US"])
+            except Exception:
+                job = job or {}
+            out["estimated"] = True
+        out["label"] = salary_label(job or {})
+        if not out["role"] and cat:
+            out["role"] = cat
+    except Exception:
+        pass
+    return out
+
+
 # ---- enrichment ------------------------------------------------------------------
 def enrich_interview_groups(groups: list[dict], *, hash_key: str = "iv_hash") -> list[dict]:
     """Add priority signals to each interview row (mutates + returns). Adds:

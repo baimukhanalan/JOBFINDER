@@ -296,10 +296,25 @@ def walkin_prep_text(interview: dict, responsible_name: str, tz: str | None = No
 
 def mail_event_text(kind: str, mailbox: str, subject: str, company: str | None = None) -> str:
     """One-line owner notification for a fresh recruiter mail classified as an OFFER or an interview
-    invitation — so a new offer/собес is seen the moment it lands, before assignment."""
+    invitation — so a new offer/собес is seen the moment it lands, before assignment. Now also carries
+    the estimated-but-accurate COMPANY + POSITION + SALARY (posted comp of the persona's applied job
+    when known, else the role-category median) so the owner sees the pay at a glance in Telegram."""
     head = {"offer": "🎉 Новый ОФФЕР", "interview": "📨 Новое приглашение на собеседование"}.get(
         kind, "✉️ Новое событие")
     body = f"{head}\nКандидат: {mailbox}\n"
-    if company:
-        body += f"Компания: {company}\n"
+    # company / position / salary — best-effort, never breaks the notification (indexer path)
+    sal = {}
+    try:
+        from backend.tools import interview_priority as _ip
+        sal = _ip.salary_for_mail(mailbox, subject) or {}
+    except Exception:
+        sal = {}
+    comp = company or sal.get("company")
+    if comp:
+        body += f"Компания: {comp}\n"
+    if sal.get("role"):
+        body += f"Позиция: {sal['role']}\n"
+    if sal.get("label"):
+        tag = "оценка" if sal.get("estimated", True) else "по вакансии"
+        body += f"Зарплата ({tag}): {sal['label']}/год\n"
     return body + f"Тема: {(subject or '—')[:140]}"

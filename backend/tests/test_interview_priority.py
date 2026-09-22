@@ -244,3 +244,38 @@ def test_pool_excludes_expired_from_delegatable():
     assert len(full) >= len(bookable)
     # facets total counts only bookable ones
     assert pool.facets().get("total", 0) == len(bookable)
+
+
+# ---- salary_for_mail: company + position + comp for the TG offer/собес ping --------------
+def test_salary_for_mail_posted_comp(monkeypatch):
+    import backend.tools.interview_priority as ip
+    from backend.interviews import pool
+    monkeypatch.setattr(pool, "_base_meta", lambda mb: {"sex": "male", "jobid": "42"})
+    import backend.tools.catalog_db as cdb
+    monkeypatch.setattr(cdb, "jobs_by_ids", lambda ids: {42: {
+        "company": "affirm", "title": "Support Rep", "role_category": "Customer Support & Success",
+        "comp_min": 60000, "comp_max": 90000}})
+    s = ip.salary_for_mail("a.b1@takhet.com", "Offer of Employment")
+    assert s["company"] == "affirm" and s["role"] == "Support Rep"
+    assert s["label"] and s["estimated"] is False           # posted comp → not an estimate
+
+
+def test_salary_for_mail_median_fallback(monkeypatch):
+    import backend.tools.interview_priority as ip
+    from backend.interviews import pool
+    # no jobid → role parsed from the subject → category median (estimated)
+    monkeypatch.setattr(pool, "_base_meta", lambda mb: {"sex": "female", "jobid": None})
+    s = ip.salary_for_mail("c.d2@takhet.com", "Customer Service Representative interview")
+    assert s["estimated"] is True
+    # a label is best-effort; the call must never raise and returns the dict shape
+    assert set(s) == {"label", "company", "role", "estimated"}
+
+
+def test_mail_event_text_includes_salary(monkeypatch):
+    from backend.interviews import notify
+    import backend.tools.interview_priority as ip
+    monkeypatch.setattr(ip, "salary_for_mail", lambda mb, subj="", body="": {
+        "label": "$60k–$90k", "company": "affirm", "role": "Support Rep", "estimated": False})
+    msg = notify.mail_event_text("offer", "a.b1@takhet.com", "Offer!")
+    assert "🎉 Новый ОФФЕР" in msg and "Компания: affirm" in msg
+    assert "Позиция: Support Rep" in msg and "Зарплата (по вакансии): $60k–$90k/год" in msg

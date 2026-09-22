@@ -1580,6 +1580,12 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   offset`) binds the chat_id (a bot can't DM by @username — the user must press Start). Token = `IV_BOT_TOKEN` else
   `TELEGRAM_BOT_TOKEN`. **Token-leak gotcha:** `notify.py` pins `httpx`'s logger to WARNING at import (it logs the full
   `bot<TOKEN>` URL at INFO) — don't lower it. Deploy: `UPDATE iv_interviews SET announced=TRUE` once before first start.
+  **New-offer/собес owner ping carries the SALARY (2026-09-22):** the fresh-mail alert
+  (`mail_indexer._maybe_notify_mail_event` → `notify.mail_event_text`, the dedicated admin bot) now adds **Компания · Позиция ·
+  Зарплата** — `interview_priority.salary_for_mail(mailbox, subject)` resolves the persona's APPLIED job (mailbox → jobid via
+  `pool._base_meta` → `job_catalog`) for the posted comp + real company/title, else the role parsed from the SUBJECT → the
+  role-category MEDIAN (`est_comp`); label tag «по вакансии» (posted) vs «оценка» (median). Best-effort, never breaks indexing.
+  **Touching `notify.py` needs `pm2 restart jobfinder-mail-indexer`** (the indexer holds it). Tests: `test_interview_priority.py`.
 - NOT YET BUILT (Phase 3, deferred): auto-assign. Tests: `test_interviews_*.py` incl. `test_interviews_manager.py` (live DB,
   `test_iv_%`-prefixed, run SEQUENTIALLY; covers the manager tier, MULTI-ROLE union access, inline role-edit live, and
   cascade-delete of any user incl. deactivated/with-history + the 1/2/3/self guards). **PRE-EXISTING (not ours):

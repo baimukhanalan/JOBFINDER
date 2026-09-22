@@ -788,6 +788,16 @@ def _llm_probe(hint: str) -> dict:
             return _row("Локальная модель", "warn",
                         f"{host} · {ms:.0f} мс · {len(ids)} моделей · настроенная модель "
                         "НЕ в списке /models (ни id, ни alias — проверить имя модели в .env)", hint)
+        # Don't spawn a `codex exec` on a KNOWN-down LLM: if the shared tailor breaker is open
+        # (some process already found completions failing), report down from it — no probe, no
+        # hung codex subprocess piling onto the load.
+        try:
+            from backend.services.tailor import tailor as _tl
+            if _tl._breaker_open():
+                return _row("Локальная модель", "down",
+                            f"{host} · completions пропущены (shared breaker открыт — LLM недоступен)", hint)
+        except Exception:
+            pass
         # /models returns 200 even when the model's backend provider is auth-dead (e.g. the Codex
         # token expired → /chat/completions 500). Probe a real tiny completion so `health --alert`
         # fires the DOWN alert on the real outage AND its RECOVERY message when the provider returns.

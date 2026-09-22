@@ -37,10 +37,11 @@ class _Resp:
 
 
 @pytest.fixture(autouse=True)
-def _reset_breaker(monkeypatch):
-    # deterministic clock + no real sleeping; reset breaker state around each test
+def _reset_breaker(monkeypatch, tmp_path):
+    # deterministic clock + no real sleeping; reset breaker state; isolate the SHARED breaker file
     monkeypatch.setattr(t, "_llm_fail_cycles", 0, raising=False)
     monkeypatch.setattr(t, "_llm_down_until", 0.0, raising=False)
+    monkeypatch.setattr(t, "_LLM_BREAKER_FILE", str(tmp_path / "llm_breaker.json"), raising=False)
     monkeypatch.setattr(t.settings, "llm_url", "http://127.0.0.1:8080/v1", raising=False)
     monkeypatch.setattr(t._time, "sleep", lambda *_a, **_k: None)
     # isolate the Sumrak/breaker behaviour from the Claude-CLI fallback (tested separately)
@@ -50,7 +51,7 @@ def _reset_breaker(monkeypatch):
 
 def test_breaker_opens_after_threshold_and_short_circuits(monkeypatch):
     clock = {"t": 0.0}
-    monkeypatch.setattr(t._time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(t._time, "time", lambda: clock["t"])
     calls = {"n": 0}
 
     def _post(*_a, **_k):
@@ -75,7 +76,7 @@ def test_breaker_opens_after_threshold_and_short_circuits(monkeypatch):
 
 def test_breaker_probes_and_closes_on_success_after_cooldown(monkeypatch):
     clock = {"t": 0.0}
-    monkeypatch.setattr(t._time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(t._time, "time", lambda: clock["t"])
     state = {"fail": True}
 
     def _post(*_a, **_k):
@@ -96,7 +97,7 @@ def test_breaker_probes_and_closes_on_success_after_cooldown(monkeypatch):
 
 
 def test_healthy_llm_is_unchanged(monkeypatch):
-    monkeypatch.setattr(t._time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(t._time, "time", lambda: 0.0)
     monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _Resp(200))
     assert t._llm_complete("hi") == "ok"
     assert t._llm_down_until == 0.0                       # never trips when healthy
@@ -105,7 +106,7 @@ def test_healthy_llm_is_unchanged(monkeypatch):
 # ---- Claude CLI fallback (subscription, no API key) --------------------------------------
 def test_claude_cli_used_when_sumrak_5xxs(monkeypatch):
     # Sumrak 500s every attempt → the Claude CLI serves the completion (no raise, no deterministic)
-    monkeypatch.setattr(t._time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(t._time, "time", lambda: 0.0)
     monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _Resp(500))
     monkeypatch.setattr(t, "_claude_cli_complete", lambda prompt: "FROM CLAUDE")
     assert t._llm_complete("hi") == "FROM CLAUDE"
@@ -113,7 +114,7 @@ def test_claude_cli_used_when_sumrak_5xxs(monkeypatch):
 
 def test_claude_cli_used_when_breaker_open(monkeypatch):
     # breaker OPEN → Sumrak is skipped entirely, the Claude CLI serves it
-    monkeypatch.setattr(t._time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(t._time, "time", lambda: 100.0)
     monkeypatch.setattr(t, "_llm_down_until", 999999.0, raising=False)
     calls = {"n": 0}
 

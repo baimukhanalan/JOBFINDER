@@ -29,7 +29,63 @@ logger = logging.getLogger(__name__)
 _LLM_BREAKER_THRESHOLD = int(os.getenv("LLM_BREAKER_THRESHOLD", "2"))    # consecutive failed cycles to trip
 _LLM_BREAKER_COOLDOWN = float(os.getenv("LLM_BREAKER_COOLDOWN", "300"))  # seconds the breaker stays open
 _llm_fail_cycles = 0
-_llm_down_until = 0.0
+# SHARED (cross-process) breaker. A per-process breaker still lets EVERY fresh lane subprocess /
+# bulk worker re-hammer a persistently-down LLM (2 failing ~30s cycles each), and the LLM server
+# spawns a `codex exec` per request — with a dead token those HANG at ~70% CPU and pile up into a
+# load spike. So the "down until" deadline (wall-clock epoch) is persisted to a file: once ANY
+# process trips it, ALL processes skip the LLM until it clears + exactly one re-probes. The module
+# global is just an in-process cache so we don't re-read the file on every call.
+_LLM_BREAKER_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    "data", "llm_breaker.json")
+_llm_down_until = 0.0   # in-process cache of the shared deadline (wall-clock epoch)
+
+
+def _breaker_open() -> bool:
+    """True while the shared LLM breaker deadline (this process's cache OR the on-disk file set by
+    any process) is still in the future — callers then skip the LLM entirely (no codex spawned)."""
+    global _llm_down_until
+    now = _time.time()
+    if _llm_down_until > now:
+        return True
+    try:
+        import json as _json
+        with open(_LLM_BREAKER_FILE) as f:
+            du = float((_json.load(f) or {}).get("down_until", 0))
+        if du > now:
+            _llm_down_until = du
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _trip_breaker() -> None:
+    """Open the shared breaker for the cooldown (persist to the file so all processes see it)."""
+    global _llm_down_until, _llm_fail_cycles
+    _llm_down_until = _time.time() + _LLM_BREAKER_COOLDOWN
+    _llm_fail_cycles = 0
+    try:
+        import json as _json
+        os.makedirs(os.path.dirname(_LLM_BREAKER_FILE), exist_ok=True)
+        tmp = _LLM_BREAKER_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump({"down_until": _llm_down_until}, f)
+        os.replace(tmp, _LLM_BREAKER_FILE)
+    except Exception:
+        pass
+
+
+def _clear_breaker() -> None:
+    """A success closes the breaker for everyone (remove the file)."""
+    global _llm_down_until, _llm_fail_cycles
+    _llm_fail_cycles = 0
+    _llm_down_until = 0.0
+    try:
+        if os.path.exists(_LLM_BREAKER_FILE):
+            os.remove(_LLM_BREAKER_FILE)
+    except Exception:
+        pass
 
 # --- Claude CLI fallback (subscription, NO API key) ------------------------------------
 # When the local Sumrak LLM is down (its Codex provider token expired / hit its quota, or
@@ -269,11 +325,11 @@ def _llm_complete(prompt: str) -> str:
     why the application looked "not fully assembled".
     """
     if settings.llm_url:
-        global _llm_fail_cycles, _llm_down_until
+        global _llm_fail_cycles
         import httpx
         last_exc: Exception | None = None
-        # Try the local Sumrak LLM unless the breaker is open (recent persistent 5xx).
-        if _time.monotonic() >= _llm_down_until:
+        # Try the local Sumrak LLM unless the SHARED breaker is open (recent persistent failure).
+        if not _breaker_open():
             for attempt in range(1, 5):  # up to 4 tries
                 try:
                     r = httpx.post(
@@ -296,19 +352,18 @@ def _llm_complete(prompt: str) -> str:
                         _time.sleep(wait)
                         continue
                     r.raise_for_status()
-                    _llm_fail_cycles = 0            # a success closes the breaker
+                    _clear_breaker()               # a success closes the shared breaker for everyone
                     return r.json()["choices"][0]["message"]["content"]
                 except (httpx.TransportError, httpx.TimeoutException) as e:
                     last_exc = e
                     logger.warning("LLM transport error (attempt %d): %s", attempt, e)
                     _time.sleep(min(2 ** attempt, 20))
-            # the whole retry cycle failed — count it toward the breaker
+            # the whole retry cycle failed — count it toward the shared breaker
             _llm_fail_cycles += 1
             if _llm_fail_cycles >= _LLM_BREAKER_THRESHOLD:
-                _llm_down_until = _time.monotonic() + _LLM_BREAKER_COOLDOWN
-                _llm_fail_cycles = 0
-                logger.warning("LLM circuit-breaker OPEN for %.0fs after %d failed cycles — "
-                               "using the Claude CLI / deterministic fallback until it probes again",
+                _trip_breaker()
+                logger.warning("LLM circuit-breaker OPEN (shared, %.0fs) after %d failed cycles — "
+                               "using the deterministic fallback until it probes again",
                                _LLM_BREAKER_COOLDOWN, _LLM_BREAKER_THRESHOLD)
         # Sumrak unavailable (just failed, or the breaker is open) → Claude CLI (subscription).
         cli = _claude_cli_complete(prompt)

@@ -139,3 +139,4 @@ backend/.ts_authkey_public
 backend/data/hiring_events_zoom.json
 data/workday_verified_tenants.json
 data/workday_probe_blocked.json
+data/llm_breaker.json

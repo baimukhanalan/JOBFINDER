@@ -1281,6 +1281,38 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
   next-most-promising (Friendly-Captcha PoW is auto-solvable, but the account/generic-form wall must be cleared first). Ground
   truth for any future lane = the API/on-page ack or a real ack in the persona Maildir.
 
+## Talent-pool résumé-DROP lane (POC — `tools/talent_pool_recon.py` + `tools/talent_pool_drop.py`)
+A DIFFERENT, INBOUND offer channel from per-job ATS applies: drop a synthetic persona's résumé + contact
+into a staffing recruiter POOL (not a specific job) → recruiters reach out with matching roles → their
+mail lands in the persona's @takhet.com Maildir (the SAME CRM the apply lanes feed). It bypasses per-job
+ATS + assessments entirely. Value = a new top-of-funnel that costs no assessment; HONEST caveat = it yields
+PASSIVE, slower/lower-conversion recruiter outreach, not a submitted application. **PURE, network-free
+helpers + registry** (`talent_pool_recon.py`) unit-tested in `test_talent_pool.py`; **driver gated
+`TALENT_POOL_ADVANCE=1`** (off ⇒ DRY RUN: mints a persona, builds the EXACT payload, transmits nothing).
+**NOT cron-wired (proof-of-concept).** `python3 -m backend.tools.talent_pool_drop --list` prints the
+per-pool recon verdicts; `--pool randstad` dry-runs.
+- **RECON (live 2026-09-22): only RANDSTAD exposes a generic (not-per-job) résumé DROP reachable
+  server-side without an account — and it is INVISIBLE-reCAPTCHA-gated** (so NOT a pure captcha-free
+  httpx lane like the Manpower `JobApplyWithEmail` per-job lane). `www.randstadusa.com/job-seeker/submit-
+  your-resume/` is a Drupal WEBFORM `join_randstad` (**CORRECTS the earlier CLAUDE.md "Friendly Captcha"
+  note** — the served form carries an INVISIBLE reCAPTCHA v2 widget `data-captcha-widget-id="cms_captcha"
+  data-size="invisible"`, not Friendly). Two-step, NO account: (1) résumé upload → multipart `POST
+  /dropzonejs/upload?token=<fresh, scraped per page load>` (field `file`) → a file id populating
+  `resume[uploaded_files]`; (2) `POST /api/form/submit` with fields `first_name`/`last_name`/`job_location`
+  (free-text "City, ST")/`job_title` (free text)/`email_address`/`phone_number`/`sms_consent[true]`/
+  `resume[uploaded_files]`/`op="join randstad"`/`webform_id="join_randstad"`/`validation_input=""`. Session
+  cookies (cms_user_id/userSessionID) from the GET must carry into both POSTs. The reCAPTCHA **sitekey is
+  injected by the site `captcha.js` at render (NOT in the initial HTML)** → discover at drive time; solve
+  via CapSolver `ReCaptchaV2TaskProxyLess` (wired `applier/capsolver.py`, needs `CAPTCHA_SOLVER_KEY`) or a
+  headless grecaptcha exec. `_recaptcha_token` REFUSES to POST a doomed drop when the captcha is unsolved.
+  The token FIELD NAME (`cms_captcha` vs `g-recaptcha-response`, JS-injected) is the one live-verify unknown.
+- **Every other surveyed pool is WALLED** (`POOLS` registry): Kelly (mykelly 403 Akamai), Adecco (React SPA
+  + reCAPTCHA), Robert Half (Salesforce account + reCAPTCHA), TTEC (talent community = Taleo profile,
+  register), Teleperformance (Sitecore/Marketo lead form + reCAPTCHA — email capture, NO résumé),
+  Concentrix (Workday/Marketo/SF SPA), Foundever (SuccessFactors RMK `/talentcommunity/subscribe/` = job-
+  ALERT email subscription, NO résumé file). So the BPO "talent communities" don't match the drop-a-résumé
+  goal — they're email-alert subscriptions or account/captcha-walled. Tests: `test_talent_pool.py`.
+
 ## Assessment question-bank HARVESTER (`backend/tools/assessment_harvester/`)
 A separate engine (manual/cron, `DISPLAY=:98 sg mail`, nothing live imports it → no pm2 restart): enters a post-apply
 assessment as a synthetic persona and BANKS every question + options into a unified corpus. Walks the free-response ceiling

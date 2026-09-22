@@ -139,4 +139,12 @@ backend/.ts_authkey_public
 backend/data/hiring_events_zoom.json
 data/workday_verified_tenants.json
 data/workday_probe_blocked.json
+# Auto-promoted iCIMS / Avature mass-hiring tenants (written by the self-verify probes) — data-driven
+data/icims_verified_sources.json
+# Auto-promoted Taleo-family mass-hiring sources (kaiser/percepta) — written by taleo_probe_promote
+data/taleo_verified_sources.json
+data/avature_verified_sources.json
+# Auto-promoted Oracle-ORC mass-hiring sources (molina/hilton) — written by orc_probe_promote
+data/orc_verified_sources.json
+data/orc_probe_blocked.json
 data/llm_breaker.json

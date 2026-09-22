@@ -141,19 +141,59 @@ class _FakeConn:
         return False
 
 
-def test_maximus_ids_scope_matches_avature_and_transcom(monkeypatch):
+_MAXIMUS_URL = "https://maximus.avature.net/careers/Job-Application?folderId=42"
+_TRANSCOM_URL = "https://apply.careers.transcom.com/en_US/careers/JobDetail/x/13462"
+
+
+def test_maximus_ids_drives_maximus_and_gates_transcom(monkeypatch):
+    """The SQL matches both the maximus.avature.net host AND the transcom host, but Maximus is
+    always driven while an UNVERIFIED Transcom is gated OUT (a different Avature tenant)."""
     from backend.tools import mass_hiring_apply_cron as mc
     from backend.tools import mh_settings
-    fake = _FakeConn([(1,), (2,)])
-    monkeypatch.setattr(mc.mail_db, "conn", lambda: fake)
     monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    monkeypatch.setattr(mc, "_read_verified_sources", lambda: set())
+    fake = _FakeConn([(1, _MAXIMUS_URL), (2, _TRANSCOM_URL)])
+    monkeypatch.setattr(mc.mail_db, "conn", lambda: fake)
     out = mc.maximus_ids()
-    assert out == [1, 2]
+    assert out == [1]                          # maximus byte-identical; transcom gated
     sql, params = fake.cur.captured[0]
-    # Both the maximus.avature.net host AND the transcom host (which 302s from transcom.avature.net
-    # but stores apply.careers.transcom.com) are matched.
     assert "apply_url ILIKE %s OR apply_url ILIKE %s" in sql
     assert params == ("%avature%", "%apply.careers.transcom.com%")
-    # sanity: a real transcom apply_url would match the second pattern (bare substring semantics)
-    assert "apply.careers.transcom.com" in \
-        "https://apply.careers.transcom.com/en_US/careers/JobDetail/x/13462"
+
+
+def test_maximus_ids_drives_transcom_once_verified(monkeypatch):
+    from backend.tools import mass_hiring_apply_cron as mc
+    from backend.tools import mh_settings
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    monkeypatch.setattr(mc, "_read_verified_sources", lambda: {"transcom"})   # probe promoted it
+    fake = _FakeConn([(1, _MAXIMUS_URL), (2, _TRANSCOM_URL)])
+    monkeypatch.setattr(mc.mail_db, "conn", lambda: fake)
+    assert mc.maximus_ids() == [1, 2]          # both now live
+
+
+def test_maximus_ids_only_and_exclude(monkeypatch):
+    from backend.tools import mass_hiring_apply_cron as mc
+    from backend.tools import mh_settings
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    monkeypatch.setattr(mc, "_read_verified_sources", lambda: {"transcom"})
+    rows = [(1, _MAXIMUS_URL), (2, _TRANSCOM_URL)]
+    monkeypatch.setattr(mc.mail_db, "conn", lambda: _FakeConn(list(rows)))
+    assert mc.maximus_ids(only="transcom") == [2]
+    monkeypatch.setattr(mc.mail_db, "conn", lambda: _FakeConn(list(rows)))
+    assert mc.maximus_ids(exclude={"maximus"}) == [2]   # catch-all: base Maximus skipped
+
+
+def test_avature_tenant_mapping():
+    from backend.tools import mass_hiring_apply_cron as mc
+    assert mc._avature_tenant(_TRANSCOM_URL) == "transcom"
+    assert mc._avature_tenant(_MAXIMUS_URL) == "maximus"
+    assert mc._avature_tenant("https://foo.avature.net/careers/Register") == "maximus"
+    assert mc._avature_tenant("") == "maximus"
+
+
+def test_avature_live_sources_union(monkeypatch):
+    from backend.tools import mass_hiring_apply_cron as mc
+    monkeypatch.setattr(mc, "_read_verified_sources", lambda: set())
+    assert mc.live_sources() == {"maximus"}
+    monkeypatch.setattr(mc, "_read_verified_sources", lambda: {"transcom"})
+    assert mc.live_sources() == {"maximus", "transcom"}

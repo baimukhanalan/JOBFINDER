@@ -295,16 +295,19 @@ class _FakeConn:
         return False
 
 
-def test_orc_job_ids_scope_includes_molina_and_hilton(monkeypatch):
+def test_orc_job_ids_scope_includes_live_sources(monkeypatch):
     from backend.tools import orc_recon
     from backend.tools import synth_persona
-    # Rows the widened SELECT would return (all staffable CSR titles).
-    rows = [(153, "Customer Service Representative"),
-            (200, "Pharmacy Customer Service Rep"),
-            (300, "Reservations Coordinator")]
+    from backend.tools import mass_hiring_apply_orc_cron as oc
+    # Rows the SQL candidate pool returns (id, title, source) — Python gates by live_sources().
+    rows = [(153, "Customer Service Representative", "alorica"),
+            (200, "Pharmacy Customer Service Rep", "molina"),
+            (300, "Reservations Coordinator", "hilton")]
     fake = _FakeConn(rows)
     monkeypatch.setattr(orc_recon.mail_db, "conn", lambda: fake)
     monkeypatch.setattr(synth_persona, "job_is_staffable", lambda j: True)
+    # With ALL three sources live (as after both probes promote), every staffable row is kept.
+    monkeypatch.setattr(oc, "live_sources", lambda: {"alorica", "molina", "hilton"})
     out = orc_recon.orc_job_ids()
     assert out == [153, 200, 300]
     sql, params = fake.cur.captured[0]
@@ -313,3 +316,26 @@ def test_orc_job_ids_scope_includes_molina_and_hilton(monkeypatch):
     # Alorica rows drain FIRST (proven tenant before the newer same-ATS tenants).
     assert "ORDER BY (source <> 'alorica')" in sql
     assert orc_recon._ORC_SOURCES == ("alorica", "molina", "hilton")
+
+
+def test_orc_job_ids_gates_on_live_sources(monkeypatch):
+    # The whole point of the gate: a collected-but-unverified tenant is DROPPED until live_sources()
+    # includes it (mirrors workday_ids gating on live_tenants). Default live = {alorica} only.
+    from backend.tools import orc_recon
+    from backend.tools import synth_persona
+    from backend.tools import mass_hiring_apply_orc_cron as oc
+    rows = [(153, "Customer Service Representative", "alorica"),
+            (200, "Pharmacy Customer Service Rep", "molina"),
+            (300, "Reservations Coordinator", "hilton")]
+    monkeypatch.setattr(orc_recon.mail_db, "conn", lambda: _FakeConn(rows))
+    monkeypatch.setattr(synth_persona, "job_is_staffable", lambda j: True)
+    monkeypatch.setattr(oc, "live_sources", lambda: {"alorica"})
+    # base only -> alorica kept, molina/hilton (unverified) dropped
+    assert orc_recon.orc_job_ids() == [153]
+    # a promotion adds molina to the live set
+    monkeypatch.setattr(oc, "live_sources", lambda: {"alorica", "molina"})
+    assert orc_recon.orc_job_ids() == [153, 200]
+    # the catch-all excludes the base source, driving only the promoted one
+    assert orc_recon.orc_job_ids(exclude={"alorica"}) == [200]
+    # `only` pins one source (the dedicated cron)
+    assert orc_recon.orc_job_ids(only="alorica") == [153]

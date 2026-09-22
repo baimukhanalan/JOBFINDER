@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import json as _json
 import logging
 import os
 import re
@@ -48,6 +49,46 @@ sys.path.insert(0, REPO)
 LOCK_PATH = os.path.join(REPO, "logs", "orc_apply.lock")
 MAILROOT = "/var/mail/vhosts/takhet.com"
 _PERSONA_EMAIL_RE = re.compile(r"persona:\s*.*?<([^>]+@takhet\.com)>", re.I)
+
+# The Oracle-ORC analogue of mass_hiring_apply_workday_cron.live_tenants(): the single source of
+# truth for which ORC tenants the cron actually DRIVES. Alorica is the LIVE-PROVEN base source
+# (always driven, by its dedicated cron). The newer same-ATS tenants collected onto this lane
+# (molina / hilton) are COLLECT-ONLY until tools/orc_probe_promote.py drives one to a real Oracle
+# application ack and appends the source to the gitignored verified file — a DATA-DRIVEN promotion,
+# no code edit (exactly like the Workday probe→promote→catch-all path).
+_BASE_SOURCES: set[str] = {"alorica"}
+_VERIFIED_PATH = os.path.join(REPO, "data", "orc_verified_sources.json")
+
+
+def _read_verified() -> set:
+    try:
+        with open(_VERIFIED_PATH) as f:
+            v = _json.load(f)
+        return {str(t) for t in v} if isinstance(v, list) else set()
+    except Exception:
+        return set()
+
+
+def add_verified(source: str) -> None:
+    """Append an auto-verified ORC source to the gitignored verified file (idempotent, atomic).
+    Called by tools/orc_probe_promote.py ONLY after a real Oracle Maildir ack — never on partial
+    evidence."""
+    cur = _read_verified()
+    if source in cur:
+        return
+    cur.add(source)
+    os.makedirs(os.path.dirname(_VERIFIED_PATH), exist_ok=True)
+    tmp = _VERIFIED_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        _json.dump(sorted(cur), f)
+    os.replace(tmp, _VERIFIED_PATH)
+
+
+def live_sources() -> set:
+    """Base {alorica} UNION any probe-verified sources — mirrors mass_hiring_apply_workday_cron
+    .live_tenants(). orc_recon.orc_job_ids() gates on this, so a probe-cron promotion goes live
+    with NO code edit."""
+    return set(_BASE_SOURCES) | _read_verified()
 
 
 def _persona_email_from_output(out: str) -> str | None:
@@ -119,6 +160,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="apply to only the first N ORC jobs (0 = all)")
     ap.add_argument("--only", type=int, default=0, help="apply to just this one mass_hiring_jobs id")
+    ap.add_argument("--source", default=None,
+                    help="restrict to ONE ORC source (e.g. alorica) — mirrors the Workday --tenant "
+                         "pin so the dedicated alorica cron never touches a promoted tenant")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated ORC sources to SKIP; the catch-all cron passes the base "
+                         "source that has its own dedicated cron (e.g. --exclude alorica) so it "
+                         "drives only the probe-promoted tenants")
     ap.add_argument("--keep", type=int, default=12, help="minutes cap per application")
     ap.add_argument("--skip-confirmed", action="store_true",
                     help="skip jobids already confirmed=True in orc_apply.log (resume a partial pass)")
@@ -141,7 +189,8 @@ def main() -> None:
     if args.only:
         ids = [args.only]
     else:
-        ids = orc_job_ids()
+        _exclude = {s.strip().lower() for s in (args.exclude or "").split(",") if s.strip()}
+        ids = orc_job_ids(only=args.source, exclude=_exclude)
         # High-pay-first order + STOP-ON-RESPONSE (drop jobs that already reached interview/offer)
         # BEFORE --limit so the top-N are the highest-paying OPEN jobs. Guarded — falls back to the
         # id-ordered list on any error / a worktree without uploads/ (offer_priority).

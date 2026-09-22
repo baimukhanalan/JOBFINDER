@@ -41,6 +41,8 @@ logger = logging.getLogger("tp_apply_cron")
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, REPO)
 
+import json as _json  # noqa: E402
+
 from backend.tools import mail_db, offer_priority  # noqa: E402
 
 LOCK_PATH = os.path.join(REPO, "logs", "tp_apply.lock")
@@ -52,15 +54,71 @@ _TP_CONFIRM_FROM = "teleperformance+autoreply@talent.icims.com"
 _TP_CONFIRM_SUBJECT_RE = re.compile(r"thank you for applying", re.I)
 _PERSONA_EMAIL_RE = re.compile(r"persona:\s*.*?<([^>]+@takhet\.com)>", re.I)
 
+# ---- live source gate (Teleperformance base UNION auto-verified iCIMS tenants) -------------------
+# The `%icims%` apply_url predicate matches EVERY iCIMS tenant on the board — Teleperformance AND
+# other tenants like Cotiviti (careers-cotiviti.icims.com). Only the PROVEN tenants are driven: the
+# base TP source always, plus any tenant the self-verify probe (tools/icims_probe_promote.py) has
+# landed a real "Thank You for Applying" ack for, appended (gitignored, data-driven — no code edit)
+# to data/icims_verified_sources.json. Cotiviti is a DIFFERENT iCIMS tenant than TP, so it is driven
+# ONLY once verified — never auto-applied on the bare `%icims%` scope (additive; TP is untouched).
+_BASE_ICIMS_SOURCES = frozenset({"teleperformance"})
+_VERIFIED_SOURCES_PATH = os.path.join(REPO, "data", "icims_verified_sources.json")
 
-def tp_job_ids() -> list[int]:
+
+def _read_verified_sources() -> set:
+    try:
+        with open(_VERIFIED_SOURCES_PATH) as f:
+            v = _json.load(f)
+        return {str(s) for s in v} if isinstance(v, list) else set()
+    except Exception:
+        return set()
+
+
+def add_verified_source(source: str) -> None:
+    """Append an auto-verified iCIMS tenant SOURCE to the gitignored file (idempotent, atomic).
+    Called by icims_probe_promote on a confirmed ack — live_sources() then unions it in."""
+    cur = _read_verified_sources()
+    if source in cur:
+        return
+    cur.add(source)
+    os.makedirs(os.path.dirname(_VERIFIED_SOURCES_PATH), exist_ok=True)
+    tmp = _VERIFIED_SOURCES_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        _json.dump(sorted(cur), f)
+    os.replace(tmp, _VERIFIED_SOURCES_PATH)
+
+
+def live_sources() -> set:
+    """Base TP source(s) UNION any auto-verified iCIMS tenant sources — the single source of truth
+    for which iCIMS tenants the cron drives. Probe promotion writes the verified file; no code edit."""
+    return set(_BASE_ICIMS_SOURCES) | _read_verified_sources()
+
+
+def tp_job_ids(only: str | None = None, exclude: set[str] | None = None) -> list[int]:
+    """Active iCIMS jobs (apply_url host is iCIMS) whose SOURCE is a live-validated tenant.
+
+    `only` restricts to one source (e.g. cotiviti); `exclude` drops the named sources — the catch-all
+    cron passes `exclude={'teleperformance'}` so it drives only the AUTO-PROMOTED tenants (TP runs on
+    its own dedicated cron), mirroring the Workday `workday_ids(only=, exclude=)` catch-all pattern."""
+    live = live_sources()
+    exclude = exclude or set()
     with mail_db.conn() as c:
         cur = c.cursor()
         cur.execute(
-            "SELECT id FROM mass_hiring_jobs WHERE apply_url ILIKE %s AND active ORDER BY id",
+            "SELECT id, source FROM mass_hiring_jobs WHERE apply_url ILIKE %s AND active ORDER BY id",
             ("%icims%",))
-        from backend.tools import mh_settings
-        return mh_settings.drop_spanish([r[0] for r in cur.fetchall()])
+        rows = cur.fetchall()
+    out: list[int] = []
+    for jid, src in rows:
+        if src not in live:
+            continue
+        if only and src != only:
+            continue
+        if src in exclude:
+            continue
+        out.append(jid)
+    from backend.tools import mh_settings
+    return mh_settings.drop_spanish(out)
 
 
 def _persona_email_from_output(out: str) -> str | None:
@@ -202,6 +260,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="apply to only the first N TP jobs (0 = all)")
     ap.add_argument("--only", type=int, default=0, help="apply to just this one mass_hiring_jobs id")
+    ap.add_argument("--source", default=None,
+                    help="restrict to one iCIMS tenant source (e.g. cotiviti)")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated iCIMS sources to SKIP (the catch-all cron passes the base "
+                         "'teleperformance' that has its own dedicated cron line)")
     ap.add_argument("--keep", type=int, default=13, help="minutes cap per application")
     ap.add_argument("--rounds", type=int, default=1, help="applications per TP job this run")
     ap.add_argument("--workers", type=int, default=1,
@@ -222,7 +285,8 @@ def main() -> None:
     if args.only:
         ids = [args.only]
     else:
-        ids = tp_job_ids()
+        _exclude = {s.strip().lower() for s in (args.exclude or "").split(",") if s.strip()}
+        ids = tp_job_ids(only=args.source, exclude=_exclude)
         if args.skip_confirmed:
             done = _confirmed_jobids_in_log()
             ids = [i for i in ids if i not in done]

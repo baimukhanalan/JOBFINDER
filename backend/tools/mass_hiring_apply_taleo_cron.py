@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import email
 import fcntl
+import json
 import logging
 import os
 import re
@@ -53,6 +54,80 @@ MAIL_DOMAIN = "takhet.com"
 _TTEC_CONFIRM_FROM = "jobopportunities@ttec.com"
 _TTEC_CONFIRM_SUBJECT_RE = re.compile(r"thank you for applying|required assessment", re.I)
 _PERSONA_EMAIL_RE = re.compile(r"persona:\s*.*?<([^>]+@takhet\.com)>", re.I)
+
+
+# --- live-source union (self-verifying auto-promotion) -------------------------------------------
+#
+# The Taleo analogue of mass_hiring_apply_workday_cron.live_tenants(). `ttec` is the LIVE-PROVEN base
+# source (its own dedicated cron drives it, byte-identical). Additional Taleo-family sources
+# (kaiser=kp.taleo.net, percepta=percepta.taleo.net) are collected COLLECT-FIRST and only become
+# LIVE once tools/taleo_probe_promote.py drives ONE application to a real Maildir receipt and appends
+# the source to the gitignored data/taleo_verified_sources.json — so promotion is DATA-DRIVEN, no
+# code edit. live_sources() unions the base with that file; the catch-all cron drives it EXCLUDING
+# ttec (which keeps its dedicated cron line).
+_BASE_SOURCES: set[str] = {"ttec"}
+_VERIFIED_SOURCES_PATH = os.path.join(REPO, "data", "taleo_verified_sources.json")
+
+
+def _read_verified_sources() -> set:
+    try:
+        with open(_VERIFIED_SOURCES_PATH) as f:
+            v = json.load(f)
+        return {str(s) for s in v} if isinstance(v, list) else set()
+    except Exception:
+        return set()
+
+
+def add_verified_source(source: str) -> None:
+    """Append a probe-verified Taleo source to the gitignored verified file (idempotent, atomic)."""
+    cur = _read_verified_sources()
+    if source in cur:
+        return
+    cur.add(source)
+    os.makedirs(os.path.dirname(_VERIFIED_SOURCES_PATH), exist_ok=True)
+    tmp = _VERIFIED_SOURCES_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(sorted(cur), f)
+    os.replace(tmp, _VERIFIED_SOURCES_PATH)
+
+
+def live_sources() -> set:
+    """Base _BASE_SOURCES ({'ttec'}) UNION any probe-verified sources — the single source of truth
+    for which Taleo-family sources the catch-all cron drives. Probe promotion writes the verified
+    file; no code edit."""
+    return set(_BASE_SOURCES) | _read_verified_sources()
+
+
+def taleo_ids(only: str | None = None, exclude: set[str] | None = None) -> list[int]:
+    """Active jobs whose source is in live_sources() and that we can HONESTLY staff — excludes
+    licensed-insurance + exotic-bilingual roles, same eligibility as ttec_job_ids(). Mirrors
+    workday_ids(only=, exclude=).
+
+    `only` restricts to one source; `exclude` drops the named sources. The catch-all cron passes
+    `--exclude ttec` so this drives ONLY the AUTO-PROMOTED sources (ttec keeps its own dedicated
+    cron line) — INERT until a source is promoted (before promotion live_sources()=={'ttec'}, so
+    `exclude={'ttec'}` leaves the set empty)."""
+    from backend.tools.synth_persona import job_is_staffable
+    from backend.tools.taleo_recon import _TTEC_LICENSED_IDS, is_licensed
+    exclude = exclude or set()
+    sources = sorted(live_sources())
+    out: list[int] = []
+    with mail_db.conn() as c:
+        cur = c.cursor()
+        cur.execute("SELECT id, title, source FROM mass_hiring_jobs "
+                    "WHERE source = ANY(%s) AND active ORDER BY id", (sources,))
+        for jid, title, src in cur.fetchall():
+            if only and src != only:
+                continue
+            if src in exclude:
+                continue
+            if jid in _TTEC_LICENSED_IDS or is_licensed(title):
+                continue
+            if not job_is_staffable({"title": title}):
+                continue
+            out.append(jid)
+    from backend.tools import mh_settings
+    return mh_settings.drop_spanish(out)
 
 
 def ttec_job_ids() -> list[int]:
@@ -184,7 +259,15 @@ def main() -> None:
                          "so parallel is safe). The box has headroom for ~3.")
     ap.add_argument("--skip-confirmed", action="store_true",
                     help="skip jobids already confirmed=True in taleo_apply.log (resume a partial pass)")
+    ap.add_argument("--source", default=None,
+                    help="catch-all lane: restrict to ONE promoted Taleo source (e.g. kaiser)")
+    ap.add_argument("--exclude", default="",
+                    help="catch-all lane: comma-separated Taleo sources to SKIP. The catch-all cron "
+                         "passes --exclude ttec so it drives only the AUTO-PROMOTED sources (ttec "
+                         "keeps its own dedicated cron line). Omitting both --source/--exclude keeps "
+                         "the default ttec-only behaviour byte-identical.")
     args = ap.parse_args()
+    _exclude = {s.strip().lower() for s in (args.exclude or "").split(",") if s.strip()}
 
     os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
     lock = open(LOCK_PATH, "w")
@@ -197,7 +280,13 @@ def main() -> None:
     if args.only:
         ids = [args.only]
     else:
-        ids = ttec_job_ids()
+        if args.source or _exclude:
+            # Catch-all lane: drive the AUTO-PROMOTED Taleo sources (kaiser/percepta). ttec keeps
+            # its own dedicated cron, so the catch-all passes --exclude ttec. INERT until a source
+            # is promoted into data/taleo_verified_sources.json by taleo_probe_promote.
+            ids = taleo_ids(only=(args.source or None), exclude=_exclude)
+        else:
+            ids = ttec_job_ids()
         if args.skip_confirmed:
             done = _confirmed_jobids_in_log()
             ids = [i for i in ids if i not in done]

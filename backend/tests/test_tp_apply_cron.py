@@ -75,14 +75,45 @@ class _FakeConn:
         return False
 
 
-def test_tp_job_ids_scope_covers_cotiviti_icims(monkeypatch):
+def test_tp_job_ids_drives_base_tp_and_gates_cotiviti(monkeypatch):
+    """The %icims% predicate matches EVERY iCIMS tenant, but only live_sources() are driven: the base
+    TP source always, an UNVERIFIED tenant (cotiviti) NEVER — until the probe promotes it."""
     from backend.tools import mh_settings
-    fake = _FakeConn([(16254,)])   # a cotiviti (careers-cotiviti.icims.com) row
-    monkeypatch.setattr(tp.mail_db, "conn", lambda: fake)
     monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    # DB returns a TP row + an (unverified) cotiviti row; only the TP one is driven.
+    monkeypatch.setattr(tp, "_read_verified_sources", lambda: set())
+    fake = _FakeConn([(500, "teleperformance"), (16254, "cotiviti")])
+    monkeypatch.setattr(tp.mail_db, "conn", lambda: fake)
     out = tp.tp_job_ids()
-    assert out == [16254]
+    assert out == [500]                       # cotiviti gated out
     sql, params = fake.cur.captured[0]
-    assert params == ("%icims%",)      # ANY iCIMS tenant, incl. Cotiviti — no scope-widening needed
-    # a cotiviti apply_url is an iCIMS host, so the %icims% predicate already selects it
-    assert "icims" in "https://careers-cotiviti.icims.com/jobs/20277/x/job".lower()
+    assert params == ("%icims%",)             # host scope unchanged; the SOURCE filter gates the tenant
+    assert "source" in sql.lower()            # query now also selects the source column
+
+
+def test_tp_job_ids_drives_cotiviti_once_verified(monkeypatch):
+    from backend.tools import mh_settings
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    monkeypatch.setattr(tp, "_read_verified_sources", lambda: {"cotiviti"})   # probe promoted it
+    fake = _FakeConn([(500, "teleperformance"), (16254, "cotiviti")])
+    monkeypatch.setattr(tp.mail_db, "conn", lambda: fake)
+    assert tp.tp_job_ids() == [500, 16254]    # both now live
+
+
+def test_tp_job_ids_only_and_exclude(monkeypatch):
+    """`only=` restricts to one source; `exclude=` drops one — the catch-all cron excludes the base."""
+    from backend.tools import mh_settings
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    monkeypatch.setattr(tp, "_read_verified_sources", lambda: {"cotiviti"})
+    rows = [(500, "teleperformance"), (16254, "cotiviti")]
+    monkeypatch.setattr(tp.mail_db, "conn", lambda: _FakeConn(list(rows)))
+    assert tp.tp_job_ids(only="cotiviti") == [16254]
+    monkeypatch.setattr(tp.mail_db, "conn", lambda: _FakeConn(list(rows)))
+    assert tp.tp_job_ids(exclude={"teleperformance"}) == [16254]   # catch-all: base TP skipped
+
+
+def test_live_sources_union(monkeypatch):
+    monkeypatch.setattr(tp, "_read_verified_sources", lambda: set())
+    assert tp.live_sources() == {"teleperformance"}                # base only
+    monkeypatch.setattr(tp, "_read_verified_sources", lambda: {"cotiviti"})
+    assert tp.live_sources() == {"teleperformance", "cotiviti"}    # base UNION verified

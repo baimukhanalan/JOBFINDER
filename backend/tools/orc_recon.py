@@ -120,19 +120,38 @@ def _synth_phone(email: str) -> str:
 _ORC_SOURCES = ("alorica", "molina", "hilton")
 
 
-def orc_job_ids() -> list[int]:
-    """Active Oracle-ORC rows we can honestly staff (Alorica first, then Molina/Hilton — same
-    `OracleORCStrategy`; drop exotic-language roles a synthetic English/Spanish/Russian persona
-    can't truthfully claim)."""
+def orc_job_ids(only: str | None = None, exclude: set | None = None) -> list[int]:
+    """Active Oracle-ORC rows we can honestly staff, restricted to the LIVE-VALIDATED sources.
+
+    Gated on `mass_hiring_apply_orc_cron.live_sources()` (base {alorica} UNION the probe-verified
+    file) — so a collected-but-unverified tenant (molina/hilton) is NEVER driven until
+    tools/orc_probe_promote.py lands a real ack for it, exactly like `workday_ids` gates on
+    `live_tenants()`. `only` pins ONE source (the dedicated alorica cron); `exclude` drops named
+    sources (the catch-all cron passes the base source so it drives only the promoted ones). Alorica
+    drains first; exotic-language roles a synthetic English/Spanish/Russian persona can't truthfully
+    claim are dropped."""
+    from backend.tools import mass_hiring_apply_orc_cron as _oc
     from backend.tools.synth_persona import job_is_staffable
+    live = {s.lower() for s in _oc.live_sources()}
+    exclude = {s.lower() for s in (exclude or set())}
+    only_l = only.lower() if only else None
     out: list[int] = []
     with mail_db.conn() as c:
         cur = c.cursor()
-        # Alorica (the proven tenant) first, then the newer same-ATS tenants, id-stable within each.
-        cur.execute("SELECT id, title FROM mass_hiring_jobs "
+        # SQL fetches the full ORC candidate pool (Alorica first, then the newer same-ATS tenants,
+        # id-stable within each); the source GATE is applied in Python so live_sources()/only/exclude
+        # are honored + unit-testable, and Alorica's fetch is byte-identical to before.
+        cur.execute("SELECT id, title, source FROM mass_hiring_jobs "
                     "WHERE source = ANY(%s) AND active "
                     "ORDER BY (source <> 'alorica'), id", (list(_ORC_SOURCES),))
-        for jid, title in cur.fetchall():
+        for jid, title, source in cur.fetchall():
+            src = (source or "").lower()
+            if src not in live:
+                continue
+            if only_l and src != only_l:
+                continue
+            if src in exclude:
+                continue
             if not job_is_staffable({"title": title}):
                 continue
             out.append(jid)

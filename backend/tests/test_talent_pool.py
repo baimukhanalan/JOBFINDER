@@ -99,13 +99,25 @@ def test_parse_upload_path():
     assert tpr.parse_upload_path("<div>no dropzone</div>") is None
 
 
-def test_parse_captcha_detects_invisible_recaptcha_and_sitekey():
+def test_parse_captcha_static_html_recaptcha_scripts():
+    # a page whose only captcha signal is grecaptcha scripts (no FriendlyCaptcha render classes)
     c = tpr.parse_captcha(_PAGE)
     assert c["present"] is True
     assert c["widget_id"] == "cms_captcha"
     assert c["size"] == "invisible"
     assert c["kind"] == "recaptcha_v2_invisible"
     assert c["sitekey"] == "6LcAbCdEfGhIjKlMnOpQrStUvWxYz0123456789A"
+
+
+def test_parse_captcha_detects_friendly_from_live_render():
+    # the LIVE Randstad page renders the cms_captcha div as FriendlyCaptcha (confirmed 2026-09-22)
+    live = ('<div data-captcha-widget-id="cms_captcha" data-size="invisible" '
+            'class="webform-element-width captcha bluex-friendly-captcha">Anti-Robot Verification</div>'
+            '<script src="https://cdn.jsdelivr.net/npm/friendly-challenge/widget.min.js"></script>')
+    c = tpr.parse_captcha(live)
+    assert c["present"] is True
+    assert c["kind"] == "friendly_captcha"     # FriendlyCaptcha wins over the bare widget div
+    assert c["widget_id"] == "cms_captcha"
 
 
 def test_parse_captcha_absent():
@@ -135,7 +147,7 @@ def test_registry_verdicts():
     assert tpr.viable_pools() == ["randstad"]
     r = tpr.POOLS["randstad"]
     assert r["reachable_serverside"] and r["resume_drop"] and not r["account_required"]
-    assert r["captcha"] == "recaptcha_v2_invisible"
+    assert r["captcha"] == "friendly_captcha"   # live wall = FriendlyCaptcha, NopeCHA can't solve it
     # every other surveyed pool is walled / no-résumé / captcha-lead-form
     for k in ("kelly", "adecco", "roberthalf", "ttec", "teleperformance", "concentrix", "foundever"):
         assert tpr.POOLS[k]["viable"] is False

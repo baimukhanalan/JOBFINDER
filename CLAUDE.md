@@ -1292,27 +1292,32 @@ Ceiling for all: real HIRE is human-gated by a later assessment.
 A DIFFERENT, INBOUND offer channel from per-job ATS applies: drop a synthetic persona's résumé + contact
 into a staffing recruiter POOL (not a specific job) → recruiters reach out with matching roles → their
 mail lands in the persona's @takhet.com Maildir (the SAME CRM the apply lanes feed). It bypasses per-job
-ATS + assessments entirely. Value = a new top-of-funnel that costs no assessment; HONEST caveat = it yields
-PASSIVE, slower/lower-conversion recruiter outreach, not a submitted application. **PURE, network-free
-helpers + registry** (`talent_pool_recon.py`) unit-tested in `test_talent_pool.py`; **driver gated
-`TALENT_POOL_ADVANCE=1`** (off ⇒ DRY RUN: mints a persona, builds the EXACT payload, transmits nothing).
-**NOT cron-wired (proof-of-concept).** `python3 -m backend.tools.talent_pool_drop --list` prints the
-per-pool recon verdicts; `--pool randstad` dry-runs.
-- **RECON (live 2026-09-22): only RANDSTAD exposes a generic (not-per-job) résumé DROP reachable
-  server-side without an account — and it is INVISIBLE-reCAPTCHA-gated** (so NOT a pure captcha-free
-  httpx lane like the Manpower `JobApplyWithEmail` per-job lane). `www.randstadusa.com/job-seeker/submit-
-  your-resume/` is a Drupal WEBFORM `join_randstad` (**CORRECTS the earlier CLAUDE.md "Friendly Captcha"
-  note** — the served form carries an INVISIBLE reCAPTCHA v2 widget `data-captcha-widget-id="cms_captcha"
-  data-size="invisible"`, not Friendly). Two-step, NO account: (1) résumé upload → multipart `POST
-  /dropzonejs/upload?token=<fresh, scraped per page load>` (field `file`) → a file id populating
-  `resume[uploaded_files]`; (2) `POST /api/form/submit` with fields `first_name`/`last_name`/`job_location`
-  (free-text "City, ST")/`job_title` (free text)/`email_address`/`phone_number`/`sms_consent[true]`/
-  `resume[uploaded_files]`/`op="join randstad"`/`webform_id="join_randstad"`/`validation_input=""`. Session
-  cookies (cms_user_id/userSessionID) from the GET must carry into both POSTs. The reCAPTCHA **sitekey is
-  injected by the site `captcha.js` at render (NOT in the initial HTML)** → discover at drive time; solve
-  via CapSolver `ReCaptchaV2TaskProxyLess` (wired `applier/capsolver.py`, needs `CAPTCHA_SOLVER_KEY`) or a
-  headless grecaptcha exec. `_recaptcha_token` REFUSES to POST a doomed drop when the captcha is unsolved.
-  The token FIELD NAME (`cms_captcha` vs `g-recaptcha-response`, JS-injected) is the one live-verify unknown.
+ATS + assessments entirely. Value = a new top-of-funnel that costs no assessment; HONEST caveat = PASSIVE,
+slower/lower-conversion recruiter outreach, not a submitted application. Recon helpers + registry
+(`talent_pool_recon.py`, network-free) unit-tested in `test_talent_pool.py`; **BROWSER driver gated
+`TALENT_POOL_ADVANCE=1`** (off ⇒ DRY RUN: mint persona, open page, fill every field + attach résumé,
+screenshot, NEVER submit). **NOT cron-wired (proof-of-concept).** `talent_pool_drop --list` prints the
+per-pool verdicts; `--pool randstad` dry-runs. `TALENT_POOL_HEADFUL=1` forces headful (needs `DISPLAY=:98`);
+default is new-headless (no `:98` contention — the vendored NopeCHA ext loads fine headless).
+- **RANDSTAD is the ONE reachable + fully FILLABLE generic résumé drop (no account) — but the HONEST WALL
+  is FriendlyCaptcha, which NopeCHA CANNOT solve** (live-proven 2026-09-22). `www.randstadusa.com/job-seeker/
+  submit-your-resume/` = Drupal WEBFORM `join_randstad`. **The captcha widget `data-captcha-widget-id=
+  "cms_captcha"` is rendered by the site `captcha.js` as FriendlyCaptcha** (`class="bluex-friendly-captcha"`,
+  "Anti-Robot Verification / Click to start verification"; `friendly-challenge` script present, NO
+  `recaptcha/api.js`, no reCAPTCHA iframe). **So CLAUDE.md's ORIGINAL "Friendly Captcha" note was RIGHT** —
+  a mid-task "invisible reCAPTCHA v2" claim (drawn from the bare static-HTML div BEFORE captcha.js runs) was
+  WRONG; `parse_captcha` now returns `friendly_captcha` from the LIVE `page.content()`. NopeCHA does
+  reCAPTCHA/hCaptcha/Turnstile ONLY → it can't touch FriendlyCaptcha, and the automated browser hits
+  FriendlyCaptcha **"Browser check failed"** (screenshot `logs/talent_pool/01_filled.png`). **What DOES work
+  (proven live):** the whole form fills server-side — first/last/email/phone `.fill()`; location + job_title
+  are AUTOCOMPLETE typeaheads (`_fill_typeahead`: type → ArrowDown → Enter picks a real option, e.g.
+  "Columbus" → "Columbus, Georgia"); the résumé uploads via the dropzone real input **`input.dz-hidden-input`**
+  (NOT `edit-resume`, which becomes a click-zone) → `POST /dropzonejs/upload?token=<fresh>` populates
+  `resume[uploaded_files]` with a real file id. Only the FriendlyCaptcha gate blocks the final
+  `op="join randstad"` submit → `/api/form/submit`. UNBUILT paths past it: (a) a legit HEADFUL browser whose
+  FriendlyCaptcha browser-check passes on its own (unproven — deferred under `:98` load ~16); (b) CapSolver's
+  paid FriendlyCaptcha task (not wired). NopeCHA is NOT one of them. `build_randstad_form` documents the exact
+  `/api/form/submit` fields.
 - **Every other surveyed pool is WALLED** (`POOLS` registry): Kelly (mykelly 403 Akamai), Adecco (React SPA
   + reCAPTCHA), Robert Half (Salesforce account + reCAPTCHA), TTEC (talent community = Taleo profile,
   register), Teleperformance (Sitecore/Marketo lead form + reCAPTCHA — email capture, NO résumé),

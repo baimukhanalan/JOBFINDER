@@ -524,16 +524,22 @@ def handled_pool_mailboxes() -> set:
 def allocate_interview(mailbox: str, manager_id: int, company: str = "",
                        jobid: str = "", subject: str = "",
                        source_message_hash: str = "") -> int:
-    """Allocate one pool interview (a persona mailbox) to a manager: insert an unassigned
-    delegation row (status='pool', responsible_id NULL). `subject` is stashed in notes for
-    display. Returns the new row id. The caller guarantees the mailbox is unallocated."""
+    """Allocate one pool interview (a persona mailbox) to a manager. The manager becomes the
+    DEFAULT attendee (responsible_id=manager_id, status='assigned') so every interview handed to
+    him IMMEDIATELY counts as HIS — whatever he does not redistribute to his team stays his to
+    attend (owner directive 2026-09-22: «остаток автоматом переходит ему»). He then hands собесы
+    DOWN to subordinates via `manager_assign_interview`; a `manager_unassign_interview` pulls one
+    back to him. `announced=TRUE` on the auto-allocation so it does NOT spam the per-row
+    «interview assigned» notifier (the Friday/Sunday weekly nudge covers «распредели свою неделю»).
+    `subject` is stashed in notes for display. Returns the new row id. The caller guarantees the
+    mailbox is unallocated."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(
             "INSERT INTO iv_interviews "
             "(mailbox, thread_key, company, jobid, responsible_id, manager_id, status, "
             " source_message_hash, notes, announced) "
-            "VALUES (%s,'',%s,%s,NULL,%s,'pool',%s,%s,TRUE) RETURNING id",
-            (mailbox, company, jobid, manager_id, source_message_hash, subject))
+            "VALUES (%s,'',%s,%s,%s,%s,'assigned',%s,%s,TRUE) RETURNING id",
+            (mailbox, company, jobid, manager_id, manager_id, source_message_hash, subject))
         return cur.fetchone()[0]
 
 
@@ -570,12 +576,14 @@ def manager_assign_interview(iid: int, responsible_id: int,
 
 
 def manager_unassign_interview(iid: int) -> None:
-    """Pull an assigned interview back into the manager's unassigned pool (clears the
-    interviewer + time, status='pool'). The allocation to the manager is kept."""
+    """Pull an interview back from a subordinate to the MANAGER himself — he becomes the attendee
+    again (responsible_id=manager_id, status='assigned'), clearing the fixed time. The allocation
+    to the manager is kept. (Since a manager auto-owns everything allocated to him, «unassign» =
+    «take it back to me», not «drop into a nobody-pool».)"""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute(
-            "UPDATE iv_interviews SET responsible_id=NULL, start_ts=NULL, end_ts=NULL, "
-            "status='pool', announced=TRUE WHERE id=%s", (iid,))
+            "UPDATE iv_interviews SET responsible_id=manager_id, start_ts=NULL, end_ts=NULL, "
+            "status='assigned', announced=TRUE WHERE id=%s AND manager_id IS NOT NULL", (iid,))
 
 
 def deallocate_interview(iid: int) -> None:
@@ -658,3 +666,51 @@ def due_announcements() -> list[dict]:
 def mark_announced(interview_id: int) -> None:
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_interviews SET announced=TRUE WHERE id=%s", (interview_id,))
+
+
+# ---- admin/manager RECLAIM (pull interviews back) ----------------------------------
+def reclaim_interview(iid: int) -> str | None:
+    """Admin pulls ONE interview back to the GLOBAL FREE POOL — delete the row so its mailbox
+    re-enters `pool.unallocated` (works whether it was held by a manager or an interviewer; the
+    persona becomes freely delegatable again). Returns the freed mailbox, or None if the id was
+    already gone. This is the inverse of `allocate_interview` (admin «забрать интервью у
+    пользователя»)."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("DELETE FROM iv_interviews WHERE id=%s RETURNING mailbox", (iid,))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def interviews_held_by(user_id: int, by: str = "responsible") -> list[dict]:
+    """Non-cancelled interviews a user currently holds, newest first. `by='responsible'` = the
+    user is the ATTENDEE (his own queue / calendar); `by='manager'` = every interview allocated
+    under this manager (his + his team's). Spine of the reclaim tools + the personal calendar."""
+    col = "manager_id" if by == "manager" else "responsible_id"
+    with mail_db._cur() as cur:
+        cur.execute(
+            f"SELECT * FROM iv_interviews WHERE {col}=%s AND status <> 'cancelled' "
+            "ORDER BY start_ts NULLS LAST, created_at DESC, id DESC", (user_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ---- weekly Telegram nudge (distribute-your-week) ----------------------------------
+def responsibles_for_nudge() -> list[dict]:
+    """Active responsibles who hold a manager OR employee role AND have linked Telegram — the
+    recipients of the Friday/Sunday «раскидай интервью на неделю» broadcast. Each dict is the full
+    iv_responsibles row (so the caller has roles/name/telegram_chat_id/manager_id)."""
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT * FROM iv_responsibles WHERE active AND telegram_chat_id IS NOT NULL "
+            "AND ('manager' = ANY(roles) OR 'employee' = ANY(roles)) "
+            "ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def responsibles_missing_telegram() -> list[dict]:
+    """Active manager/employee responsibles who have NOT linked Telegram — used to surface the
+    «подключить бота» prompt on their portal (and to know who the nudge can't reach)."""
+    with mail_db._cur() as cur:
+        cur.execute(
+            "SELECT * FROM iv_responsibles WHERE active AND telegram_chat_id IS NULL "
+            "AND ('manager' = ANY(roles) OR 'employee' = ANY(roles)) ORDER BY id")
+        return [dict(r) for r in cur.fetchall()]

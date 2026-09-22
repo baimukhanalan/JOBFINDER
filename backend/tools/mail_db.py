@@ -478,7 +478,8 @@ def mailboxes_with_kind(kind: str) -> set:
 
 
 def candidate_groups(stage: str | None = None, q: str | None = None,
-                     limit: int = 50, offset: int = 0) -> list[dict]:
+                     limit: int = 50, offset: int = 0,
+                     mailboxes: list[str] | None = None) -> list[dict]:
     """One row per candidate MAILBOX that has mail, newest-activity first — the spine of
     the grouped candidate inbox (Gmail-style, one group per persona). Assembled from a
     single GROUP BY plus a DISTINCT ON for each mailbox's latest message (and latest
@@ -498,15 +499,25 @@ def candidate_groups(stage: str | None = None, q: str | None = None,
       'assessment_skipped'|'ack'|'code'|'other') → the candidate's FURTHEST inbound stage is
       that one. q → group-level search (mailbox / candidate / subject).
     Pagination is a plain LIMIT/OFFSET over the last-activity order (matches the roster's
-    existing offset pagination)."""
+    existing offset pagination).
+
+    mailboxes: when a list is passed, the whole result is RESTRICTED to those mailboxes
+    (`mailbox = ANY(%s)`), composing with `q`/`stage` — the scoped candidate inbox for the
+    interviewer/manager cabinet (they see only the candidates they'll interview). Default
+    None ⇒ every mailbox (byte-identical to before this param existed); an empty list ⇒ no
+    rows (a responsible with no assigned mailboxes)."""
     stage = (stage or "").strip().lower()
-    where, wargs = "", []
+    clauses, wargs = [], []
+    if mailboxes is not None:
+        clauses.append("mailbox = ANY(%s)")
+        wargs.append(list(mailboxes))
     if q:
         # membership subquery so a match narrows the GROUPS but counts stay over ALL of
         # each candidate's mail (a row-level filter would under-count matched mailboxes).
-        where = ("WHERE mailbox IN (SELECT mailbox FROM mail_index WHERE "
-                 "mailbox ILIKE %s OR candidate ILIKE %s OR subject ILIKE %s)")
-        wargs = [f"%{q}%", f"%{q}%", f"%{q}%"]
+        clauses.append("mailbox IN (SELECT mailbox FROM mail_index WHERE "
+                       "mailbox ILIKE %s OR candidate ILIKE %s OR subject ILIKE %s)")
+        wargs += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     having, hargs = "", []
     if stage == "sent":
         having = "HAVING bool_or(outbound)"

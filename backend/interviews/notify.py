@@ -294,6 +294,38 @@ def walkin_prep_text(interview: dict, responsible_name: str, tz: str | None = No
     )
 
 
+# The candidate portal base for the weekly nudge deep-link. A manager opens `/manage`,
+# an interviewer `/cabinet`; picked by role inside `weekly_nudge_text`. Just a host — no
+# stack disclosure.
+PORTAL_BASE = "https://jobs.systeam.kz"
+
+
+def weekly_nudge_text(responsible: dict, pending_count: int, portal_url: str,
+                      unscheduled_count: int = 0) -> str:
+    """The Friday/Sunday «распредели/подготовь свою неделю» broadcast body (PURE, no DB, no
+    network). Neutral RU, motivating, promises ~10 минут. A MANAGER is told to раскидать
+    интервью на неделю своей команде (link → `/manage`); an INTERVIEWER to подготовиться к своим
+    предстоящим собесам (link → `/cabinet`). `portal_url` is the BASE host; the right path is
+    chosen here by role so the link is always the recipient's own portal. `pending_count` is their
+    concrete workload; `unscheduled_count` (optional) is how many of those still lack a time — shown
+    only when >0 so the ask is concrete. No stack names."""
+    roles = db.roles_of(responsible)
+    is_manager = "manager" in roles or db.primary_role(roles) == "manager"
+    path = "/manage" if is_manager else "/cabinet"
+    link = portal_url.rstrip("/") + path
+    name = (responsible.get("name") or "").strip() or "коллега"
+    lines = [f"👋 {name}, пора распланировать неделю"]
+    if is_manager:
+        lines.append("Раскидай интервью на неделю своей команде — займёт всего 10 минут.")
+    else:
+        lines.append("Подготовься к своим предстоящим собеседованиям — займёт всего 10 минут.")
+    lines.append(f"Собеседований: {pending_count}")
+    if unscheduled_count:
+        lines.append(f"Из них без назначенного времени: {unscheduled_count}")
+    lines.append(f"Открыть: {link}")
+    return "\n".join(lines)
+
+
 def mail_event_text(kind: str, mailbox: str, subject: str, company: str | None = None) -> str:
     """One-line owner notification for a fresh recruiter mail classified as an OFFER or an interview
     invitation — so a new offer/собес is seen the moment it lands, before assignment. Now also carries

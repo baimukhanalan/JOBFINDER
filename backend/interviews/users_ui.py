@@ -177,6 +177,18 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-pri-exp[open]>summary::before{content:'▾'}
 .u-pri-exp>summary:hover{color:var(--ink-soft)}
 .u-pri-exp .u-pri-list{margin-top:8px}
+/* «Забрать интервью» reuses the .u-alloc-* delegation styles; only a danger-tinted quick list */
+.u-reclaim-quick .u-alloc-row{gap:10px}
+.u-reclaim-quick .u-alloc-nm{flex:1 1 200px}
+/* live-pipeline summary + owner filter above the «Актуальные предстоящие» card */
+.u-live-sum{display:flex;gap:7px 14px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:12.5px;color:var(--ink-soft)}
+.u-live-sum .t{font-weight:700;color:var(--ink)}
+.u-live-sum b{font-family:var(--ff-mono);color:var(--ink)}
+.u-live-sum .s{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.u-live-owner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+.u-live-owner label{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.u-live-owner select{flex:0 1 260px;min-width:0;padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13.5px}
+@media(max-width:560px){.u-live-owner select{flex:1 1 100%}}
 /* the drawer keeps a tappable scrim edge on a phone (94vw, not full-bleed) so tap-outside closes it */
 @media(max-width:760px){.u-h1{font-size:23px}}
 </style>
@@ -419,6 +431,128 @@ def _allocate_card(managers: list[dict], pool_count: int, pool_rows: list[dict],
         "</div>")
 
 
+# ---- RECLAIM: pull interviews back from a user into the free pool (inverse of delegation) ----
+def _holdings(users: list[dict], allocated_rows: list[dict]) -> dict:
+    """{user_id: {"count": n, "by": "manager"|"responsible"}} — how many live interviews each
+    user currently holds, and HOW we'd reclaim them. A user holding the «управляющий» role owns
+    his WHOLE allocation (his own + his team's, counted by `manager_id`); everyone else owns only
+    their personal attendee queue (`responsible_id`). Only users holding ≥1 appear."""
+    mgr_ids = {u["id"] for u in users if "manager" in _roles_of(u)}
+    held: dict = {}
+    for u in users:
+        uid = u["id"]
+        if uid in mgr_ids:
+            n = sum(1 for r in allocated_rows if r.get("manager_id") == uid)
+            by = "manager"
+        else:
+            n = sum(1 for r in allocated_rows if r.get("responsible_id") == uid)
+            by = "responsible"
+        if n:
+            held[uid] = {"count": n, "by": by}
+    return held
+
+
+def _reclaim_user_options(users: list[dict], held: dict) -> str:
+    opts = ["<option value=''>— выберите пользователя —</option>"]
+    for u in users:
+        h = held.get(u["id"])
+        if not h:
+            continue
+        team = " · весь пул (свой + команда)" if h["by"] == "manager" else ""
+        opts.append(
+            f"<option value='{u['id']}'>{escape(u.get('name') or '')} "
+            f"(@{escape(u.get('login') or '')}) · держит: {h['count']}{escape(team)}</option>")
+    return "".join(opts)
+
+
+def _owner_name(r: dict, names_by_id: dict) -> str:
+    """The visible OWNER of an allocated row: the attending interviewer if set, else the
+    delegated manager, else «в пуле» — matches the status chip in the live-pipeline card."""
+    rid = r.get("responsible_id")
+    if rid:
+        return names_by_id.get(rid) or "—"
+    mid = r.get("manager_id")
+    if mid:
+        return names_by_id.get(mid) or "—"
+    return "в пуле"
+
+
+def _reclaim_card(users: list[dict], allocated_rows: list[dict], names_by_id: dict) -> str:
+    """The admin pull-back tools, SYMMETRIC to `_allocate_card`: return a user's held interviews
+    to the free pool — by COUNT (with the same gender/direction filter as split), a SPECIFIC one
+    (email search), or ALL of one user in one click. Rendered only when someone actually holds
+    interviews (else there is nothing to reclaim)."""
+    from backend.interviews import pool as iv_pool
+    held = _holdings(users, allocated_rows)
+    if not held:
+        return ("<div class='u-card'><h3>Забрать интервью</h3>"
+                "<p class='u-chint'>Сейчас ни за кем не закреплены интервью — забирать нечего.</p></div>")
+    user_opts = _reclaim_user_options(users, held)
+    # per-interview: email SEARCH over the currently-held interviews (email is the unique key)
+    dl_opts = []
+    seen = set()
+    for r in allocated_rows:
+        mb = r.get("mailbox") or ""
+        if not mb or mb in seen:
+            continue
+        seen.add(mb)
+        nm = (r.get("candidate") or "").strip()
+        who = _owner_name(r, names_by_id)
+        hint = " · ".join(x for x in (nm, f"у: {who}") if x)
+        dl_opts.append(f"<option value='{escape(mb, quote=True)}'>{escape(hint)}</option>")
+    send_block = (
+        "<div class='u-alloc-sub'><h4>Забрать конкретное интервью</h4>"
+        "<p class='u-chint' style='margin-top:0'>Поиск по e-mail персоны (уникальный ключ) — "
+        "вернётся в свободный пул.</p>"
+        "<form class='u-alloc-send' method='post' action='/users/reclaim/one'>"
+        "<input name='mailbox' list='u-held-emails' required autocomplete='off' "
+        "placeholder='e-mail персоны' aria-label='E-mail интервью'>"
+        f"<datalist id='u-held-emails'>{''.join(dl_opts)}</datalist>"
+        "<button class='hbtn danger' type='submit'>Забрать в пул</button></form></div>")
+    # one-click «забрать всё» per holder (improvement: no need to type a count)
+    quick_rows = []
+    for u in users:
+        h = held.get(u["id"])
+        if not h:
+            continue
+        team = " · свой + команда" if h["by"] == "manager" else ""
+        quick_rows.append(
+            f"<form class='u-alloc-row' method='post' action='/users/reclaim/count' "
+            f"onsubmit=\"return confirm('Вернуть в пул все интервью пользователя? {h['count']} шт.');\">"
+            f"<input type='hidden' name='reclaim_user_id' value='{u['id']}'>"
+            f"<span class='u-alloc-nm'>{escape(u.get('name') or '')} "
+            f"<span class='u-login'>@{escape(u.get('login') or '')}</span> · держит: {h['count']}"
+            f"{escape(team)}</span>"
+            "<button class='hbtn danger' type='submit'>Забрать всё</button></form>")
+    quick_block = (
+        "<div class='u-alloc-sub u-reclaim-quick'><h4>Забрать всё у пользователя</h4>"
+        f"<div class='u-alloc-list'>{''.join(quick_rows)}</div></div>")
+    legend = iv_pool.direction_legend_html("Что означает IT / Не-IT / Другое", align="right")
+    return (
+        "<div class='u-card'>"
+        f"<div class='u-pri-top'><h3>Забрать интервью</h3>{legend}</div>"
+        "<p class='u-chint'>Вернуть выданные интервью обратно в свободный пул. У управляющего "
+        "забирается весь его пул (свой и команды), у интервьюера — его очередь. Можно по "
+        "количеству с фильтром (пол/направление), конкретное интервью, или всё сразу.</p>"
+        "<form class='u-alloc' method='post' action='/users/reclaim/count'>"
+        "<div class='u-alloc-filters'>"
+        f"<select name='reclaim_user_id' required aria-label='Пользователь'>{user_opts}</select>"
+        "</div>"
+        "<div class='u-alloc-filters'>"
+        + _sel("reclaim_gender", _GENDER_OPTS, "Пол")
+        + _sel("reclaim_direction", _DIR_OPTS, "Направление") +
+        "</div>"
+        "<div class='u-alloc-list'><label class='u-alloc-row'>"
+        "<span class='u-alloc-nm'>Сколько забрать (пусто — все по фильтру)</span>"
+        "<input type='number' name='reclaim_count' min='1' step='1' placeholder='все' inputmode='numeric'>"
+        "</label></div>"
+        "<button class='primary' type='submit'>Забрать в пул</button>"
+        "</form>"
+        + send_block
+        + quick_block +
+        "</div>")
+
+
 # ---- interview priority (same signal as the Собес surface: urgency + salary, IT/non-IT) ----
 # every direction gets a tag (incl. 'other' → «Другое») so a priority row is never left tag-less
 _DIR_LBL = {"it": "IT", "nonit": "не‑IT", "other": "Другое"}
@@ -492,13 +626,63 @@ def _pool_priority_card(pool_rows: list[dict], sort: str) -> str:
             + "</div>")
 
 
-def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_id: dict) -> str:
+def _live_owner_filter(allocated_rows: list[dict], names_by_id: dict, live_owner: str) -> str:
+    """A «показать по владельцу» select above the live-pipeline card — the admin can narrow the
+    whole upcoming list to ONE manager/interviewer (or «Все»). Server-side (`?live_owner=<id>`),
+    so it survives a reload; the JS just navigates. Rendered only when ≥1 owner exists."""
+    owner_ids = set()
+    for r in allocated_rows or []:
+        if r.get("responsible_id"):
+            owner_ids.add(r["responsible_id"])
+        if r.get("manager_id"):
+            owner_ids.add(r["manager_id"])
+    if not owner_ids:
+        return ""
+    opts = ["<option value=''>Все</option>"]
+    for uid in sorted(owner_ids, key=lambda i: (names_by_id.get(i) or "").lower()):
+        sel = " selected" if str(uid) == str(live_owner) else ""
+        opts.append(f"<option value='{uid}'{sel}>{escape(names_by_id.get(uid) or '—')}</option>")
+    return ("<div class='u-live-owner'><label for='u-live-owner-sel'>Показать по владельцу:</label>"
+            "<select id='u-live-owner-sel' aria-label='Фильтр по владельцу' onchange='uLiveOwner(this)'>"
+            + "".join(opts) + "</select></div>")
+
+
+def _live_summary(rows: list[dict]) -> str:
+    """«N предстоящих: X в пуле · Y у управляющих · Z назначено» over the NON-expired rows —
+    the counts agree exactly with the status chips the card shows (free / manager / assigned)."""
+    live = [r for r in rows if not r.get("expired")]
+    n_free = sum(1 for r in live if not r.get("responsible_id") and not r.get("manager_id"))
+    n_mgr = sum(1 for r in live if not r.get("responsible_id") and r.get("manager_id"))
+    n_set = sum(1 for r in live if r.get("responsible_id"))
+    return (f"<div class='u-live-sum'><span class='t'>{len(live)} предстоящих:</span>"
+            f"<span class='s'><b>{n_free}</b> в пуле</span>"
+            f"<span class='s'><b>{n_mgr}</b> у управляющих</span>"
+            f"<span class='s'><b>{n_set}</b> назначено</span></div>")
+
+
+def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_id: dict,
+                   users: list[dict] | None = None, live_owner: str = "") -> str:
     """«Актуальный список ВСЕХ предстоящих собеседований» (part 2, admin): the FREE pool plus
     every already-delegated/assigned interview, non-expired first, each with a status chip
     (в пуле / у управляющего / назначен интервьюеру). Complements the free-pool priority card
-    above — here the admin sees the WHOLE live pipeline, not just the undelegated slice."""
+    above — here the admin sees the WHOLE live pipeline, not just the undelegated slice. A
+    summary header + an owner filter (`live_owner`) sit on top so the admin can control
+    urgency/priority across every portal at once."""
     from backend.interviews import priority_ui
-    rows = list(pool_rows or []) + list(allocated_rows or [])
+    pool_part = list(pool_rows or [])
+    alloc_part = list(allocated_rows or [])
+    # optional owner narrowing (a manager sees his whole allocation, an interviewer his queue).
+    owner_id = None
+    if live_owner:
+        try:
+            owner_id = int(live_owner)
+        except (ValueError, TypeError):
+            owner_id = None
+    if owner_id is not None:
+        alloc_part = [r for r in alloc_part
+                      if r.get("responsible_id") == owner_id or r.get("manager_id") == owner_id]
+        pool_part = []      # the free pool has no owner — hidden when filtering to one
+    rows = pool_part + alloc_part
 
     def _status(r: dict) -> str:
         rid = r.get("responsible_id")
@@ -509,13 +693,17 @@ def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_i
             return priority_ui.status_manager(names_by_id.get(mid) or "—")
         return priority_ui.status_free()
 
-    return priority_ui.CSS + priority_ui.upcoming_list(
+    # the owner filter + summary are built over the FULL allocated set (so «Все» is always offered
+    # and the counts describe the whole pipeline), then the card renders the (possibly) filtered rows.
+    owner_filter = _live_owner_filter(allocated_rows or [], names_by_id, live_owner)
+    summary = _live_summary(rows)
+    return (priority_ui.CSS + owner_filter + summary + priority_ui.upcoming_list(
         rows, anchor="u-live", status_of=_status,
         title="Актуальные предстоящие собеседования",
         blurb=("Весь живой поток: свободные в пуле, переданные управляющим и назначенные "
                "интервьюерам — у которых срок брони ещё не истёк, от самых срочных. Явно "
                "просроченные собраны в «Истёкшие»."),
-        empty="Актуальных предстоящих собеседований нет.")
+        empty="Актуальных предстоящих собеседований нет."))
 
 
 _LIST_ICON = ("<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' "
@@ -531,7 +719,7 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
               pool_rows: list[dict] | None = None, mgr_alloc: dict | None = None,
               pool_facets: dict | None = None, me_id: int | None = None,
               pool_sort: str = "salary", allocated_rows: list[dict] | None = None,
-              names_by_id: dict | None = None) -> str:
+              names_by_id: dict | None = None, live_owner: str = "") -> str:
     week_by_id = week_by_id or {}
     managers = managers or []
     pool_rows = pool_rows or []
@@ -629,8 +817,9 @@ def list_page(users: list[dict], avail_by_id: dict, notice=None,
         "<b>интервьюер</b> (свой кабинет). Список пользователей и добавление — в правой панели «Список».</p>"
         + _note(notice)
         + _allocate_card(managers, pool_count, pool_rows, mgr_alloc, pool_facets)
+        + _reclaim_card(users, allocated_rows, names_by_id)
         + _pool_priority_card(pool_rows, pool_sort)
-        + _all_live_card(pool_rows, allocated_rows, names_by_id)
+        + _all_live_card(pool_rows, allocated_rows, names_by_id, users=users, live_owner=live_owner)
         + "</div>"
         + drawer
         + _USERS_JS.replace("__SIG__", escape(week_sig, quote=True)))
@@ -669,6 +858,12 @@ function uDrawer(open){
   document.body.style.overflow = open?'hidden':'';
 }
 document.addEventListener('keydown',function(e){ if(e.key==='Escape') uDrawer(false); });
+// «Актуальные предстоящие» owner filter — navigate to the same page scoped to one owner
+function uLiveOwner(sel){
+  if(!sel) return;
+  var v=sel.value||'';
+  window.location.href = '/users?live_owner='+encodeURIComponent(v)+'#u-live';
+}
 // Auto-refresh the interviewer cards (+ their weekly calendars) when a собес is assigned/
 // reassigned/cancelled elsewhere — so a second admin tab checking load updates itself.
 // Poll a cheap signature; on change, fetch /users and swap just the #u-list cards.

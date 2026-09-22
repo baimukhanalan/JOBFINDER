@@ -368,7 +368,11 @@ def enrich_priority(rows: list[dict]) -> list[dict]:
     return rows
 
 
-_ALLOCATED_SQL = ("SELECT id, mailbox, jobid, subject, company, responsible_id, manager_id, "
+# NB: iv_interviews has NO `subject` column — the invite subject is stashed in `notes` by
+# allocate_interview; alias it so allocated_rows() actually runs (the old bare `subject` raised
+# UndefinedColumn, swallowed by the guard → allocated_rows() silently returned [] on the live
+# schema, leaving the admin «все актуальные предстоящие» allocated half empty).
+_ALLOCATED_SQL = ("SELECT id, mailbox, jobid, notes AS subject, company, responsible_id, manager_id, "
                   "start_ts, source_message_hash FROM iv_interviews "
                   "WHERE status <> 'cancelled' ORDER BY created_at DESC")
 
@@ -499,6 +503,28 @@ def allocate_specific(mailbox: str, manager_id: int) -> bool:
         source_message_hash=row.get("source_hash") or "")
     _invalidate()
     return True
+
+
+def reclaim(user_id: int, n: int | None = None, gender: str | None = None,
+            direction: str | None = None, by: str = "responsible") -> int:
+    """Admin/manager pull-back — the INVERSE of split/allocate. Reclaim up to `n` of a user's held
+    interviews back to the GLOBAL FREE POOL (so their mailboxes re-enter `unallocated`), honouring
+    the gender+direction filter. `by='responsible'` reclaims from that user's OWN attendee queue
+    (an interviewer OR a manager's own собесы); `by='manager'` reclaims across everything allocated
+    under that manager (his + his team's). `n=None` → all matching. Returns the count reclaimed.
+    Symmetric with `split` so the admin can e.g. «забрать у управляющего X 10 IT female»."""
+    rows = enrich_priority(db.interviews_held_by(user_id, by=by))
+    freed = 0
+    for r in rows:
+        if n is not None and freed >= int(n):
+            break
+        if not _match(r, None, gender, direction, include_expired=True):
+            continue
+        if db.reclaim_interview(int(r["id"])) is not None:
+            freed += 1
+    if freed:
+        _invalidate()
+    return freed
 
 
 def split(manager_counts: dict[int, int], gender: str | None = None,

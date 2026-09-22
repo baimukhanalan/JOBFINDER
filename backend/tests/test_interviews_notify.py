@@ -112,6 +112,9 @@ def test_tick_sends_and_marks_idempotent(monkeypatch):
     monkeypatch.setattr(notify, "rich_reminder_text", lambda *a, **k: "rich")
     monkeypatch.setattr(notify, "reminder_text", lambda *a, **k: "rem")
     monkeypatch.setattr(service, "interview_pack", lambda iv: {})
+    # the ADDITIVE weekly nudge is tested separately; keep this tick hermetic regardless of
+    # the day/hour it runs (it must not reach the DB or Telegram here).
+    monkeypatch.setattr(reminders, "_maybe_weekly_nudge", lambda now: 0)
 
     attempted = reminders.tick()
     # 1 announce + 4 reminders (120/60/15/5)
@@ -213,6 +216,103 @@ def test_send_dm_transport_error_does_not_log_token(monkeypatch, caplog):
     assert _SECRET_TOKEN not in joined
     assert "AAF_super_secret" not in joined
     assert "ConnectError" in joined         # only the exception TYPE is logged
+
+
+# ---- weekly «раскидай интервью на неделю» nudge (pure / monkeypatched) -------------
+def test_weekly_nudge_text_manager_mentions_10min_count_and_manage_path():
+    resp = {"name": "Мадина", "roles": ["manager"]}
+    t = notify.weekly_nudge_text(resp, 7, "https://jobs.systeam.kz")
+    assert "10 минут" in t
+    assert "7" in t                       # the pending count
+    assert "/manage" in t and "/cabinet" not in t
+    assert "команде" in t                 # the manager-specific ask
+    low = t.lower()
+    for banned in ("claude", "anthropic", "gpt", "openai", "llm", " ai ", "ии", "chatgpt"):
+        assert banned not in low
+
+
+def test_weekly_nudge_text_interviewer_uses_cabinet_path():
+    resp = {"name": "Sam", "roles": ["employee"]}
+    t = notify.weekly_nudge_text(resp, 3, "https://jobs.systeam.kz/")   # trailing slash tolerated
+    assert "10 минут" in t
+    assert "3" in t
+    assert "/cabinet" in t and "/manage" not in t
+    assert "Подготовься" in t
+    low = t.lower()
+    for banned in ("claude", "anthropic", "gpt", "openai", "llm"):
+        assert banned not in low
+
+
+def test_weekly_nudge_text_manager_wins_when_multirole():
+    # a manager+employee is routed to the higher (manager) surface
+    resp = {"name": "R", "roles": ["employee", "manager"]}
+    assert "/manage" in notify.weekly_nudge_text(resp, 1, "https://x")
+
+
+def test_weekly_nudge_text_shows_unscheduled_only_when_positive():
+    resp = {"name": "R", "roles": ["employee"]}
+    assert "без назначенного времени" in notify.weekly_nudge_text(resp, 5, "https://x", 2).lower()
+    assert "без назначенного времени" not in notify.weekly_nudge_text(resp, 5, "https://x", 0).lower()
+
+
+def test_send_weekly_nudge_counts_sends_and_picks_source_by_role(monkeypatch):
+    sent: list = []
+    recips = [
+        {"id": 1, "name": "Mgr", "roles": ["manager"], "telegram_chat_id": 111},
+        {"id": 2, "name": "Emp", "roles": ["employee"], "telegram_chat_id": 222},
+        {"id": 3, "name": "NoChat", "roles": ["employee"], "telegram_chat_id": None},
+    ]
+    monkeypatch.setattr(db, "responsibles_for_nudge", lambda: recips)
+    held, upcoming = [], []
+
+    def fake_held(uid, by="responsible"):
+        held.append((uid, by))
+        return [{"start_ts": 1}, {"start_ts": None}]
+
+    def fake_upcoming(uid, upcoming_only=False):
+        upcoming.append((uid, upcoming_only))
+        return [{"start_ts": 1}]
+
+    monkeypatch.setattr(db, "interviews_held_by", fake_held)
+    monkeypatch.setattr(db, "interviews_for_responsible", fake_upcoming)
+    monkeypatch.setattr(notify, "send_dm", lambda chat_id, text: (sent.append(chat_id), True)[1])
+
+    n = reminders.send_weekly_nudge(datetime.now(timezone.utc))
+    assert n == 2                          # the two linked recipients; the no-chat one skipped
+    assert sent == [111, 222]
+    assert held == [(1, "responsible")]    # manager → held_by(responsible)
+    assert upcoming == [(2, True)]         # interviewer → for_responsible(upcoming_only=True)
+
+
+def test_maybe_weekly_nudge_day_hour_and_dedupe_gate(monkeypatch, tmp_path):
+    marker = tmp_path / "iv_weekly_nudge.json"
+    monkeypatch.setattr(reminders, "_NUDGE_MARKER", marker)
+    calls: list = []
+    monkeypatch.setattr(reminders, "send_weekly_nudge",
+                        lambda now: (calls.append(now), 4)[1])
+
+    # a Friday 19:05 Almaty == 14:05 UTC (Almaty is +5, no DST)
+    fri = datetime(2026, 9, 25, 14, 5, tzinfo=timezone.utc)   # 2026-09-25 is a Friday
+    assert reminders._maybe_weekly_nudge(fri) == 4
+    assert len(calls) == 1
+    # the 60s loop fires again the same evening -> the marker blocks a second send
+    assert reminders._maybe_weekly_nudge(datetime(2026, 9, 25, 14, 6, tzinfo=timezone.utc)) == 0
+    assert len(calls) == 1
+    # a fresh daemon (re-read the on-disk marker) still won't re-send that day
+    assert reminders._read_nudge_marker() == "2026-09-25:fri"
+
+    # a Wednesday, or a Friday before 19:00 local, is NOT a broadcast window
+    wed = datetime(2026, 9, 23, 14, 5, tzinfo=timezone.utc)   # Wednesday
+    assert reminders._maybe_weekly_nudge(wed) == 0
+    early_fri = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)  # 15:00 Almaty < 19:00
+    assert reminders._maybe_weekly_nudge(early_fri) == 0
+    assert len(calls) == 1
+
+    # Sunday 19:00 local is a fresh window with its own key
+    sun = datetime(2026, 9, 27, 14, 0, tzinfo=timezone.utc)   # 19:00 Almaty, Sunday
+    assert reminders._maybe_weekly_nudge(sun) == 4
+    assert reminders._read_nudge_marker() == "2026-09-27:sun"
+    assert len(calls) == 2
 
 
 # ---- live DB (announcement roundtrip) ----------------------------------------------

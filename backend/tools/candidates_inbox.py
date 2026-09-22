@@ -272,10 +272,11 @@ def _booking_chip(g: dict) -> str:
 
 
 # --------------------------------------------------------------- group cards
-def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
+def _group_card(g: dict, *, hide_stage_dot: bool = False, plain: bool = False) -> str:
     """One candidate card (collapsed). The header toggles the card open (cgToggle);
     its body is filled lazily from /mail/candidates/thread on first open. `hide_stage_dot`
-    drops the stage dot on a single-stage surface (see render_groups)."""
+    drops the stage dot on a single-stage surface (see render_groups). `plain` drops the
+    operator-only right-slot controls + apps chip (the cabinet inbox — see render_groups)."""
     mailbox = g.get("mailbox", "") or ""
     name = g.get("name") or (mailbox.split("@")[0] if mailbox else "?")
     avatar = (f'<span class="avatar cg-ava" style="background:{_avatar_color(name)}">'
@@ -302,18 +303,19 @@ def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
     # «Назначено · <name>» once a booking exists (edit / reassign / cancel via the modal),
     # else «Собес» when the candidate has an interview mail, else nothing.
     sobes = ""
-    asg = g.get("assigned")
-    if asg:
-        sobes = _iv_assigned(mailbox, asg.get("thread_key", "") or "",
-                             asg.get("responsible_name") or "")
-    elif g.get("iv_hash"):
-        if _iv_expired(g):
-            # EXPLICIT booking window lapsed → not bookable/delegatable; muted marker replaces «Собес»
-            sobes = ('<span class="cg-noassign" title="срок бронирования истёк — '
-                     'делегировать нельзя">бронь истекла</span>')
-        else:
-            sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
-                              as_span=True)
+    if not plain:
+        asg = g.get("assigned")
+        if asg:
+            sobes = _iv_assigned(mailbox, asg.get("thread_key", "") or "",
+                                 asg.get("responsible_name") or "")
+        elif g.get("iv_hash"):
+            if _iv_expired(g):
+                # EXPLICIT booking window lapsed → not bookable/delegatable; muted marker replaces «Собес»
+                sobes = ('<span class="cg-noassign" title="срок бронирования истёк — '
+                         'делегировать нельзя">бронь истекла</span>')
+            else:
+                sobes = _iv_sobes(mailbox, g.get("iv_thread", "") or "", g.get("iv_hash", "") or "",
+                                  as_span=True)
 
     unread = g.get("unread", 0)
     unread_badge = f'<span class="cg-cnt" title="непрочитанных">{unread}</span>' if unread else ""
@@ -339,7 +341,7 @@ def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
         f'<div class="cg-top"><span class="cg-name">{escape(name)}</span>'
         f'{clip}<span class="cg-date">{escape(date)}</span></div>'
         f'<div class="cg-preview">{preview}</div>'
-        f'{_metaline(stage_dot, _apps_chip(mailbox), count_ct, sobes, _assessment_control(g), extra=_booking_chip(g) + _deadline_chip(g) + _salary_chip(g))}'
+        f'{_metaline(stage_dot, ("" if plain else _apps_chip(mailbox)), count_ct, sobes, ("" if plain else _assessment_control(g)), extra=_booking_chip(g) + _deadline_chip(g) + _salary_chip(g))}'
         f'</div>'
         f'<div class="cg-right">{unread_badge}<span class="cg-chev">›</span></div>'
         f'</div>'
@@ -348,12 +350,19 @@ def _group_card(g: dict, *, hide_stage_dot: bool = False) -> str:
     )
 
 
-def render_groups(groups, *, hide_stage_dot: bool = False) -> str:
+def render_groups(groups, *, hide_stage_dot: bool = False, plain: bool = False) -> str:
     """Fragment: just the group cards. Used for the first page (inside #grouplist),
     the /mail/candidates/more page fetches, and any AJAX list swap. `hide_stage_dot`
     drops the «• Собес» stage dot on a single-stage surface (the Собес priority page,
-    where every card is interview-stage and the dot only duplicates the «📅 Собес» action)."""
-    return "".join(_group_card(g, hide_stage_dot=hide_stage_dot) for g in (groups or []))
+    where every card is interview-stage and the dot only duplicates the «📅 Собес» action).
+
+    `plain` (the interviewer/manager cabinet inbox) drops the OPERATOR-only controls — the
+    «Собес» assign / «Назначено» reassign control, the assessment «✓ Отметить» action, and the
+    applications-page chip (all link to operator routes an employee can't reach) — leaving a
+    pure read inbox card (avatar / name / preview / counts / stage). Default False keeps the
+    admin «Кандидаты» tab byte-identical."""
+    return "".join(_group_card(g, hide_stage_dot=hide_stage_dot, plain=plain)
+                   for g in (groups or []))
 
 
 # ------------------------------------------------------- expanded message rows

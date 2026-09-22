@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -52,6 +53,44 @@ def _view_as(me: dict, responsible: dict):
     the target id when acting as someone else, else None (a normal self-view)."""
     return responsible["id"] if responsible["id"] != me["id"] else None
 
+
+def _inbox_scope(responsible: dict) -> set:
+    """The mailboxes THIS cabinet may read — the ownership set for the scoped candidate inbox +
+    its thread/message guards. An interviewer: their own assigned собес mailboxes. A MANAGER
+    (multi-role aware): their own assigned mailboxes ∪ every mailbox allocated under them ∪ each
+    active subordinate's assigned mailboxes — so a manager sees the whole candidate inbox of his
+    team's собеседования. Best-effort: any DB hiccup just narrows the set, never raises."""
+    rid = responsible["id"]
+    mboxes: set = set()
+    try:
+        mboxes |= db.assigned_mailboxes(rid)
+    except Exception as e:
+        log.warning("assigned_mailboxes failed: %s", e)
+    if db.has_role(responsible, "manager"):
+        try:
+            for iv in db.interviews_held_by(rid, by="manager"):
+                if iv.get("mailbox"):
+                    mboxes.add(iv["mailbox"])
+            for sub in db.subordinates(rid):
+                try:
+                    mboxes |= db.assigned_mailboxes(sub["id"])
+                except Exception:
+                    pass
+        except Exception as e:
+            log.warning("manager inbox scope failed: %s", e)
+    return mboxes
+
+
+def _upcoming_count(rid: int):
+    """Count of the responsible's still-upcoming собеседования — the «Собесы» nav badge. None on
+    any error (no badge)."""
+    try:
+        now = datetime.now(timezone.utc)
+        rows = db.interviews_for_responsible(rid, upcoming_only=True)
+        return sum(1 for iv in rows if not (iv.get("start_ts") and iv["start_ts"] < now))
+    except Exception:
+        return None
+
 _LINK_RE = re.compile(r'https?://[^\s"<>()\]}]+', re.I)
 _LINK_SKIP_RE = re.compile(r"unsubscribe|/preferences|list-manage|/track|/pixel|utm_|beacon|/wf/open", re.I)
 
@@ -83,7 +122,7 @@ def _not_found() -> HTMLResponse:
         '<div style="font-size:44px;font-weight:800;letter-spacing:-.02em;color:var(--ink)">404</div>'
         '<p style="color:var(--ink-soft);font-size:14px;line-height:1.55;margin:8px 0 20px">'
         'Переписка недоступна — возможно, собеседование переназначено или ссылка устарела.</p>'
-        '<a class="hbtn" href="/cabinet/inbox">← К списку</a></div>')
+        '<a class="hbtn" href="/cabinet/candidates">← К списку</a></div>')
     return HTMLResponse(cabinet_ui._doc(body, "Не найдено"), status_code=404)
 
 
@@ -193,6 +232,97 @@ def inbox(as_: str = Query("", alias="as"),
         log.warning("snippet clean failed: %s", e)
     return HTMLResponse(cabinet_ui.inbox_page(responsible, rows,
                                               as_id=_view_as(me, responsible)))
+
+
+@router.get("/calendar", response_class=HTMLResponse)
+def calendar(as_: str = Query("", alias="as"),
+             me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Personal calendar «Мои собеседования» — the acting user's upcoming собеседования grouped by
+    day in their own timezone (priority-enriched for the salary + booking/созвон link)."""
+    responsible = _acting_cabinet(me, as_)
+    from backend.interviews import pool
+    interviews = pool.enrich_priority(
+        db.interviews_for_responsible(responsible["id"], upcoming_only=True))
+    return HTMLResponse(cabinet_ui.calendar_page(responsible, interviews,
+                                                 as_id=_view_as(me, responsible)))
+
+
+@router.get("/candidates", response_class=HTMLResponse)
+def candidates(as_: str = Query("", alias="as"), q: str = Query(""),
+               me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """The FULL candidate inbox (grouped, Gmail-style) SCOPED to this user's собес candidates —
+    the same surface as the admin «Кандидаты» tab, filtered to `_inbox_scope`. `q` searches across
+    only THEIR candidates."""
+    responsible = _acting_cabinet(me, as_)
+    scope = sorted(_inbox_scope(responsible))
+    from backend.tools import candidates_inbox
+    try:
+        groups = mailcrm.candidate_groups(q=q, limit=candidates_inbox.PAGE, offset=0,
+                                          mailboxes=scope)
+    except Exception as e:
+        log.warning("cabinet candidate_groups failed: %s", e)
+        groups = []
+    return HTMLResponse(cabinet_ui.candidates_page(
+        responsible, groups, q=q, has_more=(len(groups) == candidates_inbox.PAGE),
+        offset=0, as_id=_view_as(me, responsible), iv_count=_upcoming_count(responsible["id"])))
+
+
+@router.get("/candidates/more", response_class=HTMLResponse)
+def candidates_more(as_: str = Query("", alias="as"), q: str = Query(""), offset: int = Query(0),
+                    me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Infinite-scroll fragment for the scoped candidate inbox — the next page of cards, still
+    restricted to `_inbox_scope`."""
+    responsible = _acting_cabinet(me, as_)
+    scope = sorted(_inbox_scope(responsible))
+    from backend.tools import candidates_inbox
+    try:
+        groups = mailcrm.candidate_groups(q=q, limit=candidates_inbox.PAGE, offset=int(offset),
+                                          mailboxes=scope)
+    except Exception as e:
+        log.warning("cabinet candidate_groups more failed: %s", e)
+        groups = []
+    return HTMLResponse(candidates_inbox.render_groups(groups, plain=True),
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/candidates/thread", response_class=HTMLResponse)
+def candidates_thread(mailbox: str = Query(""), as_: str = Query("", alias="as"),
+                      me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Expand one candidate's messages inside the scoped inbox. OWNERSHIP GUARD: the mailbox MUST
+    be in this user's scope, else 404 (never read a candidate they don't interview)."""
+    responsible = _acting_cabinet(me, as_)
+    if not mailbox or mailbox not in _inbox_scope(responsible):
+        return HTMLResponse('<div class="cg-load">Недоступно</div>', status_code=404)
+    from backend.tools import candidates_inbox
+    try:
+        msgs = mailcrm.list_messages(mailbox=mailbox, limit=100)
+    except Exception as e:
+        log.warning("cabinet thread list_messages failed: %s", e)
+        msgs = []
+    return HTMLResponse(candidates_inbox.render_thread_fragment(mailbox, msgs),
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/candidates/message", response_class=HTMLResponse)
+def candidates_message(id: str = Query(""), as_: str = Query("", alias="as"),
+                       me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Render one message body inside the scoped inbox (READ-ONLY: mark=False, never flips seen).
+    OWNERSHIP GUARD: resolve the row first, verify its mailbox is in this user's scope, else 404."""
+    responsible = _acting_cabinet(me, as_)
+    scope = _inbox_scope(responsible)
+    row = None
+    try:
+        row = mail_db.get_row(id) if id else None
+    except Exception as e:
+        log.warning("cabinet message get_row failed: %s", e)
+    if not row or row.get("mailbox") not in scope:
+        return HTMLResponse('<div class="cg-msg-err">Письмо недоступно</div>', status_code=404)
+    from backend.tools import candidates_inbox
+    m = mailcrm.get_message(id, mark=False)
+    if not m:
+        return HTMLResponse('<div class="cg-msg-err">Письмо не найдено</div>', status_code=404)
+    return HTMLResponse(candidates_inbox.render_message_fragment(m),
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.get("/thread", response_class=HTMLResponse)

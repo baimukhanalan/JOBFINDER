@@ -32,6 +32,38 @@ main{max-width:900px;margin:0 auto;padding:22px 18px;}
   color:var(--ink-soft);border:1px solid var(--line-strong);background:var(--panel);}
 .cab-nav a:hover{background:var(--panel-2);color:var(--ink);text-decoration:none;}
 .cab-nav a.active{background:var(--accent-soft);color:var(--accent-deep);border-color:var(--accent);}
+.cab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;
+  padding:0 5px;margin-left:6px;border-radius:9px;background:var(--accent);color:#fff;font-size:11px;
+  font-weight:700;font-family:var(--ff-mono);vertical-align:middle;}
+.cab-nav a.active .cab-badge{background:var(--accent-deep);}
+/* the scoped candidate inbox reuses the operator `cg-` card CSS; only the search wrapper is local */
+.cab-cand-tools{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 14px;}
+.cab-cand-search{margin:0;flex:1 1 240px;max-width:360px;}
+.cab-cand-search input[type=search]{width:100%;}
+.cg-load{padding:14px 16px;color:var(--ink-mute);font-size:13px;}
+/* personal calendar: day-grouped agenda */
+.cal-day{margin:0 0 18px;}
+.cal-day-h{font-weight:700;color:var(--ink);font-size:14px;margin:0 0 8px;padding-bottom:6px;
+  border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:8px;}
+.cal-day-h .cal-dow{color:var(--ink-mute);font-weight:600;font-size:12px;}
+.cal-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;}
+.cal-iv{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;}
+.cal-iv.past{opacity:.6;}
+.cal-iv-link{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;color:inherit;text-decoration:none;}
+.cal-iv-link:hover{background:var(--panel-2);text-decoration:none;}
+.cal-time{flex:0 0 auto;font-weight:800;color:var(--accent-deep);font-size:15px;font-variant-numeric:tabular-nums;min-width:54px;}
+.cal-time.none{color:var(--ink-mute);font-weight:600;font-size:12px;min-width:54px;}
+.cal-mid{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px;}
+.cal-co{font-weight:700;color:var(--ink);font-size:14px;}
+.cal-sub{color:var(--ink-soft);font-size:12.5px;word-break:break-word;}
+.cal-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;}
+.cal-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:3px 9px;
+  border-radius:var(--r-full);background:var(--panel-2);color:var(--ink-soft);border:1px solid var(--line);}
+.cal-chip.sal{color:#166534;border-color:#bbf7d0;background:#f0fdf4;}
+.cal-chip.book{color:var(--accent-deep);border-color:var(--accent);background:var(--accent-soft);}
+.cal-open{flex:0 0 auto;color:var(--accent);font-weight:600;font-size:12px;align-self:center;}
+.cal-book{padding:0 14px 12px 80px;}
+@media(max-width:560px){.cal-book{padding-left:14px;}}
 h1.cab-h{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 16px;}
 .note{background:var(--accent-soft);color:var(--accent-deep);border-radius:var(--r-sm);
   padding:9px 14px;margin-bottom:16px;font-weight:600;font-size:13px;}
@@ -139,16 +171,20 @@ def _asview_banner(responsible: dict, as_id=None) -> str:
             '<a class="hbtn" href="/users" style="margin-left:auto">← К пользователям</a></div>')
 
 
-def _topbar(responsible: dict, active: str, as_id=None) -> str:
+def _topbar(responsible: dict, active: str, as_id=None, iv_count=None) -> str:
     name = escape(responsible.get("name") or responsible.get("login") or "")
     # a manager attends interviews here too; give them a way back to their portal (multi-role
     # aware — an admin+manager or manager+employee still gets the link)
     _roles = responsible.get("roles") or ([responsible.get("role")] if responsible.get("role") else [])
     portal = (f'<a href="{_cab_href("/manage", as_id)}">← Портал</a>' if "manager" in _roles else "")
+    # a small count badge on «Собесы» so the interviewer sees at a glance how many upcoming
+    # собеседования await (only rendered when a positive count is passed by the page).
+    badge = (f'<span class="cab-badge">{iv_count}</span>' if iv_count else "")
     nav = (portal +
-           f'<a class="{"active" if active=="home" else ""}" href="{_cab_href("/cabinet", as_id)}">Собесы</a>'
+           f'<a class="{"active" if active=="home" else ""}" href="{_cab_href("/cabinet", as_id)}">Собесы{badge}</a>'
+           f'<a class="{"active" if active=="calendar" else ""}" href="{_cab_href("/cabinet/calendar", as_id)}">Календарь</a>'
+           f'<a class="{"active" if active=="candidates" else ""}" href="{_cab_href("/cabinet/candidates", as_id)}">Кандидаты</a>'
            f'<a class="{"active" if active=="availability" else ""}" href="{_cab_href("/cabinet/availability", as_id)}">Расписание</a>'
-           f'<a class="{"active" if active=="inbox" else ""}" href="{_cab_href("/cabinet/inbox", as_id)}">Почта</a>'
            f'<a href="/logout">Выход</a>')
     return (f'<div class="cab-top"><div class="brand">{mailcrm_ui._LOGO_IMG}</div>'
             f'<span class="who">{name}</span>'
@@ -219,6 +255,10 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
         block = f'<ul class="iv-list">{"".join(items)}</ul>'
     else:
         block = '<div class="empty">Предстоящих собеседований нет.</div>'
+    # a «Подключить Telegram» prompt right on the dashboard when the bot isn't linked yet — the
+    # notifier pings a linked interviewer an hour + 5 min before each собес (Task 3). Hidden once
+    # connected so it never nags.
+    tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
     # priority card: the SAME urgency/priority filter as the «Собес» screen over the interviews
     # assigned to this interviewer — «с чего начать» (по срочности брони / зарплате / давности).
     from backend.interviews import priority_ui
@@ -228,8 +268,9 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
         blurb=("Ваши собеседования по приоритету — по зарплате, срочности брони слота или "
                "давности заявки. Явно просроченные — в «Истёкшие»."),
         empty="Назначенных собеседований пока нет.") if interviews else ""
-    body = (priority_ui.CSS + _topbar(responsible, "home", as_id) + _asview_banner(responsible, as_id) +
-            '<h1 class="cab-h">Мои собеседования</h1>' + block + pri)
+    body = (priority_ui.CSS + _topbar(responsible, "home", as_id, iv_count=len(upcoming)) +
+            _asview_banner(responsible, as_id) +
+            '<h1 class="cab-h">Мои собеседования</h1>' + tg_prompt + block + pri)
     return _doc(body, "Мои собеседования")
 
 
@@ -248,11 +289,20 @@ def _tg_card(responsible: dict, as_id=None) -> str:
                  '<button class="ghost" type="submit">Отвязать</button></form>')
         sub = "Напоминания о собеседованиях приходят в ваш личный Telegram."
     else:
+        # the @username as plain text too — a fallback if the button is missed, and so the person
+        # can find the bot manually (it's the reminder bot for THEIR собеседования, not the admin one).
+        uname = ""
+        try:
+            from backend.interviews import notify
+            uname = notify.bot_username() or ""
+        except Exception:
+            uname = ""
+        uname_txt = (f' Бот: <b>@{escape(uname)}</b>.' if uname else "")
         inner = ('<form method="post" action="/cabinet/tg/connect" style="margin:0;">'
-                 '<button class="primary" type="submit">Привязать TG</button></form>')
-        sub = ("Нажмите — откроется бот, нажмите в нём «Старт». После этого за час и за 5 минут "
-               "до собеседования сюда придёт напоминание со ссылкой на созвон, вакансией, "
-               "профилем кандидата и его резюме.")
+                 '<button class="primary" type="submit">Подключить Telegram</button></form>')
+        sub = ("Нажмите — откроется бот, который напоминает о ваших предстоящих собеседованиях; "
+               "нажмите в нём «Старт». После этого за час и за 5 минут до собеседования сюда придёт "
+               "напоминание со ссылкой на созвон, вакансией, профилем кандидата и его резюме." + uname_txt)
     return ('<div class="card tg-card">'
             '<div class="tg-h">Уведомления в Telegram</div>'
             f'<div class="tg-sub">{sub}</div>'
@@ -305,6 +355,195 @@ def inbox_page(responsible: dict, rows: list[dict], as_id=None) -> str:
     body = (_topbar(responsible, "inbox", as_id) + _asview_banner(responsible, as_id) +
             '<h1 class="cab-h">Почта</h1>' + inner)
     return _doc(body, "Почта")
+
+
+# ---- scoped candidate inbox (full Gmail-style inbox of the interviewer's собес candidates) ----
+def _cab_inbox_js(as_id, page: int) -> str:
+    """Cabinet-scoped card JS: expand a candidate card → its thread, open a message inline, and
+    infinite-scroll — all pointing at the guarded /cabinet/candidates/* routes (never the operator
+    ones). The reused message card's reply button is re-routed to the full guarded /cabinet/thread
+    view (which owns the reply form). `as_id` is carried on every fetch so an admin read-through
+    stays in the viewed user's context."""
+    import json as _json
+    a = _json.dumps(str(as_id) if as_id else "")
+    return (
+        "<script>(function(){\n"
+        f"  var AS={a}; var PAGE={int(page)};\n"
+        "  function asq(){ return AS ? ('&as=' + encodeURIComponent(AS)) : ''; }\n"
+        "  window.cgToggle = function(head){\n"
+        "    if(window.event && window.event.target && window.event.target.closest('a, button')) return;\n"
+        "    var card = head.closest('.cg-card'); if(!card) return;\n"
+        "    var body = card.querySelector('.cg-body');\n"
+        "    var open = card.classList.toggle('open'); if(body) body.hidden = !open;\n"
+        "    if(open && card.dataset.loaded === '0' && body){\n"
+        "      card.dataset.loaded = '1';\n"
+        "      body.innerHTML = '<div class=\"cg-load\">Загрузка…</div>';\n"
+        "      fetch('/cabinet/candidates/thread?mailbox=' + encodeURIComponent(card.dataset.mailbox || '') + asq())\n"
+        "        .then(function(r){ return r.text(); })\n"
+        "        .then(function(h){ body.innerHTML = h; })\n"
+        "        .catch(function(){ body.innerHTML = '<div class=\"cg-load\">Не удалось загрузить</div>'; card.dataset.loaded = '0'; });\n"
+        "    }\n"
+        "  };\n"
+        "  window.cgOpen = function(row){\n"
+        "    if(window.event && window.event.target && window.event.target.closest('a, button')) return;\n"
+        "    var body = row.querySelector('.cg-msg-body'); if(!body) return;\n"
+        "    var open = row.classList.toggle('open'); body.hidden = !open;\n"
+        "    if(open && row.dataset.loaded !== '1'){\n"
+        "      row.dataset.loaded = '1';\n"
+        "      body.innerHTML = '<div class=\"cg-load\">Загрузка…</div>';\n"
+        "      fetch('/cabinet/candidates/message?id=' + encodeURIComponent(row.dataset.id || '') + asq())\n"
+        "        .then(function(r){ return r.text(); })\n"
+        "        .then(function(h){ body.innerHTML = h; wireReply(body, row.dataset.id || ''); })\n"
+        "        .catch(function(){ body.innerHTML = '<div class=\"cg-msg-err\">Не удалось загрузить</div>'; row.dataset.loaded = ''; });\n"
+        "    }\n"
+        "  };\n"
+        "  function wireReply(rootEl, hash){\n"
+        "    var qa = AS ? ('&as=' + encodeURIComponent(AS)) : '';\n"
+        "    rootEl.querySelectorAll('.mf-reply, .reply-action').forEach(function(b){\n"
+        "      var nb = b.cloneNode(true); if(b.parentNode) b.parentNode.replaceChild(nb, b);\n"
+        "      nb.addEventListener('click', function(e){ e.stopPropagation();\n"
+        "        location.href = '/cabinet/thread?hash=' + encodeURIComponent(hash) + qa; });\n"
+        "    });\n"
+        "  }\n"
+        "  var sentinel = document.getElementById('grpmore');\n"
+        "  var list = document.getElementById('grouplist');\n"
+        "  if(sentinel && list && 'IntersectionObserver' in window){\n"
+        "    var loading = false, done = false;\n"
+        "    function more(){\n"
+        "      if(loading || done || sentinel.hidden) return;\n"
+        "      loading = true;\n"
+        "      var off = parseInt(sentinel.dataset.offset || '0', 10) || 0;\n"
+        "      var qs = new URLSearchParams({ q: sentinel.dataset.q || '', offset: String(off) });\n"
+        "      if(AS) qs.set('as', AS);\n"
+        "      fetch('/cabinet/candidates/more?' + qs.toString())\n"
+        "        .then(function(r){ return r.ok ? r.text() : ''; })\n"
+        "        .then(function(html){\n"
+        "          html = (html || '').trim();\n"
+        "          if(html){ list.insertAdjacentHTML('beforeend', html); sentinel.dataset.offset = String(off + PAGE); }\n"
+        "          var added = (html.match(/class=\"cg-card[ \"]/g) || []).length;\n"
+        "          if(added < PAGE){ done = true; sentinel.hidden = true; }\n"
+        "          loading = false;\n"
+        "        })\n"
+        "        .catch(function(){ loading = false; });\n"
+        "    }\n"
+        "    var io = new IntersectionObserver(function(entries){\n"
+        "      entries.forEach(function(en){ if(en.isIntersecting) more(); });\n"
+        "    }, {rootMargin: '400px'});\n"
+        "    io.observe(sentinel);\n"
+        "  }\n"
+        "})();</script>")
+
+
+def candidates_page(responsible: dict, groups: list, *, q: str = "", has_more: bool = False,
+                    offset: int = 0, as_id=None, iv_count=None) -> str:
+    """The interviewer/manager's FULL candidate inbox, scoped to their собес candidates — the
+    same Gmail-style grouped cards as the admin «Кандидаты» tab (via candidates_inbox.render_groups
+    in `plain` mode: no operator assign/assessment controls), the same search, expand-a-card-to-its-
+    thread and open-a-message inline, but every route guarded to this user's assigned mailboxes."""
+    from backend.tools import candidates_inbox
+    groups = groups or []
+    listing = candidates_inbox.render_groups(groups, plain=True)
+    next_off = offset + len(groups)
+    hidden_as = _as_field(as_id)
+    search = ('<form class="cab-cand-search" method="get" action="/cabinet/candidates" role="search">'
+              + hidden_as
+              + f'<input type="search" name="q" value="{escape(q or "", quote=True)}" '
+              'placeholder="Поиск кандидата" autocomplete="off"></form>')
+    tools = ('<div class="cab-cand-tools">'
+             '<span style="color:var(--ink-soft);font-size:13px;line-height:1.5;">'
+             'Все кандидаты ваших собеседований — вся переписка, поиск и ответ рекрутёру.</span>'
+             + search + '</div>')
+    inner = (f'<div id="grouplist">{listing}</div>' if groups
+             else '<div class="empty">Кандидатов пока нет.</div>')
+    sentinel = (f'<div id="grpmore" data-offset="{next_off}" '
+                f'data-q="{escape(q or "", quote=True)}"{"" if has_more else " hidden"}></div>')
+    body = (f'<style>{candidates_inbox._CG_CSS}</style>'
+            + _topbar(responsible, "candidates", as_id, iv_count=iv_count)
+            + _asview_banner(responsible, as_id)
+            + '<h1 class="cab-h">Кандидаты</h1>' + tools + inner + sentinel
+            + _cab_inbox_js(as_id, candidates_inbox.PAGE))
+    return _doc(body, "Кандидаты")
+
+
+def _cal_item(iv: dict, time_lbl: str, past: bool, as_id=None) -> str:
+    company = escape(iv.get("company") or "Собеседование")
+    mailbox = escape(iv.get("mailbox") or "")
+    h = iv.get("source_message_hash") or iv.get("source_hash") or ""
+    href = (_cab_href(f"/cabinet/thread?hash={escape(str(h), quote=True)}", as_id) if h
+            else _cab_href("/cabinet/candidates", as_id))
+    time_html = (f'<span class="cal-time">{escape(time_lbl)}</span>' if time_lbl
+                 else '<span class="cal-time none">—</span>')
+    chips = ""
+    sal = iv.get("salary_label")
+    if sal:
+        chips += f'<span class="cal-chip sal">{escape(sal)}/год</span>'
+    # booking / созвон link rendered as a SIBLING of the card link (never a nested <a>): its own
+    # row below the card so it opens the scheduler / Zoom room in a new tab.
+    bk = iv.get("iv_booking_url") or iv.get("booking_url") or ""
+    booking_row = ""
+    if bk:
+        booking_row = (f'<div class="cal-book"><a class="cal-chip book" '
+                       f'href="{escape(bk, quote=True)}" target="_blank" rel="noopener noreferrer">'
+                       '📅 ссылка записи / созвон</a></div>')
+    past_cls = " past" if past else ""
+    return (f'<li class="cal-iv{past_cls}"><a class="cal-iv-link" href="{href}">'
+            f'{time_html}<span class="cal-mid"><span class="cal-co">{company}</span>'
+            f'<span class="cal-sub">{mailbox}</span>'
+            f'<span class="cal-chips">{chips}</span></span>'
+            f'<span class="cal-open">Переписка →</span></a>{booking_row}</li>')
+
+
+def calendar_page(responsible: dict, interviews: list, as_id=None) -> str:
+    """Personal calendar «Мои собеседования»: the interviewer's upcoming собеседования grouped by
+    DAY (in their own timezone), each showing когда и во сколько + company/candidate + the booking/
+    созвон link + a link into that candidate's переписка. Interviews with no set time land in a
+    «Без даты» group at the end; already-passed-but-active ones stay visible, dimmed."""
+    rtz = responsible.get("tz") or slots.DEFAULT_TZ
+    now = datetime.now(timezone.utc)
+    interviews = interviews or []
+    upcoming = [iv for iv in interviews if not (iv.get("start_ts") and iv["start_ts"] < now)]
+
+    order: list[str] = []
+    buckets: dict[str, dict] = {}
+    for iv in interviews:
+        st = iv.get("start_ts")
+        label, dow, time_lbl, key = "Без даты", "", "", "zzz-none"
+        if st:
+            try:
+                loc = slots.to_local(st, rtz)
+                key = loc.strftime("%Y-%m-%d")
+                label = loc.strftime("%d.%m.%Y")
+                dow = _WEEKDAYS[loc.weekday()]
+                time_lbl = loc.strftime("%H:%M")
+            except Exception:
+                label, dow, time_lbl, key = "Без даты", "", "", "zzz-none"
+        past = bool(st and st < now)
+        if key not in buckets:
+            buckets[key] = {"label": label, "dow": dow, "items": []}
+            order.append(key)
+        buckets[key]["items"].append((iv, time_lbl, past))
+
+    if interviews:
+        days = []
+        for key in order:
+            b = buckets[key]
+            head = (f'<div class="cal-day-h">{escape(b["label"])}'
+                    + (f'<span class="cal-dow">{escape(b["dow"])}</span>' if b["dow"] else "")
+                    + '</div>')
+            items = "".join(_cal_item(iv, t, p, as_id) for (iv, t, p) in b["items"])
+            days.append(f'<div class="cal-day">{head}<ul class="cal-list">{items}</ul></div>')
+        block = "".join(days)
+    else:
+        block = '<div class="empty">Предстоящих собеседований нет.</div>'
+
+    tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
+    body = (_topbar(responsible, "calendar", as_id, iv_count=len(upcoming))
+            + _asview_banner(responsible, as_id)
+            + '<h1 class="cab-h">Мой календарь</h1>'
+            + '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
+            f'Ваши собеседования по дням — когда и во сколько (время по <b>{escape(slots.tz_label(rtz))}</b>).</p>'
+            + tg_prompt + block)
+    return _doc(body, "Календарь")
 
 
 def _thread_card(m: dict) -> str:
@@ -362,8 +601,8 @@ def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, link
             '<button class="primary" type="submit">Отправить ответ</button>'
             '</form>')
 
-    body = (_topbar(responsible, "inbox", as_id) + _asview_banner(responsible, as_id) +
-            f'<a class="back-link" href="{_cab_href("/cabinet/inbox", as_id)}">← К списку</a>'
+    body = (_topbar(responsible, "candidates", as_id) + _asview_banner(responsible, as_id) +
+            f'<a class="back-link" href="{_cab_href("/cabinet/candidates", as_id)}">← К списку</a>'
             f'<h1 class="tsubj">{escape(subj)}</h1>'
             f'<div class="tbox">Ящик: {box}</div>' + sent_banner + cards + reply_form)
     return _doc(body, subj)

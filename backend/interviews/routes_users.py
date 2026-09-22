@@ -17,13 +17,58 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from backend.interviews import auth, db, pool, slots, users_ui
+from backend.tools import mail_db
 
 router = APIRouter()
 
 _ROLES = ("admin", "manager", "employee")
 
 
-def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary") -> HTMLResponse:
+def _allocated_rows() -> list[dict]:
+    """Every non-cancelled allocated/assigned interview, priority-enriched — the ALLOCATED half of
+    the admin «все актуальные предстоящие» overview + the reclaim tools.
+
+    Prefers the foundation `pool.allocated_rows()`; but that currently swallows a DB error and
+    returns [] on this schema (its `_ALLOCATED_SQL` selects a non-existent `subject` column — the
+    real column is `notes`), which would empty the whole allocated overview. So on an empty result
+    we fall back to a direct read (best-effort, read-only) and reuse `pool.enrich_priority`. This
+    SELF-HEALS: once the foundation SQL is fixed (subject→notes) `pool.allocated_rows()` returns
+    rows and this fallback goes dormant. See the note relayed to the integrator."""
+    try:
+        rows = pool.allocated_rows()
+    except Exception:
+        rows = []
+    if rows:
+        return rows
+    try:
+        with mail_db._cur() as cur:
+            cur.execute("SELECT id, mailbox, jobid, notes AS subject, company, responsible_id, "
+                        "manager_id, start_ts, source_message_hash FROM iv_interviews "
+                        "WHERE status <> 'cancelled' ORDER BY created_at DESC")
+            rows = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+    try:
+        return pool.enrich_priority(rows)
+    except Exception:
+        return rows
+
+
+def _iid_for_mailbox(mailbox: str) -> int | None:
+    """The id of the newest non-cancelled interview for a persona mailbox (reclaim/one resolves
+    an email to its held interview). Read-only, best-effort → None if none / on error."""
+    try:
+        with mail_db._cur(dict_rows=False) as cur:
+            cur.execute("SELECT id FROM iv_interviews WHERE mailbox=%s AND status <> 'cancelled' "
+                        "ORDER BY id DESC LIMIT 1", (mailbox,))
+            row = cur.fetchone()
+            return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary",
+                 live_owner: str = "") -> HTMLResponse:
     users = db.list_responsibles(active_only=False)
     avail = {u["id"]: db.get_availability(u["id"]) for u in users}
     # This week's booked interviews per responsible — the weekly load view, so the operator
@@ -60,7 +105,7 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
         # ALLOCATED half of the «все актуальные предстоящие» overview: every non-cancelled
         # interview already delegated to a manager / assigned to an interviewer (free half =
         # pool_rows). Best-effort — a hiccup just omits the allocated rows.
-        allocated_rows = pool.allocated_rows()
+        allocated_rows = _allocated_rows()
         managers = db.list_managers(active_only=True)
         if managers:
             pool_facets = pool.facets()
@@ -76,7 +121,7 @@ def _render_list(notice=None, me_id: int | None = None, pool_sort: str = "salary
         users, avail, notice, week_by_id=week_by_id, monday=monday, week_sig=sig,
         managers=managers, pool_count=pool_count, pool_rows=pool_rows,
         pool_facets=pool_facets, mgr_alloc=mgr_alloc, me_id=me_id, pool_sort=pool_sort,
-        allocated_rows=allocated_rows, names_by_id=names_by_id))
+        allocated_rows=allocated_rows, names_by_id=names_by_id, live_owner=live_owner))
 
 
 def _week_window():
@@ -112,8 +157,9 @@ def _render_edit(rid: int, notice=None, me_id: int | None = None) -> HTMLRespons
 
 
 @router.get("/users", response_class=HTMLResponse)
-def users_list(pool_sort: str = "salary", me: dict = Depends(auth.current_responsible)):
-    return _render_list(me_id=(me or {}).get("id"), pool_sort=pool_sort)
+def users_list(pool_sort: str = "salary", live_owner: str = "",
+               me: dict = Depends(auth.current_responsible)):
+    return _render_list(me_id=(me or {}).get("id"), pool_sort=pool_sort, live_owner=live_owner)
 
 
 @router.post("/users/add", response_class=HTMLResponse)
@@ -304,6 +350,84 @@ def users_allocate_send(mailbox: str = Form(""), manager_id: str = Form(""),
         return _render_list(("err", "Это интервью уже выделено или недоступно."), me_id=me_id)
     return _render_list(("ok",
         f"Интервью «{escape(mailbox)}» выделено управляющему «{escape(m.get('name') or '')}»."), me_id=me_id)
+
+
+@router.post("/users/reclaim/count", response_class=HTMLResponse)
+async def users_reclaim_count(request: Request,
+                             me: dict = Depends(auth.current_responsible)):
+    """Забрать N интервью у пользователя обратно в свободный пул — the INVERSE of split. Reads
+    `reclaim_user_id`, an optional `reclaim_count` (blank = ALL matching), and the same
+    `reclaim_gender`/`reclaim_direction` filter as split. A user holding «управляющий» is
+    reclaimed by=manager (his whole pool + team); anyone else by=responsible (his own queue)."""
+    me_id = (me or {}).get("id")
+    form = await request.form()
+    try:
+        uid = int((form.get("reclaim_user_id") or "").strip())
+    except (ValueError, TypeError):
+        return _render_list(("err", "Выберите пользователя, у которого забрать интервью."), me_id=me_id)
+    u = db.get_responsible(uid)
+    if not u:
+        return _render_list(("err", "Пользователь не найден."), me_id=me_id)
+    raw = (form.get("reclaim_count") or "").strip()
+    n = None
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            return _render_list(("err", "Количество должно быть числом."), me_id=me_id)
+        if n <= 0:
+            return _render_list(("err", "Количество должно быть больше нуля."), me_id=me_id)
+    gender = (form.get("reclaim_gender") or "").strip() or None
+    direction = (form.get("reclaim_direction") or "").strip() or None
+    if gender not in (None,) + pool.GENDERS:
+        gender = None
+    if direction not in (None,) + pool.DIRECTIONS:
+        direction = None
+    by = "manager" if db.has_role(u, "manager") else "responsible"
+    try:
+        freed = pool.reclaim(uid, n=n, gender=gender, direction=direction, by=by)
+    except Exception as e:
+        return _render_list(("err", f"Не удалось забрать: {escape(str(e))}"), me_id=me_id)
+    if not freed:
+        return _render_list(("err", "По этому фильтру у пользователя нет интервью для возврата в пул."), me_id=me_id)
+    filt = []
+    if gender:
+        filt.append("муж." if gender == "male" else "жен.")
+    if direction:
+        filt.append({"it": "IT", "nonit": "не-IT", "other": "другое"}.get(direction, direction))
+    fs = f", {', '.join(filt)}" if filt else ""
+    who = escape(str(u.get("name") or u.get("login") or uid))
+    return _render_list(("ok", f"Возвращено в свободный пул — {freed} (у «{who}»{fs})."), me_id=me_id)
+
+
+@router.post("/users/reclaim/one", response_class=HTMLResponse)
+def users_reclaim_one(mailbox: str = Form(""), iid: str = Form(""),
+                      me: dict = Depends(auth.current_responsible)):
+    """Забрать ONE specific interview back to the free pool. Accepts a direct `iid`, else a
+    `mailbox` (the email-search value) which is resolved to its held interview row. `iid` is read
+    as a string + int-validated in-body so a crafted/blank POST returns the friendly notice."""
+    me_id = (me or {}).get("id")
+    mailbox = (mailbox or "").strip()
+    iid_i = None
+    if (iid or "").strip():
+        try:
+            iid_i = int(iid.strip())
+        except ValueError:
+            iid_i = None
+    if iid_i is None:
+        if not mailbox:
+            return _render_list(("err", "Укажите интервью (e-mail персоны) или его id."), me_id=me_id)
+        iid_i = _iid_for_mailbox(mailbox)
+        if iid_i is None:
+            return _render_list(("err", "Это интервью не найдено среди выданных (возможно, уже в пуле)."), me_id=me_id)
+    try:
+        freed_mb = db.reclaim_interview(iid_i)
+    except Exception as e:
+        return _render_list(("err", f"Не удалось забрать: {escape(str(e))}"), me_id=me_id)
+    if not freed_mb:
+        return _render_list(("err", "Это интервью уже возвращено в пул или недоступно."), me_id=me_id)
+    pool._invalidate()   # db.reclaim_interview deletes directly → drop the pool cache so it re-appears
+    return _render_list(("ok", f"Интервью «{escape(freed_mb)}» возвращено в свободный пул."), me_id=me_id)
 
 
 @router.post("/users/{rid}/telegram", response_class=HTMLResponse)

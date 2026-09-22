@@ -1675,6 +1675,39 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   `pool._base_meta` → `job_catalog`) for the posted comp + real company/title, else the role parsed from the SUBJECT → the
   role-category MEDIAN (`est_comp`); label tag «по вакансии» (posted) vs «оценка» (median). Best-effort, never breaks indexing.
   **Touching `notify.py` needs `pm2 restart jobfinder-mail-indexer`** (the indexer holds it). Tests: `test_interview_priority.py`.
+- **Portal-parity feature set (2026-09-22) — manager auto-own · admin/manager reclaim · scoped candidate inbox + personal
+  calendar · Fri/Sun weekly Telegram nudge · TG-connect prompt.** Owner directive to make interview-taking convenient for
+  EVERY role. **(1) Manager AUTO-OWNS everything allocated to him** — `db.allocate_interview` now inserts
+  `responsible_id=manager_id, status='assigned', announced=TRUE` (was `responsible NULL`/`'pool'`): the manager is the DEFAULT
+  attendee, so «остаток автоматом переходит ему» — whatever he doesn't hand down stays his; `manager_assign_interview` hands a
+  собес DOWN to a subordinate (announced=FALSE → the sub is pinged), `manager_unassign_interview` pulls it back TO THE MANAGER
+  (not a null pool). The /manage portal reshaped: «Мои собеседования — не розданы команде» (responsible=mgr) + «Роздано команде»
+  (responsible=sub), distribute-to-team uses the SAME gender/direction filter the admin uses. **(2) RECLAIM (забрать) both ways**
+  — `db.reclaim_interview(iid)` (delete → the mailbox re-enters the free pool) + `pool.reclaim(user_id, n, gender, direction,
+  by='responsible'|'manager')` (the inverse of `pool.split`, count+filter). Admin: `_all_live_card`'s «Забрать интервью» card
+  (`POST /users/reclaim/count` + `/users/reclaim/one`, + «забрать всё у пользователя»). Manager: `POST /manage/reclaim_from`
+  (pull back from a subordinate) + per-row «← Забрать себе». **(3) Admin «Актуальные предстоящие» = ALL собесы across ALL
+  portals** — `pool.allocated_rows()` (EVERY non-cancelled iv, owner-named via `names_by_id`) merged with the free pool, a
+  «N предстоящих: X в пуле · Y у управляющих · Z назначено» header + a `?live_owner=` filter. **BUGFIX: `pool._ALLOCATED_SQL`
+  selected a non-existent `subject` column** (real col = `notes`) → `allocated_rows()` silently returned `[]` on the live schema
+  (the guard swallowed `UndefinedColumn`); now `notes AS subject`, so the allocated overview + reclaim tools actually populate.
+  **(4) Scoped FULL candidate inbox + personal calendar on /cabinet** — `mail_db.candidate_groups` / `mailcrm.candidate_groups`
+  gained an ADDITIVE `mailboxes=` filter (default None = byte-identical to the admin «Кандидаты» tab); `candidates_inbox.
+  render_groups(..., plain=True)` suppresses the operator-only controls. New routes `GET /cabinet/candidates(/more/thread/
+  message)` render the same grouped inbox + search + résumé SCOPED to the acting user's собес candidates (interviewer = his
+  `assigned_mailboxes`; manager = own ∪ team), each thread/message behind the ownership guard; `GET /cabinet/calendar` = the
+  interviewer's personal day-grouped agenda (when + at what time, booking/Zoom chip). Cabinet nav is role-dependent (Собесы+count
+  badge · Календарь · Кандидаты · Расписание · Выход; managers +«← Портал»). **(5) Fri+Sun 19:00 Telegram weekly nudge** —
+  `reminders._maybe_weekly_nudge(now)` (in `tick()`, additive) DMs every `db.responsibles_for_nudge()` recipient (active
+  manager/employee WITH a linked chat) `notify.weekly_nudge_text(...)` («раскидай интервью на неделю… займёт 10 минут», role-
+  aware /manage vs /cabinet link + their pending count), gated on Asia/Almaty Fri(4)/Sun(6) ≥19:00 with a persisted per-day
+  dedupe marker (`logs/iv_weekly_nudge.json`) so the 60s loop / a restart never re-sends. The −120/−60/−15/−5 reminders are
+  unchanged. **(6) TG-connect prompt** on /manage + /cabinet when `telegram_chat_id` is NULL — a «Подключить Telegram» button to
+  the existing `POST /cabinet/tg/connect` deep-link + the bot `@username` (from `notify.bot_username()`) as text, worded as the
+  USER reminder bot (not the admin one); `db.responsibles_missing_telegram()` lists who's unlinked. **Deploy: `pm2 restart
+  jobfinder-alan-dash` (all portals) + `jobfinder-alan-ivremind` (the weekly nudge).** Tests: `test_interviews_e2e.py` (the full
+  allocate→auto-own→hand-down→reclaim chain + nudge recipients), `test_interviews_users_reclaim.py`, `test_interviews_cabinet_
+  inbox.py`, updated `test_interviews_manager.py` + `test_interviews_notify.py` (157 passed sequentially).
 - NOT YET BUILT (Phase 3, deferred): auto-assign. Tests: `test_interviews_*.py` incl. `test_interviews_manager.py` (live DB,
   `test_iv_%`-prefixed, run SEQUENTIALLY; covers the manager tier, MULTI-ROLE union access, inline role-edit live, and
   cascade-delete of any user incl. deactivated/with-history + the 1/2/3/self guards). **PRE-EXISTING (not ours):

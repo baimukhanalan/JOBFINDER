@@ -680,15 +680,19 @@ def _by_email() -> dict[str, dict]:
 
 
 def candidate_groups(stage: str = "", q: str = "", limit: int = 50,
-                     offset: int = 0) -> list[dict]:
+                     offset: int = 0, mailboxes: list[str] | None = None) -> list[dict]:
     """Grouped candidate inbox rows (see mail_db.candidate_groups) enriched with the
     authoritative roster display NAME (real roster > demo registry > stored candidate >
     local-part), a candidate `id` and an `is_demo` flag — the spine of the merged
     Кандидаты screen. Returns [] (the empty state, never a crash) when the index is
-    unavailable."""
+    unavailable.
+
+    mailboxes: when a list is passed, restricts the result to those mailboxes — the scoped
+    candidate inbox for the interviewer/manager cabinet. Default None ⇒ every mailbox
+    (byte-identical to the admin «Кандидаты» tab)."""
     try:
         rows = mail_db.candidate_groups(stage=stage or None, q=q or None,
-                                        limit=limit, offset=offset)
+                                        limit=limit, offset=offset, mailboxes=mailboxes)
     except Exception as e:
         _health_fallback("candidate_groups", e)
         return []

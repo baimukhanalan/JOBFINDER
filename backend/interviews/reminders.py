@@ -11,13 +11,96 @@ Not wired into the dashboard — the controller deploys this as a separate proce
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
-from backend.interviews import db, notify
+from backend.interviews import db, notify, slots
 
 logger = logging.getLogger(__name__)
+
+# ---- weekly «раскидай интервью на неделю» broadcast --------------------------------
+# Fired on FRIDAY and SUNDAY once the local (Asia/Almaty) time is ≥ 19:00, exactly ONCE
+# per such day. The 60s tick loop would otherwise re-fire it every minute until midnight,
+# so a persisted marker (`logs/iv_weekly_nudge.json`, mirroring notify._read/_write_offset)
+# records the last-sent date-key `YYYY-MM-DD:fri|sun`; a daemon restart re-reads it, so the
+# dedupe survives a restart too.
+_NUDGE_DAYS = {4: "fri", 6: "sun"}   # datetime.weekday(): Mon=0 .. Fri=4 .. Sun=6
+_NUDGE_HOUR = 19                     # local hour gate (Asia/Almaty)
+_NUDGE_MARKER = Path(__file__).resolve().parents[2] / "logs" / "iv_weekly_nudge.json"
+
+
+def _nudge_marker_key(now: datetime) -> str | None:
+    """The date-key for `now` (an aware UTC datetime) IFF it is a Fri/Sun at ≥19:00 local
+    (Asia/Almaty) — else None. The key `YYYY-MM-DD:fri|sun` is unique per broadcast day."""
+    local = slots.to_local(now, slots.DEFAULT_TZ)
+    tag = _NUDGE_DAYS.get(local.weekday())
+    if not tag or local.hour < _NUDGE_HOUR:
+        return None
+    return f"{local.date().isoformat()}:{tag}"
+
+
+def _read_nudge_marker() -> str:
+    try:
+        return str(json.loads(_NUDGE_MARKER.read_text()).get("last") or "")
+    except Exception:
+        return ""
+
+
+def _write_nudge_marker(key: str) -> None:
+    try:
+        _NUDGE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _NUDGE_MARKER.write_text(json.dumps({"last": key}))
+    except Exception:
+        pass
+
+
+def send_weekly_nudge(now: datetime) -> int:
+    """DM every connected manager/interviewer their «распредели/подготовь свою неделю» nudge.
+    Best-effort per recipient (one bad row never stops the rest, never raises). Returns how
+    many DMs were sent. Does NOT gate on day/hour — the caller (`_maybe_weekly_nudge`) owns
+    the Fri/Sun-19:00 + once-per-day gate."""
+    try:
+        recipients = db.responsibles_for_nudge()
+    except Exception as e:
+        logger.warning("send_weekly_nudge: recipient lookup failed: %s", e)
+        return 0
+    sent = 0
+    for resp in recipients:
+        try:
+            chat = resp.get("telegram_chat_id")
+            if not chat:
+                continue
+            rid = resp.get("id")
+            if "manager" in db.roles_of(resp):
+                # a manager's queue of собесы to раскидать across his team
+                rows = db.interviews_held_by(rid, by="responsible")
+            else:
+                rows = db.interviews_for_responsible(rid, upcoming_only=True)
+            pending = len(rows)
+            unscheduled = sum(1 for iv in rows if not iv.get("start_ts"))
+            text = notify.weekly_nudge_text(resp, pending, notify.PORTAL_BASE, unscheduled)
+            if notify.send_dm(int(chat), text):
+                sent += 1
+        except Exception as e:
+            logger.warning("send_weekly_nudge: failed for responsible %s: %s",
+                           resp.get("id"), e)
+    return sent
+
+
+def _maybe_weekly_nudge(now: datetime) -> int:
+    """Fire the weekly broadcast if `now` opens a fresh Fri/Sun-19:00 window we haven't
+    served yet, then persist the marker so the 60s loop (and a restart) won't re-send.
+    The marker is written even on a 0-send pass so a transient empty result can't turn the
+    once-a-day nudge into an all-evening retry."""
+    key = _nudge_marker_key(now)
+    if not key or _read_nudge_marker() == key:
+        return 0
+    sent = send_weekly_nudge(now)
+    _write_nudge_marker(key)
+    return sent
 
 
 def plan(announcements: list, due60: list, due5: list,
@@ -58,6 +141,14 @@ def tick() -> int:
         logger.warning("tick: poll_updates failed: %s", e)
 
     now = datetime.now(timezone.utc)
+
+    # ADDITIVE: the Fri/Sun-19:00 weekly «раскидай интервью на неделю» broadcast. Fully
+    # guarded — never affects the reminder/announcement pass below nor the returned count.
+    try:
+        _maybe_weekly_nudge(now)
+    except Exception as e:
+        logger.warning("tick: weekly nudge failed: %s", e)
+
     announcements = db.due_announcements()
     due120 = db.due_reminders(now, 120)
     due60 = db.due_reminders(now, 60)

@@ -99,52 +99,58 @@ def test_iv_manager_id_roundtrip_and_subordinates():
 
 def test_iv_allocate_assign_and_load():
     ids = _chain()
-    # allocate two pool interviews to manager A
+    # allocate two interviews to manager A — the AUTO-OWN model makes HIM the attendee at once
     i1 = db.allocate_interview("test_iv_m_p1@x.com", ids["mgrA"], subject="Interview 1")
     i2 = db.allocate_interview("test_iv_m_p2@x.com", ids["mgrA"], subject="Interview 2")
-    pool_rows = db.manager_interviews(ids["mgrA"])
-    assert {r["id"] for r in pool_rows} == {i1, i2}
-    assert all(r["responsible_id"] is None and r["status"] == "pool" for r in pool_rows)
+    _mark_announced()
+    rows = db.manager_interviews(ids["mgrA"])
+    assert {r["id"] for r in rows} == {i1, i2}
+    # each lands ASSIGNED to the manager himself (responsible_id=manager_id), NOT a null pool
+    assert all(r["responsible_id"] == ids["mgrA"] and r["status"] == "assigned" for r in rows)
     # they count as handled (out of the free pool)
     handled = db.handled_pool_mailboxes()
     assert {"test_iv_m_p1@x.com", "test_iv_m_p2@x.com"} <= handled
 
-    # manager A assigns one to subordinate S → visibility for S, load reflects it
+    # manager A hands one DOWN to subordinate S → visibility for S, load reflects it
     db.manager_assign_interview(i1, ids["subS"])
     _mark_announced()
     row = db.interview_by_id(i1)
     assert row["responsible_id"] == ids["subS"] and row["status"] == "assigned"
-    assert row["manager_id"] == ids["mgrA"]           # allocation is preserved on assign
+    assert row["manager_id"] == ids["mgrA"]           # allocation is preserved on hand-down
     assert "test_iv_m_p1@x.com" in db.assigned_mailboxes(ids["subS"])
     assert db.assigned_load([ids["subS"]]).get(ids["subS"]) == 1
 
-    # manager B sees NOTHING of A's pool
+    # manager B sees NOTHING of A's set
     assert db.manager_interviews(ids["mgrB"]) == []
 
-    # unassign returns it to the pool (S loses visibility)
+    # unassign pulls it back to the MANAGER himself (not a null pool)
     db.manager_unassign_interview(i1)
+    _mark_announced()
     row = db.interview_by_id(i1)
-    assert row["responsible_id"] is None and row["status"] == "pool"
+    assert row["responsible_id"] == ids["mgrA"] and row["status"] == "assigned"
     assert "test_iv_m_p1@x.com" not in db.assigned_mailboxes(ids["subS"])
+    assert "test_iv_m_p1@x.com" in db.assigned_mailboxes(ids["mgrA"])   # back with the manager
 
-    # deallocate an unassigned pool row removes it entirely (back to the free pool)
-    db.deallocate_interview(i2)
+    # admin reclaim pulls a собес fully back to the global free pool (deletes the row)
+    freed = db.reclaim_interview(i2)
+    assert freed == "test_iv_m_p2@x.com"
     assert i2 not in {r["id"] for r in db.manager_interviews(ids["mgrA"])}
     assert "test_iv_m_p2@x.com" not in db.handled_pool_mailboxes()
 
 
-def test_iv_pool_delegation_is_not_an_assignment():
-    # M1: a status='pool' delegation row (responsible_id NULL) must NOT badge «Назначено» on the
-    # candidate card — only a truly-BOOKED interview (an attending responsible) is an assignment.
+def test_iv_allocated_is_owned_then_handed_down():
+    # M1 (new model): an allocated собес is IMMEDIATELY the manager's assignment (auto-own);
+    # handing it down re-points the assignment at the subordinate. Either way it badges «Назначено».
     ids = _chain()
     mb = "test_iv_m_pa@x.com"
     iid = db.allocate_interview(mb, ids["mgrA"], subject="Interview P")
     _mark_announced()
-    assert db.assignments_for_mailboxes([mb]) == {}      # pool row is NOT an assignment
+    a = db.assignments_for_mailboxes([mb])
+    assert mb in a and a[mb]["responsible_id"] == ids["mgrA"]   # auto-owned by the manager
     db.manager_assign_interview(iid, ids["subS"])
     _mark_announced()
     a = db.assignments_for_mailboxes([mb])
-    assert mb in a and a[mb]["responsible_id"] == ids["subS"]   # booked → IS an assignment
+    assert mb in a and a[mb]["responsible_id"] == ids["subS"]   # handed down → the subordinate
 
 
 def test_iv_manage_assign_availability_gate():
@@ -159,7 +165,8 @@ def test_iv_manage_assign_availability_gate():
                                         "start_local": start_local}, follow_redirects=False)
     _mark_announced()
     row = db.interview_by_id(iid)
-    assert row["responsible_id"] is None and row["status"] == "pool"   # rejected: no availability
+    # rejected (no availability): the собес stays with the MANAGER himself (auto-own), never a null pool
+    assert row["responsible_id"] == ids["mgrA"] and row["status"] == "assigned"
     # give S a 24h window every weekday → the same slot is now bookable
     db.set_availability(ids["subS"], [{"dow": d, "start_min": 0, "end_min": 0, "enabled": True}
                                       for d in range(7)])
@@ -415,8 +422,9 @@ def test_iv_manager_distribute_to_with_direction_and_isolation():
     _mark_announced()
     assert r.status_code == 200
     got = [db.interview_by_id(i)["responsible_id"] for i in (i1, i2, i3)]
-    assert got.count(ids["subS"]) == 2                       # the two IT ones
-    assert db.interview_by_id(i3)["responsible_id"] is None  # the 'other' one stays in the pool
+    assert got.count(ids["subS"]) == 2                       # the two IT ones handed down
+    # the 'other' one wasn't matched → stays with the MANAGER himself (auto-own), not handed down
+    assert db.interview_by_id(i3)["responsible_id"] == ids["mgrA"]
 
     # ISOLATION: a manager cannot distribute to a non-subordinate (the plain employee E)
     r = client.post("/manage/distribute_to",
@@ -427,18 +435,58 @@ def test_iv_manager_distribute_to_with_direction_and_isolation():
 
 def test_iv_manager_portal_two_sections():
     ids = _chain()
-    i_self = db.allocate_interview("test_iv_m_s1@x.com", ids["mgrA"], subject="mine")
+    db.allocate_interview("test_iv_m_s1@x.com", ids["mgrA"], subject="mine")   # auto-owned
     i_team = db.allocate_interview("test_iv_m_s2@x.com", ids["mgrA"], subject="teammate")
-    db.manager_assign_interview(i_self, ids["mgrA"])   # manager attends this one himself
-    db.manager_assign_interview(i_team, ids["subS"])   # delegated to a subordinate
+    db.manager_assign_interview(i_team, ids["subS"])   # handed DOWN to a subordinate
     _mark_announced()
     _login("test_iv_m_A")
     r = client.get("/manage", follow_redirects=False)
     assert r.status_code == 200
-    # the two required sections are present + separated
-    assert "Пул на распределение" in r.text and "Мои собеседования" in r.text
-    assert "test_iv_m_s1" in r.text                    # own queue shows the self-assigned one
-    assert "Назначено команде" in r.text               # subordinate assignment is visible too
+    # the two required sections of the auto-own model are present + separated
+    assert "Мои собеседования — не розданы команде" in r.text and "Роздано команде" in r.text
+    assert "test_iv_m_s1" in r.text                    # my own (not distributed) shows
+    assert "test_iv_m_s2" in r.text                    # the handed-down one shows in «Роздано команде»
+
+
+def test_iv_manager_reclaim_from_returns_to_manager():
+    # TASK 2: bulk reclaim pulls a subordinate's собесы back to the MANAGER himself (responsible_id
+    # → manager_id), with the same gender/direction/count filter as distribute — and the isolation
+    # contract (a manager can only reclaim from HIS active subordinates).
+    ids = _chain()
+    i1 = db.allocate_interview("test_iv_m_rc1@x.com", ids["mgrA"], subject="rc1")
+    i2 = db.allocate_interview("test_iv_m_rc2@x.com", ids["mgrA"], subject="rc2")
+    db.manager_assign_interview(i1, ids["subS"])   # hand both down to subordinate S
+    db.manager_assign_interview(i2, ids["subS"])
+    _mark_announced()
+    assert db.assigned_load([ids["subS"]]).get(ids["subS"]) == 2
+
+    _login("test_iv_m_A")
+    r = client.post("/manage/reclaim_from",
+                    data={"member_id": ids["subS"], "count": 1}, follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    got = [db.interview_by_id(i)["responsible_id"] for i in (i1, i2)]
+    assert got.count(ids["mgrA"]) == 1 and got.count(ids["subS"]) == 1   # exactly one pulled back
+
+    # ISOLATION: a manager cannot reclaim from a non-subordinate (the plain employee E) — no-op
+    r = client.post("/manage/reclaim_from",
+                    data={"member_id": ids["empE"], "count": 1}, follow_redirects=False)
+    _mark_announced()
+    assert r.status_code == 200
+    got = [db.interview_by_id(i)["responsible_id"] for i in (i1, i2)]
+    assert got.count(ids["mgrA"]) == 1 and got.count(ids["subS"]) == 1   # unchanged
+
+
+def test_iv_manager_portal_new_controls_rendered():
+    # the reclaim route + the Telegram-connect prompt (reusing /cabinet/tg/connect) are wired in.
+    ids = _chain()
+    db.allocate_interview("test_iv_m_nc@x.com", ids["mgrA"], subject="nc")
+    _login("test_iv_m_A")
+    r = client.get("/manage", follow_redirects=False)
+    assert r.status_code == 200
+    assert 'action="/manage/reclaim_from"' in r.text                 # bulk reclaim UI trigger
+    # a manager with no linked Telegram sees the connect prompt, reusing the existing cabinet route
+    assert 'action="/cabinet/tg/connect"' in r.text and "Подключить Telegram" in r.text
 
 
 # ---- role editor: self-lockout guard (audit finding 3) ---------------------------

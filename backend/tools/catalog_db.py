@@ -46,18 +46,52 @@ def _get_pool():
     return _pool
 
 
+def _alive(c) -> bool:
+    """A pooled connection can go STALE: the server (or the SSL layer / an idle timeout) closes
+    it while it sits in the pool, but psycopg2 still hands it back — the next `execute` then dies
+    with `SSL connection has been closed unexpectedly`, and in the error path `rollback()` raises
+    a SECONDARY `InterfaceError: connection already closed` that masks the real error and aborts
+    the whole run (the nightly regions/forms backfills died this way). A cheap `SELECT 1` proves
+    the socket before we use it; a dead one is discarded so the pool opens a fresh one."""
+    try:
+        if getattr(c, "closed", 0):
+            return False
+        with c.cursor() as cur:
+            cur.execute("SELECT 1")
+        c.rollback()                     # don't leave the ping's txn open
+        return True
+    except Exception:
+        return False
+
+
 @contextmanager
 def conn():
     p = _get_pool()
     c = p.getconn()
+    if not _alive(c):                    # stale pooled conn → drop it, take a fresh one
+        try:
+            p.putconn(c, close=True)
+        except Exception:
+            pass
+        c = p.getconn()
     try:
         yield c
         c.commit()
     except Exception:
-        c.rollback()
+        # guard the rollback: on a broken connection it raises `InterfaceError: connection
+        # already closed`, which would replace the ORIGINAL error and, worse, the finally below
+        # would return the dead conn to the pool for the next caller to hit again.
+        try:
+            c.rollback()
+        except Exception:
+            pass
         raise
     finally:
-        p.putconn(c)
+        # a connection that broke mid-block is closed (removed from the pool) instead of recycled.
+        try:
+            p.putconn(c, close=bool(getattr(c, "closed", 0)))
+        except Exception:
+            pass
 
 
 @contextmanager

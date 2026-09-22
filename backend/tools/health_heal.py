@@ -105,6 +105,17 @@ def classify_row(section_key: str, row: dict):
             if ("cwd" in low and "≠" in detail) or "не найден" in low:
                 return _alert(f"pm2:{name}", "pm2_manual", name, detail,
                               "restart не поможет — нужен pm2 start --cwd /home/projects/jobfinder + pm2 save")
+            # A service pm2 STILL reports `online` but that health flagged `down` ONLY by the
+            # restart-rate heuristic ("N перезапусков за час (падает?)") is CRASH-LOOPING or
+            # flapping — NOT stopped/errored. A `pm2 restart` does not fix the cause AND adds a
+            # restart, feeding the very counter that raised the flag: a self-perpetuating loop
+            # where the healer becomes the crasher (observed on jobfinder-shl-watch — every heal
+            # tick bumped its restart count, so it never cleared). Alert for a code fix/investigation
+            # instead; only a genuinely NOT-online process (stopped/errored/removed) is restarted.
+            if "online" in low and ("падает" in low or "перезапуск" in low):
+                return _alert(f"pm2:{name}", "pm2_flap", name, detail,
+                              "сервис online, но часто перезапускается — рестарт не лечит причину "
+                              "(нужен код-фикс/расследование), авто-рестарт НЕ применяем")
             return _heal(f"pm2:{name}", "pm2_restart", ["pm2", "restart", name], name, detail,
                          f"pm2 restart {name}")
         # a non-jobfinder pm2 row that is down = the pm2 layer itself → alert, never auto-touch pm2

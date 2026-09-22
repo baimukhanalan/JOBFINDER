@@ -322,7 +322,14 @@ _ERR_RE = re.compile(
 # exiting" flock-skip is normal. Don't flag any of those.
 _BENIGN_RE = re.compile(
     r'errors?["\s]*[=:]\s*0\b|\b0\s+errors?\b|error\s*[=:]\s*(?:none|null|0)\b|'
-    r"still going\s*[—-]\s*exiting|using deterministic", re.I)
+    r"still going\s*[—-]\s*exiting|using deterministic|"
+    # workday_probe_promote reports NON-fatal outcomes as its normal operation, not failures: it
+    # DEFERS under load ("box busy … skip, retry next tick") and reports when a quiet-window drive
+    # couldn't finish the promote yet ("did not reach create-account", "no_captcha_incomplete",
+    # "submit not reached"). None of these is a crash — the probe just hasn't promoted the tenant
+    # yet — so they must not paint the health badge red every 15 min (a real traceback still does).
+    r"retry next tick|box busy|no_captcha_incomplete|did not reach create-account|submit not reached",
+    re.I)
 
 
 # A leading log timestamp ("2026-09-19 15:36:35,546 …" / "2026-09-19T04:15:05+0200 …", optionally

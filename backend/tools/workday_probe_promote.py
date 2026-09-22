@@ -40,7 +40,7 @@ from backend.tools import mass_hiring_apply_workday_cron as wc  # noqa: E402
 # step on a quiet :98 and AUTO-PROMOTE on a confirmed on-page submit (like Sagility) — no code edit.
 # (GEICO is host-wired too but has 0 active rows right now, so it has no probe id yet; Oscar/Clover
 # are Greenhouse boards, NOT Workday, so they are NOT probed here.)
-PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 1224,
+PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 16492,
                            "everise": 17085, "devoted": 17093}
 
 QUIET_LOAD = float(os.getenv("PROBE_QUIET_LOAD", "9"))   # 1-min load must be below this

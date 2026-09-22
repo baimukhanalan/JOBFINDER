@@ -98,3 +98,39 @@ def test_pick_strategy_routes_workday(monkeypatch):
         "https://humana.wd5.myworkdayjobs.com/Humana_External_Career_Site/job/x/apply")
     assert strat is not None
     assert type(strat).__name__ != "GenericStrategy"
+
+
+def test_connector_auto_status_conduent_humana_unitedhealth():
+    # Conduent (Phenom → Oracle HCM guest apply) is LIVE-PROVEN full-auto → 'auto' (the board shows
+    # «Авто» + the phenom lane drives it). Humana is Workday-CxS behind a register-captcha probe →
+    # 'needs_laptop' (the workday_probe_promote cron promotes it, no misleading «Авто»). UnitedHealth
+    # is a hard Azure-AD-SSO identity wall (no candidate self-registration) → genuinely 'blocked'.
+    from backend.tools.mass_hiring import auto_status
+    assert auto_status("conduent") == "auto"
+    assert auto_status("humana") == "needs_laptop"
+    assert auto_status("unitedhealth") == "blocked"
+
+
+def test_phenom_recon_pay_orders_the_pool(monkeypatch):
+    # phenom_recon.main() must pay-order the WHOLE Conduent pool via offer_priority.plan_mh_batch
+    # (high-pay-first + stop-on-response), THEN apply --limit, so --limit keeps the top-N
+    # highest-paying still-open jobs — never a blind SQL LIMIT over id order.
+    from backend.tools import offer_priority
+
+    monkeypatch.setattr(phenom_recon, "phenom_job_ids", lambda *a, **k: [11, 22, 33, 44])
+    seen = {}
+
+    def fake_plan(ids, **kw):
+        seen["ids"] = list(ids)
+        seen["kw"] = kw
+        return [44, 33, 22, 11]          # pretend pay-desc order
+
+    monkeypatch.setattr(offer_priority, "plan_mh_batch", fake_plan)
+    # drive nothing: stub the per-job driver + row lookup so main() only exercises selection
+    monkeypatch.setattr(phenom_recon, "_row", lambda jid: None)
+    monkeypatch.setenv("PHENOM_ADVANCE", "0")
+    import sys
+    monkeypatch.setattr(sys, "argv", ["phenom_recon", "--limit", "2"])
+    phenom_recon.main()
+    assert seen["ids"] == [11, 22, 33, 44]          # the WHOLE pool was handed to the planner
+    assert seen["kw"].get("rounds") == 1

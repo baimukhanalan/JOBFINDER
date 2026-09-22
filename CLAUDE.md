@@ -886,7 +886,7 @@ Source recipes (endpoint + gotcha):
   - **Afni** (`fetch_afni`/`_afni_row`): ADP "myjobs" SPA (`myjobs.adp.com/afniexternalcareers`). The job API is a **PLAIN httpx GET** (the "withCredentials-gated" read was wrong): the keyless public career-site config `myjobs.adp.com/public/staffing/v1/career-site/afniexternalcareers` mints a `myJobsToken`; sending it as header `myjobstoken` (+ `rolecode: manager` + `orgoid`) to `my.adp.com/myadp_prefix/mycareer/public/staffing/v1/job-requisitions/apply-custom-filters?$select=…&$top=300` returns every requisition — NO login/cookie/geo gate. `_afni_row` is TITLE-first remote (the ADP location is the recruiting OFFICE, not the work site), US off `requisitionLocations[0].address.country.codeValue==USA`. **STRONG live yield: 63 reqs → 12 US-remote ENTRY rows** ("Remote Customer Service Representative", "Full-Time Remote Insurance Representative"). Apply URL `…/cx/job-details/<reqId>`; ADP has no apply strategy (collect-only).
   - **Cotiviti** (`fetch_cotiviti`/`_cotiviti_row`): iCIMS `careers-cotiviti.icims.com`. httpx gets a **405 "Human Verification"**; **curl_cffi impersonate="chrome"** returns the 200 results HTML from the SAME plain IP (the wall is a TLS-fingerprint check — a US-datacenter egress got the identical 405). Each results row is `Job Locations <loc> ID 2026-<id> Title <title> …`; loc `US-Remote` = remote+US (regex `Job Locations\s+(.*?)\s+ID\s`). Paginate `?ss=1&in_iframe=1&pr=<0-indexed>`. **HONEST live: ~83 postings → ~1 US-remote ENTRY** (Cotiviti is mostly senior healthcare-analytics; the entry slice is thin) — reachable + future-proof. Apply = iCIMS/TP lane after a per-tenant verify.
   - **Progressive** (`fetch_progressive`/`_progressive_row`): NOT Workday — `progressive.wd5.myworkdayjobs.com` is a bot-walled **DECOY** tenant (still 422s regardless of IP/TLS); the real board is **Talemetry SSR** at `careers.progressive.com`, behind **Cloudflare**. httpx gets CF's "Just a moment" 403; **curl_cffi impersonate="chrome124" in a WARMED Session** (GET `/` first for the CF clearance cookie, then retry) clears it from the plain server IP. Use the clean **REMOTE facet** `/search/remote_work/remote/jobs/` (+ `?page=N`) so remoteness is guaranteed; each `.jobs-section__item` → `h3 a` title + `/jobs/<id>-<slug>/` (US forced, US-only insurer). **HONEST live: only ~7 remote roles TOTAL → ~1 entry today** (Progressive runs large seasonal WFH claims/service/sales ramps → future-proof). Apply = Talemetry (no strategy). *(NB `chrome124` is fingerprint-specific — the newer `chrome` default is CF-blocked; keep chrome124 + the warmed Session + retries.)*
-- **Conduent** (`fetch_conduent`, already wired): **Phenom People** ATS (`careers.conduent.com/widgets`, POST + paginate `from`; keeps remote-US CSR — `keywords="customer service"`). Live ~16 remote-US CSR rows. **COLLECT-ONLY** — Phenom apply is not a supported strategy (`auto_status='blocked'`).
+- **Conduent** (`fetch_conduent`, already wired): **Phenom People** ATS (`careers.conduent.com/widgets`, POST + paginate `from`; keeps remote-US CSR — `keywords="customer service"`). Live ~16 remote-US CSR rows. **AUTO-APPLY** (`auto_status='auto'`, 2026-09-22): the Phenom career-site "Apply" hands off to an **Oracle HCM guest apply** — driven full-auto by `strategies/phenom.py::PhenomStrategy` + the `phenom_recon` lane (see Auto-apply lanes). (Humana's `careers.humana.com/widgets` Phenom board is DISCOVERY only — its apply_url is Workday; see the Humana Workday-CxS lane.)
 - **Gainwell Technologies** (Medicaid/Medicare BPO; the SAME SuccessFactors RMK family as Foundever, `jobs.gainwelltechnologies.com/search-jobs/results?q=&startrow=N`): the results table is BYTE-IDENTICAL to Foundever's, so **`_gainwell_parse = _foundever_parse`** (reused verbatim). TWO differences (recon 2026-09-21): (1) the LOCATION is `<city>, <state-code>, US, <zip>` (e.g. `Any city, MT, US, 99999`) so the country token is a MIDDLE token, NOT the last (that's the ZIP) → `_gainwell_is_us` scans every comma-token for `US`/`USA`/`United States`; (2) the REMOTE signal is in the TITLE (`- Remote MT`, `Remote, …`), NOT the location → `_gainwell_row` feeds `_is_remote(title, loc)`. `categorize()` still drops the clinical/pharmacy/lead/analyst titles Gainwell posts alongside its CSR pipeline. `fetch_gainwell`/`_gainwell_row`/`_gainwell_is_us`. **~28 remote-US mass-hiring rows** (of ~57 raw "Remote" on the board, after the entry filter). Apply = SuccessFactors careersection (see the Gainwell auto-apply lane).
 - **himalayas:** RETRY the offset on intermittent non-JSON, don't `break` the pagination.
 - **STAFFING AGENCIES (fast-placement lane, added 2026-09-20; Manpower + Experis are now FULL-AUTO server-side (2026-09-21, see the auto-apply lane), the rest COLLECT-ONLY — see the auto-apply note below).** Each is its OWN careers backend (recon'd from the site's network calls, verified with httpx); US-only inventory, so `us_eligible` is forced True and `categorize()`/`_is_remote` enforce the two HARD RULES. Salary stored raw (`to_hourly` normalizes by magnitude at display). Live yields are modest — these firms are mostly on-site/professional, so the genuinely-remote entry slice is small (nightly: randstad ~11, manpower ~6, roberthalf ~24, adecco ~a few, experis ~2).
@@ -899,6 +899,55 @@ Source recipes (endpoint + gotcha):
 ## Auto-apply lanes (mass hiring)
 Ceiling for all: real HIRE is human-gated by a later assessment.
 
+- **Conduent / Phenom → Oracle HCM** (`strategies/phenom.py::PhenomStrategy`, driver `tools/phenom_recon.py`, gated
+  `PHENOM_ADVANCE=1`) — **FULL-AUTO to a real ack from the DATACENTER IP (DIRECT, no residential), NO login wall, NO
+  interactive captcha.** `careers.conduent.com/us/en/job/<id>` is a Phenom career-site wrapper whose real ATS is Oracle
+  HCM (`"ats":"ORACLEHCM"`, `"forwardApply":"hvhapply"`); the guest "Apply" hands off to the Oracle CX apply (some reqs
+  render the Phenom apply-STUDIO form INLINE at `careers.conduent.com/us/en/apply?jobSeqNo=…` instead of redirecting to
+  `oraclecloud.com` — the strategy fills BOTH). `PhenomStrategy` subclasses `OracleORCStrategy` (JET widget fill, EEO
+  decline, deterministic truthful screeners, env-gated wizard walk) + adds the Phenom→Oracle handoff and a long
+  post-form multi-step walk (`_conduent_finish`, 14 steps: personal → DRP acknowledgment → arbitration → demographics →
+  screeners → CC-305/veteran radios → …). **GOTCHAS (all live-found):** Conduent's client-side validation accepts ONLY a
+  REAL interaction — Country + Country-dependent State via `select_option`, DRP/agreement checkboxes via a real `label`
+  click (a JS `checked=`/force set reads as checked but is REJECTED → the "you must agree" stall; NO JS fallback), NEVER
+  the `#phenomChatbotWrapper` overlay or the Qualtrics/Medallia "rate your experience" survey popup (both intercept the
+  Submit/checkbox click — `_dismiss_chatbot`/`_dismiss_feedback_popup` hide them first); the phone must be digits + `+ # -`
+  only (`_sanitize_phone` strips `( )`/spaces — a parenthesised phone silently blocks step 1); marketing WhatsApp/SMS
+  opt-ins are UNticked. Captcha: Phenom's apply-studio reCAPTCHA v2 is OFF for Conduent (`captchaConfig.useCaptcha=false`);
+  the Oracle-HCM backend runs an INVISIBLE reCAPTCHA v3 on submit that the NopeCHA-armed headful browser passes from the
+  plain server IP (`captcha_solver.solve_on_page`). Driver `phenom_recon` = the shared `workday_recon.drive_apply` loop
+  (fresh synth persona placed in the job's state, `keep`-minute Maildir confirm-poll, transient-crash retry ×3); selection
+  is pay-ordered + stop-on-response via `offer_priority.plan_mh_batch` then `--limit`. **LIVE-PROVEN end-to-end 2026-09-02**
+  (a real "Thank You for Applying at Conduent" ack in the persona Maildir; the post-application "Required Assessment" is a
+  human skills test, a POST-submit step like TP/Maximus, not a submit wall); **fresh dry-run 2026-09-22** still fills the
+  whole identity form + Terms consent + reaches Submit side-effect-free. `_confirmed` EXCLUDES recruiting-marketing (Talent
+  Community / job alerts from careeralerts.conduent.com) so only a real ack counts. **PHENOM_ADVANCE off ⇒ dry run**
+  (fills + STOPS, no PII transmitted, no wizard walk). HEADFUL on `:98` (reCAPTCHA v3 rejects headless); no pm2 restart
+  (fresh subprocess each run — but the persistent copilot holds old apply code, so a `/catalog` one-click Conduent fill
+  needs `pm2 restart jobfinder-alan-copilot`). Cron line (2×/day, hour-staggered — minute 6 / hours 4,14, only the Workday
+  centene lane at :48 shares those hours):
+  `6 4,14 * * * cd /home/projects/jobfinder && flock -n logs/phenom_apply.lock env DISPLAY=:98 PHENOM_ADVANCE=1 sg mail -c 'python3 -m backend.tools.phenom_recon --limit 4' >> logs/phenom_apply.log 2>&1`.
+  Tests: `test_phenom.py` (routing/gates/screeners), `test_workday_phenom_recon.py` (job-id SQL + auto_status + pay-order).
+- **Humana / Phenom → Workday CxS** (`strategies/phenom.py::PhenomWorkdayStrategy` → the MODERN shared `WorkdayStrategy`
+  create-account lane; source `humana`, hosts `humana.wd5.myworkdayjobs.com` Humana_External + CenterWell tenants) —
+  `careers.humana.com` is Phenom for DISCOVERY only; every apply_url is Workday, so `PhenomWorkdayStrategy` routes it to
+  the same account-create wizard as cigna/centene/concentrix (default gate OFF = byte-identical to stock `WorkdayStrategy`).
+  Selectable by `workday_recon.workday_job_ids()` (humana is in its source list) + in `workday_recon._BLOCKED`
+  ("register-step reCAPTCHA, pending live re-verify"). **NOT manually cron-wired** — the `*/30 workday_probe_promote` cron
+  drives it on a QUIET `:98` (`PENDING["humana"]=16492`, a fresh live row) and AUTO-PROMOTES it to `_LIVE_TENANTS` (→ the
+  `mass_hiring_apply_workday_cron` picks it up) the moment it reaches the on-page "Application Submitted" with NO register
+  captcha (like Concentrix, which was unblocked the same way) — else records the real captcha to
+  `data/workday_probe_blocked.json`. Seasonal (AEP Oct-Dec). `auto_status='needs_laptop'` (no misleading «Авто» until the
+  probe confirms a real ack). Live register-captcha verdict still PENDING a quiet-`:98` probe drive (the box was under load
+  this pass, so no 2nd headful drive was run — honest).
+- **UnitedHealth / Optum — genuinely BLOCKED (Azure AD SSO, no self-registration; NOT buildable).** `careers.unitedhealth
+  group.com` (Radancy) hands off to Oracle Taleo (`uhg.taleo.net` careersection 10020) which has NO captcha/WAF — BUT the
+  account-create step (`createprofile`/`register`/`accessmanagement.ftl`) 302s via `referrals.unitedhealthgroup.com` →
+  `login.radancy.net` → `login.microsoftonline.com` (Azure AD SAML). There is NO candidate self-signup → 0 guest
+  applications are possible. Re-verified live 2026-09-22 (identical to the 2026-09-01 finding + 3 empty-Maildir drives). A
+  hard IDENTITY wall — a captcha key or a US IP does NOT help. `auto_status='blocked'`; `tools/recon_unitedhealth.py` keeps
+  the full probe evidence + the `resolve_apply_url` helper. Do NOT wire `TaleoStrategy` onto `uhg.taleo.net` (TaleoStrategy
+  itself is fine — proven on TTEC, which has no SSO redirect).
 - **Maximus / Avature** (`strategies/avature.py`, cron `mass_hiring_apply_cron`) — COMPLETES a real submission. Gated
   `AVATURE_ADVANCE=1` (advancing transmits PII + creates the account on the final Submit; a plain fill is side-effect-free).
   Fills the account password ×2, the `*`-labelled Terms checkbox, Yes/No screeners (`_SCREENERS`/`_answer_radio_screeners`,

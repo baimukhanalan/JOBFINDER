@@ -102,7 +102,20 @@ def main() -> None:
     ap.add_argument("--keep", type=int, default=13)
     args = ap.parse_args()
 
-    ids = [args.job] if args.job else phenom_job_ids(limit=(args.limit or None))
+    if args.job:
+        ids = [args.job]
+    else:
+        # Pay-order the WHOLE Conduent pool + drop positions already at interview/offer
+        # (offer_priority.plan_mh_batch: high-pay-first + STOP-ON-RESPONSE), THEN take the top-N so
+        # --limit keeps the highest-paying still-open jobs. Fully guarded — falls back to id order.
+        ids = phenom_job_ids()
+        try:
+            from backend.tools import offer_priority
+            ids = offer_priority.plan_mh_batch(ids, rounds=1)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[offer_priority ordering skipped: {type(exc).__name__}: {exc}]", flush=True)
+        if args.limit:
+            ids = ids[: args.limit]
     if not ids:
         print("no Conduent (phenom) jobs on the board", flush=True)
         return

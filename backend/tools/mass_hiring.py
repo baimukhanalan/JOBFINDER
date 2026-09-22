@@ -320,7 +320,14 @@ _AUTO_STATUS = {
     "centene": "needs_laptop", "cigna": "needs_laptop", "ttec": "needs_laptop",
     # Healthcare payers/BPOs on the driven Workday CxS lane (register-captcha probe pending).
     "elevance": "needs_laptop", "highmark": "needs_laptop", "sagility": "needs_laptop",
-    "unitedhealth": "needs_laptop", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
+    # unitedhealth/Optum: careers.unitedhealthgroup.com (Radancy) hands off to Oracle Taleo
+    # (uhg.taleo.net careersection 10020) for the apply — NO captcha/WAF, BUT the account-create step
+    # (createprofile/register/accessmanagement.ftl) 302s via referrals.unitedhealthgroup.com →
+    # login.radancy.net → login.microsoftonline.com (Azure AD SAML). There is NO candidate
+    # self-registration, so 0 guest applications are possible (re-verified live 2026-09-22, same as the
+    # 2026-09-01 finding + 3 empty-Maildir drives). A hard IDENTITY wall, not solvable with a captcha
+    # key or a US IP → genuinely BLOCKED (not 'needs_laptop', which implied a buildable lane).
+    "unitedhealth": "blocked", "teleperformance": "needs_laptop", "sutherland": "needs_laptop",
     # Wayfair: DIRECT-HIRE (non-BPO) on the SAME SmartRecruiters lane as Sutherland — the SR apply cron
     # (keyed on the smartrecruiters.com apply_url) drives it full-auto to an ack regardless of this badge;
     # mirrors Sutherland's status. The pre-offer human gate (phone/video + sales assessment) sits AFTER
@@ -348,7 +355,24 @@ _AUTO_STATUS = {
     # career41.sapsf.com, company gainwellte) — captcha-free, reuses strategies/foundever.py via
     # tools/gainwell_recon.py. Medicaid/Medicare BPO CSR/member-services.
     "gainwell": "auto",
-    "humana": "blocked", "conduent": "blocked", "workingsolutions": "blocked", "amazon": "blocked",
+    # conduent: Phenom career-site wrapper → Oracle HCM guest apply (careers.conduent.com). FULL-AUTO
+    # from the datacenter IP (DIRECT, no residential) — no login wall, no interactive captcha (Phenom's
+    # apply-studio reCAPTCHA v2 is OFF for Conduent, the Oracle-HCM backend runs an INVISIBLE reCAPTCHA
+    # v3 the NopeCHA-armed headful browser passes). Driven by strategies/phenom.py::PhenomStrategy +
+    # tools/phenom_recon.py (gated PHENOM_ADVANCE=1). LIVE-PROVEN end-to-end 2026-09-02 (a real "Thank
+    # You for Applying at Conduent" ack landed in the persona Maildir); fresh dry-run 2026-09-22 still
+    # fills the whole identity form + Terms consent + reaches Submit. The post-application "Required
+    # Assessment" is a human skills test (a POST-submit step, like TP/Maximus), not a submit wall.
+    "conduent": "auto",
+    # humana: careers.humana.com is Phenom for DISCOVERY only; every apply_url points at Workday
+    # (humana.wd5.myworkdayjobs.com, Humana_External + CenterWell tenants). Routed via
+    # strategies/phenom.py::PhenomWorkdayStrategy → the modern shared Workday CxS create-account lane
+    # (mass_hiring_apply_workday_cron --tenant humana). Sits in workday_recon._BLOCKED pending a live
+    # register-captcha re-verify (the workday_probe_promote cron auto-promotes it to _LIVE_TENANTS on a
+    # confirmed on-page submit, like Concentrix). Seasonal (AEP Oct-Dec). Keep 'needs_laptop' (no
+    # misleading «Авто» badge; the probe cron drives it, no manual _LIVE add).
+    "humana": "needs_laptop",
+    "workingsolutions": "blocked", "amazon": "blocked",
     # Staffing agencies (recon 2026-09-20). Randstad: guest apply + résumé + a Friendly-Captcha
     # proof-of-work (self-solving, no image challenge) — the most auto-promising, but not yet
     # proven end-to-end, so 'needs_laptop' until a live ack. Adecco: mandatory account on a custom

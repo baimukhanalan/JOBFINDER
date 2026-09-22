@@ -1521,3 +1521,173 @@ def test_progressive_missing_fields_are_dropped():
     assert mh._progressive_row("", "Customer Service Representative", "/jobs/x/", "United States") is None
     assert mh._progressive_row("2", "", "/jobs/2/", "United States") is None
     assert mh._progressive_row("3", "Customer Service Representative", "", "United States") is None
+
+
+# ---- Everise — Workday BPO (weareeverise.wd1). Remote-US ENTRY via us_from_path (state in the
+# externalPath) + title_remote. Live 2026-09-22: ~40 board, ~17 US-remote, ~6 remote-US entry CSR.
+def test_everise_multiloc_remote_us_via_path_is_kept():
+    # locationsText is a bare "29 Locations" (no US signal) — US confirmed by the state in the path.
+    row = mh._workday_row(
+        {"locationsText": "29 Locations",
+         "title": "Healthcare Customer Service Representative - Work From Home",
+         "bulletFields": ["R14012"],
+         "externalPath": "/job/Work-from-Home-Alabama/Healthcare-CSR_R14012"},
+        "everise", "Everise", "weareeverise.wd1.myworkdayjobs.com", "everiseCareers",
+        title_remote=True, us_from_path=True)
+    assert row is not None
+    assert row["source"] == "everise"
+    assert row["source_id"] == "R14012"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+
+
+def test_everise_wfh_state_location_is_kept():
+    row = mh._workday_row(
+        {"locationsText": "Work from Home Alabama", "title": "Licensed Health Insurance Agent",
+         "bulletFields": ["R14020"], "externalPath": "/job/Work-from-Home-Alabama/x_R14020"},
+        "everise", "Everise", "weareeverise.wd1.myworkdayjobs.com", "everiseCareers",
+        title_remote=True, us_from_path=True)
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_everise_offshore_remote_is_dropped():
+    # A remote role with a non-US path/location must NOT leak in on us_from_path.
+    assert mh._workday_row(
+        {"locationsText": "Manila, Philippines",
+         "title": "Customer Service Representative - Work from Home",
+         "bulletFields": ["R14030"], "externalPath": "/job/Manila-Philippines/x_R14030"},
+        "everise", "Everise", "weareeverise.wd1.myworkdayjobs.com", "everiseCareers",
+        title_remote=True, us_from_path=True) is None
+
+
+def test_everise_senior_us_remote_is_dropped():
+    assert mh._workday_row(
+        {"locationsText": "Work From Home Texas", "title": "Senior Vice President - Sales",
+         "bulletFields": ["R14040"], "externalPath": "/job/Work-from-Home-Texas/x_R14040"},
+        "everise", "Everise", "weareeverise.wd1.myworkdayjobs.com", "everiseCareers",
+        title_remote=True, us_from_path=True) is None
+
+
+# ---- Devoted Health — Workday (devoted.wd1), US-only payer (us_confirmed). Remote care-coordinator
+# member-services entry roles. Live 2026-09-22: ~76 board, ~3 remote entry.
+def test_devoted_remote_care_coordinator_is_kept():
+    row = mh._workday_row(
+        {"locationsText": "Remote USA", "title": "Digital Care Coordinator",
+         "bulletFields": ["R6001"], "externalPath": "/job/Remote/Digital-Care-Coordinator_R6001"},
+        "devoted", "Devoted Health", "devoted.wd1.myworkdayjobs.com", "Devoted",
+        us_confirmed=True, title_remote=True)
+    assert row is not None
+    assert row["source"] == "devoted"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+
+
+def test_devoted_clinical_and_senior_are_dropped():
+    assert mh._workday_row(
+        {"locationsText": "Remote USA", "title": "Quality Assurance Manager",
+         "bulletFields": ["R6002"], "externalPath": "/x_R6002"},
+        "devoted", "Devoted Health", "devoted.wd1.myworkdayjobs.com", "Devoted",
+        us_confirmed=True, title_remote=True) is None
+    assert mh._workday_row(
+        {"locationsText": "Remote USA", "title": "Registered Nurse Care Manager",
+         "bulletFields": ["R6003"], "externalPath": "/x_R6003"},
+        "devoted", "Devoted Health", "devoted.wd1.myworkdayjobs.com", "Devoted",
+        us_confirmed=True, title_remote=True) is None
+
+
+# ---- Greenhouse boards (Oscar / Clover healthcare payers) — _greenhouse_row. Remote from title/loc,
+# US from wording/state/title (US-only payers). Live 2026-09-22: oscar ~1, clover ~1 remote entry.
+def test_greenhouse_bare_remote_us_payer_is_kept():
+    row = mh._greenhouse_row(
+        {"id": 4567, "title": "COB Verification Specialist", "location": {"name": "Remote"},
+         "absolute_url": "https://boards.greenhouse.io/oscar/jobs/4567",
+         "updated_at": "2026-09-15T00:00:00-04:00"}, "oscar", "Oscar Health")
+    assert row is not None
+    assert row["source"] == "oscar"
+    assert row["source_id"] == "4567"
+    assert row["category"] == "operations"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == "https://boards.greenhouse.io/oscar/jobs/4567"
+
+
+def test_greenhouse_remote_usa_label_is_kept():
+    row = mh._greenhouse_row(
+        {"id": 88, "title": "CPH - Provider Engagement",
+         "location": {"name": "Remote - USA"}, "absolute_url": "u"}, "clover", "Clover Health")
+    assert row is not None
+    assert row["category"] == "customer_support"
+
+
+def test_greenhouse_onsite_is_dropped():
+    assert mh._greenhouse_row(
+        {"id": 1, "title": "Customer Service Representative",
+         "location": {"name": "New York, NY"}, "absolute_url": "u"}, "oscar", "Oscar Health") is None
+
+
+def test_greenhouse_senior_remote_is_dropped():
+    assert mh._greenhouse_row(
+        {"id": 2, "title": "Senior Software Engineer",
+         "location": {"name": "Remote"}, "absolute_url": "u"}, "oscar", "Oscar Health") is None
+
+
+# ---- Concentrix Canada (jdq country=Canada, _cnx_ca_row). CA-remote CSR; forces the board-keep flag,
+# builds a Canadian location. Live 2026-09-22: ~37 CA rows, ~10 remote entry (bilingual EN/FR).
+def test_cnx_ca_fully_remote_is_kept():
+    row = mh._cnx_ca_row({
+        "ats_external_id": "cx-100", "job_title": "Customer Service Rep - Remote (Bilingual)",
+        "remote_type": "fully_remote", "city": "Work At Home", "state": "",
+        "apply_url": "https://concentrix.crew.talkpush.com/x", "created_at": "2026-09-10"})
+    assert row is not None
+    assert row["source"] == "concentrix_ca"
+    assert row["source_id"] == "cx-100"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True                # forced (no CA column) — keeps it on the board
+    assert "Canada" in row["location_raw"]
+
+
+def test_cnx_ca_city_location_is_canada():
+    row = mh._cnx_ca_row({
+        "ats_external_id": "cx-101", "job_title": "Bilingual Program Support Specialist",
+        "remote_type": "fully_remote", "city": "Dartmouth", "state": "NS",
+        "apply_url": "u", "created_at": "2026-09-10"})
+    assert row is not None
+    assert row["location_raw"] == "Dartmouth, NS, Canada"
+
+
+def test_cnx_ca_onsite_and_hybrid_dropped():
+    assert mh._cnx_ca_row({
+        "ats_external_id": "cx-102", "job_title": "Customer Service Rep", "remote_type": "on_site",
+        "city": "Oshawa", "state": "ON"}) is None
+    assert mh._cnx_ca_row({
+        "ats_external_id": "cx-103", "job_title": "Customer Service Rep", "remote_type": "hybrid",
+        "city": "Toronto", "state": "ON"}) is None
+
+
+def test_cnx_ca_senior_dropped_by_categorize():
+    assert mh._cnx_ca_row({
+        "ats_external_id": "cx-104", "job_title": "Senior Operations Manager - Remote",
+        "remote_type": "fully_remote", "city": "Work At Home"}) is None
+
+
+# ---- Sutherland Canada (SmartRecruiters country=ca, force_eligible). CA-remote entry; board-keep flag.
+def test_smartrecruiters_ca_remote_is_kept_and_forced_eligible():
+    row = mh._smartrecruiters_row({
+        "id": "744000200000001", "name": "Customer Service - Sports Streaming Platform",
+        "location": {"country": "ca", "remote": True, "fullLocation": "Fredericton, NB, Canada"},
+        "releasedDate": "2026-09-18T00:00:00.000Z",
+    }, "sutherland_ca", "Sutherland", country="ca", force_eligible=True)
+    assert row is not None
+    assert row["source"] == "sutherland_ca"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True                # forced so collect() keeps the CA row on the board
+    assert "Canada" in row["location_raw"]
+    assert row["apply_url"] == "https://jobs.smartrecruiters.com/Sutherland/744000200000001"
+
+
+def test_smartrecruiters_ca_does_not_leak_into_us_lane():
+    # The US Sutherland fetcher (country='us', no force) must NOT keep a CA row.
+    assert mh._smartrecruiters_row({
+        "id": "1", "name": "Customer Service Representative",
+        "location": {"country": "ca", "remote": True, "fullLocation": "Toronto, ON, Canada"},
+    }, "sutherland", "Sutherland") is None

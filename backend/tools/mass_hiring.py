@@ -364,6 +364,13 @@ _AUTO_STATUS = {
     # Talemetry (no strategy), afni = ADP (no strategy) → no lane auto-drives them, so 'needs_laptop'.
     "geico": "needs_laptop", "afni": "needs_laptop",
     "cotiviti": "needs_laptop", "progressive": "needs_laptop",
+    # 2026-09-22 coverage expansion. everise/devoted = Workday BPO/payer (create-account lane after a
+    # per-tenant verify); oscar/clover = custom Greenhouse (no wired apply); all collect-first. CANADA:
+    # concentrix_ca = Talkpush/Workday CA channels (collect-first); sutherland_ca = the shared SR lane
+    # (the SR cron keys on the smartrecruiters.com apply_url host, so it CAN drive these — cosmetic
+    # 'needs_laptop', like Wayfair).
+    "everise": "needs_laptop", "oscar": "needs_laptop", "clover": "needs_laptop",
+    "devoted": "needs_laptop", "concentrix_ca": "needs_laptop", "sutherland_ca": "needs_laptop",
 }
 
 
@@ -1017,7 +1024,7 @@ def _wd_remote_location_ids(host: str, tenant: str, site: str) -> list[str]:
 
 def _workday_row(j: dict, source: str, company: str, host: str, site: str,
                  us_confirmed: bool = False, *, title_remote: bool = False,
-                 assume_remote: bool = False) -> dict | None:
+                 assume_remote: bool = False, us_from_path: bool = False) -> dict | None:
     loc = j.get("locationsText") or ""
     ep = j.get("externalPath") or ""
     title = j.get("title") or ""
@@ -1039,8 +1046,14 @@ def _workday_row(j: dict, source: str, company: str, host: str, site: str,
             return None
     # US is guaranteed when the caller applied a US-country facet OR the tenant is a US-only employer
     # (us_confirmed); otherwise (e.g. CVS, narrowed only by a job-family facet) confirm it from the
-    # location text (US wording or a state).
-    if not (us_confirmed or us_eligible(loc) or _has_us_state(loc)):
+    # location text (US wording or a state). With `us_from_path` a multi-location remote row whose
+    # locationsText is "N Locations" (no US signal) is confirmed via the US state in the externalPath
+    # slug or the title (Everise posts "…-Work-from-Home" at a state-named path, loc "29 Locations").
+    us_ok = us_confirmed or us_eligible(loc) or _has_us_state(loc)
+    if not us_ok and us_from_path:
+        ep_txt = ep.replace("-", " ")
+        us_ok = _has_us_state(ep_txt) or _title_us(title)
+    if not us_ok:
         return None
     jid = (j.get("bulletFields") or [None])[0] or ep.rstrip("/").split("_")[-1] or ep
     row = _mk_row(source, jid, company, title, loc or "Remote, United States",
@@ -1055,7 +1068,7 @@ def _workday_row(j: dict, source: str, company: str, host: str, site: str,
 def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str, *,
                    search_texts=("",), applied_facets=None, offset_cap: int = 200,
                    us_confirmed: bool = False, title_remote: bool = False,
-                   remote_location_facet: bool = False) -> list[dict]:
+                   remote_location_facet: bool = False, us_from_path: bool = False) -> list[dict]:
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     ref = f"https://{host}/{site}"
     rows, seen = [], set()
@@ -1076,7 +1089,8 @@ def _fetch_workday(source: str, company: str, host: str, tenant: str, site: str,
                 break
             for j in js:
                 row = _workday_row(j, source, company, host, site, us_confirmed,
-                                   title_remote=title_remote, assume_remote=assume_remote)
+                                   title_remote=title_remote, assume_remote=assume_remote,
+                                   us_from_path=us_from_path)
                 if row and row["source_id"] not in seen:
                     seen.add(row["source_id"])
                     rows.append(row)
@@ -1302,18 +1316,27 @@ def _enrich_ttec_pay(rows: list[dict]) -> None:
 # Sutherland — SmartRecruiters public postings API. location.country is lowercase ISO-2 ('us') and
 # location.remote is a boolean; filter on those (the fullLocation string still names a US city because
 # these are US-homed remote roles). Server-side remote/country params are unreliable, so filter client-side.
-def _smartrecruiters_row(j: dict, source: str, company: str) -> dict | None:
+def _smartrecruiters_row(j: dict, source: str, company: str, *, country: str = "us",
+                         force_eligible: bool = False) -> dict | None:
     loc = j.get("location") or {}
-    if (loc.get("country") or "").lower() != "us" or not loc.get("remote"):
+    if (loc.get("country") or "").lower() != country or not loc.get("remote"):
         return None
+    country_name = "Canada" if country == "ca" else "United States"
     full = loc.get("fullLocation") or ", ".join(
-        x for x in (loc.get("city"), loc.get("region"), "United States") if x)
-    return _mk_row(source, j.get("id"), company, j.get("name"), full or "United States",
-                   f"https://jobs.smartrecruiters.com/{company}/{j.get('id')}",
-                   posted_at=_iso_epoch(j.get("releasedDate")))
+        x for x in (loc.get("city"), loc.get("region"), country_name) if x)
+    row = _mk_row(source, j.get("id"), company, j.get("name"), full or country_name,
+                  f"https://jobs.smartrecruiters.com/{company}/{j.get('id')}",
+                  posted_at=_iso_epoch(j.get("releasedDate")))
+    if row and force_eligible:
+        # A CA-remote row (country='ca') has a Canadian location → us_eligible() is False → collect()
+        # would drop it. There is no CA column on the North-America board, so force the "keep on board"
+        # flag True; location_raw still carries the Canada signal for downstream (persona nationality).
+        row["us_eligible"] = True
+    return row
 
 
-def _fetch_smartrecruiters(source: str, company: str) -> list[dict]:
+def _fetch_smartrecruiters(source: str, company: str, *, country: str = "us",
+                           force_eligible: bool = False) -> list[dict]:
     rows, offset = [], 0
     while offset < 1000:
         try:
@@ -1328,7 +1351,8 @@ def _fetch_smartrecruiters(source: str, company: str) -> list[dict]:
         if not content:
             break
         for j in content:
-            row = _smartrecruiters_row(j, source, company)
+            row = _smartrecruiters_row(j, source, company, country=country,
+                                       force_eligible=force_eligible)
             if row:
                 rows.append(row)
         offset += 100
@@ -2811,6 +2835,145 @@ def fetch_progressive() -> list[dict]:
     return rows
 
 
+# --- Greenhouse boards (healthcare payers with remote member-services) --------------------------
+# `boards-api.greenhouse.io/v1/boards/<token>/jobs` is a keyless public JSON list (id/title/
+# location.name/absolute_url). Used for US health-insurer/payer tenants that post remote member-
+# services CSR alongside clinical roles (categorize() drops the clinical/senior ones). Apply is NOT
+# wired (these embed a custom Greenhouse form — collect-first) → 'needs_laptop'.
+def _greenhouse_row(j: dict, source: str, company: str) -> dict | None:
+    """PURE (network-free): one Greenhouse board job → a normalized row or None. Remote from the
+    title/location, US from the location wording / a state / a US title (these tenants are US-only
+    payers, so a bare "Remote" is US). categorize() enforces the mass-hiring entry rule."""
+    title = j.get("title") or ""
+    loc = ((j.get("location") or {}).get("name") or "").strip()
+    if not _is_remote(title, loc):
+        return None
+    if not (us_eligible(loc) or _has_us_state(loc) or _title_us(title)):
+        return None
+    return _mk_row(source, j.get("id"), company, title, loc or "Remote, United States",
+                   j.get("absolute_url") or "", posted_at=_iso_epoch(j.get("updated_at") or ""))
+
+
+def _fetch_greenhouse(source: str, company: str, board: str) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs",
+                      params={"content": "false"}, headers={**_UA, "Accept": "application/json"},
+                      timeout=30)
+        for j in (r.json().get("jobs") or []):
+            row = _greenhouse_row(j, source, company)
+            if row:
+                rows.append(row)
+    except Exception as e:
+        print(f"[{source}] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+def fetch_oscar() -> list[dict]:
+    """Oscar Health — Greenhouse board `oscar` (~290 reqs). US health insurer; remote member-services /
+    verification / claims CSR. HONEST live 2026-09-22: ~1 remote entry today (COB Verification
+    Specialist); the rest is senior/eng/clinical (categorize drops it). Future-proof — Oscar ramps
+    remote member-services seasonally. Collect-first (custom GH form) → 'needs_laptop'."""
+    return _fetch_greenhouse("oscar", "Oscar Health", "oscar")
+
+
+def fetch_clover() -> list[dict]:
+    """Clover Health — Greenhouse board `cloverhealth` (~64 reqs). US Medicare-Advantage insurer;
+    remote provider-engagement / member-services. HONEST live 2026-09-22: ~1 remote entry today
+    (CPH - Provider Engagement). Future-proof. Collect-first → 'needs_laptop'."""
+    return _fetch_greenhouse("clover", "Clover Health", "cloverhealth")
+
+
+# --- Everise — a US remote-CSR BPO on Workday (weareeverise.wd1) ---------------------------------
+# LIVE-VERIFIED 2026-09-22: board ~40 reqs, ~17 US-remote, ~6 remote-US ENTRY CSR NOW ("Healthcare
+# Customer Service Representative - Work From Home", "Licensed Health Insurance Agent- Work from
+# Home"). Everise is GLOBAL (US/PH/Guatemala/Malaysia), so NOT us_confirmed — US is read per row:
+# most remote reqs carry the US state in the externalPath ("…Work-from-Home-Alabama/…") even when
+# locationsText is a bare "29 Locations", so `us_from_path=True` (+ `title_remote` for a WFH title).
+# Apply would reuse the Workday create-account lane after a per-tenant verify → 'needs_laptop'.
+def fetch_everise() -> list[dict]:
+    return _fetch_workday("everise", "Everise", "weareeverise.wd1.myworkdayjobs.com",
+                          "weareeverise", "everiseCareers", search_texts=("",),
+                          title_remote=True, us_from_path=True, offset_cap=200)
+
+
+# --- Devoted Health — Workday (devoted.wd1), US-only Medicare-Advantage insurer -------------------
+# LIVE-VERIFIED 2026-09-22: board ~76 reqs, mostly senior/clinical → ~0 remote ENTRY today
+# (categorize drops Product Leader / QA Manager / Clinical Documentation). US-only employer
+# (us_confirmed). Future-proof — Devoted ramps remote member/guide services seasonally. Collect-
+# first → 'needs_laptop'.
+def fetch_devoted() -> list[dict]:
+    return _fetch_workday("devoted", "Devoted Health", "devoted.wd1.myworkdayjobs.com",
+                          "devoted", "Devoted", search_texts=("", "remote"),
+                          title_remote=True, us_confirmed=True, offset_cap=200)
+
+
+# --- CANADA remote-CSR (the biggest coverage gap) ------------------------------------------------
+# The mass_hiring board has only a `us_eligible` boolean (no CA column), and collect(us_only=True)
+# drops any row with us_eligible=False. So a CA source FORCES us_eligible=True to persist on the
+# North-America board; location_raw still carries the Canada signal (persona nationality reads the
+# location, not this flag). Distinct source names keep the CA slice separable in stats/apply.
+def _cnx_ca_row(d: dict) -> dict | None:
+    """PURE (network-free): one jobs.concentrix.com jdq row (country='Canada') → a CA-remote mass-
+    hiring row or None. Same shape as `_cnx_jdq_row` but builds a Canadian location and forces the
+    board-keep flag. Remote off the structured `remote_type` (drop on_site/hybrid), then categorize()."""
+    rt = (d.get("remote_type") or "").strip().lower()
+    if rt in ("on_site", "onsite", "hybrid"):
+        return None
+    loc_txt = " ".join(str(d.get(k) or "") for k in ("street", "address", "city", "state") if d.get(k))
+    if rt != "fully_remote" and not _is_remote(d.get("job_title") or "", loc_txt):
+        return None
+    sid = d.get("ats_external_id") or d.get("campaign_id") or d.get("id")
+    if not sid:
+        return None
+    apply_url = d.get("apply_url") or d.get("landing_page_url")
+    city, state = (d.get("city") or "").strip(), (d.get("state") or "").strip()
+    if city and city.lower() not in ("work at home", "work_from_home_canada", "can", "canada"):
+        location = f"{city}, {state}, Canada" if state else f"{city}, Canada"
+    else:
+        location = "Remote, Canada"
+    desc = re.sub(r"<[^>]+>", " ", d.get("long_description") or d.get("short_description") or "")
+    lo, hi, raw = _parse_hourly_wage(desc)
+    row = _mk_row("concentrix_ca", sid, "Concentrix", d.get("job_title"), location, apply_url,
+                  salary_min=lo, salary_max=hi, salary_raw=raw,
+                  employment_type=d.get("job_type"), posted_at=_iso_epoch(d.get("created_at") or ""))
+    if row:
+        row["us_eligible"] = True                      # keep on the NA board (no CA column)
+    return row
+
+
+def fetch_concentrix_canada() -> list[dict]:
+    """Concentrix Canada — the same first-party jdq feed as US, `country=Canada`. LIVE-VERIFIED
+    2026-09-22: ~37 CA rows, ~10 remote ENTRY CSR (fully_remote WFH + bilingual EN/FR). Reuses the
+    Talkpush/Workday apply channels; collect-first CA feed → 'needs_laptop'."""
+    rows, page, pages = [], 1, 1
+    hdr = {"User-Agent": _BROWSER_UA, "Accept": "application/json",
+           "Referer": "https://jobs.concentrix.com/"}
+    while page <= pages and page <= 10:
+        try:
+            r = httpx.get(_CNX_JDQ_URL, headers=hdr, timeout=30,
+                          params={"country": "Canada", "per_page": 100, "page": page})
+            js = r.json()
+        except Exception as e:
+            print(f"[concentrix_ca page={page}] {type(e).__name__}: {e}", file=sys.stderr)
+            break
+        for d in (js.get("data") or []):
+            row = _cnx_ca_row(d)
+            if row:
+                rows.append(row)
+        pages = (js.get("meta") or {}).get("total_pages") or 1
+        page += 1
+    return rows
+
+
+def fetch_sutherland_canada() -> list[dict]:
+    """Sutherland Canada — the SAME SmartRecruiters postings API as US Sutherland, `country=ca`.
+    LIVE-VERIFIED 2026-09-22: ~2 CA-remote, ~1 CA-remote entry today (tiny, future-proof). Forces the
+    board-keep flag (Canadian location). The SR apply cron keys on the jobs.smartrecruiters.com host,
+    so these are the same shared SR lane after a per-tenant verify → cosmetic 'needs_laptop'."""
+    return _fetch_smartrecruiters("sutherland_ca", "Sutherland", country="ca", force_eligible=True)
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "hilton": fetch_hilton,
@@ -2831,7 +2994,12 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "adecco": fetch_adecco, "roberthalf": fetch_roberthalf,
             # TLS-fingerprint / JS-interstitial-walled boards, cracked 2026-09-21 (see the connector list)
             "geico": fetch_geico, "afni": fetch_afni,
-            "cotiviti": fetch_cotiviti, "progressive": fetch_progressive}
+            "cotiviti": fetch_cotiviti, "progressive": fetch_progressive,
+            # BPO + healthcare-payer coverage expansion (2026-09-22)
+            "everise": fetch_everise, "oscar": fetch_oscar, "clover": fetch_clover,
+            "devoted": fetch_devoted,
+            # CANADA remote-CSR (the biggest gap)
+            "concentrix_ca": fetch_concentrix_canada, "sutherland_ca": fetch_sutherland_canada}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

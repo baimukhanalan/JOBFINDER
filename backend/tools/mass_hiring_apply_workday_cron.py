@@ -140,8 +140,14 @@ def _tenant_of(url: str) -> str:
     return _TENANT.get(slug, slug)
 
 
-def workday_ids(only: str | None = None) -> list[int]:
-    """Active Workday-tenant jobs that are (a) in SUPPORTED_HOSTS and (b) a live-validated tenant."""
+def workday_ids(only: str | None = None, exclude: set[str] | None = None) -> list[int]:
+    """Active Workday-tenant jobs that are (a) in SUPPORTED_HOSTS and (b) a live-validated tenant.
+
+    `only` restricts to one tenant; `exclude` drops the named tenants (used by the catch-all cron to
+    drive the AUTO-PROMOTED tenants only, since centene/concentrix run on their own dedicated crons —
+    without this, the pay-ordered `--limit` catch-all would spend its whole budget on the high-paying
+    base tenants and never reach a freshly-promoted one)."""
+    exclude = exclude or set()
     with mail_db.conn() as c:
         cur = c.cursor()
         cur.execute("SELECT id, apply_url FROM mass_hiring_jobs "
@@ -153,6 +159,8 @@ def workday_ids(only: str | None = None) -> list[int]:
             continue
         tenant = _tenant_of(url)
         if only and tenant != only:
+            continue
+        if tenant in exclude:
             continue
         if tenant not in live_tenants():
             continue
@@ -186,6 +194,9 @@ def main() -> None:
                          "proven path; >1 runs that many headful browsers at once)")
     ap.add_argument("--keep", type=int, default=12, help="minutes cap per application (Maildir ack poll)")
     ap.add_argument("--tenant", default=None, help="restrict to one tenant (e.g. centene)")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated tenants to SKIP (the catch-all cron passes the base tenants "
+                         "that have their own dedicated cron lines, e.g. --exclude centene,concentrix)")
     ap.add_argument("--limit", type=int, default=0, help="apply to at most N jobs this run (0 = all)")
     args = ap.parse_args()
 
@@ -201,7 +212,8 @@ def main() -> None:
         logger.info("a previous Workday apply run is still going — exiting")
         return
 
-    ids = workday_ids(only=args.tenant)
+    _exclude = {t.strip().lower() for t in (args.exclude or "").split(",") if t.strip()}
+    ids = workday_ids(only=args.tenant, exclude=_exclude)
     # High-pay-first order + STOP-ON-RESPONSE (drop jobs that already reached interview/offer)
     # BEFORE --limit so the top-N are the highest-paying OPEN jobs. Guarded — falls back to the
     # id-ordered list on any error / a worktree without uploads/ (offer_priority).

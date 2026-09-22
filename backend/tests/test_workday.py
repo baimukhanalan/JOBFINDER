@@ -607,3 +607,47 @@ def test_every_decline_value_avoids_a_protected_veteran_first_option():
         hits = _fuzzy_hits(val, veteran)
         assert "I am a protected veteran" not in hits, (val, hits)
         assert "I identify as one or more classifications" not in hits, (val, hits)
+
+
+# ---- catch-all cron exclude filter (auto-promoted tenants only) --------------
+
+def test_workday_ids_exclude_drops_named_tenants(monkeypatch):
+    """The catch-all cron passes --exclude centene,concentrix so it drives ONLY the auto-promoted
+    tenants (centene/concentrix have their own dedicated cron lines). Without exclude, the pay-ordered
+    --limit catch-all would spend its budget on the high-paying base tenants and never reach a fresh
+    promotion. Verifies the exclude set removes those tenants from the candidate id list."""
+    from backend.tools import mass_hiring_apply_workday_cron as wc
+
+    rows = [
+        (1, _CENTENE),   # centene  -> excluded
+        (2, _CNX),       # concentrix -> excluded
+        (3, _SAGILITY),  # sagility -> a promoted tenant, kept
+        (4, _CIGNA),     # cigna    -> a promoted tenant, kept
+    ]
+
+    class _Cur:
+        def execute(self, *a, **k): pass
+        def fetchall(self): return rows
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    monkeypatch.setattr(wc.mail_db, "conn", lambda: _Conn())
+    monkeypatch.setattr(wc.mha, "is_supported", lambda url: True)
+    monkeypatch.setattr(wc, "live_tenants",
+                        lambda: {"centene", "concentrix", "sagility", "cigna"})
+    monkeypatch.setattr(wc, "_read_verified", lambda: {"sagility", "cigna"})
+    # no-op the Spanish filter so it returns the ids untouched
+    import backend.tools.mh_settings as _mh
+    monkeypatch.setattr(_mh, "drop_spanish", lambda ids: ids)
+
+    all_ids = wc.workday_ids()
+    assert set(all_ids) == {1, 2, 3, 4}
+
+    kept = wc.workday_ids(exclude={"centene", "concentrix"})
+    assert set(kept) == {3, 4}, "exclude must drop centene/concentrix, keep the promoted tenants"
+
+    one = wc.workday_ids(only="sagility")
+    assert set(one) == {3}

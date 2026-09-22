@@ -40,8 +40,11 @@ from backend.tools import mass_hiring_apply_workday_cron as wc  # noqa: E402
 # step on a quiet :98 and AUTO-PROMOTE on a confirmed on-page submit (like Sagility) — no code edit.
 # (GEICO is host-wired too but has 0 active rows right now, so it has no probe id yet; Oscar/Clover
 # are Greenhouse boards, NOT Workday, so they are NOT probed here.)
+# cigna (cigna.wd5) + elevance (elevancehealth.wd1) added 2026-09-22 — both are supported Workday CxS
+# hosts routed to the mass-hiring create-account wizard, and were in workday_recon._BLOCKED with no
+# live re-verify; the probe drives them on a quiet :98 and auto-promotes on a confirmed on-page submit.
 PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 16492,
-                           "everise": 17085, "devoted": 17093}
+                           "everise": 17085, "devoted": 17093, "cigna": 16481, "elevance": 15559}
 
 QUIET_LOAD = float(os.getenv("PROBE_QUIET_LOAD", "9"))   # 1-min load must be below this
 DRIVE_SECS = int(os.getenv("PROBE_DRIVE_SECS", "540"))    # hard cap per probe drive

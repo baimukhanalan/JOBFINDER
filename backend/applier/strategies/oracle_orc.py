@@ -415,41 +415,53 @@ class OracleORCStrategy(GenericStrategy):
             await el.scroll_into_view_if_needed(timeout=2000)
             await el.click(timeout=2500)
             await page.wait_for_timeout(400)
+            if val and shorten:
+                # POSTAL/ZIP CX typeahead. Two problems the old .fill()+prefix loop never beat: (1) the
+                # widget FILTERS ON REAL KEYSTROKES — an el.fill() sets .value WITHOUT firing the keyup
+                # the autocomplete listens to, so NO options ever render (that's why the prefix retry
+                # "didn't surface options"); (2) the persona's exact ZIP (43215 = Franklin) doesn't fit
+                # the auto-cascaded City+County (Columbus→Delaware) → "No results". A synthetic persona
+                # only needs ANY valid local ZIP, so: TYPE the ZIP with REAL keys, then BACKSPACE toward
+                # a 1-digit prefix until the listbox offers a real option, and take the FIRST one. The
+                # ZIP's own leading digit is the state's region digit (4 = OH), so even a 1-char prefix
+                # lists ZIPs for this locale — a valid, consistent postal code for the cascaded city.
+                digits = re.sub(r"\D", "", val) or val.strip()
+
+                def _real(loc):
+                    return loc.filter(
+                        has_not_text=re.compile("no matches|no results|searching|select", re.I))
+                try:
+                    await el.fill("", timeout=1500)          # clear any pre-seeded / cascaded value
+                except Exception:
+                    pass
+                await page.keyboard.type(digits, delay=60)   # REAL keystrokes fire the autocomplete
+                typed = digits
+                await page.wait_for_timeout(900)
+                for _ in range(len(digits) + 1):
+                    try:
+                        real = _real(await self._options_locator(page, el)).first
+                        if await real.count():
+                            await real.click(timeout=2500)
+                            await page.wait_for_timeout(300)
+                            return True
+                    except Exception:
+                        pass
+                    if len(typed) <= 1:
+                        break
+                    await page.keyboard.press("Backspace")   # shorten the prefix, keep the session live
+                    typed = typed[:-1]
+                    await page.wait_for_timeout(750)
+                # nothing offered even at a 1-digit prefix — commit whatever was typed as free text
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(200)
+                await page.keyboard.press("Tab")
+                return bool(typed)
             if val:
                 try:
                     await el.fill(val, timeout=2000)
                 except Exception:
                     await page.keyboard.type(val, delay=45)
                 await page.wait_for_timeout(900)
-                # POSTAL/ZIP: the CX Postal typeahead is scoped to the auto-cascaded City+County, so
-                # the persona's exact ZIP (43215 = Franklin) yields "No results" when the city picked a
-                # different-county default (Columbus→Delaware). A synthetic persona only needs a VALID,
-                # CONSISTENT ZIP, so retype progressively shorter numeric prefixes until the typeahead
-                # offers options, then take the first real one (first_ok) — a real zip for this locale.
-                if shorten and val.strip().isdigit():
-                    probe = await self._options_locator(page, el)
-                    def _has_real(loc):
-                        return loc.filter(
-                            has_not_text=re.compile("no matches|no results|searching|select", re.I))
-                    try:
-                        has_now = await _has_real(probe).count()
-                    except Exception:
-                        has_now = 0
-                    if not has_now:
-                        for k in (5, 4, 3, 2):
-                            pre = val.strip()[:k]
-                            if len(pre) >= len(val.strip()):
-                                continue
-                            try:
-                                await el.fill(pre, timeout=2000)
-                            except Exception:
-                                await page.keyboard.type(pre, delay=45)
-                            await page.wait_for_timeout(900)
-                            try:
-                                if await _has_real(await self._options_locator(page, el)).count():
-                                    break
-                            except Exception:
-                                pass
             opts = await self._options_locator(page, el)
             target = None
             # 1) EXACT value in the preferred state: the option whose text STARTS with the typed city

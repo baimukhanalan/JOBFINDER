@@ -265,3 +265,51 @@ def test_build_persona_honors_orc_phone_override(monkeypatch):
     orc_recon = _patch_persona_build(monkeypatch, prof)
     p = orc_recon._build_persona({"title": "CSR", "location_raw": "Remote, US"})
     assert p["profile_form"]["phone"] == "+1 216 471 2200"
+
+
+# ---- orc_recon.orc_job_ids scope (Alorica + Molina + Hilton, Alorica first) --------------------
+
+class _FakeCur:
+    def __init__(self, rows):
+        self.rows = rows
+        self.captured = []
+
+    def execute(self, sql, params=None):
+        self.captured.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.cur = _FakeCur(rows)
+
+    def cursor(self):
+        return self.cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_orc_job_ids_scope_includes_molina_and_hilton(monkeypatch):
+    from backend.tools import orc_recon
+    from backend.tools import synth_persona
+    # Rows the widened SELECT would return (all staffable CSR titles).
+    rows = [(153, "Customer Service Representative"),
+            (200, "Pharmacy Customer Service Rep"),
+            (300, "Reservations Coordinator")]
+    fake = _FakeConn(rows)
+    monkeypatch.setattr(orc_recon.mail_db, "conn", lambda: fake)
+    monkeypatch.setattr(synth_persona, "job_is_staffable", lambda j: True)
+    out = orc_recon.orc_job_ids()
+    assert out == [153, 200, 300]
+    sql, params = fake.cur.captured[0]
+    assert "source = ANY(%s)" in sql
+    assert params[0] == ["alorica", "molina", "hilton"]
+    # Alorica rows drain FIRST (proven tenant before the newer same-ATS tenants).
+    assert "ORDER BY (source <> 'alorica')" in sql
+    assert orc_recon._ORC_SOURCES == ("alorica", "molina", "hilton")

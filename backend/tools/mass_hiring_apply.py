@@ -69,6 +69,10 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # clean create-account drive). Elevance/Anthem (+Carelon) / Highmark / Sagility.
                    "elevancehealth.wd1.myworkdayjobs.com", "highmarkhealth.wd1.myworkdayjobs.com",
                    "sagility.wd1.myworkdayjobs.com",
+                   # Everise (BPO) + Devoted (MA payer) + GEICO — collected onto the same Workday CxS
+                   # lane 2026-09-22 (register-captcha probe pending, driven by workday_probe_promote).
+                   "weareeverise.wd1.myworkdayjobs.com", "devoted.wd1.myworkdayjobs.com",
+                   "geico.wd1.myworkdayjobs.com",
                    # iCIMS family: Teleperformance (careersus-teleperformance.icims.com) — the
                    # iframe iForm is account-gated with AWS-WAF + reCAPTCHA on submit
                    # (strategies/icims.py). Account creation + submit gated behind ICIMS_ADVANCE;

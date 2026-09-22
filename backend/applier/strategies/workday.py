@@ -75,7 +75,10 @@ _WIZARD_BTN = ("button[data-automation-id='pageFooterNextButton'], "
 # purpose (NOT a blanket myworkdayjobs.com) so every other Workday URL falls through to WorkdayStrategy.
 _MASSHIRING_HOST_RE = re.compile(
     r"(?:cnx\.wd1|cvshealth\.wd1|centene\.wd5|cigna\.wd5|"
-    r"elevancehealth\.wd1|highmarkhealth\.wd1|sagility\.wd1)\.myworkdayjobs\.com", re.I)
+    r"elevancehealth\.wd1|highmarkhealth\.wd1|sagility\.wd1|"
+    # Everise (BPO) / Devoted (MA payer) / GEICO — collected onto the same CxS lane 2026-09-22,
+    # register-captcha probe pending (workday_probe_promote drives the create-account step).
+    r"weareeverise\.wd1|devoted\.wd1|geico\.wd1)\.myworkdayjobs\.com", re.I)
 # A representative, real, in-state ZIP per US state (a major-city ZIP). Workday validates
 # 'X is not a valid postal code for <State>', so a synthetic persona's random ZIP (which may not
 # belong to its state) is overridden with the state's ZIP here to keep postal-vs-state consistent.

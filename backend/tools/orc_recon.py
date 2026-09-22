@@ -110,15 +110,28 @@ def _synth_phone(email: str) -> str:
     return f"+1 ({npa}) {nxx}-{subscriber:04d}"
 
 
+# Oracle Recruiting Cloud (Candidate Experience) tenants that share the SAME public guest-apply
+# REST board + `OracleORCStrategy` host family. Alorica is the LIVE-PROVEN tenant; Molina + Hilton
+# were collected onto the same lane (`careers.molinahealthcare.com`/`jobs.hilton.com` → the same
+# `hckd`/`efet` oraclecloud CX_1 board). Their per-tenant screener battery MAY differ from Alorica's
+# (different Yes/No questions), so a Molina/Hilton drive is LOW-RISK to attempt but the live cron is
+# the real verification — a mis-mapped screener fails gracefully (no ack, `unfilled` non-empty →
+# Submit is gated), it never mis-submits. Alorica is ordered FIRST (the proven tenant drains first).
+_ORC_SOURCES = ("alorica", "molina", "hilton")
+
+
 def orc_job_ids() -> list[int]:
-    """Active Alorica (Oracle ORC) rows we can honestly staff (drop exotic-language roles a
-    synthetic English/Spanish/Russian persona can't truthfully claim)."""
+    """Active Oracle-ORC rows we can honestly staff (Alorica first, then Molina/Hilton — same
+    `OracleORCStrategy`; drop exotic-language roles a synthetic English/Spanish/Russian persona
+    can't truthfully claim)."""
     from backend.tools.synth_persona import job_is_staffable
     out: list[int] = []
     with mail_db.conn() as c:
         cur = c.cursor()
+        # Alorica (the proven tenant) first, then the newer same-ATS tenants, id-stable within each.
         cur.execute("SELECT id, title FROM mass_hiring_jobs "
-                    "WHERE source='alorica' AND active ORDER BY id")
+                    "WHERE source = ANY(%s) AND active "
+                    "ORDER BY (source <> 'alorica'), id", (list(_ORC_SOURCES),))
         for jid, title in cur.fetchall():
             if not job_is_staffable({"title": title}):
                 continue

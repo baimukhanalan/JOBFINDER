@@ -77,3 +77,48 @@ def test_pick_state_routes_by_source():
     # UnitedHealth -> generic icims _pick_state reads the location
     full, code, _city, _zc = _pick_state("unitedhealth", "CSR - Remote", "TN, United States")
     assert (code, full) == ("TN", "Tennessee")
+
+
+# ---- taleo_recon.taleo_job_ids scope (adds Kaiser + Percepta) -----------------------------------
+
+class _FakeCur:
+    def __init__(self, rows):
+        self.rows = rows
+        self.captured = []
+
+    def execute(self, sql, params=None):
+        self.captured.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.cur = _FakeCur(rows)
+
+    def cursor(self):
+        return self.cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_taleo_job_ids_scope_includes_kaiser_and_percepta(monkeypatch):
+    from backend.tools import taleo_recon
+    from backend.tools import synth_persona
+    rows = [(100, "Customer Service Rep", "ttec"),
+            (200, "Contact Center Specialist I", "kaiser"),
+            (300, "Customer Experience Advisor", "percepta")]
+    fake = _FakeConn(rows)
+    monkeypatch.setattr(taleo_recon.mail_db, "conn", lambda: fake)
+    monkeypatch.setattr(synth_persona, "job_is_staffable", lambda j: True)
+    out = taleo_recon.taleo_job_ids()
+    assert out == [100, 200, 300]
+    sql, params = fake.cur.captured[0]
+    assert "source = ANY(%s)" in sql
+    assert params[0] == ["unitedhealth", "ttec", "kaiser", "percepta"]
+    assert taleo_recon._TALEO_SOURCES == ("unitedhealth", "ttec", "kaiser", "percepta")

@@ -53,11 +53,15 @@ from backend.tools import mail_db, mass_hiring_apply as mha  # noqa: E402
 
 LOCK_PATH = os.path.join(REPO, "logs", "workday_apply.lock")
 
-# host-slug -> friendly tenant name
+# host-slug (the first dotted label of the apply_url host) -> friendly tenant name. Only slugs that
+# DIFFER from their tenant name need an entry; `_tenant_of` falls back to the slug itself otherwise
+# (so devoted.wd1 -> 'devoted' and geico.wd1 -> 'geico' need no mapping, but weareeverise.wd1 does).
 _TENANT = {"cnx": "concentrix", "cvshealth": "cvshealth", "centene": "centene",
            "cigna": "cigna", "humana": "humana",
            # Healthcare payers/BPOs collected onto the same Workday lane (probe pending).
-           "elevancehealth": "elevance", "highmarkhealth": "highmark", "sagility": "sagility"}
+           "elevancehealth": "elevance", "highmarkhealth": "highmark", "sagility": "sagility",
+           # Everise BPO — host slug `weareeverise` ≠ the tenant/source name `everise`.
+           "weareeverise": "everise"}
 
 # Tenants live-validated to land a real Workday application ack — driven by the cron.
 #

@@ -111,3 +111,49 @@ def test_employee_referral_screener_answered_no():
     # the substring must not steal the "preferred first name" identity field or unrelated Qs
     assert A("preferred first name", {}) is None
     assert A("are you legally authorized to work in the united states?", {}) == ["Yes"]
+
+
+# ---- maximus_ids scope now also picks up Transcom (Avature on apply.careers.transcom.com) --------
+
+class _FakeCur:
+    def __init__(self, rows):
+        self.rows = rows
+        self.captured = []
+
+    def execute(self, sql, params=None):
+        self.captured.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.cur = _FakeCur(rows)
+
+    def cursor(self):
+        return self.cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_maximus_ids_scope_matches_avature_and_transcom(monkeypatch):
+    from backend.tools import mass_hiring_apply_cron as mc
+    from backend.tools import mh_settings
+    fake = _FakeConn([(1,), (2,)])
+    monkeypatch.setattr(mc.mail_db, "conn", lambda: fake)
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    out = mc.maximus_ids()
+    assert out == [1, 2]
+    sql, params = fake.cur.captured[0]
+    # Both the maximus.avature.net host AND the transcom host (which 302s from transcom.avature.net
+    # but stores apply.careers.transcom.com) are matched.
+    assert "apply_url ILIKE %s OR apply_url ILIKE %s" in sql
+    assert params == ("%avature%", "%apply.careers.transcom.com%")
+    # sanity: a real transcom apply_url would match the second pattern (bare substring semantics)
+    assert "apply.careers.transcom.com" in \
+        "https://apply.careers.transcom.com/en_US/careers/JobDetail/x/13462"

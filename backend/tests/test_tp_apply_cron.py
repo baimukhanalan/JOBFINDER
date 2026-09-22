@@ -45,3 +45,44 @@ def test_persona_email_parsed_from_recon_stdout():
 def test_persona_email_none_when_absent():
     assert tp._persona_email_from_output("no persona line here") is None
     assert tp._persona_email_from_output("") is None
+
+
+# ---- tp_job_ids scope is host-based (%icims%) so Cotiviti (careers-cotiviti.icims.com) is in ------
+
+class _FakeCur:
+    def __init__(self, rows):
+        self.rows = rows
+        self.captured = []
+
+    def execute(self, sql, params=None):
+        self.captured.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self.cur = _FakeCur(rows)
+
+    def cursor(self):
+        return self.cur
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_tp_job_ids_scope_covers_cotiviti_icims(monkeypatch):
+    from backend.tools import mh_settings
+    fake = _FakeConn([(16254,)])   # a cotiviti (careers-cotiviti.icims.com) row
+    monkeypatch.setattr(tp.mail_db, "conn", lambda: fake)
+    monkeypatch.setattr(mh_settings, "drop_spanish", lambda ids: ids)
+    out = tp.tp_job_ids()
+    assert out == [16254]
+    sql, params = fake.cur.captured[0]
+    assert params == ("%icims%",)      # ANY iCIMS tenant, incl. Cotiviti — no scope-widening needed
+    # a cotiviti apply_url is an iCIMS host, so the %icims% predicate already selects it
+    assert "icims" in "https://careers-cotiviti.icims.com/jobs/20277/x/job".lower()

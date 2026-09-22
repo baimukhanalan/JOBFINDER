@@ -31,10 +31,20 @@ LOCK_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "mh_apply_cron
 def maximus_ids() -> list[int]:
     with mail_db.conn() as c:
         cur = c.cursor()
+        # The Avature lane, keyed by the apply_url HOST (like the SR/TP lanes) so any Avature tenant
+        # is auto-picked. Maximus posts on `maximus.avature.net`; Transcom is ALSO Avature but its
+        # apply_url is `apply.careers.transcom.com` (transcom.avature.net 302s to it), so `%avature%`
+        # alone misses it — match the Transcom host too. Transcom reuses `strategies/avature.py`; its
+        # screener set MAY differ from Maximus's `_SCREENERS`, so a Transcom drive is LOW-RISK to
+        # attempt but the live cron is the real verification (a newly-required step-1 screener would
+        # leave `unfilled` non-empty → the co-pilot's submit gate refuses, it never mis-submits — the
+        # documented Maximus dead-lane symptom; add the screener to `_SCREENERS` if the log shows it).
         # `active` guard mirrors every other lane (Kelly/SR/Taleo/TP/Workday) — without it the lane
         # applied to DELISTED jobs, minting a fresh persona+mailbox per dead id (~50 wasted/day).
-        cur.execute("SELECT id FROM mass_hiring_jobs WHERE active AND apply_url ILIKE %s ORDER BY id",
-                    ("%avature%",))
+        cur.execute(
+            "SELECT id FROM mass_hiring_jobs WHERE active "
+            "AND (apply_url ILIKE %s OR apply_url ILIKE %s) ORDER BY id",
+            ("%avature%", "%apply.careers.transcom.com%"))
         from backend.tools import mh_settings
         return mh_settings.drop_spanish([r[0] for r in cur.fetchall()])
 

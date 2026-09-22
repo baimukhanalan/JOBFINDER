@@ -61,9 +61,19 @@ def _pick_state(source: str, title: str, location_raw: str) -> tuple[str, str, s
     return full, code, city, zc
 
 
+# Taleo tenants driven by this lane. TTEC (ttec.taleo.net) is the LIVE-PROVEN one; UnitedHealth
+# (uhg.taleo.net) rides the same lane. Kaiser (kp.taleo.net) + Percepta (percepta.taleo.net) were
+# collected onto Taleo too — they reuse `strategies/taleo.py`, but their Basics-page screener battery
+# MAY differ from TTEC's (the `_BASICS_JS` prescreen is TTEC-tuned), so a Kaiser/Percepta drive is
+# LOW-RISK to attempt but the live cron is the real verification: a mis-mapped Basics select leaves a
+# required field unset → Save-and-Continue bounces / `unfilled` non-empty → it fails gracefully
+# (no ack) rather than mis-submitting. Add a per-tenant Basics mapping if the live log shows a stall.
+_TALEO_SOURCES = ("unitedhealth", "ttec", "kaiser", "percepta")
+
+
 def taleo_job_ids() -> list[int]:
-    """Active Taleo (UnitedHealth + TTEC) rows, EXCLUDING licensed-insurance roles AND
-    exotic-bilingual roles we cannot honestly staff (a language other than English/Spanish/Russian —
+    """Active Taleo (UnitedHealth + TTEC + Kaiser + Percepta) rows, EXCLUDING licensed-insurance roles
+    AND exotic-bilingual roles we cannot honestly staff (a language other than English/Spanish/Russian —
     no native speaker, so an honest No screens them out)."""
     from backend.tools.synth_persona import job_is_staffable
     out: list[int] = []
@@ -71,7 +81,7 @@ def taleo_job_ids() -> list[int]:
         cur = c.cursor()
         cur.execute(
             "SELECT id, title, source FROM mass_hiring_jobs "
-            "WHERE source IN ('unitedhealth','ttec') AND active ORDER BY id")
+            "WHERE source = ANY(%s) AND active ORDER BY id", (list(_TALEO_SOURCES),))
         for jid, title, _src in cur.fetchall():
             if jid in _TTEC_LICENSED_IDS or is_licensed(title):
                 continue

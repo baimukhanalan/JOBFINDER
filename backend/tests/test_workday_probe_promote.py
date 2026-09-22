@@ -65,3 +65,24 @@ def test_run_once_incomplete_does_not_promote(monkeypatch):
     monkeypatch.setattr(wc, "add_verified", lambda t: promoted.append(t))
     r = p.run_once()
     assert r["verdict"] == "no_captcha_incomplete" and promoted == []   # NEVER promote on partial
+
+
+def test_pending_includes_everise_and_devoted():
+    # Everise (BPO) + Devoted (MA payer) were collected onto the Workday CxS lane and routed via the
+    # probe (with a live mass_hiring_jobs id each) so they auto-promote on a confirmed submit.
+    assert p.PENDING.get("everise") and isinstance(p.PENDING["everise"], int)
+    assert p.PENDING.get("devoted") and isinstance(p.PENDING["devoted"], int)
+
+
+def test_new_tenants_route_to_workday_masshiring_strategy():
+    # host slug -> tenant mapping (weareeverise ≠ everise; devoted/geico fall back to the slug)
+    assert wc._tenant_of("https://weareeverise.wd1.myworkdayjobs.com/en-US/x/job/y") == "everise"
+    assert wc._tenant_of("https://devoted.wd1.myworkdayjobs.com/en-US/x/job/y") == "devoted"
+    assert wc._tenant_of("https://geico.wd1.myworkdayjobs.com/en-US/x/job/y") == "geico"
+    # is_supported + the mass-hiring host regex both accept the new hosts
+    from backend.tools import mass_hiring_apply as mha
+    from backend.applier.strategies.workday import _MASSHIRING_HOST_RE
+    for host in ("weareeverise.wd1", "devoted.wd1", "geico.wd1"):
+        u = f"https://{host}.myworkdayjobs.com/en-US/x/job/y"
+        assert mha.is_supported(u)
+        assert _MASSHIRING_HOST_RE.search(u)

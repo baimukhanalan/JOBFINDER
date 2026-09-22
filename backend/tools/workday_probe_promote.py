@@ -35,7 +35,13 @@ sys.path.insert(0, REPO)
 from backend.tools import mass_hiring_apply_workday_cron as wc  # noqa: E402
 
 # tenant -> a live mass_hiring_jobs id to probe (the register step + wizard are tenant-uniform).
-PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 1224}
+# Everise (BPO) + Devoted (MA payer) were collected onto the Workday CxS lane 2026-09-22 and routed
+# via SUPPORTED_HOSTS + _MASSHIRING_HOST_RE + _TENANT, so the probe can drive their create-account
+# step on a quiet :98 and AUTO-PROMOTE on a confirmed on-page submit (like Sagility) — no code edit.
+# (GEICO is host-wired too but has 0 active rows right now, so it has no probe id yet; Oscar/Clover
+# are Greenhouse boards, NOT Workday, so they are NOT probed here.)
+PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 1224,
+                           "everise": 17085, "devoted": 17093}
 
 QUIET_LOAD = float(os.getenv("PROBE_QUIET_LOAD", "9"))   # 1-min load must be below this
 DRIVE_SECS = int(os.getenv("PROBE_DRIVE_SECS", "540"))    # hard cap per probe drive

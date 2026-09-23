@@ -279,15 +279,19 @@ def _tg_card(responsible: dict, as_id=None) -> str:
         # Admin read-through: Telegram linking is a SELF-SERVICE step (it mints a code the
         # person opens in their own Telegram), so it makes no sense for an admin to do it FOR
         # them — show status only, no interactive connect/unlink control.
-        status = ('✓ Telegram подключён' if responsible.get("telegram_chat_id")
+        _u = (responsible.get("telegram_username") or "").lstrip("@")
+        _as = f' как @{escape(_u)}' if _u else ''
+        status = (f'✓ Telegram подключён{_as}' if responsible.get("telegram_chat_id")
                   else 'Telegram не подключён')
         return ('<div class="card tg-card"><div class="tg-h">Уведомления в Telegram</div>'
                 f'<div class="tg-sub">{status} (привязку делает сам сотрудник).</div></div>')
     if responsible.get("telegram_chat_id"):
-        inner = ('<span style="color:#166534;font-weight:700;">✓ Telegram подключён</span>'
+        _u = (responsible.get("telegram_username") or "").lstrip("@")
+        _as = f' как @{escape(_u)}' if _u else ''
+        inner = (f'<span style="color:#166534;font-weight:700;">✓ Telegram подключён{_as}</span>'
                  '<form method="post" action="/cabinet/tg/unlink" style="display:inline;margin-left:12px;">'
                  '<button class="ghost" type="submit">Отвязать</button></form>')
-        sub = "Напоминания о собеседованиях приходят в ваш личный Telegram."
+        sub = "Напоминания приходят лично вам — только о ВАШИХ собеседованиях."
     else:
         # the @username as plain text too — a fallback if the button is missed, and so the person
         # can find the bot manually (it's the reminder bot for THEIR собеседования, not the admin one).

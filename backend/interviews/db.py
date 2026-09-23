@@ -50,6 +50,11 @@ def ensure_schema() -> None:
         # the notifier maps a /start <code> back to this responsible and stores their chat_id.
         cur.execute("ALTER TABLE iv_responsibles "
                     "ADD COLUMN IF NOT EXISTS tg_link_code TEXT;")
+        # the Telegram @username of the account that pressed Start — captured for a VISIBLE
+        # «✓ подключено как @username» confirmation on the portal (identity is the chat_id; this
+        # is display-only so the user/admin can SEE which account is bound).
+        cur.execute("ALTER TABLE iv_responsibles "
+                    "ADD COLUMN IF NOT EXISTS telegram_username TEXT;")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS iv_availability (
           id             SERIAL PRIMARY KEY,
@@ -233,12 +238,16 @@ def set_tg_link_code(rid: int, code: str) -> None:
         cur.execute("UPDATE iv_responsibles SET tg_link_code=%s WHERE id=%s", (code, rid))
 
 
-def link_telegram_by_code(code: str, chat_id: int) -> dict | None:
-    """A responsible pressed Start on the bot with `/start <code>`: bind their chat_id
-    and clear the one-time code. Returns the linked row, or None if the code is unknown."""
+def link_telegram_by_code(code: str, chat_id: int, username: str | None = None) -> dict | None:
+    """A responsible pressed Start on the bot with `/start <code>`: bind their chat_id (the
+    reminders then go to THIS person and only this person) and clear the one-time code. Also
+    stores the pressing account's @username (display-only, for the «✓ подключено как @username»
+    confirmation). Returns the linked row, or None if the code is unknown/expired."""
+    uname = (username or "").lstrip("@") or None
     with mail_db._cur() as cur:
-        cur.execute("UPDATE iv_responsibles SET telegram_chat_id=%s, tg_link_code=NULL "
-                    "WHERE tg_link_code=%s RETURNING *", (chat_id, code))
+        cur.execute("UPDATE iv_responsibles SET telegram_chat_id=%s, telegram_username=%s, "
+                    "tg_link_code=NULL WHERE tg_link_code=%s RETURNING *",
+                    (chat_id, uname, code))
         row = cur.fetchone()
         return dict(row) if row else None
 

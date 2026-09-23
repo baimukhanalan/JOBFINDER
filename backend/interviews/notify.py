@@ -174,15 +174,17 @@ def poll_updates() -> int:
             continue
         parts = text.split(maxsplit=1)
         code = parts[1].strip() if len(parts) > 1 else ""
+        uname = ((msg.get("from") or {}).get("username") or "").strip() or None
         if not code:
             send_dm(chat, "Откройте кабинет интервьюера и нажмите «Подключить Telegram», "
                           "чтобы получать сюда напоминания о собеседованиях.")
             continue
-        row = db.link_telegram_by_code(code, int(chat))
+        row = db.link_telegram_by_code(code, int(chat), username=uname)
         if row:
             linked += 1
-            send_dm(chat, f"✅ Готово, {row.get('name') or ''}! Напоминания о собеседованиях "
-                          "будут приходить в этот чат.")
+            who = f" @{uname}" if uname else ""
+            send_dm(chat, f"✅ Готово, {row.get('name') or ''}! Этот чат{who} привязан лично к вам — "
+                          "я буду присылать сюда напоминания только о ВАШИХ собеседованиях.")
         else:
             send_dm(chat, "Ссылка для подключения устарела. Откройте кабинет и нажмите "
                           "«Подключить Telegram» ещё раз.")

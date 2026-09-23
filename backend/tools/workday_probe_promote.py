@@ -77,7 +77,7 @@ def _jobfinder_headful_drives() -> int:
 def box_is_quiet() -> tuple[bool, str]:
     load = _load1()
     drives = _jobfinder_headful_drives()
-    ok = load < QUIET_LOAD and drives <= 0
+    ok = load < QUIET_LOAD and drives <= int(os.getenv("PROBE_MAX_DRIVES", "0"))
     return ok, f"load1={load:.1f}(<{QUIET_LOAD}) jobfinder_drives={drives}"
 
 

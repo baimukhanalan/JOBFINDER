@@ -68,6 +68,10 @@ CSS = """
 .ivp-exp[open]>summary::before{content:'▾';}
 .ivp-exp>summary:hover{color:var(--ink-soft);}
 .ivp-exp .ivp-list{margin-top:8px;}
+/* per-user colour: a legend mapping name→colour + a coloured dot */
+.ivp-legend{display:flex;gap:6px 12px;flex-wrap:wrap;margin:0 0 10px;font-size:11.5px;color:var(--ink-soft);}
+.ivp-legend .lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;}
+.ivp-legend .lg .d{width:9px;height:9px;border-radius:50%;flex:0 0 auto;}
 </style>
 """
 
@@ -176,9 +180,19 @@ def status_free() -> str:
     return "<span class='ivp-badge ivp-st-free'>в пуле</span>"
 
 
-def status_manager(name: str) -> str:
-    return f"<span class='ivp-badge ivp-st-mgr'>управл.: {escape(name or '—')}</span>"
+# colours come from db.color_for (a validated 6-digit hex), so `{color}22`/`{color}55` are
+# safe 8-digit RRGGBBAA tints. `color=None` keeps the original neutral class colours, so every
+# existing caller (and the free chip) is unchanged.
+def _tint(color: str | None) -> str:
+    return (f" style=\"background:{color}22;color:{color};border:1px solid {color}55\""
+            if color else "")
 
 
-def status_assigned(name: str) -> str:
-    return f"<span class='ivp-badge ivp-st-set'>назначен: {escape(name or '—')}</span>"
+def status_manager(name: str, color: str | None = None) -> str:
+    return (f"<span class='ivp-badge ivp-st-mgr'{_tint(color)}>"
+            f"управл.: {escape(name or '—')}</span>")
+
+
+def status_assigned(name: str, color: str | None = None) -> str:
+    return (f"<span class='ivp-badge ivp-st-set'{_tint(color)}>"
+            f"назначен: {escape(name or '—')}</span>")

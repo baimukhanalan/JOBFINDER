@@ -184,6 +184,8 @@ def _topbar(responsible: dict, active: str, as_id=None, iv_count=None) -> str:
            f'<a class="{"active" if active=="home" else ""}" href="{_cab_href("/cabinet", as_id)}">Собесы{badge}</a>'
            f'<a class="{"active" if active=="calendar" else ""}" href="{_cab_href("/cabinet/calendar", as_id)}">Календарь</a>'
            f'<a class="{"active" if active=="candidates" else ""}" href="{_cab_href("/cabinet/candidates", as_id)}">Кандидаты</a>'
+           # the shared «События найма» board — open to every role (общий раздел)
+           f'<a class="{"active" if active=="hiring" else ""}" href="/hiring-events">События найма</a>'
            f'<a class="{"active" if active=="availability" else ""}" href="{_cab_href("/cabinet/availability", as_id)}">Расписание</a>'
            f'<a href="/logout">Выход</a>')
     return (f'<div class="cab-top"><div class="brand">{mailcrm_ui._LOGO_IMG}</div>'

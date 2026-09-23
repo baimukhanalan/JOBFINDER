@@ -143,8 +143,10 @@ def _topbar(manager: dict, active: str = "portal", is_admin_view: bool = False) 
     nav = (back +
            f'<a class="{"active" if active=="portal" else ""}" href="/manage{q}">Портал</a>')
     if not is_admin_view:
-        # a manager also attends interviews assigned to himself → his own cabinet
+        # a manager also attends interviews assigned to himself → his own cabinet; the shared
+        # «События найма» board is open to every role (admin/управляющий/интервьюер).
         nav += ('<a href="/cabinet">Мои собесы</a>'
+                '<a href="/hiring-events">События найма</a>'
                 '<a href="/cabinet/availability">Расписание</a>'
                 '<a href="/logout">Выход</a>')
     return (f'<div class="mg-top"><div class="brand">{mailcrm_ui._LOGO_IMG}</div>'
@@ -418,18 +420,27 @@ def portal_page(manager: dict, subs: list[dict], own_ivs: list[dict],
     # priority + «актуальные предстоящие» cards (the SAME urgency/priority signal as the «Собес»
     # screen). Priority card = the manager's own not-yet-distributed set, split IT/non-IT + sortable;
     # upcoming card = every live (non-expired) собес in his scope with a status chip.
-    from backend.interviews import priority_ui
+    from backend.interviews import db as iv_db, priority_ui
     pool_all = pool_all if pool_all is not None else own_ivs
     scope_ivs = scope_ivs if scope_ivs is not None else (own_ivs + team_ivs)
     mid = manager["id"]
+    # per-user colour (owner: «пусть у каждого пользователя свой цвет») — the manager himself +
+    # his subordinates are the only owners of his scope rows; both carry an explicit/palette colour.
+    colors: dict = {}
+    try:
+        colors[mid] = iv_db.color_for(manager)
+        for s in subs:
+            colors[s["id"]] = iv_db.color_for(s)
+    except Exception:
+        colors = {}
 
     def _mg_status(iv: dict) -> str:
         rid = iv.get("responsible_id")
         if not rid:
             return priority_ui.status_free()
         if rid == mid:
-            return priority_ui.status_manager(names.get(mid) or "—")   # мой — провожу сам
-        return priority_ui.status_assigned(names.get(rid) or "—")       # роздан сотруднику
+            return priority_ui.status_manager(names.get(mid) or "—", color=colors.get(mid))  # мой — провожу сам
+        return priority_ui.status_assigned(names.get(rid) or "—", color=colors.get(rid))      # роздан сотруднику
 
     priority_card = priority_ui.priority_card(
         pool_all, pool_sort, sort_base, anchor="mg-pri",

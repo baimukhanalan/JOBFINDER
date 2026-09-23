@@ -668,9 +668,17 @@ def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_i
     above — here the admin sees the WHOLE live pipeline, not just the undelegated slice. A
     summary header + an owner filter (`live_owner`) sit on top so the admin can control
     urgency/priority across every portal at once."""
-    from backend.interviews import priority_ui
+    from backend.interviews import db as iv_db, priority_ui
     pool_part = list(pool_rows or [])
     alloc_part = list(allocated_rows or [])
+    # per-user colour so managers/interviewers are told apart at a glance (owner: «управляющие все
+    # одного цвета — глаза путаются»). db.color_for honours an explicit override, else a stable pick.
+    colors_by_id: dict = {}
+    for u in (users or []):
+        try:
+            colors_by_id[u["id"]] = iv_db.color_for(u)
+        except Exception:
+            pass
     # optional owner narrowing (a manager sees his whole allocation, an interviewer his queue).
     owner_id = None
     if live_owner:
@@ -687,17 +695,31 @@ def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_i
     def _status(r: dict) -> str:
         rid = r.get("responsible_id")
         if rid:
-            return priority_ui.status_assigned(names_by_id.get(rid) or "—")
+            return priority_ui.status_assigned(names_by_id.get(rid) or "—", color=colors_by_id.get(rid))
         mid = r.get("manager_id")
         if mid:
-            return priority_ui.status_manager(names_by_id.get(mid) or "—")
+            return priority_ui.status_manager(names_by_id.get(mid) or "—", color=colors_by_id.get(mid))
         return priority_ui.status_free()
+
+    # a small legend mapping every owner shown → their colour, so name↔colour is unambiguous
+    legend_ids: list = []
+    seen: set = set()
+    for r in rows:
+        uid = r.get("responsible_id") or r.get("manager_id")
+        if uid and uid in colors_by_id and uid not in seen:
+            seen.add(uid)
+            legend_ids.append(uid)
+    legend = ""
+    if legend_ids:
+        legend = ("<div class='ivp-legend'>" + "".join(
+            f"<span class='lg'><span class='d' style='background:{colors_by_id[uid]}'></span>"
+            f"{escape(names_by_id.get(uid) or '—')}</span>" for uid in legend_ids) + "</div>")
 
     # the owner filter + summary are built over the FULL allocated set (so «Все» is always offered
     # and the counts describe the whole pipeline), then the card renders the (possibly) filtered rows.
     owner_filter = _live_owner_filter(allocated_rows or [], names_by_id, live_owner)
     summary = _live_summary(rows)
-    return (priority_ui.CSS + owner_filter + summary + priority_ui.upcoming_list(
+    return (priority_ui.CSS + owner_filter + summary + legend + priority_ui.upcoming_list(
         rows, anchor="u-live", status_of=_status,
         title="Актуальные предстоящие собеседования",
         blurb=("Весь живой поток: свободные в пуле, переданные управляющим и назначенные "

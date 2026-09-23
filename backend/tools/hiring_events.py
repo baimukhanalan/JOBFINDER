@@ -443,6 +443,29 @@ def _parse_invite(row: dict) -> dict | None:
     date_text, time_text = extract_schedule(plain)
     role = extract_role(subject, plain)
     tracking_url, _unsub = extract_join(plain, html)
+    invite_ts = int(row.get("date_ts") or 0)
+    # Booking DEADLINE for THIS candidate — the SAME logic as the «Собес» surface: an explicit
+    # «within N days» / «by <date>» window is a real countdown, else an ESTIMATE from invite +
+    # DEFAULT_DAYS. Best-effort — a parse miss must never drop the invite.
+    deadline_ts = None
+    deadline_estimated = True
+    invite_age_days = None
+    try:
+        from backend.tools import interview_priority as _ip
+        deadline_ts, deadline_estimated = _ip.extract_deadline(subject, plain, invite_ts)
+    except Exception:
+        deadline_ts, deadline_estimated = None, True
+    deadline_days = None
+    if deadline_ts:
+        try:
+            deadline_days = int((deadline_ts - time.time()) // 86400)
+        except Exception:
+            deadline_days = None
+    if invite_ts:
+        try:
+            invite_age_days = max(0, int((time.time() - invite_ts) // 86400))
+        except Exception:
+            invite_age_days = None
     return {
         "mailbox": row.get("mailbox") or "",
         "candidate": row.get("candidate") or "",
@@ -455,6 +478,10 @@ def _parse_invite(row: dict) -> dict | None:
         "time_text": time_text,
         "role": role,
         "tracking_url": tracking_url,
+        "deadline_ts": deadline_ts,
+        "deadline_days": deadline_days,
+        "deadline_estimated": deadline_estimated,
+        "invite_age_days": invite_age_days,
     }
 
 
@@ -557,7 +584,173 @@ def _resume_worthy(resume: dict | None) -> bool:
                 or resume.get("education"))
 
 
-def _invite_row_html(inv: dict, *, group_meeting_id: str | None = None) -> str:
+# ---- per-candidate schedule window + booking deadline ----------------------------
+_EN_DOW = (("monday", "Пн"), ("tuesday", "Вт"), ("wednesday", "Ср"), ("thursday", "Чт"),
+           ("friday", "Пт"), ("saturday", "Сб"), ("sunday", "Вс"))
+_TIME12_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([AaPp])\.?\s*[Mm]\.?")
+_RU_MON = ("янв", "фев", "мар", "апр", "мая", "июн",
+           "июл", "авг", "сент", "окт", "нояб", "дек")
+
+
+def _to24(m: "re.Match") -> str:
+    h = int(m.group(1))
+    mn = m.group(2) or "00"
+    ap = m.group(3).lower()
+    if ap == "p" and h != 12:
+        h += 12
+    if ap == "a" and h == 12:
+        h = 0
+    return f"{h}:{mn}"
+
+
+def _window_label(date_text: str, time_text: str) -> str:
+    """A compact RU «окно работы Zoom-комнаты» from the parsed schedule, e.g. «Monday–Friday» +
+    «9:30 AM – 5:00 PM ET» → «Пн–Пт 9:30 – 17:00 ET». Best-effort: English weekday names are
+    localised and 12h times converted to 24h; on any hiccup the raw parsed text is used."""
+    d = (date_text or "").strip()
+    t = (time_text or "").strip()
+    if not d and not t:
+        return ""
+    try:
+        dd = d
+        for en, ru in _EN_DOW:
+            dd = re.sub(en, ru, dd, flags=re.I)
+        tt = _TIME12_RE.sub(_to24, t)
+        return " ".join(x for x in (dd, tt) if x)
+    except Exception:
+        return " ".join(x for x in (d, t) if x)
+
+
+def _fmt_dl_date(ts) -> str:
+    try:
+        dt = datetime.datetime.fromtimestamp(int(ts), datetime.timezone.utc)
+        return f"{dt.day} {_RU_MON[dt.month - 1]}"
+    except Exception:
+        return ""
+
+
+def _deadline_chip_parts(inv: dict) -> tuple[str, str]:
+    """(label, level) for a candidate's booking deadline chip. level ∈ {ok, soon, urgent, over}.
+    ONLY an EXPLICIT past deadline reads «поздно подключаться» (over/dim) — an estimated one is
+    never «поздно» (owner). Near deadlines read «сегодня»/«осталось N дн»; further ones «до 30 сент»."""
+    ts = inv.get("deadline_ts")
+    if not ts:
+        return "", ""
+    days = inv.get("deadline_days")
+    estimated = inv.get("deadline_estimated")
+    if days is not None and days < 0 and not estimated:
+        return "поздно подключаться", "over"          # explicit past deadline only
+    if days is None:
+        lvl = "ok"
+    elif days <= 1:
+        lvl = "urgent"
+    elif days <= 3:
+        lvl = "soon"
+    else:
+        lvl = "ok"
+    if days is not None and 0 <= days <= 3:
+        label = "сегодня" if days == 0 else f"осталось {days} дн"
+    else:
+        d = _fmt_dl_date(ts)
+        label = f"до {d}" if d else ""
+    return label, lvl
+
+
+def _meta_row_html(inv: dict) -> str:
+    """A per-candidate meta line under the name: the Zoom «окно» (working hours of THIS
+    candidate's room) + the booking deadline chip. Both best-effort; empty → nothing rendered."""
+    bits = []
+    win = _window_label(inv.get("date_text") or "", inv.get("time_text") or "")
+    if win:
+        bits.append(f'<span class="he-win">Окно: {escape(win)}</span>')
+    dl, lvl = _deadline_chip_parts(inv)
+    if dl:
+        bits.append(f'<span class="he-dl he-dl-{lvl}">{escape(dl)}</span>')
+    return f'<div class="he-inv-meta">{"".join(bits)}</div>' if bits else ""
+
+
+def _claim_color(c: dict, color_for=None) -> str:
+    """A claim's display colour: `db.color_for` when the callable is threaded in (honours an
+    explicit override), else the colour event_claims_for already resolved, else a safe grey."""
+    if color_for:
+        try:
+            return color_for({"id": c.get("responsible_id"), "color": c.get("color")})
+        except Exception:
+            pass
+    return c.get("color") or "#5f6368"
+
+
+def _claim_time_label(c: dict, me: dict | None) -> str:
+    """A claim's join time as HH:MM in the VIEWER's timezone, or '' when no time is set."""
+    ts = c.get("join_ts")
+    if not ts:
+        return ""
+    try:
+        from backend.interviews import slots
+        return slots.to_local(ts, (me or {}).get("tz")).strftime("%H:%M")
+    except Exception:
+        return ""
+
+
+def _claim_block(mbx: str, claims: list | None, me: dict | None, color_for=None) -> str:
+    """The shared claim strip for one candidate row: a coloured chip per claimer
+    («@Имя · подключится 14:00» / «@Имя · подключился ✓», colour = the claimer's), plus, for the
+    ACTING user, an inline «Я подключусь» time + «Подключился» control (or «Отменить» if already
+    claimed). Every role sees the same chips; only the acting user gets the control."""
+    claims = claims or []
+    mine = None
+    chips = []
+    for c in claims:
+        if me and c.get("responsible_id") == me.get("id"):
+            mine = c
+        color = _claim_color(c, color_for)
+        who = escape(c.get("name") or "—")
+        if c.get("joined"):
+            lbl = "подключился ✓"
+        else:
+            t = _claim_time_label(c, me)
+            lbl = f"подключится {t}" if t else "готов подключиться"
+        chips.append(
+            f'<span class="he-claim-chip" style="background:{color}22;color:{color};'
+            f'border:1px solid {color}55">@{who} · {escape(lbl)}</span>')
+    chips_html = (f'<span class="he-claim-chips">{"".join(chips)}</span>' if chips
+                  else '<span class="he-claim-none">Пока никто не отметился</span>')
+
+    control = ""
+    if me and me.get("id"):
+        mb_attr = escape(mbx, quote=True)
+        if mine is not None:
+            cur_t = _claim_time_label(mine, me)
+            chk = " checked" if mine.get("joined") else ""
+            control = (
+                '<span class="he-claim-mine">'
+                '<form method="post" action="/hiring-events/claim" class="he-claim-form">'
+                f'<input type="hidden" name="mailbox" value="{mb_attr}">'
+                f'<input type="time" name="join_local" value="{escape(cur_t, quote=True)}" '
+                'aria-label="Во сколько подключитесь">'
+                f'<label class="he-claim-chk"><input type="checkbox" name="joined" value="1"{chk}> '
+                'Подключился</label>'
+                '<button type="submit" class="he-claim-save">Сохранить</button></form>'
+                '<form method="post" action="/hiring-events/unclaim" class="he-claim-form">'
+                f'<input type="hidden" name="mailbox" value="{mb_attr}">'
+                '<button type="submit" class="he-claim-cancel">Отменить</button></form>'
+                '</span>')
+        else:
+            control = (
+                '<span class="he-claim-mine">'
+                '<form method="post" action="/hiring-events/claim" class="he-claim-form">'
+                f'<input type="hidden" name="mailbox" value="{mb_attr}">'
+                '<input type="time" name="join_local" aria-label="Во сколько подключитесь">'
+                '<label class="he-claim-chk"><input type="checkbox" name="joined" value="1"> '
+                'Подключился</label>'
+                '<button type="submit" class="he-claim-save">Я подключусь</button></form>'
+                '</span>')
+    return f'<div class="he-claim">{chips_html}{control}</div>'
+
+
+def _invite_row_html(inv: dict, *, group_meeting_id: str | None = None,
+                     claims: list | None = None, me: dict | None = None,
+                     color_for=None) -> str:
     """One persona row: name + mailbox, a per-candidate «Ссылка» (THIS persona's OWN Zoom
     room, keyed on their unique invite — flagged «др. комната» when it differs from the
     group's shared room), «Письмо» link, a «Скачать резюме» button (when a résumé resolves)
@@ -642,23 +835,27 @@ def _invite_row_html(inv: dict, *, group_meeting_id: str | None = None) -> str:
                      '</div>')
     detail_body = f'<div class="he-detail-facts">{detail_html}</div>' + "".join(extra)
 
+    claim_html = _claim_block(mbx, claims, me, color_for)
+
     return (
         '<div class="he-inv-wrap">'
         '<div class="he-inv">'
         f'<div class="he-inv-main"><span class="he-inv-name">{who}</span>'
-        f'<span class="he-inv-mb">{mb}</span></div>'
+        f'<span class="he-inv-mb">{mb}</span>{_meta_row_html(inv)}</div>'
         '<div class="he-inv-actions">'
         f'<span class="he-inv-when">{escape(when)}</span>'
         f'{link_html}'
         f'<a class="he-inv-open" href="{open_mail}">Письмо</a>'
         f'{res_btn}{exp_btn}</div>'
         '</div>'
+        f'{claim_html}'
         f'<div class="he-detail" id="{did}" hidden>{detail_body}</div>'
         '</div>'
     )
 
 
-def _group_card_html(g: dict) -> str:
+def _group_card_html(g: dict, *, claims: dict | None = None, me: dict | None = None,
+                     color_for=None) -> str:
     join = g.get("join_url") or ""
     role = escape(g.get("role") or "Remote CSR")
     date_text = escape(g.get("date_text") or "")
@@ -672,8 +869,11 @@ def _group_card_html(g: dict) -> str:
         '<span class="he-join he-join-off">Ссылка недоступна</span>'
     )
     sched_bits = " · ".join(x for x in (date_text, time_text) if x)
-    invites = "".join(_invite_row_html(inv, group_meeting_id=mid)
-                      for inv in g.get("invites") or [])
+    invites = "".join(
+        _invite_row_html(inv, group_meeting_id=mid,
+                         claims=(claims or {}).get(inv.get("mailbox")),
+                         me=me, color_for=color_for)
+        for inv in g.get("invites") or [])
     return (
         '<section class="he-card">'
         '<div class="he-head">'
@@ -715,6 +915,15 @@ _CSS = """
   text-overflow:ellipsis;white-space:nowrap;}
 .he-inv-mb{font-size:11.5px;color:var(--ink-mute);font-family:var(--ff-mono);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;}
+/* per-candidate meta: Zoom working-hours window + booking deadline chip */
+.he-inv-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:3px;}
+.he-win{font-size:11px;font-weight:600;color:var(--ink-soft);background:var(--panel-2);
+  border-radius:var(--r-full);padding:2px 8px;white-space:nowrap;}
+.he-dl{font-size:11px;font-weight:700;border-radius:var(--r-full);padding:2px 8px;white-space:nowrap;}
+.he-dl-ok{color:var(--ink-soft);background:var(--panel-2);}
+.he-dl-soon{color:var(--warn,#b45309);background:var(--warn-soft,#fef3c7);}
+.he-dl-urgent{color:var(--danger,#a50e0e);background:#fce8e6;}
+.he-dl-over{color:var(--ink-mute);background:var(--panel-2);opacity:.7;}
 .he-inv-actions{display:flex;align-items:center;gap:8px;margin-left:auto;flex:0 0 auto;}
 .he-inv-when{font-size:12px;color:var(--ink-mute);flex:0 0 auto;}
 .he-inv-open{font-size:12.5px;color:var(--accent);flex:0 0 auto;white-space:nowrap;}
@@ -745,6 +954,27 @@ _CSS = """
 .he-detail{margin:2px 10px 8px;padding:9px 12px;border-radius:8px;background:var(--panel-2);
   color:var(--ink-soft);font-size:12.5px;line-height:1.55;}
 .he-detail[hidden]{display:none;}
+/* shared claims: who (any role) will join / has joined this candidate's Zoom room + when */
+.he-claim{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;margin:0 10px 8px;
+  padding:8px 10px;border-top:1px dashed var(--line);}
+.he-claim-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.he-claim-chip{display:inline-flex;align-items:center;height:var(--chip-sm-h,22px);padding:0 9px;
+  border-radius:var(--r-full);font-size:11.5px;font-weight:700;white-space:nowrap;}
+.he-claim-none{color:var(--ink-mute);font-size:11.5px;}
+.he-claim-form{display:inline-flex;align-items:center;gap:7px;margin:0;flex-wrap:wrap;}
+.he-claim-form input[type=time]{padding:6px 8px;border:1px solid var(--line-strong);border-radius:7px;
+  font-size:13px;background:var(--panel);color:var(--ink);}
+.he-claim-chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
+  color:var(--ink-soft);white-space:nowrap;cursor:pointer;}
+.he-claim-chk input{width:16px;height:16px;flex:0 0 auto;}
+.he-claim-save,.he-claim-cancel{display:inline-flex;align-items:center;height:var(--chip-h);
+  padding:0 12px;border-radius:var(--r-full);font-size:12.5px;font-weight:700;cursor:pointer;
+  border:1px solid var(--line-strong);}
+.he-claim-save{background:var(--accent);color:#fff;border-color:var(--accent);}
+.he-claim-save:hover{filter:brightness(.96);}
+.he-claim-cancel{background:var(--panel);color:var(--ink-soft);}
+.he-claim-cancel:hover{border-color:var(--danger);color:var(--danger);}
+.he-claim-mine{margin-left:auto;display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;}
 """
 
 
@@ -771,10 +1001,16 @@ _TOGGLE_JS = """<script>
 </script>"""
 
 
-def render_page(groups: list[dict] | None = None) -> str:
-    """The «События найма» operator surface: live Zoom hiring events, each with its
+def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
+                me: dict | None = None, color_for=None) -> str:
+    """The «События найма» SHARED surface: live Zoom hiring events, each with its
     schedule + a «Присоединиться» button + the personas invited to it. Distinct from the
-    «Собес» interview pool. Neutral RU; no stack names."""
+    «Собес» interview pool. Neutral RU; no stack names.
+
+    `claims` ({mailbox: [claim,…]} from db.event_claims_for), `me` (the acting responsible) and
+    `color_for` (db.color_for) drive the shared claim strips — who (any role) will join / has
+    joined each candidate. All default to None so the CLI `--refresh`/`_main` path renders
+    unchanged (no per-user control, no claims)."""
     from backend.tools import mailcrm_ui
     if groups is None:
         groups = grouped_events()
@@ -782,11 +1018,12 @@ def render_page(groups: list[dict] | None = None) -> str:
     n_inv = sum(len(g.get("invites") or []) for g in groups)
     lead = (
         "Живые события найма Teleperformance: подключитесь к Zoom-комнате под нужным "
-        "кандидатом и получите оффер на месте — без теста. Собеседование обычно идёт "
-        "будни, время указано по ET. Список формируется из входящих приглашений."
+        "кандидатом и получите оффер на месте — без теста. Отметьте галочкой, во сколько "
+        "подключитесь к кандидату — это видят все. Список формируется из входящих приглашений."
     )
     if groups:
-        cards = "".join(_group_card_html(g) for g in groups)
+        cards = "".join(_group_card_html(g, claims=claims, me=me, color_for=color_for)
+                        for g in groups)
         body_inner = f'<p class="he-lead">{escape(lead)}</p>{cards}'
     else:
         body_inner = ('<p class="he-lead">' + escape(lead) + '</p>'

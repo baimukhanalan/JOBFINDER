@@ -142,22 +142,29 @@ def _public_asset(path: str) -> bool:
             or path == "/join" or path.startswith("/join/"))
 
 
+def _hiring_events_path(path: str) -> bool:
+    """The SHARED «События найма» board — open to every role (admin/manager/employee), so
+    interviewers and managers can also see + claim which candidate they'll join in Zoom."""
+    return path == "/hiring-events" or path.startswith("/hiring-events/")
+
+
 def _employee_allowed(path: str) -> bool:
-    """The employee WHITELIST: an employee may reach ONLY their own cabinet surface.
-    Everything else on this PII dashboard is blocked at the door (redirected to /cabinet),
-    so isolation rests on this single positive check, not on every operator route
+    """The employee WHITELIST: an employee may reach their own cabinet surface PLUS the shared
+    hiring-events board. Everything else on this PII dashboard is blocked at the door (redirected
+    to /cabinet), so isolation rests on this single positive check, not on every operator route
     remembering to exclude employees. /logout is already in ALLOWLIST (open to all)."""
-    return path == "/cabinet" or path.startswith("/cabinet/")
+    return path == "/cabinet" or path.startswith("/cabinet/") or _hiring_events_path(path)
 
 
 def _manager_allowed(path: str) -> bool:
-    """The manager WHITELIST: a manager may reach ONLY their own management portal
-    (/manage/*) PLUS the interviewer cabinet (/cabinet/*) — a manager also attends
-    interviews assigned to himself, so he needs the cabinet (its ownership guard already
-    confines him to HIS assigned personas). Everything else (the full admin dashboard,
-    /users, /mail, /catalog, …) is blocked at the door → redirected to /manage. Isolation
-    rests on this single positive check, like the employee whitelist."""
+    """The manager WHITELIST: a manager may reach their own management portal (/manage/*), the
+    interviewer cabinet (/cabinet/*) — a manager also attends interviews assigned to himself, so
+    he needs the cabinet (its ownership guard already confines him to HIS assigned personas) —
+    and the shared hiring-events board. Everything else (the full admin dashboard, /users, /mail,
+    /catalog, …) is blocked at the door → redirected to /manage. Isolation rests on this single
+    positive check, like the employee whitelist."""
     return (path == "/manage" or path.startswith("/manage/")
+            or _hiring_events_path(path)
             or _employee_allowed(path))
 
 

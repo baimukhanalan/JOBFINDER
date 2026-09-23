@@ -12,19 +12,90 @@ into ``iv_interviews``, so the interview pool stays clean.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from datetime import datetime
 
+from fastapi import APIRouter, Depends, Form
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse, Response)
+
+from backend.interviews import auth
 from backend.tools import hiring_events
 
 router = APIRouter()
 
 
+def _parse_join(raw: str, me: dict | None):
+    """Parse a claim's join time (a `HH:MM` <input type=time>, or a full
+    `YYYY-MM-DDTHH:MM`) as wall-clock in the acting user's timezone → tz-aware UTC. A bare
+    `HH:MM` is anchored to TODAY in the user's zone. None on anything empty/unparseable."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        from backend.interviews import slots
+        tz = (me or {}).get("tz")
+        if "T" in raw:
+            naive = datetime.strptime(raw[:16], "%Y-%m-%dT%H:%M")
+        else:
+            t = datetime.strptime(raw[:5], "%H:%M").time()
+            today = slots.to_local(datetime.now(slots.UTC), tz).date()
+            naive = datetime.combine(today, t)
+        return naive.replace(tzinfo=slots.zone(tz)).astimezone(slots.UTC)
+    except Exception:
+        return None
+
+
 @router.get("/hiring-events", response_class=HTMLResponse)
-def hiring_events_page() -> HTMLResponse:
-    """The live-hiring-events surface. Resolution is cache-first (only new invites hit
-    the network), so repeat renders are fast."""
-    return HTMLResponse(hiring_events.render_page())
+def hiring_events_page(me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """The live-hiring-events surface, SHARED across all roles. Resolution is cache-first
+    (only new invites hit the network), so repeat renders are fast. Every claim («кто и во
+    сколько подключится к кандидату») is loaded + shown to everyone; the acting user gets the
+    inline claim control."""
+    groups = hiring_events.grouped_events()
+    mailboxes = [inv.get("mailbox")
+                 for g in groups for inv in (g.get("invites") or [])]
+    claims = {}
+    color_for = None
+    try:
+        from backend.interviews import db
+        claims = db.event_claims_for(mailboxes)
+        color_for = db.color_for
+    except Exception:
+        claims, color_for = {}, None
+    return HTMLResponse(hiring_events.render_page(
+        groups, claims=claims, me=me, color_for=color_for))
+
+
+@router.post("/hiring-events/claim")
+def hiring_events_claim(mailbox: str = Form(""), join_local: str = Form(""),
+                        joined: str = Form(""),
+                        me: dict = Depends(auth.current_responsible)):
+    """Record the ACTING user's claim on a candidate («я подключусь в X:XX» / «уже подключился»).
+    Always keyed to the acting user (no ?as spoofing). Redirects back to the board."""
+    mbx = (mailbox or "").strip()
+    if mbx:
+        join_ts = _parse_join(join_local, me)
+        is_joined = (joined or "").strip().lower() in ("1", "true", "on", "yes")
+        try:
+            from backend.interviews import db
+            db.set_event_claim(mbx, me["id"], join_ts=join_ts, joined=is_joined)
+        except Exception:
+            pass
+    return RedirectResponse("/hiring-events", status_code=303)
+
+
+@router.post("/hiring-events/unclaim")
+def hiring_events_unclaim(mailbox: str = Form(""),
+                          me: dict = Depends(auth.current_responsible)):
+    """Remove the acting user's own claim on a candidate («Отменить»)."""
+    mbx = (mailbox or "").strip()
+    if mbx:
+        try:
+            from backend.interviews import db
+            db.clear_event_claim(mbx, me["id"])
+        except Exception:
+            pass
+    return RedirectResponse("/hiring-events", status_code=303)
 
 
 @router.get("/hiring-events/resume")

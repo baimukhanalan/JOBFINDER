@@ -11,11 +11,46 @@ receive aware `datetime` objects — the owner asked for GMT/UTC only in the MVP
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 
 from backend.tools import mail_db
 
 DOW_COUNT = 7
+
+# ---- per-user colour (собес overviews) --------------------------------------------
+# A fixed, visually-distinct, WCAG-legible palette (all solid 6-digit hex, dark enough
+# to carry white text on a chip). Each user gets a STABLE pick by id so managers/
+# interviewers never blur together on the «актуальные предстоящие» overviews (owner:
+# «пусть у каждого пользователя свой цвет»). An explicit `iv_responsibles.color`
+# overrides the palette pick.
+USER_PALETTE = (
+    "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777",
+    "#0891b2", "#65a30d", "#ea580c", "#4f46e5", "#0d9488", "#c026d3",
+    "#b45309", "#1d4ed8", "#be123c", "#15803d",
+)
+_HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _palette_color(rid) -> str:
+    """A stable palette colour for a user id (id % len(palette))."""
+    try:
+        return USER_PALETTE[int(rid) % len(USER_PALETTE)]
+    except (TypeError, ValueError):
+        return USER_PALETTE[0]
+
+
+def color_for(resp: dict | None) -> str:
+    """The display colour for a responsible: their explicit `color` when it is a valid
+    6-digit hex, else a stable palette pick keyed on their id. ALWAYS returns a safe hex
+    string (a stored junk value can never reach an inline `style=`), so every user has a
+    distinct, stable colour even with no explicit set."""
+    if not resp:
+        return USER_PALETTE[0]
+    c = (resp.get("color") or "").strip()
+    if c and _HEX_RE.match(c):
+        return c
+    return _palette_color(resp.get("id"))
 
 
 # ---- schema ----------------------------------------------------------------------
@@ -55,6 +90,11 @@ def ensure_schema() -> None:
         # is display-only so the user/admin can SEE which account is bound).
         cur.execute("ALTER TABLE iv_responsibles "
                     "ADD COLUMN IF NOT EXISTS telegram_username TEXT;")
+        # a per-user display colour for the собес overviews (so managers/interviewers don't
+        # blur into one colour on «актуальные предстоящие»). Additive; NULL → a stable palette
+        # pick by id (see color_for). Same fast constant-default ALTER pattern as above.
+        cur.execute("ALTER TABLE iv_responsibles "
+                    "ADD COLUMN IF NOT EXISTS color TEXT;")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS iv_availability (
           id             SERIAL PRIMARY KEY,
@@ -132,6 +172,24 @@ def ensure_schema() -> None:
         cur.execute("UPDATE iv_responsibles SET roles=ARRAY[role] "
                     "WHERE roles IS NULL OR cardinality(roles)=0")
 
+        # ---- shared hiring-event claims (any role can mark «я подключусь к этому кандидату
+        # в такое-то время / уже подключился» on the shared «События найма» board) ---------
+        # One row per (candidate mailbox, responsible). NOT tied to iv_interviews — these are
+        # TP mass Zoom-room invites captured separately (see tools/hiring_events.py); this only
+        # records WHO is covering WHICH candidate and WHEN, visible to everyone.
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS iv_event_claims (
+          id             SERIAL PRIMARY KEY,
+          mailbox        TEXT NOT NULL,
+          responsible_id INT REFERENCES iv_responsibles(id) ON DELETE CASCADE,
+          join_ts        TIMESTAMPTZ,
+          joined         BOOLEAN DEFAULT FALSE,
+          updated_at     TIMESTAMPTZ DEFAULT now(),
+          UNIQUE(mailbox, responsible_id)
+        );""")
+        cur.execute("CREATE INDEX IF NOT EXISTS iv_event_claims_mailbox_idx "
+                    "ON iv_event_claims (mailbox);")
+
 
 # ---- roles (multi-role: a user may hold several at once; capabilities = the UNION) -----
 VALID_ROLES = ("admin", "manager", "employee")
@@ -187,7 +245,14 @@ def add_responsible(login: str, password_hash: str, name: str, tz: str = "UTC",
             "INSERT INTO iv_responsibles (login, password_hash, name, tz, role, roles, manager_id) "
             "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (login, password_hash, name, tz, primary_role(norm), norm, manager_id))
-        return cur.fetchone()[0]
+        new_id = cur.fetchone()[0]
+    # Assign the stable palette colour for the new id (best-effort — color_for falls back to
+    # the same palette pick anyway, so a failure here is cosmetic, never fatal to the insert).
+    try:
+        set_color(new_id, _palette_color(new_id))
+    except Exception:
+        pass
+    return new_id
 
 
 def get_responsible_by_login(login: str) -> dict | None:
@@ -231,6 +296,14 @@ def set_tz(rid: int, tz: str) -> None:
     and the zone their times are shown/reminded in). Auto-detected from their browser."""
     with mail_db._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_responsibles SET tz=%s WHERE id=%s", (tz, rid))
+
+
+def set_color(rid: int, color: str) -> None:
+    """Set a responsible's explicit display colour (an admin override of the palette pick).
+    Its own transaction so a missing `color` column (pre-ensure_schema) never poisons a
+    caller's insert — see add_responsible."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_responsibles SET color=%s WHERE id=%s", (color, rid))
 
 
 def set_tg_link_code(rid: int, code: str) -> None:
@@ -723,3 +796,66 @@ def responsibles_missing_telegram() -> list[dict]:
             "SELECT * FROM iv_responsibles WHERE active AND telegram_chat_id IS NULL "
             "AND ('manager' = ANY(roles) OR 'employee' = ANY(roles)) ORDER BY id")
         return [dict(r) for r in cur.fetchall()]
+
+
+# ---- shared hiring-event claims (the «События найма» board, any role) --------------------
+def set_event_claim(mailbox: str, responsible_id: int, join_ts: datetime | None = None,
+                    joined: bool | None = None) -> None:
+    """Upsert one responsible's claim on a hiring-event candidate («я подключусь в X:XX» /
+    «уже подключился»). On conflict only the provided fields are overwritten (a None keeps the
+    existing value via COALESCE), so toggling «Подключился» without re-entering the time keeps
+    the time. Guarded — any error is a no-op, never breaks the board."""
+    if not mailbox or not responsible_id:
+        return
+    try:
+        with mail_db._cur(dict_rows=False) as cur:
+            cur.execute(
+                "INSERT INTO iv_event_claims (mailbox, responsible_id, join_ts, joined, updated_at) "
+                "VALUES (%s,%s,%s,COALESCE(%s,FALSE),now()) "
+                "ON CONFLICT (mailbox, responsible_id) DO UPDATE SET "
+                "join_ts=COALESCE(EXCLUDED.join_ts, iv_event_claims.join_ts), "
+                "joined=COALESCE(%s, iv_event_claims.joined), updated_at=now()",
+                (mailbox, responsible_id, join_ts, joined, joined))
+    except Exception:
+        pass
+
+
+def clear_event_claim(mailbox: str, responsible_id: int) -> None:
+    """Remove a responsible's claim on a hiring-event candidate («Отменить»). Guarded."""
+    if not mailbox or not responsible_id:
+        return
+    try:
+        with mail_db._cur(dict_rows=False) as cur:
+            cur.execute("DELETE FROM iv_event_claims WHERE mailbox=%s AND responsible_id=%s",
+                        (mailbox, responsible_id))
+    except Exception:
+        pass
+
+
+def event_claims_for(mailboxes) -> dict:
+    """{mailbox: [ {responsible_id, name, color, join_ts, joined}, … ]} — every claim on the
+    given candidate mailboxes, joined to iv_responsibles for the claimer's name + colour
+    (already resolved via color_for so a NULL colour is a stable palette pick). Joined-yet rows
+    sort first. Guarded — any error / empty input → {}."""
+    mbs = [m for m in (mailboxes or []) if m]
+    if not mbs:
+        return {}
+    try:
+        with mail_db._cur() as cur:
+            cur.execute(
+                "SELECT c.mailbox, c.responsible_id, r.name, r.color, c.join_ts, c.joined "
+                "FROM iv_event_claims c JOIN iv_responsibles r ON r.id = c.responsible_id "
+                "WHERE c.mailbox = ANY(%s) "
+                "ORDER BY c.joined DESC, c.join_ts NULLS LAST, r.name", (mbs,))
+            out: dict = {}
+            for r in cur.fetchall():
+                out.setdefault(r["mailbox"], []).append({
+                    "responsible_id": r["responsible_id"],
+                    "name": r.get("name") or "",
+                    "color": color_for({"id": r["responsible_id"], "color": r.get("color")}),
+                    "join_ts": r.get("join_ts"),
+                    "joined": bool(r.get("joined")),
+                })
+            return out
+    except Exception:
+        return {}

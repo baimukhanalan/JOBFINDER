@@ -1691,3 +1691,191 @@ def test_smartrecruiters_ca_does_not_leak_into_us_lane():
         "id": "1", "name": "Customer Service Representative",
         "location": {"country": "ca", "remote": True, "fullLocation": "Toronto, ON, Canada"},
     }, "sutherland", "Sutherland") is None
+
+
+# ================================================================================================
+# Keyless-board expansion 2026-09-23 — Greenhouse (Instacart/Affirm) · Ashby (Ramp/Kin) ·
+# Lever (Wealthfront) · SmartRecruiters (Experian). Network-free _X_row decisions, both HARD RULES.
+# ================================================================================================
+
+# ---- Greenhouse US + CA slices (_greenhouse_row ca flag) ---------------------------------------
+def test_greenhouse_instacart_us_remote_entry_is_kept():
+    row = mh._greenhouse_row(
+        {"id": 100, "title": "Bilingual Customer Experience Specialist",
+         "location": {"name": "United States - Remote"},
+         "absolute_url": "https://boards.greenhouse.io/instacart/jobs/100",
+         "updated_at": "2026-09-15T00:00:00-04:00"}, "instacart", "Instacart")
+    assert row is not None
+    assert row["source"] == "instacart"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"].endswith("/jobs/100")
+
+
+def test_greenhouse_instacart_us_lane_drops_the_canada_row():
+    # The US fetch (ca=False) must NOT keep a Canada-remote row.
+    assert mh._greenhouse_row(
+        {"id": 101, "title": "Billing Operations Associate",
+         "location": {"name": "Canada - Remote (ON, AB, BC, or NS Only)"},
+         "absolute_url": "u"}, "instacart", "Instacart") is None
+
+
+def test_greenhouse_ca_slice_keeps_canada_remote_and_forces_eligible():
+    row = mh._greenhouse_row(
+        {"id": 101, "title": "Billing Operations Associate",
+         "location": {"name": "Canada - Remote (ON, AB, BC, or NS Only)"},
+         "absolute_url": "u"}, "instacart_ca", "Instacart", ca=True)
+    assert row is not None
+    assert row["source"] == "instacart_ca"
+    assert row["category"] == "operations"
+    assert row["us_eligible"] is True                # forced so collect() keeps the CA row
+    assert "Canada" in row["location_raw"]
+
+
+def test_greenhouse_ca_slice_drops_a_us_row():
+    # The CA fetch must NOT keep a US-remote row (it belongs to the US source).
+    assert mh._greenhouse_row(
+        {"id": 100, "title": "Bilingual Customer Experience Specialist",
+         "location": {"name": "United States - Remote"}, "absolute_url": "u"},
+        "instacart_ca", "Instacart", ca=True) is None
+
+
+def test_greenhouse_affirm_onsite_and_senior_are_dropped():
+    # not remote
+    assert mh._greenhouse_row(
+        {"id": 1, "title": "Customer Advocacy Associate II",
+         "location": {"name": "New York, NY"}, "absolute_url": "u"}, "affirm", "Affirm") is None
+    # remote but not a mass-hiring entry title (senior)
+    assert mh._greenhouse_row(
+        {"id": 2, "title": "Senior Manager, Customer Advocacy",
+         "location": {"name": "Remote US"}, "absolute_url": "u"}, "affirm", "Affirm") is None
+
+
+# ---- Ashby (_ashby_row) ------------------------------------------------------------------------
+def test_ashby_kin_primary_remote_us_is_kept():
+    row = mh._ashby_row(
+        {"id": "abc", "title": "Bilingual Licensed Customer Service Agent",
+         "location": "Remote (United States)", "isRemote": True, "secondaryLocations": [],
+         "employmentType": "FullTime", "jobUrl": "https://jobs.ashbyhq.com/kin/abc",
+         "publishedAt": "2026-09-15T16:12:45.128+00:00", "isListed": True}, "kin", "Kin Insurance")
+    assert row is not None
+    assert row["source"] == "kin"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == "https://jobs.ashbyhq.com/kin/abc"
+
+
+def test_ashby_ramp_hybrid_office_with_remote_us_secondary_is_kept():
+    # A hybrid-primary role (office location) that offers "Remote (US)" as a secondary IS remote-eligible.
+    row = mh._ashby_row(
+        {"id": "1", "title": "Customer Experience Associate (Evening Shift)",
+         "location": "New York, NY (HQ)", "workplaceType": "Hybrid", "isRemote": True,
+         "secondaryLocations": [{"location": "San Francisco, CA"}, {"location": "Remote (US)"}],
+         "jobUrl": "https://jobs.ashbyhq.com/ramp/1", "isListed": True}, "ramp", "Ramp")
+    assert row is not None
+    assert row["category"] == "customer_support"
+    assert row["location_raw"] == "Remote (US)"
+    assert row["us_eligible"] is True
+
+
+def test_ashby_office_only_no_remote_location_is_dropped():
+    # isRemote is False and no remote location string → not remote → drop.
+    assert mh._ashby_row(
+        {"id": "2", "title": "Customer Experience Associate",
+         "location": "New York, NY (HQ)", "isRemote": False,
+         "secondaryLocations": [{"location": "San Francisco, CA"}], "isListed": True},
+        "ramp", "Ramp") is None
+
+
+def test_ashby_non_us_remote_is_dropped():
+    # "Remote (Non-U.S.)" is offshore even though us_eligible()'s regex would trip on "U.S." — the
+    # _ASHBY_NONUS_RE guard rejects it.
+    assert mh._ashby_row(
+        {"id": "3", "title": "Customer Experience Specialist",
+         "location": "Remote (Non-U.S.)", "isRemote": True, "secondaryLocations": [],
+         "isListed": True}, "probe", "X") is None
+
+
+def test_ashby_senior_and_unlisted_are_dropped():
+    assert mh._ashby_row(
+        {"id": "4", "title": "Director, Customer Experience", "location": "Remote (United States)",
+         "isRemote": True, "isListed": True}, "kin", "Kin Insurance") is None
+    # a delisted posting is skipped
+    assert mh._ashby_row(
+        {"id": "5", "title": "Customer Service Agent", "location": "Remote (United States)",
+         "isRemote": True, "isListed": False}, "kin", "Kin Insurance") is None
+
+
+def test_ashby_ca_slice_keeps_canada_and_forces_eligible():
+    row = mh._ashby_row(
+        {"id": "6", "title": "Customer Support Specialist", "location": "Remote (Canada)",
+         "isRemote": True, "secondaryLocations": [], "isListed": True}, "probe_ca", "X", ca=True)
+    assert row is not None
+    assert row["us_eligible"] is True
+    assert "Canada" in row["location_raw"]
+
+
+# ---- Lever (_lever_row) ------------------------------------------------------------------------
+def _lever_job(text, location, workplaceType="remote", country="US", all_loc=None, jid="L1"):
+    return {"id": jid, "text": text, "workplaceType": workplaceType, "country": country,
+            "categories": {"commitment": "Full-time", "location": location,
+                           "allLocations": all_loc if all_loc is not None else [location]},
+            "hostedUrl": f"https://jobs.lever.co/wealthfront/{jid}", "createdAt": 1787864015437}
+
+
+def test_lever_wealthfront_us_remote_is_kept():
+    row = mh._lever_row(
+        _lever_job("Client Services Representative", "Palo Alto, CA (Open to US-based Remote)"),
+        "wealthfront", "Wealthfront")
+    assert row is not None
+    assert row["source"] == "wealthfront"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"] == "https://jobs.lever.co/wealthfront/L1"
+    assert row["posted_at"] == 1787864015  # createdAt ms → s
+
+
+def test_lever_onsite_is_dropped():
+    assert mh._lever_row(
+        _lever_job("Client Services Representative", "Palo Alto, CA",
+                   workplaceType="on-site", all_loc=["Palo Alto, CA"]),
+        "wealthfront", "Wealthfront") is None
+
+
+def test_lever_foreign_country_remote_is_dropped():
+    # A remote posting in a non-US country must not leak into the US lane.
+    assert mh._lever_row(
+        _lever_job("Customer Support Specialist", "London, UK", country="GB"),
+        "wealthfront", "Wealthfront") is None
+
+
+def test_lever_senior_is_dropped():
+    assert mh._lever_row(
+        _lever_job("Head of Customer Support", "Remote - US"),
+        "wealthfront", "Wealthfront") is None
+
+
+def test_lever_ca_slice_keeps_canada_and_forces_eligible():
+    row = mh._lever_row(
+        _lever_job("Client Support Specialist", "Toronto, ON (Remote)", country="CA"),
+        "koho_ca", "X", ca=True)
+    assert row is not None
+    assert row["us_eligible"] is True
+
+
+# ---- Experian (SmartRecruiters, reuses _smartrecruiters_row) -----------------------------------
+def test_experian_us_remote_bdr_is_kept():
+    row = mh._smartrecruiters_row({
+        "id": "744000999", "name": "Enterprise Business Development Representative - Remote",
+        "location": {"country": "us", "remote": True, "fullLocation": "United States"},
+        "releasedDate": "2026-09-12T00:00:00.000Z"}, "experian", "Experian", country="us")
+    assert row is not None
+    assert row["source"] == "experian"
+    assert row["category"] == "sales"
+    assert row["apply_url"] == "https://jobs.smartrecruiters.com/Experian/744000999"
+
+
+# ---- auto_status honesty for the new sources ---------------------------------------------------
+def test_new_keyless_sources_are_collect_first():
+    for s in ("instacart", "instacart_ca", "affirm", "ramp", "kin", "wealthfront", "experian"):
+        assert mh.auto_status(s) == "needs_laptop"

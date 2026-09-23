@@ -395,6 +395,14 @@ _AUTO_STATUS = {
     # 'needs_laptop', like Wayfair).
     "everise": "needs_laptop", "oscar": "needs_laptop", "clover": "needs_laptop",
     "devoted": "needs_laptop", "concentrix_ca": "needs_laptop", "sutherland_ca": "needs_laptop",
+    # 2026-09-23 keyless-board expansion. instacart/affirm = custom Greenhouse (no wired mass-hiring
+    # apply); ramp/kin = Ashby (no wired apply); wealthfront = Lever (no wired apply) — all collect-
+    # first. experian = SmartRecruiters: the SR cron keys on the smartrecruiters.com apply_url host so
+    # it CAN be driven, but stays cosmetic 'needs_laptop' pending a per-tenant verify (like Wayfair).
+    # instacart_ca = Greenhouse CA slice (collect-first).
+    "instacart": "needs_laptop", "instacart_ca": "needs_laptop", "affirm": "needs_laptop",
+    "ramp": "needs_laptop", "kin": "needs_laptop", "wealthfront": "needs_laptop",
+    "experian": "needs_laptop",
 }
 
 
@@ -2864,28 +2872,53 @@ def fetch_progressive() -> list[dict]:
 # location.name/absolute_url). Used for US health-insurer/payer tenants that post remote member-
 # services CSR alongside clinical roles (categorize() drops the clinical/senior ones). Apply is NOT
 # wired (these embed a custom Greenhouse form — collect-first) → 'needs_laptop'.
-def _greenhouse_row(j: dict, source: str, company: str) -> dict | None:
+# A Canadian remote signal in a location/title string (province name or the word "Canada"). Used by
+# the keyless-board CA slices (Greenhouse/Ashby/Lever) the same way _has_us_state gates the US ones —
+# a CA row FORCES us_eligible=True to persist on the North-America board (no CA column; see _cnx_ca_row).
+# Province full names + "Canada" (case-insensitive); the bare 2-letter province CODES are matched
+# separately (case-SENSITIVE, uppercase) so re.I can't trip on the English words "on"/"as"/"nu"/"pe".
+_CA_REMOTE_RE = re.compile(
+    r"\bcanada\b|\bontario\b|\bqu[eé]bec\b|british columbia|\balberta\b|\bmanitoba\b|"
+    r"saskatchewan|nova scotia|newfoundland|new brunswick|prince edward island", re.I)
+_CA_PROV_CODE_RE = re.compile(r"\b(?:ON|QC|BC|AB|MB|SK|NS|NL|NB|PE|YT|NT|NU)\b")
+
+
+def _is_ca_remote(loc: str) -> bool:
+    return bool(_CA_REMOTE_RE.search(loc or "") or _CA_PROV_CODE_RE.search(loc or ""))
+
+
+def _greenhouse_row(j: dict, source: str, company: str, *, ca: bool = False) -> dict | None:
     """PURE (network-free): one Greenhouse board job → a normalized row or None. Remote from the
     title/location, US from the location wording / a state / a US title (these tenants are US-only
-    payers, so a bare "Remote" is US). categorize() enforces the mass-hiring entry rule."""
+    payers, so a bare "Remote" is US). categorize() enforces the mass-hiring entry rule.
+    With ca=True: keep a CANADA-remote row instead (province/"Canada" in the location) and FORCE
+    us_eligible=True so it persists on the North-America board (the board has no CA column)."""
     title = j.get("title") or ""
     loc = ((j.get("location") or {}).get("name") or "").strip()
     if not _is_remote(title, loc):
         return None
+    if ca:
+        if not _is_ca_remote(loc):
+            return None
+        row = _mk_row(source, j.get("id"), company, title, loc or "Remote, Canada",
+                      j.get("absolute_url") or "", posted_at=_iso_epoch(j.get("updated_at") or ""))
+        if row:
+            row["us_eligible"] = True
+        return row
     if not (us_eligible(loc) or _has_us_state(loc) or _title_us(title)):
         return None
     return _mk_row(source, j.get("id"), company, title, loc or "Remote, United States",
                    j.get("absolute_url") or "", posted_at=_iso_epoch(j.get("updated_at") or ""))
 
 
-def _fetch_greenhouse(source: str, company: str, board: str) -> list[dict]:
+def _fetch_greenhouse(source: str, company: str, board: str, *, ca: bool = False) -> list[dict]:
     rows: list[dict] = []
     try:
         r = httpx.get(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs",
                       params={"content": "false"}, headers={**_UA, "Accept": "application/json"},
                       timeout=30)
         for j in (r.json().get("jobs") or []):
-            row = _greenhouse_row(j, source, company)
+            row = _greenhouse_row(j, source, company, ca=ca)
             if row:
                 rows.append(row)
     except Exception as e:
@@ -2998,6 +3031,192 @@ def fetch_sutherland_canada() -> list[dict]:
     return _fetch_smartrecruiters("sutherland_ca", "Sutherland", country="ca", force_eligible=True)
 
 
+# ================================================================================================
+# Coverage expansion 2026-09-23 — NEW keyless-board employers (Greenhouse / Ashby / Lever / SR).
+# The big BPOs/insurers/staffing firms are already covered; these add high-brand fintech/gig/insurtech
+# remote-US(/CA) CSR + support + sales that publish on keyless boards. All COLLECT-FIRST
+# ('needs_laptop') — none has a wired mass-hiring apply strategy yet (the SR ones ARE host-drivable by
+# the shared SR cron, but stay cosmetic 'needs_laptop' pending a per-tenant verify, like Wayfair).
+# ------------------------------------------------------------------------------------------------
+
+# --- Greenhouse employers (reuse _fetch_greenhouse / _greenhouse_row) ----------------------------
+def fetch_instacart() -> list[dict]:
+    """Instacart — Greenhouse board `instacart` (~110 reqs). US gig-economy grocery marketplace with
+    high-volume remote Customer Experience / SDR / billing-ops hiring. LIVE 2026-09-23: ~4 remote-US
+    ENTRY today (Bilingual CX Specialist, Billing Operations Associate, Activation/Retention SDR).
+    Custom GH mass-hiring apply not wired → collect-first 'needs_laptop'."""
+    return _fetch_greenhouse("instacart", "Instacart", "instacart")
+
+
+def fetch_instacart_canada() -> list[dict]:
+    """Instacart Canada — the SAME Greenhouse board, CA-remote slice (ca=True forces the board-keep
+    flag; location carries the Canada signal). LIVE 2026-09-23: ~1 CA-remote ENTRY today (Billing
+    Operations Associate — Canada Remote ON/AB/BC/NS). Collect-first 'needs_laptop'."""
+    return _fetch_greenhouse("instacart_ca", "Instacart", "instacart", ca=True)
+
+
+def fetch_affirm() -> list[dict]:
+    """Affirm — Greenhouse board `affirm` (~200 reqs). US BNPL fintech; remote Customer Advocacy /
+    collections / admin support. LIVE 2026-09-23: ~2 remote-US ENTRY today (Customer Advocacy
+    Associate II, Administrative Assistant IV). Seasonal support ramps. Collect-first 'needs_laptop'."""
+    return _fetch_greenhouse("affirm", "Affirm", "affirm")
+
+
+# --- Ashby (NEW keyless fetcher: api.ashbyhq.com/posting-api/job-board/<org>) ---------------------
+# Ashby's public job-board API is keyless. Each job carries `location` (a string, often an OFFICE for a
+# hybrid role) + `secondaryLocations[]` + `isRemote`/`workplaceType` (Remote|Hybrid|OnSite). A row is
+# genuinely remote only when SOME location string (primary or secondary) reads remote — so a
+# hybrid-in-office role that also offers "Remote (US)" as a secondary location qualifies, an office-only
+# role does not. US/CA is read off THAT remote location string (or the title). Explicit "non-U.S."
+# remote is rejected (Ashby writes "Remote (Non-U.S.)" for offshore roles).
+_ASHBY_NONUS_RE = re.compile(r"non[-\s.]*u\.?\s*s\.?\b|outside (?:the )?u\.?s", re.I)
+
+
+def _ashby_locations(j: dict) -> list[str]:
+    locs = [(j.get("location") or "").strip()]
+    for s in (j.get("secondaryLocations") or []):
+        v = (s.get("location") or "").strip() if isinstance(s, dict) else ""
+        if v:
+            locs.append(v)
+    return [x for x in locs if x]
+
+
+def _ashby_row(j: dict, source: str, company: str, *, ca: bool = False) -> dict | None:
+    """PURE (network-free): one Ashby posting → a normalized remote-US(/CA) mass-hiring row or None."""
+    if j.get("isListed") is False:
+        return None
+    title = j.get("title") or ""
+    if not categorize(title):
+        return None
+    locs = _ashby_locations(j)
+    # find a location string that is genuinely remote AND in the right country
+    region_ok = None
+    for L in locs:
+        if not _is_remote(L) or _ASHBY_NONUS_RE.search(L):
+            continue
+        if ca:
+            if _is_ca_remote(L):
+                region_ok = L
+                break
+        elif us_eligible(L) or _has_us_state(L):
+            region_ok = L
+            break
+    # US fallback: an explicitly-remote posting whose title carries the US signal (no usable loc string)
+    if region_ok is None and not ca and j.get("isRemote") and _title_us(title) \
+            and not any(_ASHBY_NONUS_RE.search(L) for L in locs):
+        region_ok = "Remote, United States"
+    if region_ok is None:
+        return None
+    apply_url = j.get("jobUrl") or j.get("applyUrl") or ""
+    row = _mk_row(source, j.get("id"), company, title, region_ok,
+                  apply_url, employment_type=j.get("employmentType"),
+                  posted_at=_iso_epoch(j.get("publishedAt") or ""))
+    if row and ca:
+        row["us_eligible"] = True
+    return row
+
+
+def _fetch_ashby(source: str, company: str, org: str, *, ca: bool = False) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        r = httpx.get(f"https://api.ashbyhq.com/posting-api/job-board/{org}",
+                      params={"includeCompensation": "false"},
+                      headers={**_UA, "Accept": "application/json"}, timeout=30)
+        for j in (r.json().get("jobs") or []):
+            row = _ashby_row(j, source, company, ca=ca)
+            if row:
+                rows.append(row)
+    except Exception as e:
+        print(f"[{source}] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+def fetch_ramp() -> list[dict]:
+    """Ramp — Ashby org `ramp`. US fintech (spend management); high-volume remote-eligible Customer
+    Experience / Product-Operations / SDR hiring. LIVE 2026-09-23: ~13 remote-US ENTRY today (CX
+    Associate, Product Operations Specialist, SDR) — most are HYBRID-primary with a "Remote (US)"
+    secondary location, kept as remote-eligible. Collect-first 'needs_laptop'."""
+    return _fetch_ashby("ramp", "Ramp", "ramp")
+
+
+def fetch_kin() -> list[dict]:
+    """Kin Insurance — Ashby org `kin`. US home-insurtech; remote licensed customer-service / claims
+    agents. LIVE 2026-09-23: ~1 remote-US ENTRY today (Bilingual Licensed Customer Service Agent).
+    Seasonal CSR ramps. Collect-first 'needs_laptop'."""
+    return _fetch_ashby("kin", "Kin Insurance", "kin")
+
+
+# --- Lever (NEW keyless fetcher: api.lever.co/v0/postings/<org>?mode=json) ------------------------
+# Lever's public postings API is keyless. Each job has `text` (title), `categories.{location,
+# allLocations}`, a top-level `workplaceType` (remote|hybrid|on-site) + `country` (ISO-2). Remote off
+# workplaceType or a remote location string; US/CA off `country` (or the location text / title).
+def _lever_row(j: dict, source: str, company: str, *, ca: bool = False) -> dict | None:
+    """PURE (network-free): one Lever posting → a normalized remote-US(/CA) mass-hiring row or None."""
+    title = j.get("text") or ""
+    if not categorize(title):
+        return None
+    cats = j.get("categories") or {}
+    loc = (cats.get("location") or "").strip()
+    all_loc = [x for x in (cats.get("allLocations") or []) if x]
+    loc_texts = [loc] + all_loc
+    wt = (j.get("workplaceType") or "").lower()
+    country = (j.get("country") or "").upper()
+    if wt not in ("remote",) and not any(_is_remote(t) for t in loc_texts):
+        return None
+    if ca:
+        region_ok = country == "CA" or any(_is_ca_remote(t) for t in loc_texts)
+    else:
+        region_ok = (country == "US" or any(us_eligible(t) for t in loc_texts)
+                     or _has_us_state(loc) or _title_us(title))
+        if country and country not in ("US", ""):   # a foreign posting → drop (don't trust bare "remote")
+            region_ok = country == "US"
+    if not region_ok:
+        return None
+    label = (loc or ("Remote, Canada" if ca else "Remote, United States"))
+    posted = 0
+    try:
+        posted = int((j.get("createdAt") or 0) / 1000)
+    except (TypeError, ValueError):
+        posted = 0
+    row = _mk_row(source, j.get("id"), company, title, label,
+                  j.get("hostedUrl") or j.get("applyUrl") or "",
+                  employment_type=(cats.get("commitment") or None), posted_at=posted)
+    if row and ca:
+        row["us_eligible"] = True
+    return row
+
+
+def _fetch_lever(source: str, company: str, org: str, *, ca: bool = False) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        r = httpx.get(f"https://api.lever.co/v0/postings/{org}", params={"mode": "json"},
+                      headers={**_UA, "Accept": "application/json"}, timeout=30)
+        for j in (r.json() or []):
+            row = _lever_row(j, source, company, ca=ca)
+            if row:
+                rows.append(row)
+    except Exception as e:
+        print(f"[{source}] {type(e).__name__}: {e}", file=sys.stderr)
+    return rows
+
+
+def fetch_wealthfront() -> list[dict]:
+    """Wealthfront — Lever org `wealthfront`. US robo-advisor fintech; remote Client Services /
+    support. LIVE 2026-09-23: ~1 remote-US ENTRY today (Client Services Representative, US-based
+    Remote). Seasonal support ramps. Collect-first 'needs_laptop'."""
+    return _fetch_lever("wealthfront", "Wealthfront", "wealthfront")
+
+
+# --- SmartRecruiters employer (reuses the proven SR apply lane, host-keyed) -----------------------
+def fetch_experian() -> list[dict]:
+    """Experian — SmartRecruiters company `Experian` (~400 reqs). Global credit bureau with US remote
+    sales/support ramps. LIVE 2026-09-23: ~1 remote-US ENTRY today (Enterprise BDR - Remote). The SR
+    apply cron keys on the jobs.smartrecruiters.com apply_url host, so this IS auto-drivable, but stays
+    cosmetic 'needs_laptop' pending a per-tenant screener verify (like Wayfair). Future-proof — big
+    seasonal ramps."""
+    return _fetch_smartrecruiters("experian", "Experian", country="us")
+
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "hilton": fetch_hilton,
@@ -3023,7 +3242,11 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "everise": fetch_everise, "oscar": fetch_oscar, "clover": fetch_clover,
             "devoted": fetch_devoted,
             # CANADA remote-CSR (the biggest gap)
-            "concentrix_ca": fetch_concentrix_canada, "sutherland_ca": fetch_sutherland_canada}
+            "concentrix_ca": fetch_concentrix_canada, "sutherland_ca": fetch_sutherland_canada,
+            # keyless-board fintech/gig/insurtech expansion (2026-09-23)
+            "instacart": fetch_instacart, "instacart_ca": fetch_instacart_canada,
+            "affirm": fetch_affirm, "ramp": fetch_ramp, "kin": fetch_kin,
+            "wealthfront": fetch_wealthfront, "experian": fetch_experian}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

@@ -327,3 +327,82 @@ def test_partition_groups_splits_all_dead_room_out_and_keeps_mixed_live():
     assert attend[0]["invites"][0]["_status"] == "attendable"
     assert attend[0]["invites"][1]["_status"] == "expired"
     assert attend[0]["_live_n"] == 1
+
+
+# ---- auto-distribution + window helpers (2026-09-23) ------------------------------
+import datetime as _dt
+
+
+def test_parse_event_window_recurring():
+    w = he.parse_event_window("Monday–Friday", "9:30 AM – 5:00 PM ET")
+    assert w["dows"] == {0, 1, 2, 3, 4}
+    assert w["start_min"] == 9 * 60 + 30 and w["end_min"] == 17 * 60
+    assert w["tz"] == "America/New_York"
+
+
+def test_parse_event_window_defaults():
+    w = he.parse_event_window("", "")
+    assert w["dows"] == {0, 1, 2, 3, 4}          # TP default Mon-Fri
+    assert w["start_min"] == 0 and w["end_min"] == 1440
+
+
+def test_next_occurrence_is_future():
+    w = he.parse_event_window("Monday-Friday", "9:30 AM - 5:00 PM ET")
+    now = _dt.datetime(2026, 9, 23, 12, 0, tzinfo=_dt.timezone.utc)
+    occ = he.next_occurrence_utc(w, now)
+    assert occ is not None and occ[1] > now
+
+
+def test_can_attend_empty_avail_unrestricted_but_set_avail_is_respected():
+    w = he.parse_event_window("Wednesday", "9:30 AM - 5:00 PM ET")
+    now = _dt.datetime(2026, 9, 23, 0, 0, tzinfo=_dt.timezone.utc)
+    s, e = he.next_occurrence_utc(w, now)
+    assert he._can_attend([], "UTC", s, e) is True                       # no schedule → unrestricted
+    wd = he.slots_weekday(s) if hasattr(he, "slots_weekday") else s.astimezone(_dt.timezone.utc).weekday()
+    off = [{"dow": wd, "start_min": 0, "end_min": 300, "enabled": True}]  # only 00:00-05:00 UTC
+    assert he._can_attend(off, "UTC", s, e) is False
+    onw = [{"dow": wd, "start_min": 12 * 60, "end_min": 23 * 60, "enabled": True}]
+    assert he._can_attend(onw, "UTC", s, e) is True
+
+
+def test_auto_distribute_balances_and_idempotent(monkeypatch):
+    from backend.interviews import db as ivdb
+    invites = [{"mailbox": f"c{i}@x", "candidate": f"C{i}", "date_text": "Monday-Friday",
+                "time_text": "9:30 AM - 5:00 PM ET", "_status": "attendable",
+                "join_url": "z", "meeting_id": "m"} for i in range(3)]
+    groups = [{"invites": invites, "join_url": "z", "meeting_id": "m",
+               "date_text": "Monday-Friday", "time_text": "9:30 AM - 5:00 PM ET", "latest_ts": 0}]
+    monkeypatch.setattr(he, "grouped_events", lambda **k: groups)
+    monkeypatch.setattr(he, "verify_events", lambda invs, **k: invs)
+    monkeypatch.setattr(he, "partition_groups", lambda gs, now=None: (gs, []))
+    store: dict = {}
+    monkeypatch.setattr(ivdb, "event_claims_for", lambda mbs: {m: v for m, v in store.items() if m in mbs})
+    monkeypatch.setattr(ivdb, "list_responsibles", lambda active_only=True: [{"id": 1, "tz": "UTC"}, {"id": 2, "tz": "UTC"}])
+    monkeypatch.setattr(ivdb, "get_availability", lambda rid: [])
+    monkeypatch.setattr(ivdb, "set_event_claim",
+                        lambda mb, rid, join_ts=None, joined=None: store.setdefault(mb, []).append({"responsible_id": rid}))
+    r1 = he.auto_distribute()
+    assert r1["assigned"] == 3
+    counts: dict = {}
+    for lst in store.values():
+        for c in lst:
+            counts[c["responsible_id"]] = counts.get(c["responsible_id"], 0) + 1
+    assert set(counts) == {1, 2} and max(counts.values()) <= 2       # load-balanced across both
+    r2 = he.auto_distribute()
+    assert r2["assigned"] == 0 and r2["skipped_claimed"] == 3        # idempotent — no churn
+
+
+def test_auto_distribute_never_assigns_expired(monkeypatch):
+    from backend.interviews import db as ivdb
+    inv = {"mailbox": "d@x", "candidate": "D", "date_text": "Monday-Friday",
+           "time_text": "9:30 AM - 5:00 PM ET", "_status": "expired"}
+    monkeypatch.setattr(he, "grouped_events", lambda **k: [{"invites": [inv], "latest_ts": 0}])
+    monkeypatch.setattr(he, "verify_events", lambda invs, **k: invs)
+    monkeypatch.setattr(he, "partition_groups", lambda gs, now=None: (gs, []))
+    monkeypatch.setattr(ivdb, "event_claims_for", lambda mbs: {})
+    monkeypatch.setattr(ivdb, "list_responsibles", lambda active_only=True: [{"id": 1, "tz": "UTC"}])
+    monkeypatch.setattr(ivdb, "get_availability", lambda rid: [])
+    called = []
+    monkeypatch.setattr(ivdb, "set_event_claim", lambda *a, **k: called.append(a))
+    r = he.auto_distribute()
+    assert r["assigned"] == 0 and called == []                      # expired room never assigned

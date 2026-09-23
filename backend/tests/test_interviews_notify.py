@@ -379,3 +379,40 @@ def test_rich_reminder_text_has_all_fields():
         assert s in t, s
     # no-link fallback line
     assert "не найдена" in notify.rich_reminder_text(iv, "Sam", None, {**pack, "zoom": ""})
+
+
+# ---- live hiring-event join-now reminders (2026-09-23) ----------------------------
+def test_event_reminder_fires_in_window_and_dedupes(monkeypatch, tmp_path):
+    import datetime as _dt
+    from backend.interviews import reminders as R
+    from backend.interviews import db as _db
+    from backend.interviews import notify as _notify
+    from backend.tools import hiring_events as _he
+
+    inv = {"mailbox": "cand@x", "candidate": "Cand One", "role": "CSR",
+           "date_text": "Monday-Friday", "time_text": "9:30 AM - 5:00 PM ET",
+           "_status": "attendable", "join_url": "https://x.zoom.us/j/1"}
+    groups = [{"invites": [inv], "join_url": "https://x.zoom.us/j/1",
+               "date_text": "Monday-Friday", "time_text": "9:30 AM - 5:00 PM ET"}]
+    monkeypatch.setattr(_he, "grouped_events", lambda **k: groups)
+    monkeypatch.setattr(_he, "verify_events", lambda invs, **k: invs)
+    monkeypatch.setattr(_he, "partition_groups", lambda gs, now=None: (gs, []))
+    monkeypatch.setattr(_he, "resume_pdf_path", lambda mb, **k: None)
+    monkeypatch.setattr(_db, "event_claims_for", lambda mbs: {"cand@x": [{"responsible_id": 5, "name": "Ann"}]})
+    monkeypatch.setattr(_db, "get_responsible", lambda rid: {"id": 5, "telegram_chat_id": 999})
+    sent = []
+    monkeypatch.setattr(_notify, "send_dm", lambda chat, text: (sent.append((chat, text)) or True))
+    monkeypatch.setattr(_notify, "send_document", lambda *a, **k: True)
+    monkeypatch.setattr(R, "_EVENT_REMIND_MARKER", tmp_path / "remind.json")
+
+    # a guaranteed weekday, 15:00 UTC (~11am ET — inside the 9:30–17:00 ET window)
+    base = _dt.date(2026, 9, 23)
+    while base.weekday() > 4:
+        base += _dt.timedelta(days=1)
+    now = _dt.datetime(base.year, base.month, base.day, 15, 0, tzinfo=_dt.timezone.utc)
+
+    assert R.send_event_reminders(now) == 1
+    assert len(sent) == 1 and "zoom.us" in sent[0][1]
+    # dedupe: same (candidate, assignee, day) → no second DM
+    assert R.send_event_reminders(now) == 0
+    assert len(sent) == 1

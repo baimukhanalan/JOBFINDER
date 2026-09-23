@@ -717,6 +717,176 @@ def partition_groups(groups: list[dict], now: float | None = None) -> tuple[list
     return attend, expired
 
 
+# ---- auto-distribution of attendable rooms to interviewers -----------------------
+# So no OFFICIALLY-attendable live room leaks unjoined: assign each still-live candidate to an
+# active interviewer/manager who can actually be in the room during its window (availability +
+# tz respected), load-balanced, idempotent. Persisted as an iv_event_claims row (same shape a
+# human claim uses), so it surfaces on the card as «@Имя · подключится HH:MM» and a human can
+# still claim/override. Only rooms `classify_event`==attendable/unverified are ever assigned.
+_WD = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5,
+       "sunday": 6, "mon": 0, "tue": 1, "tues": 1, "wed": 2, "thu": 3, "thur": 3, "thurs": 3,
+       "fri": 4, "sat": 5, "sun": 6}
+_TZ_ABBR = {"ET": "America/New_York", "EST": "America/New_York", "EDT": "America/New_York",
+            "CT": "America/Chicago", "CST": "America/Chicago", "CDT": "America/Chicago",
+            "MT": "America/Denver", "MST": "America/Denver", "MDT": "America/Denver",
+            "PT": "America/Los_Angeles", "PST": "America/Los_Angeles", "PDT": "America/Los_Angeles"}
+
+
+def parse_event_window(date_text: str, time_text: str) -> dict:
+    """PURE: parse a hiring-event schedule («Monday–Friday», «9:30 AM – 5:00 PM ET») into a
+    recurring window {dows:set[int Mon=0..Sun=6], start_min, end_min, tz}. Defaults are the TP
+    norm: no weekday parsed → Mon–Fri; no time → all-day; no tz → America/New_York."""
+    dt = (date_text or "").lower()
+    dows: set = set()
+    m = re.search(r'([a-z]+)\s*(?:-|–|to|through|thru)\s*([a-z]+)', dt)
+    if m and m.group(1) in _WD and m.group(2) in _WD:
+        a, b, i = _WD[m.group(1)], _WD[m.group(2)], _WD[m.group(1)]
+        while True:
+            dows.add(i)
+            if i == b:
+                break
+            i = (i + 1) % 7
+    else:
+        for name, idx in _WD.items():
+            if re.search(r'\b' + name + r'\b', dt):
+                dows.add(idx)
+    if not dows:
+        dows = {0, 1, 2, 3, 4}
+    tt = time_text or ""
+    tz = "America/New_York"
+    mtz = re.search(r'\b(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT)\b', tt, re.I)
+    if mtz:
+        tz = _TZ_ABBR[mtz.group(1).upper()]
+    times = re.findall(r'(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)', tt, re.I)
+
+    def _mins(h, mm, ap):
+        h = int(h)
+        mm = int(mm or 0)
+        ap = ap.lower().replace('.', '')
+        if ap == 'pm' and h != 12:
+            h += 12
+        if ap == 'am' and h == 12:
+            h = 0
+        return h * 60 + mm
+    if len(times) >= 2:
+        start_min, end_min = _mins(*times[0]), _mins(*times[1])
+    elif len(times) == 1:
+        start_min = _mins(*times[0])
+        end_min = min(1440, start_min + 480)
+    else:
+        start_min, end_min = 0, 1440
+    return {"dows": dows, "start_min": start_min, "end_min": end_min, "tz": tz}
+
+
+def _occurrence_utc(window: dict, d, slots_mod):
+    """(start_utc, end_utc) for the window on a specific local date `d`."""
+    tz = slots_mod.zone(window["tz"])
+    base = datetime.datetime(d.year, d.month, d.day, 0, 0, tzinfo=tz)
+    s = base + datetime.timedelta(minutes=window["start_min"])
+    e = base + datetime.timedelta(minutes=window["end_min"])
+    if window["end_min"] <= window["start_min"]:
+        e += datetime.timedelta(days=1)
+    return s.astimezone(datetime.timezone.utc), e.astimezone(datetime.timezone.utc)
+
+
+def next_occurrence_utc(window: dict, now_dt):
+    """The soonest upcoming (start_utc, end_utc) of a recurring window whose END is still in the
+    future (searches the next 9 local days), or None."""
+    from backend.interviews import slots as _slots
+    tz = _slots.zone(window["tz"])
+    local_now = now_dt.astimezone(tz)
+    for off in range(0, 9):
+        d = (local_now + datetime.timedelta(days=off)).date()
+        if d.weekday() in window["dows"]:
+            s, e = _occurrence_utc(window, d, _slots)
+            if e > now_dt:
+                return s, e
+    return None
+
+
+def _can_attend(avail_rows, resp_tz, s_utc, e_utc) -> bool:
+    """True if the responsible's availability overlaps the event window. NO availability set →
+    unrestricted (True) so coverage isn't blocked by an interviewer who never filled a schedule;
+    a SET schedule must overlap the window (converted to UTC via the shared slots helpers)."""
+    if not avail_rows:
+        return True
+    from backend.interviews import slots as _slots
+    days = {_slots.to_local(s_utc, resp_tz).date(), _slots.to_local(e_utc, resp_tz).date()}
+    d0 = min(days) - datetime.timedelta(days=1)
+    d1 = max(days) + datetime.timedelta(days=1)
+    try:
+        ivs = _slots.availability_utc_intervals(avail_rows, resp_tz, d0, d1)
+    except Exception:
+        return False
+    return any(_slots.overlaps(s_utc, e_utc, a, b) for a, b in ivs)
+
+
+def auto_distribute(now=None) -> dict:
+    """Assign every OFFICIALLY-attendable, not-yet-claimed hiring-event candidate to an active
+    interviewer/manager who can be in the room during its window (availability+tz), load-balanced
+    (fewest current claims first), idempotent (a candidate already claimed by anyone is skipped),
+    persisted via db.set_event_claim(join_ts=window start). Fully guarded → {} counters on any
+    failure, never raises into the daemon. Never assigns an expired/dead room."""
+    out = {"assigned": 0, "skipped_claimed": 0, "no_overlap": 0, "no_window": 0, "candidates": 0}
+    now_dt = datetime.datetime.now(datetime.timezone.utc) if now is None else now
+    now_ts = now_dt.timestamp()
+    try:
+        from backend.interviews import db as _db
+        groups = grouped_events(resolve=True)
+        verify_events([inv for g in groups for inv in (g.get("invites") or [])])
+        attend, _exp = partition_groups(groups, now_ts)
+    except Exception:
+        return out
+    cand = [inv for g in attend for inv in (g.get("invites") or [])
+            if inv.get("_status") != "expired" and inv.get("mailbox")]
+    out["candidates"] = len(cand)
+    if not cand:
+        return out
+    try:
+        claims = _db.event_claims_for(list({inv["mailbox"] for inv in cand})) or {}
+        resps = _db.list_responsibles(active_only=True) or []
+    except Exception:
+        return out
+    load: dict = {}
+    for lst in claims.values():
+        for c in lst:
+            load[c["responsible_id"]] = load.get(c["responsible_id"], 0) + 1
+    avail_cache: dict = {}
+
+    def _avail(rid):
+        if rid not in avail_cache:
+            try:
+                avail_cache[rid] = _db.get_availability(rid)
+            except Exception:
+                avail_cache[rid] = []
+        return avail_cache[rid]
+
+    for inv in sorted(cand, key=lambda i: _urgency_key(i, now_ts)):
+        mb = inv["mailbox"]
+        if claims.get(mb):                       # already covered (human or prior auto) → idempotent
+            out["skipped_claimed"] += 1
+            continue
+        occ = next_occurrence_utc(parse_event_window(inv.get("date_text"), inv.get("time_text")), now_dt)
+        if occ is None:
+            out["no_window"] += 1
+            continue
+        s_utc, e_utc = occ
+        elig = [r["id"] for r in resps if _can_attend(_avail(r["id"]), r.get("tz") or "UTC", s_utc, e_utc)]
+        if not elig:
+            out["no_overlap"] += 1
+            continue
+        elig.sort(key=lambda rid: (load.get(rid, 0), rid))
+        pick = elig[0]
+        try:
+            _db.set_event_claim(mb, pick, join_ts=s_utc)
+        except Exception:
+            continue
+        load[pick] = load.get(pick, 0) + 1
+        claims[mb] = [{"responsible_id": pick}]  # local mark so the pass stays idempotent
+        out["assigned"] += 1
+    return out
+
+
 # ---- rendering (dedicated «События найма» surface) -------------------------------
 def _fmt_date(ts: int) -> str:
     if not ts:

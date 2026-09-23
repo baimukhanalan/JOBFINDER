@@ -103,6 +103,137 @@ def _maybe_weekly_nudge(now: datetime) -> int:
     return sent
 
 
+# ---- live hiring-event: auto-distribute + join-now reminders -----------------------
+# So no OFFICIALLY-attendable Zoom room leaks unjoined: every ~14 min the daemon (1) re-runs
+# hiring_events.auto_distribute (assigns fresh live candidates to available interviewers) and
+# (2) DMs the assigned interviewer to JOIN when the room's window is imminent/open — deduped
+# once per (candidate, assignee, day) so the 60s loop can't spam. Both fully guarded/additive.
+_EVENT_PASS_MARKER = Path(__file__).resolve().parents[2] / "logs" / "iv_event_pass.json"
+_EVENT_REMIND_MARKER = Path(__file__).resolve().parents[2] / "logs" / "iv_event_remind.json"
+_EVENT_PASS_GAP = 840          # seconds — re-distribute/remind at most ~every 14 min
+_EVENT_REMIND_LEAD = 45        # minutes before the window opens to start reminding
+
+
+def _event_remind_read() -> set:
+    try:
+        return set(json.loads(_EVENT_REMIND_MARKER.read_text()).get("sent") or [])
+    except Exception:
+        return set()
+
+
+def _event_remind_write(keys: set) -> None:
+    try:
+        _EVENT_REMIND_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        # keep the file bounded (recent keys only)
+        _EVENT_REMIND_MARKER.write_text(json.dumps({"sent": sorted(keys)[-4000:]}))
+    except Exception:
+        pass
+
+
+def _event_remind_text(inv: dict, group: dict, persona: str) -> str:
+    join = inv.get("join_url") or group.get("join_url") or ""
+    win = ""
+    dt, tt = (inv.get("date_text") or group.get("date_text") or ""), (inv.get("time_text") or group.get("time_text") or "")
+    if dt or tt:
+        win = f"\nОкно: {(dt + ' ' + tt).strip()}"
+    role = inv.get("role") or group.get("role") or "Remote CSR"
+    return (f"🎯 Живое событие найма СЕЙЧАС — зайдите в Zoom-комнату под кандидатом:\n"
+            f"{persona} ({inv.get('mailbox') or ''})\nРоль: {role}{win}\n"
+            f"Ссылка: {join}\nЗайдите в комнату под этим кандидатом в его окно — оффер дают на месте.")
+
+
+def send_event_reminders(now: datetime) -> int:
+    """DM each assigned interviewer to JOIN when their attendable room's window is imminent/open.
+    Only OFFICIALLY-attendable rooms (re-verified live here). Deduped per (mailbox, rid, day).
+    Returns the number of DMs sent. Fully guarded."""
+    try:
+        from backend.tools import hiring_events as he
+        groups = he.grouped_events(resolve=True)
+        he.verify_events([inv for g in groups for inv in (g.get("invites") or [])])
+        attend, _exp = he.partition_groups(groups, now.timestamp())
+    except Exception as e:
+        logger.warning("send_event_reminders: gather failed: %s", e)
+        return 0
+    try:
+        mbs = list({inv.get("mailbox") for g in attend for inv in (g.get("invites") or []) if inv.get("mailbox")})
+        claims = db.event_claims_for(mbs)
+    except Exception:
+        claims = {}
+    seen = _event_remind_read()
+    daykey = now.astimezone(timezone.utc).date().isoformat()
+    sent = 0
+    dirty = False
+    for g in attend:
+        for inv in (g.get("invites") or []):
+            if inv.get("_status") == "expired":
+                continue
+            mb = inv.get("mailbox")
+            cl = claims.get(mb) or []
+            if not cl:
+                continue                                   # only remind an ASSIGNED/claimed room
+            try:
+                occ = he.next_occurrence_utc(he.parse_event_window(inv.get("date_text"), inv.get("time_text")), now)
+            except Exception:
+                occ = None
+            if not occ:
+                continue
+            s_utc, e_utc = occ
+            from datetime import timedelta as _td
+            if not (s_utc - _td(minutes=_EVENT_REMIND_LEAD) <= now <= e_utc):
+                continue                                   # not imminent/open yet (or already past)
+            for c in cl:
+                rid = c.get("responsible_id")
+                key = f"{mb}|{rid}|{daykey}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                dirty = True
+                try:
+                    r = db.get_responsible(rid) or {}
+                    chat = r.get("telegram_chat_id")
+                    if not chat:
+                        continue                           # can't DM (marked seen → no retry storm)
+                    persona = (c.get("name") and inv.get("candidate")) or inv.get("candidate") or (inv.get("mailbox") or "")
+                    if notify.send_dm(int(chat), _event_remind_text(inv, g, inv.get("candidate") or persona)):
+                        sent += 1
+                        try:
+                            rp = he.resume_pdf_path(mb)
+                            if rp:
+                                notify.send_document(int(chat), rp, caption="Резюме")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning("send_event_reminders: rid=%s mbx=%s failed: %s", rid, mb, e)
+    if dirty:
+        _event_remind_write(seen)
+    return sent
+
+
+def _maybe_event_pass(now: datetime) -> None:
+    """Throttled (~14 min) combined pass: auto-distribute fresh live rooms, then remind assigned
+    interviewers whose window is open. Guarded — never breaks the tick."""
+    try:
+        last = float(json.loads(_EVENT_PASS_MARKER.read_text()).get("ts") or 0)
+    except Exception:
+        last = 0.0
+    if now.timestamp() - last < _EVENT_PASS_GAP:
+        return
+    try:
+        _EVENT_PASS_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        _EVENT_PASS_MARKER.write_text(json.dumps({"ts": now.timestamp()}))
+    except Exception:
+        pass
+    try:
+        from backend.tools import hiring_events as he
+        he.auto_distribute(now)
+    except Exception as e:
+        logger.warning("_maybe_event_pass: distribute failed: %s", e)
+    try:
+        send_event_reminders(now)
+    except Exception as e:
+        logger.warning("_maybe_event_pass: reminders failed: %s", e)
+
+
 def plan(announcements: list, due60: list, due5: list,
          due120: list | None = None, due15: list | None = None) -> list[tuple[dict, str]]:
     """PURE planner: flatten/label the input lists into (interview, kind) pairs,
@@ -148,6 +279,13 @@ def tick() -> int:
         _maybe_weekly_nudge(now)
     except Exception as e:
         logger.warning("tick: weekly nudge failed: %s", e)
+
+    # ADDITIVE: throttled (~14 min) auto-distribute of live hiring-event rooms to available
+    # interviewers + join-now DM reminders. Fully guarded — never affects the reminder pass below.
+    try:
+        _maybe_event_pass(now)
+    except Exception as e:
+        logger.warning("tick: event pass failed: %s", e)
 
     announcements = db.due_announcements()
     due120 = db.due_reminders(now, 120)

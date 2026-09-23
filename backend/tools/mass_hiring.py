@@ -225,7 +225,18 @@ _CATEGORIES = [
         r"trust (and|&) safety|content (review|moderat)|community (support|moderat)", re.I)),
     ("sales", re.compile(
         r"\bsdr\b|\bbdr\b|sales (development|dev) rep|business development rep|"
-        r"inside sales|telesales|appointment setter|lead generation (rep|specialist)", re.I)),
+        r"inside sales|telesales|appointment setter|lead generation (rep|specialist)|"
+        # Licensed-insurance / Medicare AEP sales agents — the seasonal ramp pool (SelectQuote/
+        # GoHealth/eHealth/HealthMarkets etc.). _NOT_MASS still vetoes senior/manager/lead first, so
+        # only ENTRY sales-agent titles land here. A synthetic persona transmits a synthetic license
+        # (same class as the Taleo lane), so licensed roles are ATTEMPTED, not dropped.
+        r"(licensed )?(insurance|medicare|health|life|final expense) sales "
+        r"(agent|rep\b|representative|advisor|consultant|associate)|"
+        r"(licensed )?(insurance|medicare|final expense) (agent|advisor|consultant)|"
+        r"\bsales agent\b|medicare sales|"
+        r"sales development (advisor|associate)|business development sales (rep\b|representative)|"
+        r"(pre[- ]?sales|transfer) (agent|rep\b|representative)|sales qualification associate|"
+        r"enrollment (advisor|counselor|specialist|agent)|benefits? advisor", re.I)),
     ("data_entry", re.compile(
         r"data entry|data annotat|data label|transcription|transcriber|annotator|"
         r"image (annotat|label)|content (tagger|labeler)", re.I)),
@@ -403,6 +414,14 @@ _AUTO_STATUS = {
     "instacart": "needs_laptop", "instacart_ca": "needs_laptop", "affirm": "needs_laptop",
     "ramp": "needs_laptop", "kin": "needs_laptop", "wealthfront": "needs_laptop",
     "experian": "needs_laptop",
+    # insurance-sales AEP seasonal ramps (2026-09-23) — SelectQuote (Jibe→iCIMS), HealthMarkets
+    # (Radancy), Spring Venture (SR, host-drivable after a verify). categorize() widened to keep the
+    # licensed-insurance-sales-agent titles that ARE the AEP pool.
+    "selectquote": "needs_laptop", "healthmarkets": "needs_laptop", "springventure": "needs_laptop",
+    # Chewy (Workday, holiday CS ramp) + Canada fintech/tech CS (collect-first, seasonal capture)
+    "chewy": "needs_laptop", "koho": "needs_laptop", "neo": "needs_laptop",
+    "wealthsimple": "needs_laptop", "clearco": "needs_laptop", "float": "needs_laptop",
+    "hootsuite": "needs_laptop", "coveo": "needs_laptop",
 }
 
 
@@ -3217,6 +3236,12 @@ def fetch_experian() -> list[dict]:
     return _fetch_smartrecruiters("experian", "Experian", country="us")
 
 
+# The insurance-AEP + Chewy/Canada connectors live in separate modules that import the reusable
+# readers FROM this module — imported HERE (after every _fetch_* helper is defined) so the circular
+# import resolves cleanly.
+from backend.tools import connectors_insurance as _ci  # noqa: E402
+from backend.tools import connectors_extra as _ce  # noqa: E402
+
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
             "conduent": fetch_conduent, "alorica": fetch_alorica, "hilton": fetch_hilton,
@@ -3246,7 +3271,15 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             # keyless-board fintech/gig/insurtech expansion (2026-09-23)
             "instacart": fetch_instacart, "instacart_ca": fetch_instacart_canada,
             "affirm": fetch_affirm, "ramp": fetch_ramp, "kin": fetch_kin,
-            "wealthfront": fetch_wealthfront, "experian": fetch_experian}
+            "wealthfront": fetch_wealthfront, "experian": fetch_experian,
+            # insurance-sales AEP seasonal ramps (2026-09-23, connectors_insurance.py)
+            "selectquote": _ci.fetch_selectquote, "healthmarkets": _ci.fetch_healthmarkets,
+            "springventure": _ci.fetch_springventure,
+            # Chewy holiday CS ramp + Canada fintech/tech CS (connectors_extra.py)
+            "chewy": _ce.fetch_chewy,
+            "koho": _ce.fetch_koho, "neo": _ce.fetch_neo, "wealthsimple": _ce.fetch_wealthsimple,
+            "clearco": _ce.fetch_clearco, "float": _ce.fetch_float,
+            "hootsuite": _ce.fetch_hootsuite, "coveo": _ce.fetch_coveo}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

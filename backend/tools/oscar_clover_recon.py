@@ -358,14 +358,25 @@ def main() -> None:
     ap.add_argument("--job", type=int, default=0, help="mass_hiring_jobs id (source oscar/clover)")
     ap.add_argument("--keep", type=int, default=8, help="minutes cap to await a Maildir receipt")
     ap.add_argument("--list", action="store_true", help="list auto-applyable Oscar/Clover ids + exit")
-    ap.add_argument("--source", default="", help="restrict --list to 'oscar' or 'clover'")
+    ap.add_argument("--source", default="", help="restrict --list/--limit to 'oscar' or 'clover'")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="drive the top-N auto-applyable Oscar/Clover jobs (the cron entry-point)")
     args = ap.parse_args()
     if args.list:
         ids = oscar_clover_job_ids(args.source or None)
         print(f"{len(ids)} auto-applyable Oscar/Clover jobs: {ids}")
         return
+    if args.limit:
+        ids = oscar_clover_job_ids(args.source or None)[: args.limit]
+        print(f"oscar_clover: driving {len(ids)} job(s): {ids}")
+        for jid in ids:
+            try:
+                run(jid, keep_minutes=args.keep)
+            except Exception as e:  # noqa: BLE001 — one job's failure must not sink the batch
+                print(f"oscar_clover job {jid} error: {type(e).__name__}: {e}")
+        return
     if not args.job:
-        ap.error("--job is required (or --list)")
+        ap.error("--job or --limit is required (or --list)")
     run(args.job, keep_minutes=args.keep)
 
 

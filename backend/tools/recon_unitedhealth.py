@@ -47,7 +47,35 @@ GATE (hardest thing between us and "Thanks for Applying"):
   emailed activation code, the persona's @takhet.com mailbox + verify_code.read_code handles it, same
   as the Greenhouse/Ashby "security code" path.
 
-FEASIBILITY: **BLOCKED — Azure AD SSO, no self-registration** (CORRECTED 2026-09-01 by live validation).
+RE-VERIFIED 2026-09-23 (fresh trace — the "newRegister.jsf 200 without SSO bounce" hint did NOT hold):
+  A full re-recon (curl_cffi redirect trace + a LIGHT headless DOM walk, NO heavy :98 headful) re-proved
+  the BLOCKED verdict with new evidence. See `backend/tools/uhg_recon.py` for the whole traced flow +
+  the pure classifiers + a self-verifying wall-watch probe (`uhg_probe_promote.py`, promotes only if the
+  SSO wall ever drops). NO strategy file was built (`applier/strategies/uhg_taleo.py` deliberately absent)
+  — a lane exists only once a self-register path exists.
+    * The Radancy job page -> external Taleo apply URL (careersection 10020) resolves fine
+      (resolve_apply_url), the Privacy Agreement page renders (akira JSF), NO captcha, NO WAF.
+    * Clicking "I Accept" jumps STRAIGHT to the corporate IdP — there is NO native Taleo "New User":
+        PingFederate  https://authgateway3.entiam.uhg.com/ext/microsoft-authn
+        -> Azure AD   https://login.microsoftonline.com/db05faca-c82a-4b9d-b9c5-0f64b6755421/oauth2/
+                      v2.0/authorize?client_id=7e95aaf6-...&scope=openid+User.Read  (title "Sign in to
+                      your account"), RelayState=referrals.unitedhealthgroup.com.
+    * The tenant db05faca-... is a WORKFORCE Entra ID tenant, NOT B2C (no *.b2clogin.com, no /tfp/, no
+      B2C policy param). Workforce Azure AD has NO public self-service sign-up. The only "sign up" strings
+      on the page are the generic MSA boilerplate (login.live.com personal-account link on every Azure
+      page); ZERO tenant "Create account / Register" links render.
+    * newRegister.jsf (iam/accessmanagement) = HTTP 200 but content-type application/x-octet-stream, 0
+      bytes — an EMPTY download (the "Download is starting" attachment quirk), NOT a form. login.jsf = 0
+      bytes. accessmanagement.ftl / register.ftl / createprofile.ftl / moresearch.ftl ALL redirect to
+      login.microsoftonline.com (even plain job browsing is SSO-gated).
+    * Every persona apply is therefore impossible: a captcha key or a US IP does NOT help — the wall is
+      pure IDENTITY (a workforce Azure AD login with no candidate self-registration). Contrast TTEC
+      (ttec.taleo.net): same Oracle Taleo vendor, but a NATIVE candidate register (no SSO) — which is why
+      TaleoStrategy is proven there. UHG differs ONLY in the Azure-SSO account step, and that is the whole
+      blocker. ACTION unchanged: keep the UHG rows out of any drive-set; do NOT wire TaleoStrategy onto
+      uhg.taleo.net. The wall-watch probe auto-detects the day Azure SSO is removed.
+
+FEASIBILITY: **BLOCKED — Azure AD SSO, no self-registration** (CORRECTED 2026-09-01, RE-VERIFIED 2026-09-23).
   The earlier "feasible / NOT blocked_real_antibot" verdict below was WRONG: it was based on a GET of
   the Taleo *Privacy Agreement* page only, which is NOT the account step. A live run (job 1153 ×3) plus
   repeated GETs proved every auth/register endpoint on careersection 10020

@@ -108,7 +108,7 @@ def _build_persona(row: dict) -> dict:
     """Fresh synthetic US persona for this Foundever job, PLACED in the job's state. Provisions the
     mailbox + registers the demo persona (so a Foundever reply lands in a CRM-visible box), writes the
     prefill dir, and returns the profile_form dict the strategy fills."""
-    from backend.tools import catalog_drafts, drafts_ui, mailcrm
+    from backend.tools import mailcrm
     from backend.tools.provision_mailboxes import provision_email
     from backend.tools.synth_persona import synth_persona
 
@@ -116,6 +116,7 @@ def _build_persona(row: dict) -> dict:
     city, zc = _STATE_PLACE.get(state, ("Austin", "78701"))
     job = {"title": row.get("title") or "", "company": "Foundever",
            "company_key": "foundever", "description": "",
+           "category": row.get("category") or "",
            "location": f"{city}, {state}, United States", "regions": ["US"],
            "ats": "foundever", "external_id": str(row.get("id") or ""),
            "url": row.get("apply_url") or "", "questions": []}
@@ -148,13 +149,12 @@ def _build_persona(row: dict) -> dict:
     jobid = f"mh_{row['id']}"
     out = Path(PREFILL_ROOT) / profile_id / jobid
     out.mkdir(parents=True, exist_ok=True)
-    # a tailored résumé isn't uploaded (the SF form has no résumé field) but generate + persist it so
-    # the CRM/stats artifacts match the other lanes; never fatal.
-    try:
-        d = catalog_drafts.generate_draft(job, cand, use_ai=True, ideal=True)
-        out.joinpath("resume.pdf").write_bytes(drafts_ui.render_resume_pdf(d.get("resume") or {}) or b"")
-    except Exception as e:  # noqa: BLE001
-        print(f"[foundever] resume gen skipped: {type(e).__name__}: {e}", flush=True)
+    # MANDATORY attractiveness pass via the shared engine (role-targeted, no-fabrication, guarded:
+    # a tailor/LLM failure falls back to the base résumé — never empty, never raises). The SF form
+    # has no résumé field, but generate + persist it so the CRM/stats artifacts match the lanes.
+    from backend.tools import mass_hiring_apply as _mha
+    d = _mha.tailored_draft(job, cand)
+    out.joinpath("resume.pdf").write_bytes(_mha.resume_pdf_bytes(d, cand))
     out.joinpath("persona.json").write_text(
         json.dumps({"profile": prof, "facts": cand.get("facts") or {}}, ensure_ascii=False),
         encoding="utf-8")

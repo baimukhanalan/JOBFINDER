@@ -93,7 +93,7 @@ def _build_persona(row: dict) -> dict:
     """Fresh synthetic US persona for this Afni job, PLACED in the job's state (or a default when the
     row is state-less). Provisions the mailbox + registers the demo persona (so the OTP + any Afni
     reply land in a CRM-visible box), writes the prefill dir, and returns the profile_form."""
-    from backend.tools import catalog_drafts, drafts_ui, mailcrm
+    from backend.tools import mailcrm
     from backend.tools.provision_mailboxes import provision_email
     from backend.tools.synth_persona import synth_persona
 
@@ -138,11 +138,10 @@ def _build_persona(row: dict) -> dict:
     jobid = f"mh_{row['id']}"
     out = Path(PREFILL_ROOT) / profile_id / jobid
     out.mkdir(parents=True, exist_ok=True)
-    try:
-        d = catalog_drafts.generate_draft(job, cand, use_ai=True, ideal=True)
-        out.joinpath("resume.pdf").write_bytes(drafts_ui.render_resume_pdf(d.get("resume") or {}) or b"")
-    except Exception as e:  # noqa: BLE001
-        print(f"[afni] resume gen skipped: {type(e).__name__}: {e}", flush=True)
+    # MANDATORY attractiveness pass via the shared engine (role-targeted, no-fabrication, guarded).
+    from backend.tools import mass_hiring_apply as _mha
+    d = _mha.tailored_draft(job, cand)
+    out.joinpath("resume.pdf").write_bytes(_mha.resume_pdf_bytes(d, cand))
     out.joinpath("persona.json").write_text(
         json.dumps({"profile": prof, "facts": facts}, ensure_ascii=False), encoding="utf-8")
     out.joinpath("status.json").write_text(

@@ -108,7 +108,9 @@ def _job_from_row(row: dict) -> dict:
         "title": row.get("title") or "",
         "company": row.get("company") or "",
         "company_key": row.get("company_key") or "",
-        "description": "",                       # the board stores no JD body
+        "description": "",                       # the board stores no JD body → tailored_draft
+                                                 # supplies a truthful title+category JD proxy
+        "category": row.get("category") or "",   # steers the attractiveness engine (no fabrication)
         "location": location,
         "regions": ["US"],                       # the board is US-only
         "ats": "avature",
@@ -134,6 +136,96 @@ def _drafted_from_answers(d: dict) -> dict:
         if lbl and v:
             drafted[lbl] = v
     return drafted
+
+
+# ---- SHARED attractiveness engine (MANDATORY on every mass-hiring lane) --------
+# Owner directive 2026-09-23 («движок привлекательности обязательно при подаче тоже»):
+# every mass-hiring submit uploads a résumé run through the SAME tailor_resume attractiveness
+# pass the /catalog lane uses (role-targeted summary + the persona's OWN JD-matched-skills group +
+# JD-relevance bullet ordering + the LLM truthful vocab-mirror), STRICTLY no-fabrication. This is
+# the ONE point every lane funnels through (prepare → here; the direct-build recons call
+# `tailored_draft`/`resume_pdf_bytes` too), so the guarantee + its guard live here, not per-recon.
+
+# A truthful, entry-CSR role descriptor per mass-hiring category — the JD *input* the tailor
+# matches the persona's OWN skills against (the row carries NO JD body). NOTHING here is written
+# into the résumé; it only steers which of the persona's EXISTING skills/bullets get surfaced.
+_CATEGORY_JD = {
+    "customer_support": ("customer service and support: resolving customer inquiries by phone, "
+                         "chat and email, troubleshooting, de-escalation, account maintenance, "
+                         "CRM tools, clear communication, empathy and patience."),
+    "sales": ("sales and account management: inbound and outbound sales, lead qualification, "
+              "upselling, quota attainment, negotiation, pipeline and CRM management."),
+    "data_entry": ("data entry and administration: accurate data capture, spreadsheets, "
+                   "documentation, records management, attention to detail."),
+    "virtual_assistant": ("virtual assistant and administrative support: scheduling, calendar "
+                          "and email management, coordination, documentation, communication."),
+    "operations": ("operations support: process execution, coordination, quality, reporting, "
+                   "documentation, prioritization and time management."),
+    "recruiting": ("recruiting and talent coordination: sourcing, interview scheduling, candidate "
+                   "communication, applicant tracking, documentation."),
+}
+
+
+def _jd_proxy(job: dict) -> str:
+    """A TRUTHFUL role descriptor from the row's OWN title + company + category, used ONLY as the
+    `job_description` argument to tailor_resume. The `mass_hiring_jobs` table stores no JD body, so
+    without this tailor_resume gets an empty description and its JD-driven parts (the persona's own
+    JD-matched-skills group, JD-relevance bullet ordering, the LLM vocab-mirror) are no-ops — the
+    résumé would be title-targeted only, WEAKER than the catalog lane. This is NOT fabrication:
+    nothing is added to the résumé (tailor_resume/_ai_polish never invent facts — they only SELECT,
+    reorder, and truthfully rephrase the persona's OWN content); it just gives the matcher real
+    signal so the mass-hiring résumé reaches the SAME quality as the catalog lane."""
+    title = (job.get("title") or "").strip()
+    company = (job.get("company") or "").strip()
+    cat = (job.get("category") or "").strip().lower()
+    parts: list[str] = []
+    if title:
+        parts.append(f"Remote {title} role" + (f" at {company}." if company else "."))
+    elif company:
+        parts.append(f"Remote role at {company}.")
+    descriptor = _CATEGORY_JD.get(cat)
+    if descriptor:
+        parts.append(descriptor)
+    return " ".join(parts).strip()
+
+
+def tailored_draft(job: dict, cand: dict) -> dict:
+    """Run the /catalog attractiveness engine (generate_draft → tailor_resume, LLM polish ON) for a
+    mass-hiring persona — MANDATORY on every lane. Supplies the JD proxy when the row has no
+    description, and GUARDS everything: ANY tailor/LLM error falls back to a minimal draft wrapping
+    the persona's UNTAILORED base résumé, so a lane is NEVER broken and a résumé is NEVER dropped."""
+    j = job
+    if not (job.get("description") or "").strip():
+        proxy = _jd_proxy(job)
+        if proxy:
+            j = {**job, "description": proxy}
+    try:
+        return catalog_drafts.generate_draft(j, cand, use_ai=True, ideal=True)
+    except Exception as e:  # noqa: BLE001 — never break a lane on a tailor/LLM failure
+        print(f"[mh-tailor] tailoring failed, falling back to base résumé: "
+              f"{type(e).__name__}: {e}", flush=True)
+        prof = cand.get("profile") or {}
+        return {"resume": prof.get("resume") or {}, "answers": [], "cover_letter": "",
+                "resume_text": "", "candidate": {"id": prof.get("id", ""),
+                                                 "country": prof.get("country", "")},
+                "_tailor_failed": True}
+
+
+def resume_pdf_bytes(draft: dict, cand: dict) -> bytes:
+    """Render the tailored résumé PDF, falling back to the persona's BASE résumé if the tailored one
+    is empty/missing — so a lane NEVER uploads an empty file (the old per-recon guard wrote b'' on a
+    tailor error). Never raises."""
+    prof = cand.get("profile") or {}
+    try:
+        pdf = drafts_ui.render_resume_pdf((draft or {}).get("resume") or {})
+        if pdf:
+            return pdf
+    except Exception as e:  # noqa: BLE001
+        print(f"[mh-tailor] tailored résumé render failed: {type(e).__name__}: {e}", flush=True)
+    try:
+        return drafts_ui.render_resume_pdf(prof.get("resume") or {}) or b""
+    except Exception:
+        return b""
 
 
 def prepare(row: dict, gender: str | None = None) -> tuple[str, str]:
@@ -184,14 +276,15 @@ def prepare(row: dict, gender: str | None = None) -> tuple[str, str]:
     except Exception as e:
         print(f"[mh-fill] mailbox provision skipped: {type(e).__name__}: {e}", flush=True)
 
-    d = catalog_drafts.generate_draft(job, cand, use_ai=True, ideal=True)
+    # MANDATORY attractiveness pass (role-targeted, no-fabrication) + guard: a tailor/LLM failure
+    # falls back to the base résumé here rather than raising out of prepare (which would break the lane).
+    d = tailored_draft(job, cand)
 
     profile_id = cand["profile"]["id"]
     jobid = f"mh_{row['id']}"
     out = PREFILL_ROOT / profile_id / jobid
     out.mkdir(parents=True, exist_ok=True)
-    out.joinpath("resume.pdf").write_bytes(
-        drafts_ui.render_resume_pdf(d.get("resume") or {}) or b"")
+    out.joinpath("resume.pdf").write_bytes(resume_pdf_bytes(d, cand))
 
     drafted = _drafted_from_answers(d)
     # City/country help generic Avature identity fields; the strategy also answers residence

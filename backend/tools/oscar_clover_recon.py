@@ -223,7 +223,7 @@ def _build_prefill(row: dict) -> dict:
     tailored résumé + drafted screener answers against the REAL GH questions, and writes the
     co-pilot prefill dir with the Greenhouse EMBED apply URL. Returns the profile_id/jobid/embed_url
     the co-pilot `/load` needs."""
-    from backend.tools import catalog_collector, catalog_drafts, drafts_ui, mailcrm
+    from backend.tools import catalog_collector, mailcrm
     from backend.tools.provision_mailboxes import provision_email
     from backend.tools.synth_persona import synth_persona
 
@@ -234,7 +234,7 @@ def _build_prefill(row: dict) -> dict:
     questions = catalog_collector._gh_questions(slug, gid) if (slug and gid) else None
     job = {"title": row.get("title") or "", "company": row.get("company") or _COMPANY.get(
                (row.get("source") or "").lower(), "Health"),
-           "company_key": slug, "description": "",
+           "company_key": slug, "description": "", "category": row.get("category") or "",
            "location": "Remote, United States", "regions": ["US"],
            "ats": "greenhouse", "external_id": str(gid),
            "url": row.get("apply_url") or "", "questions": questions or []}
@@ -257,12 +257,11 @@ def _build_prefill(row: dict) -> dict:
     jobid = f"mh_{row['id']}"
     out = Path(PREFILL_ROOT) / profile_id / jobid
     out.mkdir(parents=True, exist_ok=True)
-    draft = {}
-    try:
-        draft = catalog_drafts.generate_draft(job, cand, use_ai=True, ideal=True)
-        out.joinpath("resume.pdf").write_bytes(drafts_ui.render_resume_pdf(draft.get("resume") or {}) or b"")
-    except Exception as e:  # noqa: BLE001
-        print(f"[oscar_clover] draft/resume gen skipped: {type(e).__name__}: {e}", flush=True)
+    # MANDATORY attractiveness pass via the shared engine (role-targeted, no-fabrication, guarded:
+    # a tailor/LLM failure falls back to the base résumé — never empty, never raises).
+    from backend.tools import mass_hiring_apply as _mha
+    draft = _mha.tailored_draft(job, cand)
+    out.joinpath("resume.pdf").write_bytes(_mha.resume_pdf_bytes(draft, cand))
     out.joinpath("persona.json").write_text(
         json.dumps({"profile": prof, "facts": cand.get("facts") or {}}, ensure_ascii=False),
         encoding="utf-8")

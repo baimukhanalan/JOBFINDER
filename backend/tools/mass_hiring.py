@@ -422,6 +422,11 @@ _AUTO_STATUS = {
     "chewy": "needs_laptop", "koho": "needs_laptop", "neo": "needs_laptop",
     "wealthsimple": "needs_laptop", "clearco": "needs_laptop", "float": "needs_laptop",
     "hootsuite": "needs_laptop", "coveo": "needs_laptop",
+    # seasonal Q4 retail CS + fintech/insurtech (2026-09-23)
+    "macys": "needs_laptop", "ulta": "needs_laptop", "nordstrom": "needs_laptop",
+    "ibex": "needs_laptop", "mercury": "needs_laptop", "current": "needs_laptop",
+    "rocketmoney": "needs_laptop", "lendingtree": "needs_laptop",
+    "angi": "needs_laptop", "ro": "needs_laptop",
 }
 
 
@@ -3241,6 +3246,7 @@ def fetch_experian() -> list[dict]:
 # import resolves cleanly.
 from backend.tools import connectors_insurance as _ci  # noqa: E402
 from backend.tools import connectors_extra as _ce  # noqa: E402
+from backend.tools import connectors_seasonal as _cs  # noqa: E402
 
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
@@ -3279,7 +3285,12 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "chewy": _ce.fetch_chewy,
             "koho": _ce.fetch_koho, "neo": _ce.fetch_neo, "wealthsimple": _ce.fetch_wealthsimple,
             "clearco": _ce.fetch_clearco, "float": _ce.fetch_float,
-            "hootsuite": _ce.fetch_hootsuite, "coveo": _ce.fetch_coveo}
+            "hootsuite": _ce.fetch_hootsuite, "coveo": _ce.fetch_coveo,
+            # seasonal Q4 retail CS + fintech/insurtech (2026-09-23, connectors_seasonal.py)
+            "macys": _cs.fetch_macys, "ulta": _cs.fetch_ulta, "nordstrom": _cs.fetch_nordstrom,
+            "ibex": _cs.fetch_ibex, "mercury": _cs.fetch_mercury, "current": _cs.fetch_current,
+            "rocketmoney": _cs.fetch_rocketmoney, "lendingtree": _cs.fetch_lendingtree,
+            "angi": _cs.fetch_angi, "ro": _cs.fetch_ro}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

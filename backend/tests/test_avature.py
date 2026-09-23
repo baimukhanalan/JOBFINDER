@@ -14,6 +14,33 @@ def test_matches_avature_hosts():
     assert not AvatureStrategy.matches("")
 
 
+def test_matches_transcom_vanity_host():
+    # Transcom is the classic Avature portal on its own host (NOT *.avature.net); one strategy owns
+    # both. Additive: Maximus + a non-avature host are unchanged.
+    assert AvatureStrategy.matches(
+        "https://apply.careers.transcom.com/en_US/careers/JobDetail/US-CSA-WFH/13462")
+    assert AvatureStrategy.matches(
+        "https://APPLY.CAREERS.TRANSCOM.COM/en_US/careers/Register?folderId=13462")
+    assert AvatureStrategy.matches("https://maximus.avature.net/careers/Register?folderId=1")
+    assert not AvatureStrategy.matches("https://careers.transcom.net/other")
+
+
+def test_folder_id_extraction_first_wins():
+    # Maximus byte-identical: ?folderId=<id> wins even if a JobDetail tail is also present.
+    assert AvatureStrategy._folder_id(
+        "https://maximus.avature.net/careers/Job-Application?folderId=42") == "42"
+    # Transcom JobDetail path tail /JobDetail/<slug>/<id>.
+    assert AvatureStrategy._folder_id(
+        "https://apply.careers.transcom.com/en_US/careers/JobDetail/US-CSA-Work-from-Home/13462") == "13462"
+    # Transcom Login page carries it as ?jobId=<id>.
+    assert AvatureStrategy._folder_id(
+        "https://apply.careers.transcom.com/en_US/careers/Login?jobId=777&applicationStep=0") == "777"
+    # No job id anywhere → None (open_form returns early, never a wrong nav).
+    assert AvatureStrategy._folder_id(
+        "https://apply.careers.transcom.com/en_US/careers/SearchJobs") is None
+    assert AvatureStrategy._folder_id("") is None
+
+
 def test_advance_off_by_default():
     # The wizard-advance (which transmits PII + creates the account on submit) must be OFF unless
     # AVATURE_ADVANCE is explicitly set — a plain fill stays side-effect-free at the employer.

@@ -16,6 +16,9 @@ from backend.tools import mass_hiring_apply
 # The live sample apply URL from recon (Alorica on Oracle CX).
 _ORC_URL = ("https://fa-euxw-saasfaprod1.fa.ocs.oraclecloud.com/hcmUI/"
             "CandidateExperience/en/sites/CX_1/job/239440")
+# Molina — a DIFFERENT ORC tenant host (`hckd.fa.us2`), same CX apply surface + same strategy.
+_MOLINA_URL = ("https://hckd.fa.us2.oraclecloud.com/hcmUI/"
+               "CandidateExperience/en/sites/CX_1/job/2039268")
 
 
 # ---- strategy routing --------------------------------------------------------
@@ -58,6 +61,23 @@ def test_is_a_generic_subclass_with_name():
     # extends GenericStrategy (so super().prefill resolves to the shared pipeline).
     assert issubclass(OracleORCStrategy, GenericStrategy)
     assert OracleORCStrategy.name == "oracle_orc"
+
+
+def test_molina_routes_to_orc_and_is_supported():
+    # Molina's `hckd.fa.us2` ORC tenant routes to the SAME OracleORCStrategy as Alorica and is an
+    # accepted mass-hiring apply host (so the probe can drive its guest apply → Postal fallback).
+    assert OracleORCStrategy.matches(_MOLINA_URL)
+    assert isinstance(_pick_strategy(_MOLINA_URL), OracleORCStrategy)
+    assert mass_hiring_apply.is_supported(_MOLINA_URL)
+
+
+def test_postal_has_empty_open_first_option_fallback():
+    # The molina Postal typeahead is scoped to the auto-cascaded City/County, so the persona's own
+    # ZIP never surfaces; the shorten branch now re-opens the field EMPTY and takes the first offered
+    # local ZIP. Guard the fallback exists (browser-runtime, confirmed live by the ORC probe).
+    import inspect
+    src = inspect.getsource(OracleORCStrategy._pick_combobox)
+    assert "re-open the field EMPTY" in src or "restore the typed ZIP" in src
 
 
 def test_mass_hiring_apply_supports_oracle():

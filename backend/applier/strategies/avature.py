@@ -64,14 +64,32 @@ class AvatureStrategy(ApplyStrategy):
 
     @classmethod
     def matches(cls, url: str) -> bool:
-        return "avature.net" in (url or "").lower()
+        u = (url or "").lower()
+        # Maximus is `*.avature.net`; Transcom is the SAME classic server-rendered Avature portal
+        # but on its own vanity host `apply.careers.transcom.com` (NOT `*.avature.net`). Both drive
+        # the identical /careers/Register?folderId=<id> account+application wizard, so one strategy
+        # owns both — additively (Maximus behaviour is unchanged; a non-avature host still won't match).
+        return "avature.net" in u or "apply.careers.transcom.com" in u
+
+    @staticmethod
+    def _folder_id(url: str) -> str | None:
+        """The Avature job/folder id from an apply URL, matched FIRST-WINS so Maximus is byte-identical:
+        Maximus (and any Avature board apply link) carries it as `?folderId=<id>`; the classic portal's
+        JobDetail page (Transcom: `/JobDetail/<slug>/<id>`) puts it in the path TAIL, and its Login page
+        as `?jobId=<id>`. Returns the numeric id string, or None when the URL carries no job id."""
+        for pat in (r"folderId=(\d+)", r"/JobDetail/[^/?#]+/(\d+)", r"[?&]jobId=(\d+)"):
+            m = re.search(pat, url or "", re.I)
+            if m:
+                return m.group(1)
+        return None
 
     async def open_form(self, page: Page) -> None:
-        # The board's apply URL is /careers/Job-Application?folderId=<id>; the real
-        # application+account wizard is /careers/Register?folderId=<id>. Navigate there.
+        # The board's apply URL is /careers/Job-Application?folderId=<id> (Maximus) or a classic
+        # /careers/JobDetail/<slug>/<id> page (Transcom); the real application+account wizard is
+        # /careers/Register?folderId=<id> on either host. Resolve the folder id + navigate there.
         url = page.url
-        m = re.search(r"folderId=(\d+)", url)
-        if not m:
+        fid = self._folder_id(url)
+        if not fid:
             return
         # Clear any prior Avature login FIRST: the co-pilot's shared browser persists cookies,
         # so without this every application AFTER the first is filled while still logged in as
@@ -83,8 +101,9 @@ class AvatureStrategy(ApplyStrategy):
             pass
         base = url.split("/careers/")[0]
         try:
-            # Always (re)load the clean, logged-out Register page for this folder.
-            await page.goto(f"{base}/careers/Register?folderId={m.group(1)}",
+            # Always (re)load the clean, logged-out Register page for this folder. `base` keeps any
+            # locale prefix (Transcom's `…/en_US`), so this stays `…/en_US/careers/Register?folderId=`.
+            await page.goto(f"{base}/careers/Register?folderId={fid}",
                             wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(2500)
             # Dismiss the cookie banner NOW — BEFORE any field is filled. Dismissing it

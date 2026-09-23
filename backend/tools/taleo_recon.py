@@ -23,6 +23,7 @@ import asyncio
 import glob
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -91,16 +92,44 @@ def taleo_job_ids() -> list[int]:
     return out
 
 
+# The strategy resolver (`strategies.taleo.resolve_apply_url`) only recognises a NUMERIC or
+# section-less careersection (UHG `/careersection/10020/…`, TTEC `/careersection/jobapply.ftl`).
+# Kaiser's Radancy front (kaiserpermanentejobs.org) embeds a NAMED-careersection apply URL —
+# `https://kp.taleo.net/careersection/external/jobapply.ftl?job=<id>` — which that numeric-only
+# regex misses (→ the "could not resolve" no_form). This wider pattern also accepts an alpha/named
+# section segment; it's a FALLBACK only (the strategy resolver is tried FIRST so TTEC/UHG stay
+# byte-identical), and it keeps the SAME "skip the internal `/careersection/10000/` section" rule.
+_TALEO_WIDE_APPLYURL_RE = re.compile(
+    r"https://[a-z0-9.]*taleo\.net/careersection/(?:[A-Za-z0-9_-]+/)?jobapply\.ftl\?job=[A-Za-z0-9]+",
+    re.I)
+
+
+def _resolve_taleo_html(page_html: str) -> str | None:
+    """Extract the external Taleo apply URL from a Radancy job page's HTML — the strategy resolver
+    FIRST (numeric/section-less: TTEC/UHG), then a widened fallback that also accepts a NAMED
+    careersection (kaiser: `/careersection/external/…`). Pure + network-free (unit-testable)."""
+    from backend.applier.strategies.taleo import resolve_apply_url
+    url = resolve_apply_url(page_html or "")
+    if url:
+        return url
+    hits = _TALEO_WIDE_APPLYURL_RE.findall(page_html or "")
+    if not hits:
+        return None
+    for u in hits:                                    # prefer a non-internal (10000) section
+        if "/careersection/10000/" not in u:
+            return u
+    return hits[0]
+
+
 def _resolve_taleo_url(apply_url: str) -> str | None:
     """Fetch the Radancy job/listing page and pull out the embedded taleo.net apply URL."""
     import httpx
-    from backend.applier.strategies.taleo import resolve_apply_url
     ua = {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                          "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"),
           "Accept-Encoding": "identity"}
     try:
         r = httpx.get(apply_url, headers=ua, timeout=30, follow_redirects=True)
-        return resolve_apply_url(r.text)
+        return _resolve_taleo_html(r.text)
     except Exception as e:  # noqa: BLE001
         print(f"[resolve error: {type(e).__name__}: {e}]", flush=True)
         return None

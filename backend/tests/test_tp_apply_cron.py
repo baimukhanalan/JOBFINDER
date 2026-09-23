@@ -117,3 +117,28 @@ def test_live_sources_union(monkeypatch):
     assert tp.live_sources() == {"teleperformance"}                # base only
     monkeypatch.setattr(tp, "_read_verified_sources", lambda: {"cotiviti"})
     assert tp.live_sources() == {"teleperformance", "cotiviti"}    # base UNION verified
+
+
+# ---- icims_recon._is_employer_screener (Cotiviti "employed by <us>?" -> No) ----------------------
+
+def test_employer_screener_matches_tenant_name():
+    from backend.tools.icims_recon import _is_employer_screener as f
+    # names the employer (Cotiviti) — a fresh synthetic persona never worked there -> answer No.
+    assert f("Have you ever been employed by Cotiviti?", "Cotiviti")
+    assert f("Have you previously worked for Cotiviti, Inc. or a subsidiary?", "Cotiviti")
+    # generic self-reference (no name) still counts.
+    assert f("Have you ever worked for the Company?", "Cotiviti")
+    assert f("Are you currently employed by our organization?", "Cotiviti")
+
+
+def test_employer_screener_excludes_unrelated_questions():
+    from backend.tools.icims_recon import _is_employer_screener as f
+    # work-AUTHORIZATION is NOT an employment-history question (must not answer No).
+    assert not f("Are you legally authorized to work in the United States?", "Cotiviti")
+    # a CSR-experience question must not be mistaken for 'employed by us'.
+    assert not f("Do you have experience working in customer service?", "Cotiviti")
+    # a third-party employer (no tenant name, no self-reference) is left for the human.
+    assert not f("Are you currently employed by a staffing agency?", "Cotiviti")
+    # TP's own 'employed by TP' is already answered by the strategy; the tenant-name path here is
+    # additive and never contradicts it (TP is the base tenant, kept byte-identical).
+    assert not f("", "Cotiviti")

@@ -35,6 +35,33 @@ def test_resolve_none_when_absent():
     assert resolve_apply_url("") is None
 
 
+# ---- taleo_recon._resolve_taleo_html (widened for NAMED careersections: Kaiser) ------------------
+
+def test_recon_resolves_kaiser_named_careersection():
+    # Kaiser's Radancy page embeds a NAMED (`external`) careersection the strategy's numeric-only
+    # regex misses — the widened taleo_recon fallback catches it (both the raw + &amp; copies match).
+    from backend.tools.taleo_recon import _resolve_taleo_html
+    html = ('<a href="https://kp.taleo.net/careersection/external/mysubmissions.ftl?lang=en">x</a>'
+            '<a href="https://kp.taleo.net/careersection/external/jobapply.ftl?job=1445595&amp;src=JB-10088">Apply</a>')
+    assert _resolve_taleo_html(html) == \
+        "https://kp.taleo.net/careersection/external/jobapply.ftl?job=1445595"
+
+
+def test_recon_resolver_keeps_ttec_and_uhg_byte_identical():
+    # TTEC (section-less) + UHG (numeric 10020) still resolve via the strategy resolver FIRST — the
+    # widened fallback only fires when that returns None, so the proven tenants are unchanged.
+    from backend.tools.taleo_recon import _resolve_taleo_html
+    assert _resolve_taleo_html(
+        '<a href="https://ttec.taleo.net/careersection/jobapply.ftl?job=04DW3">x</a>') == \
+        "https://ttec.taleo.net/careersection/jobapply.ftl?job=04DW3"
+    assert _resolve_taleo_html(
+        '<a href="https://uhg.taleo.net/careersection/10000/jobapply.ftl?job=1">i</a>'
+        '<a href="https://uhg.taleo.net/careersection/10020/jobapply.ftl?job=1">e</a>') == \
+        "https://uhg.taleo.net/careersection/10020/jobapply.ftl?job=1"
+    assert _resolve_taleo_html("<html>nothing</html>") is None
+    assert _resolve_taleo_html("") is None
+
+
 # ---- eligibility: licensed-role skip + state placement ------------------------------------------
 
 def test_licensed_roles_are_skipped():

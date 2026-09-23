@@ -15,6 +15,12 @@ IP-reputation part. It does NOT and CANNOT solve a human video/voice assessment
   * AWS WAF: `solve_aws_waf` tries the FREE `AwsWafIntegration.getToken()` browser path first
     (AWSWAF_BROWSER=1) and only falls through to the PAID `AntiAwsWafTask` for a hard visual
     puzzle.
+  * **FriendlyCaptcha** (a proof-of-work widget, `.frc-captcha`/`bluex-friendly-captcha`, on e.g.
+    the Randstad résumé drop): **2captcha-ONLY** — CapSolver has no FriendlyCaptcha task type and
+    NopeCHA can't touch it. `solve('friendlycaptcha', …)` / `solve_on_page` route it to 2captcha
+    (in.php `method=friendlycaptcha`, sitekey+pageurl → the solution token) REGARDLESS of
+    `CAPTCHA_SOLVER_PROVIDER`, funded by `_twocaptcha_key()` (`TWOCAPTCHA_KEY` else
+    `CAPTCHA_SOLVER_KEY`). The token is injected into the hidden `frc-captcha-solution` field.
 
 Config (env, all optional — absent key => the PAID tier is disabled, a graceful no-op):
   CAPTCHA_SOLVER_PROVIDER  capsolver (default) | twocaptcha
@@ -62,9 +68,29 @@ def _key() -> str:
     return (os.getenv("CAPTCHA_SOLVER_KEY") or "").strip()
 
 
+def _twocaptcha_key() -> str:
+    """The 2captcha API key — a dedicated `TWOCAPTCHA_KEY` if set, else `CAPTCHA_SOLVER_KEY`.
+
+    FriendlyCaptcha is **2captcha-ONLY** (CapSolver has no FriendlyCaptcha task type and NopeCHA
+    only does reCAPTCHA/hCaptcha/Turnstile), so its solve ALWAYS funds through this key regardless of
+    `CAPTCHA_SOLVER_PROVIDER`. When the owner runs CapSolver as the default provider for the other
+    kinds, they set a separate `TWOCAPTCHA_KEY` here for FriendlyCaptcha; when the default provider IS
+    2captcha, `CAPTCHA_SOLVER_KEY` doubles as the 2captcha key and nothing extra is needed."""
+    return (os.getenv("TWOCAPTCHA_KEY") or _key()).strip()
+
+
 def is_enabled() -> bool:
     """True only when a provider API key is configured — callers no-op otherwise."""
     return bool(_key())
+
+
+def friendlycaptcha_available() -> bool:
+    """True when a FriendlyCaptcha solve can run — a 2captcha-compatible key is configured.
+
+    FriendlyCaptcha is 2captcha-only, so a lane gates its solve on THIS (not `is_enabled()`): with
+    only `TWOCAPTCHA_KEY` set (CapSolver as the default provider, or no key at all for the other
+    kinds) FriendlyCaptcha still solves."""
+    return bool(_twocaptcha_key())
 
 
 def _awswaf_browser_enabled() -> bool:
@@ -98,18 +124,20 @@ _CAPSOLVER_TASK = {
     "hcaptcha": "HCaptchaTaskProxyLess",
     "turnstile": "AntiTurnstileTaskProxyLess",
 }
-# 2Captcha "method" per kind (in/out API).
+# 2Captcha "method" per kind (in/out API). FriendlyCaptcha is 2captcha-ONLY (no CapSolver task type),
+# so it lives here but NOT in _CAPSOLVER_TASK.
 _TWOCAPTCHA_METHOD = {
     "recaptcha_v2": "userrecaptcha",
     "recaptcha_v3": "userrecaptcha",
     "hcaptcha": "hcaptcha",
     "turnstile": "turnstile",
+    "friendlycaptcha": "friendlycaptcha",
 }
 
 
 async def _twocaptcha_solve(kind: str, site_key: str, page_url: str,
                             action: str | None = None) -> str | None:
-    params = {"key": _key(), "method": _TWOCAPTCHA_METHOD[kind], "json": 1,
+    params = {"key": _twocaptcha_key(), "method": _TWOCAPTCHA_METHOD[kind], "json": 1,
               "pageurl": page_url}
     if kind in ("recaptcha_v2", "recaptcha_v3"):
         params["googlekey"] = site_key
@@ -119,6 +147,9 @@ async def _twocaptcha_solve(kind: str, site_key: str, page_url: str,
     elif kind == "hcaptcha":
         params["sitekey"] = site_key
     elif kind == "turnstile":
+        params["sitekey"] = site_key
+    elif kind == "friendlycaptcha":
+        # 2captcha `method=friendlycaptcha`: sitekey + pageurl → the FriendlyCaptcha solution token.
         params["sitekey"] = site_key
     async with httpx.AsyncClient(timeout=30) as cx:
         r = await cx.get(f"{_TWOCAPTCHA_BASE}/in.php", params=params)
@@ -145,12 +176,27 @@ async def _twocaptcha_solve(kind: str, site_key: str, page_url: str,
 
 async def solve(kind: str, site_key: str, page_url: str, action: str | None = None,
                 *, enterprise: bool = False, enterprise_payload: dict | None = None) -> str | None:
-    """Solve one captcha of `kind` ∈ {recaptcha_v2,recaptcha_v3,hcaptcha,turnstile}. Returns the
-    token, or None (disabled / error / timeout). Never raises. The CapSolver path (default
+    """Solve one captcha of `kind` ∈ {recaptcha_v2,recaptcha_v3,hcaptcha,turnstile,friendlycaptcha}.
+    Returns the token, or None (disabled / error / timeout). Never raises. The CapSolver path (default
     provider) runs through `backend.applier.capsolver` (createTask/getTaskResult + bounded
     exponential-backoff poll); `enterprise`/`enterprise_payload` escalate to the enterprise task
-    types. 2captcha keeps the legacy in/out flow."""
-    if not is_enabled() or kind not in _CAPSOLVER_TASK or not site_key or not page_url:
+    types. 2captcha keeps the legacy in/out flow.
+
+    **FriendlyCaptcha (`kind='friendlycaptcha'`) routes to 2captcha REGARDLESS of
+    `CAPTCHA_SOLVER_PROVIDER`** — CapSolver has no FriendlyCaptcha task type, so it always funds
+    through `_twocaptcha_key()`. Every other kind's routing is byte-identical to before."""
+    if not site_key or not page_url:
+        return None
+    if kind == "friendlycaptcha":
+        # 2captcha-ONLY (CapSolver can't do it). Uses TWOCAPTCHA_KEY else CAPTCHA_SOLVER_KEY.
+        if not _twocaptcha_key():
+            return None
+        try:
+            return await _twocaptcha_solve(kind, site_key, page_url)
+        except Exception as exc:
+            logger.warning("captcha solve failed (friendlycaptcha): %s", exc)
+            return None
+    if not is_enabled() or kind not in _CAPSOLVER_TASK:
         return None
     try:
         if _provider() == "twocaptcha":
@@ -167,6 +213,24 @@ async def solve(kind: str, site_key: str, page_url: str, action: str | None = No
 # the Enterprise API is loaded. Returns {kind, key, enterprise}.
 _DETECT_JS = r"""() => {
   const q = s => document.querySelector(s);
+  // FriendlyCaptcha — a proof-of-work widget (.frc-captcha / .bluex-friendly-captcha / the
+  // friendly-challenge script). 2captcha solves it; CapSolver/NopeCHA cannot. The sitekey is on the
+  // widget's data-sitekey (FriendlyCaptcha's documented attribute); Randstad renders it via captcha.js.
+  {
+    const frcScript = document.querySelector(
+      'script[src*="friendly-challenge"], script[src*="friendlycaptcha"], script[src*="friendly.js"]');
+    let f = q('.frc-captcha[data-sitekey], .bluex-friendly-captcha[data-sitekey], '
+             + '[data-sitekey].frc-captcha, [data-friendly-captcha][data-sitekey]');
+    const host = q('.frc-captcha, .bluex-friendly-captcha, [data-friendly-captcha]');
+    if (!f && host && host.closest) f = host.closest('[data-sitekey]');
+    if (f && f.getAttribute && f.getAttribute('data-sitekey'))
+      return {kind:'friendlycaptcha', key:f.getAttribute('data-sitekey'), enterprise:false};
+    if (host || frcScript) {
+      const sk = q('[data-sitekey]');
+      return {kind:'friendlycaptcha',
+              key:(sk && sk.getAttribute && sk.getAttribute('data-sitekey')) || '', enterprise:false};
+    }
+  }
   // Cloudflare Turnstile — explicit widget, or the challenge iframe next to a data-sitekey host.
   let el = q('.cf-turnstile[data-sitekey], [data-sitekey].cf-turnstile') ||
            (q('iframe[src*="challenges.cloudflare.com"]') || {}).closest &&
@@ -245,6 +309,21 @@ _INJECT_JS = r"""([kind, token]) => {
     const b = setField('textarea[name="g-recaptcha-response"], [name="g-recaptcha-response"]',
                        {id:'g-recaptcha-response', name:'g-recaptcha-response'});
     ok = a || b;
+  } else if (kind === 'friendlycaptcha') {
+    // FriendlyCaptcha's solution goes into the hidden `frc-captcha-solution` field; the widget then
+    // reads it. Set it, fire events, mark the widget done + invoke any registered callback so an SPA
+    // gate that watches the widget state (not just the hidden field) advances.
+    ok = setField('input[name="frc-captcha-solution"], textarea[name="frc-captcha-solution"], '
+                  + '.frc-captcha-solution', {id:'frc-captcha-solution', name:'frc-captcha-solution'});
+    try {
+      document.querySelectorAll('.frc-captcha, .bluex-friendly-captcha, [data-friendly-captcha]')
+        .forEach(w => {
+          try { w.setAttribute('data-attached', 'true'); if (w.dataset) w.dataset.solution = token; }
+          catch (e) {}
+          const cb = w.getAttribute && w.getAttribute('data-callback');
+          if (cb && typeof window[cb] === 'function') { try { window[cb](token); } catch (e) {} }
+        });
+    } catch (e) {}
   } else {
     // reCAPTCHA v2/v3: the (usually hidden) response textarea — create it if missing.
     ok = setField('textarea#g-recaptcha-response, textarea[name="g-recaptcha-response"]',
@@ -289,11 +368,17 @@ async def solve_on_page(page, action: str | None = None) -> bool:
     (itself free-first) for an AWS WAF gate. Never raises."""
     det = await _detect_full(page)
     if det:
-        # A token captcha is present; the paid tier requires a key (the free NopeCHA path, when
-        # armed, already ran in the browser). No key => no-op here.
-        if not is_enabled():
-            return False
         kind, site_key, enterprise = det["kind"], det["key"], det["enterprise"]
+        # FriendlyCaptcha is 2captcha-only — gate on a 2captcha key, not is_enabled(). Every other
+        # token captcha needs the paid CapSolver/2captcha key (the free NopeCHA path, when armed,
+        # already ran in the browser); no key => no-op here.
+        if kind == "friendlycaptcha":
+            if not friendlycaptcha_available() or not site_key:
+                if not site_key:
+                    logger.info("friendlycaptcha present but no sitekey resolved on the page")
+                return False
+        elif not is_enabled():
+            return False
         try:
             page_url = page.url
         except Exception:

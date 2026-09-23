@@ -462,8 +462,69 @@ async def _fill_how_heard(page, root) -> bool:
 
 _DEMO_DUMPED = [False]
 
+# A "have you (ever) worked / been employed by / for <this employer>?" screener. The strategy's
+# `_screener_answer` only recognises Teleperformance's OWN name list (tp/teleperformance/…/company),
+# so a DIFFERENT iCIMS tenant's "employed by <us>" question (e.g. Cotiviti) matches nothing → the
+# REQUIRED screener is left blank → the fill stalls. This tenant-agnostic predicate names the
+# employer from the row's company, so a fresh synthetic persona answers it No (truthful).
+_EMP_SCREENER_RE = _re.compile(r"(?:employ|work)\w*\b.{0,30}\b(?:by|for|at|with)\b", _re.I)
 
-async def _tp_fill(page, root, pf, facts, strat) -> None:
+
+def _is_employer_screener(label: str, company: str) -> bool:
+    """True for a 'have you worked/been employed by/for <this employer>?' screener (uses the row's
+    company name, or a generic self-reference). Excludes work-AUTHORIZATION questions so 'authorized
+    to work' is never mistaken for an employment-history one. Pure + network-free (unit-testable)."""
+    t = (label or "").lower()
+    if not _EMP_SCREENER_RE.search(t):
+        return False
+    if _re.search(r"authoriz|eligible|legal right|sponsor|able to work|right to work", t):
+        return False
+    toks = [w for w in _re.split(r"[^a-z0-9]+", (company or "").lower()) if len(w) >= 4]
+    if any(w in t for w in toks):
+        return True
+    return bool(_re.search(r"\b(this company|the company|our company|organization|"
+                           r"parent company|subsidiar|affiliate)\b", t))
+
+
+async def _answer_employer_screener(root, company: str) -> bool:
+    """Answer a still-UNANSWERED employer-history screener (native <select> or radio group) with No,
+    when its question names the row's employer. Idempotent + additive: TP's own 'employed by TP'
+    screener is already answered by the strategy, so this only fires on a NEW tenant's residual."""
+    toks = [w for w in _re.split(r"[^a-z0-9]+", (company or "").lower()) if len(w) >= 4]
+    try:
+        return bool(await root.evaluate(
+            """([toks])=>{
+              const n=s=>(s||'').toLowerCase();
+              const emp=/(?:employ|work)\\w*\\b[^.]{0,30}\\b(by|for|at|with)\\b/;
+              const auth=/authoriz|eligible|legal right|sponsor|able to work|right to work/;
+              const gen=/\\b(this company|the company|our company|organization|parent company|subsidiar|affiliate)\\b/;
+              const isEmp=t=>{t=n(t); if(!emp.test(t))return false; if(auth.test(t))return false;
+                if(toks.some(w=>t.includes(w)))return true; return gen.test(t);};
+              let did=false;
+              for(const el of document.querySelectorAll('select:not([multiple])')){
+                let lab=''; if(el.id){const l=document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(el.id):el.id)+'"]');if(l)lab=l.innerText;}
+                lab=lab||el.getAttribute('data-label')||'';
+                if(!isEmp(lab))continue;
+                const cur=el.options[el.selectedIndex];
+                if(el.value&&cur&&!/make a selection|select an option|select a |please select|choose/i.test(cur.text))continue;
+                const o=[...el.options].find(o=>o.value&&/^\\s*no\\b/i.test(o.text));
+                if(o){el.value=o.value;el.dispatchEvent(new Event('change',{bubbles:true}));did=true;}
+              }
+              const byName={};
+              for(const r of document.querySelectorAll('input[type=radio]'))(byName[r.name]=byName[r.name]||[]).push(r);
+              for(const nm in byName){const rs=byName[nm];if(rs.some(r=>r.checked))continue;
+                let box=rs[0].parentElement;while(box&&!rs.every(r=>box.contains(r)))box=box.parentElement;
+                if(!isEmp(box?(box.innerText||''):''))continue;
+                const no=rs.find(r=>{const l=r.id?document.querySelector('label[for="'+(window.CSS&&CSS.escape?CSS.escape(r.id):r.id)+'"]'):null;
+                  const t=((l&&l.innerText)||(r.closest('label')?r.closest('label').innerText:'')||'');return /^\\s*no\\b/i.test(t);});
+                if(no){no.checked=true;no.dispatchEvent(new Event('click',{bubbles:true}));no.dispatchEvent(new Event('change',{bubbles:true}));did=true;}
+              }
+              return did;}""", [toks]))
+    except Exception:
+        return False
+
+
+async def _tp_fill(page, root, pf, facts, strat, company: str = "") -> None:
     """Fill the Teleperformance iCIMS Candidate Profile / screener step COMPLETELY (frame-aware,
     idempotent, no résumé re-attach). Order matters: Country BEFORE State (the State dropdown is
     Country-dependent), and City/Zip are force-set AFTER (the résumé parser overwrites them)."""
@@ -529,7 +590,10 @@ async def _tp_fill(page, root, pf, facts, strat) -> None:
     for fn in (lambda: strat._tick_acknowledge(page, root),
                lambda: strat._tick_required_checkboxes(page, root),
                lambda: strat._decline_demographics(root, pf.get("full_name") or ""),
-               lambda: strat._answer_screeners(page, root, facts or {})):
+               lambda: strat._answer_screeners(page, root, facts or {}),
+               # tenant-agnostic 'employed by/for <this employer>?' → No (Cotiviti + any new iCIMS
+               # tenant whose employer name the strategy's TP-only list doesn't know); No-op for TP.
+               lambda: _answer_employer_screener(root, company)):
         try:
             await fn()
         except Exception:
@@ -1070,7 +1134,7 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
         try:
             from backend.tools import captcha_relay
             captcha_relay.set_page(page, display=os.environ.get("DISPLAY", ":98"),
-                                   label="Teleperformance")
+                                   label=(row.get("company") or "Application"))
             await captcha_relay.serve(9003)
             print("[captcha relay up -> https://captcha.systeam.kz/ ]", flush=True)
         except BaseException as e:
@@ -1223,7 +1287,7 @@ async def run(job_id: int, url: str | None = None, keep_minutes: int = 20, reuse
                 #     without re-forcing country/state/how-heard every tick (that would flicker).
                 try:
                     if new_step or not RELAY_DRIVE:
-                        await _tp_fill(page, root, pf, p["facts"], strat)
+                        await _tp_fill(page, root, pf, p["facts"], strat, row.get("company") or "")
                     else:
                         await strat._fill_identity(root, pf)
                         await strat._tick_required_checkboxes(page, root)

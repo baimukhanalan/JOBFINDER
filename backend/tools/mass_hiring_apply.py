@@ -86,7 +86,11 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # Foundever (ex-Sitel) SuccessFactors careersection (strategies/foundever.py) — the
                    # RMK job page (jobs.foundever.com) hands off to career4.successfactors.com; NO
                    # captcha, single-page apply. Submit gated behind FOUNDEVER_ADVANCE.
-                   "jobs.foundever.com", "career4.successfactors.com")
+                   "jobs.foundever.com", "career4.successfactors.com",
+                   # Transcom — the CLASSIC server-rendered Avature portal on its own vanity host
+                   # (NOT *.avature.net); AvatureStrategy owns it (same Register wizard as Maximus),
+                   # gated behind AVATURE_ADVANCE. Collect-first until the avature probe lands an ack.
+                   "apply.careers.transcom.com")
 
 
 def is_supported(apply_url: str) -> bool:

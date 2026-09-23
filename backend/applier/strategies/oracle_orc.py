@@ -451,6 +451,27 @@ class OracleORCStrategy(GenericStrategy):
                     await page.keyboard.press("Backspace")   # shorten the prefix, keep the session live
                     typed = typed[:-1]
                     await page.wait_for_timeout(750)
+                # The persona's ZIP never surfaced at ANY prefix — on some CX tenants (e.g. molina's
+                # `hckd` board) the Postal typeahead is SCOPED to the auto-cascaded City/County (whose
+                # ZIPs differ from the persona's Franklin/43215), so a filtered search returns nothing.
+                # A synthetic persona only needs ANY valid local ZIP → re-open the field EMPTY and take
+                # the FIRST option the widget lists for the cascaded locale. ADDITIVE: only reached when
+                # the typed loop found nothing (a tenant whose ZIP resolved above returned already), so a
+                # working postal fill is byte-identical; on failure it restores `typed` for the original
+                # free-text commit below.
+                try:
+                    await el.fill("", timeout=1500)
+                    await el.click(timeout=2000)
+                    await page.wait_for_timeout(700)
+                    first = _real(await self._options_locator(page, el)).first
+                    if await first.count():
+                        await first.click(timeout=2500)
+                        await page.wait_for_timeout(300)
+                        return True
+                    await el.fill("", timeout=1000)          # nothing offered — restore the typed ZIP
+                    await page.keyboard.type(typed, delay=45)
+                except Exception:
+                    pass
                 # nothing offered even at a 1-digit prefix — commit whatever was typed as free text
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(200)

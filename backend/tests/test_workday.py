@@ -125,6 +125,25 @@ def test_mass_hiring_apply_supports_the_healthcare_payer_tenants():
         assert mass_hiring_apply.is_supported(u), u
 
 
+def test_workday_recon_routes_sagility_to_masshiring_wizard():
+    # The driver must route Sagility's URL to the create-account wizard strategy (so the probe's
+    # drive reaches create-account), same selection the co-pilot makes.
+    from backend.tools import workday_recon
+    assert isinstance(workday_recon._pick_strategy(_SAGILITY), WorkdayMassHiringStrategy)
+
+
+def test_workday_recon_has_slow_load_reload_retry():
+    # A slow/flaky CxS SPA (Sagility) can hydrate to a blank shell on the first load -> no Apply
+    # button -> the drive never reaches create-account. drive_apply now reloads ONCE when no Apply
+    # affordance appears. Guard the additive retry exists (browser-runtime; confirmed by the probe).
+    import inspect
+
+    from backend.tools import workday_recon
+    src = inspect.getsource(workday_recon.drive_apply)
+    assert "_wait_apply_affordance" in src
+    assert "reloading the CxS SPA once" in src
+
+
 def test_mass_hiring_apply_supports_the_four_tenants():
     for u in _TENANTS:
         assert mass_hiring_apply.is_supported(u), u

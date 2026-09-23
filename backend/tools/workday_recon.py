@@ -353,6 +353,21 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                 except Exception as _e:
                     print(f"[shot {tag} failed: {_e}]"[:100], flush=True)
 
+            async def _wait_apply_affordance(per_ms: int = 8000) -> bool:
+                """True once a job-header / Apply affordance is visible (the SPA hydrated). Tries the
+                known CxS automation-ids + Apply link/button shapes; returns False if none appear."""
+                for _sel in ('[data-automation-id="jobPostingHeader"]',
+                             '[data-automation-id="applyFlowButton"]',
+                             'a[role="button"]:has-text("Apply")',
+                             'button:has-text("Apply")',
+                             '[data-automation-id="jobPostingPage"]'):
+                    try:
+                        await page.wait_for_selector(_sel, timeout=per_ms, state="visible")
+                        return True
+                    except Exception:
+                        continue
+                return False
+
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=90000)
                 # Workday CxS is a React SPA — the job + Apply button load via XHR AFTER
@@ -362,16 +377,23 @@ async def drive_apply(row: dict, *, advance_env: str, keep_minutes: int = 13,
                     await page.wait_for_load_state("networkidle", timeout=25000)
                 except Exception:
                     pass
-                for _sel in ('[data-automation-id="jobPostingHeader"]',
-                             '[data-automation-id="applyFlowButton"]',
-                             'a[role="button"]:has-text("Apply")',
-                             'button:has-text("Apply")',
-                             '[data-automation-id="jobPostingPage"]'):
+                found = await _wait_apply_affordance()
+                if not found:
+                    # SLOW/FLAKY tenant (e.g. Sagility): the CxS SPA sometimes hydrates to a blank
+                    # shell on the FIRST load, so open_form finds no Apply button and the drive never
+                    # reaches create-account. Reload ONCE and re-wait — additive: a tenant whose Apply
+                    # button rendered first time (centene/concentrix) never enters this branch, so its
+                    # landing is byte-identical.
+                    print("[apply affordance not visible — reloading the CxS SPA once]", flush=True)
                     try:
-                        await page.wait_for_selector(_sel, timeout=8000, state="visible")
-                        break
+                        await page.reload(wait_until="domcontentloaded", timeout=90000)
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=25000)
+                        except Exception:
+                            pass
+                        found = await _wait_apply_affordance()
                     except Exception:
-                        continue
+                        pass
                 await page.wait_for_timeout(2500)
             except Exception as e:
                 out["error"] = f"goto: {type(e).__name__}: {e}"

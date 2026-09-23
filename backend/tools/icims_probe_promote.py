@@ -40,7 +40,7 @@ from backend.tools import workday_probe_promote as wpp  # noqa: E402 — reuse t
 # iCIMS tenant SOURCES that are collected but not yet live-verified for auto-apply. Each is probed in
 # order; the job to drive is picked at RUNTIME (the newest active row for that source), so a stale
 # hardcoded job id can never send the probe at an expired posting.
-PENDING_SOURCES: tuple[str, ...] = ("cotiviti",)
+PENDING_SOURCES: tuple[str, ...] = ("cotiviti", "selectquote")
 
 DRIVE_MINUTES = int(os.getenv("ICIMS_PROBE_KEEP", "13"))     # --keep window for the icims_recon drive
 DRIVE_SECS = DRIVE_MINUTES * 60 + 150                        # hard subprocess cap (recon + ack poll)

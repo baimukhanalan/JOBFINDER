@@ -252,3 +252,78 @@ def test_candidate_join_resolved_flag_derived_from_meeting_id():
     assert cj["resolved"] is True
     # no group room to compare against → never differs
     assert cj["differs"] is False
+
+
+# ---- OFFICIAL verification + urgency classification (pure) ------------------------
+
+def _inv(**kw):
+    """A minimal invite dict for the classifier (pre-stamped verify/deadline fields)."""
+    base = {"mailbox": "a@takhet.com", "tracking_url": "https://tracking.icims.com/x",
+            "date_ts": 1_700_000_000, "deadline_ts": None, "deadline_days": None,
+            "deadline_estimated": True, "meeting_id": None, "resolved": False}
+    base.update(kw)
+    return base
+
+
+def test_classify_attendable_when_zoom_resolved_and_no_past_deadline():
+    assert he.classify_event(_inv(verify="zoom", meeting_id="7436255779")) == "attendable"
+
+
+def test_classify_expired_on_explicit_past_deadline():
+    # explicit (not estimated) past deadline → unrecoverable, even if the room still resolves
+    assert he.classify_event(_inv(verify="zoom", meeting_id="1",
+                                  deadline_days=-3, deadline_estimated=False)) == "expired"
+
+
+def test_classify_estimated_deadline_never_expires():
+    # an ESTIMATED past deadline must NOT expire (mirrors the «Собес» is_expired rule)
+    assert he.classify_event(_inv(verify="zoom", meeting_id="1",
+                                  deadline_days=-9, deadline_estimated=True)) == "attendable"
+
+
+def test_classify_expired_when_link_definitively_gone():
+    assert he.classify_event(_inv(verify="gone")) == "expired"
+
+
+def test_classify_unverified_on_resolve_error_kept_not_dropped():
+    # could not confirm (error/other) AND not explicitly past → unverified, NOT expired
+    assert he.classify_event(_inv(verify="error")) == "unverified"
+    assert he.classify_event(_inv(verify="other", resolved=True)) == "unverified"
+
+
+def test_classify_recurring_window_stays_attendable():
+    # a recurring «Mon–Fri» window has no explicit deadline → attendable when the room resolves
+    assert he.classify_event(_inv(verify="zoom", meeting_id="1",
+                                  deadline_ts=None, deadline_days=None)) == "attendable"
+
+
+def test_verify_events_offline_marks_zoom_by_meeting_id_else_error():
+    invs = [_inv(meeting_id="1", tracking_url="t1"), _inv(meeting_id=None, tracking_url="t2")]
+    he.verify_events(invs, live=False)
+    assert invs[0]["verify"] == "zoom"
+    assert invs[1]["verify"] == "error"   # offline can't confirm → unverified, never dropped
+
+
+def test_urgency_key_orders_attendable_before_expired_and_soonest_deadline_first():
+    live_soon = _inv(verify="zoom", meeting_id="1", deadline_days=1, deadline_estimated=False)
+    live_far = _inv(verify="zoom", meeting_id="2", deadline_days=9, deadline_estimated=False)
+    dead = _inv(verify="gone", deadline_days=-2, deadline_estimated=False)
+    ordered = sorted([dead, live_far, live_soon], key=he._urgency_key)
+    assert ordered[0] is live_soon and ordered[1] is live_far and ordered[2] is dead
+
+
+def test_partition_groups_splits_all_dead_room_out_and_keeps_mixed_live():
+    now = 1_700_100_000.0
+    live_grp = {"key": "L", "latest_ts": 1_700_050_000, "invites": [
+        _inv(mailbox="l1@x", verify="zoom", meeting_id="1"),
+        _inv(mailbox="l2@x", verify="gone", deadline_days=-5, deadline_estimated=False)]}
+    dead_grp = {"key": "D", "latest_ts": 1_700_000_000, "invites": [
+        _inv(mailbox="d1@x", verify="gone", deadline_days=-9, deadline_estimated=False)]}
+    attend, expired = he.partition_groups([dead_grp, live_grp], now)
+    assert [g["key"] for g in attend] == ["L"]      # mixed room stays attendable
+    assert [g["key"] for g in expired] == ["D"]     # all-dead room moves to «истёкшие»
+    # within the live room, the attendable candidate sorts above the dead one
+    assert attend[0]["invites"][0]["mailbox"] == "l1@x"
+    assert attend[0]["invites"][0]["_status"] == "attendable"
+    assert attend[0]["invites"][1]["_status"] == "expired"
+    assert attend[0]["_live_n"] == 1

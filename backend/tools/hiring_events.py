@@ -565,6 +565,158 @@ def candidate_join(inv: dict, *, group_meeting_id: str | None = None) -> dict:
     }
 
 
+# ---- OFFICIAL verification + urgency classification ------------------------------
+# The «События найма» surface must show, VERIFIED (not guessed): which rooms/candidates are
+# still ATTENDABLE («можно зайти») vs UNRECOVERABLE («истёкшие — не вернуть»). Verification is
+# two live checks: (1) the icims tracking link still resolves to a real *.zoom.us room, and
+# (2) the booking window/deadline is not EXPLICITLY in the past. A resolve error or an ambiguous
+# resolve is treated as UNVERIFIED (kept in «Актуальные» with a «проверить вручную» note) — we
+# NEVER silently drop a possibly-joinable room (owner: «либо не убирать, чтобы не рисковать»).
+_ZOOM_HOST_RE = re.compile(r"://[^/]*zoom\.us/", re.I)
+_GONE_URL_RE = re.compile(
+    r"(event[-_ ]?(has[-_ ]?)?ended|registration[-_ ]?closed|no[-_ ]?longer[-_ ]?available|"
+    r"expired|not[-_ ]?found|/404|/error)", re.I)
+
+
+def _resolve_status(tracking_url: str, timeout: float = 12.0) -> str:
+    """OFFICIAL live check of one tracking link → a status, NOT a guess:
+      'zoom'  — resolves to a real *.zoom.us room (attendable);
+      'gone'  — resolves to a definitively dead destination (HTTP 404/410, or a URL that reads
+                 event-ended/registration-closed/expired) → unrecoverable;
+      'error' — could not check (timeout/network/no httpx) → UNVERIFIED, never treated as dead;
+      'other' — resolved to some non-Zoom 200 page (ambiguous) → UNVERIFIED.
+    Best-effort; only a DEFINITIVE dead signal returns 'gone'."""
+    if not tracking_url:
+        return "error"
+    try:
+        import httpx
+    except Exception:
+        return "error"
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                             "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+    try:
+        with httpx.Client(follow_redirects=True, timeout=timeout, headers=headers) as c:
+            r = c.get(tracking_url)
+            final = str(r.url) or ""
+            if _ZOOM_HOST_RE.search(final):
+                return "zoom"
+            if r.status_code in (404, 410):
+                return "gone"
+            if _GONE_URL_RE.search(final):
+                return "gone"
+            return "other"
+    except Exception:
+        return "error"
+
+
+def verify_events(invites: list[dict], *, live: bool = True) -> list[dict]:
+    """Stamp each invite with `verify` ∈ {'zoom','gone','error','other'} — the OFFICIAL resolve
+    status. An invite that already resolved to a Zoom room (meeting_id) is 'zoom' with no extra
+    call. Others get ONE cached live `_resolve_status`. `live=False` (tests) skips the network and
+    uses only the already-resolved meeting_id. Guarded: any failure → 'error' (never raises)."""
+    for inv in invites:
+        try:
+            if inv.get("meeting_id"):
+                inv["verify"] = "zoom"
+                continue
+            tu = inv.get("tracking_url")
+            if not tu:
+                inv["verify"] = "error"
+                continue
+            if not live:
+                inv["verify"] = "error"
+                continue
+            cache = _load_cache()
+            ent = cache.get(tu) or {}
+            st = ent.get("status")
+            if not st:
+                st = _resolve_status(tu)
+                with _CACHE_LOCK:
+                    cache = _load_cache()
+                    e = cache.get(tu) or {}
+                    e["status"] = st
+                    e.setdefault("ts", int(time.time()))
+                    cache[tu] = e
+                    _save_cache(cache)
+            inv["verify"] = st
+        except Exception:
+            inv["verify"] = "error"
+    return invites
+
+
+def _explicit_expired(inv: dict, now: float | None = None) -> bool:
+    """True ONLY when there is an EXPLICIT past booking deadline (a real parsed «by <date>» /
+    «within N days» window now in the past — an ESTIMATE never expires, mirroring the «Собес»
+    is_expired rule). A recurring window («Пн–Пт 9:30–17:00») has no explicit date → never past."""
+    days = inv.get("deadline_days")
+    estimated = inv.get("deadline_estimated")
+    if days is not None and days < 0 and not estimated:
+        return True
+    return False
+
+
+def classify_event(inv: dict, now: float | None = None) -> str:
+    """PURE classifier (uses the pre-computed `verify` + deadline fields; no network):
+      'attendable' — verified live Zoom room AND no explicit-past deadline → «можно зайти»;
+      'expired'    — explicit past deadline OR a definitively-dead link → «не вернуть»;
+      'unverified' — could not confirm (resolve error / non-Zoom page) AND not explicitly past →
+                     kept in «Актуальные» with «проверить вручную» (never dropped)."""
+    if _explicit_expired(inv, now):
+        return "expired"
+    v = inv.get("verify") or ("zoom" if inv.get("meeting_id") else
+                              ("other" if inv.get("resolved") else "error"))
+    if v == "gone":
+        return "expired"
+    if v == "zoom":
+        return "attendable"
+    return "unverified"
+
+
+_RANK = {"attendable": 0, "unverified": 1, "expired": 2}
+
+
+def _urgency_key(inv: dict, now: float | None = None) -> tuple:
+    """Sort key, smaller = MORE urgent: verified-attendable before unverified before expired;
+    then the soonest EXPLICIT deadline first (estimated/none sink); then the newest invite first
+    (a fresher event is likelier still live)."""
+    status = classify_event(inv, now)
+    days = inv.get("deadline_days")
+    estimated = inv.get("deadline_estimated")
+    if days is not None and not estimated:
+        dl = days            # explicit → soonest (even negative) sorts first within its group
+    else:
+        dl = 10_000          # estimated / none → after every explicit deadline
+    return (_RANK.get(status, 3), dl, -(inv.get("date_ts") or 0))
+
+
+def partition_groups(groups: list[dict], now: float | None = None) -> tuple[list[dict], list[dict]]:
+    """Split grouped events into (attendable_groups, expired_groups), each invite classified +
+    sorted by urgency. A group is EXPIRED only when ALL its candidates are unrecoverable; a group
+    with ANY live/unverified candidate stays ATTENDABLE (its invites ordered live-first, dead ones
+    dimmed at the bottom). Attendable groups are ordered by their most-urgent candidate; expired
+    groups by recency. Each invite is stamped `_status` for the row renderer."""
+    if now is None:
+        now = time.time()
+    attend: list[dict] = []
+    expired: list[dict] = []
+    for g in groups:
+        invs = list(g.get("invites") or [])
+        for inv in invs:
+            inv["_status"] = classify_event(inv, now)
+        invs.sort(key=lambda i: _urgency_key(i, now))
+        g["invites"] = invs
+        live = [i for i in invs if i.get("_status") != "expired"]
+        g["_live_n"] = len(live)
+        if live:
+            g["_urgency"] = _urgency_key(live[0], now)
+            attend.append(g)
+        else:
+            expired.append(g)
+    attend.sort(key=lambda g: g.get("_urgency") or (9, 9, 0))
+    expired.sort(key=lambda g: -(g.get("latest_ts") or 0))
+    return attend, expired
+
+
 # ---- rendering (dedicated «События найма» surface) -------------------------------
 def _fmt_date(ts: int) -> str:
     if not ts:
@@ -837,12 +989,25 @@ def _invite_row_html(inv: dict, *, group_meeting_id: str | None = None,
 
     claim_html = _claim_block(mbx, claims, me, color_for)
 
+    # verified-status badge (set by partition_groups): dim the unrecoverable ones, flag the
+    # unverified ones for a manual check — a live/attendable row carries no badge.
+    status = inv.get("_status") or ""
+    status_badge = ""
+    wrap_cls = "he-inv-wrap"
+    if status == "expired":
+        status_badge = '<span class="he-st he-st-over">не вернуть</span>'
+        wrap_cls += " he-inv-dead"
+    elif status == "unverified":
+        status_badge = ('<span class="he-st he-st-chk" title="Ссылку не удалось проверить '
+                        'автоматически — проверьте вручную">проверить</span>')
+
     return (
-        '<div class="he-inv-wrap">'
+        f'<div class="{wrap_cls}">'
         '<div class="he-inv">'
         f'<div class="he-inv-main"><span class="he-inv-name">{who}</span>'
         f'<span class="he-inv-mb">{mb}</span>{_meta_row_html(inv)}</div>'
         '<div class="he-inv-actions">'
+        f'{status_badge}'
         f'<span class="he-inv-when">{escape(when)}</span>'
         f'{link_html}'
         f'<a class="he-inv-open" href="{open_mail}">Письмо</a>'
@@ -975,6 +1140,21 @@ _CSS = """
 .he-claim-cancel{background:var(--panel);color:var(--ink-soft);}
 .he-claim-cancel:hover{border-color:var(--danger);color:var(--danger);}
 .he-claim-mine{margin-left:auto;display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;}
+/* urgency split: section headers + verified status badges */
+.he-sec{font-size:14px;font-weight:700;color:var(--ink);margin:18px 0 10px;display:flex;
+  align-items:baseline;gap:8px;}
+.he-sec-n{font-size:12px;font-weight:600;color:var(--ink-mute);font-family:var(--ff-mono);}
+.he-exp-sec{margin:20px 0 0;border-top:1px dashed var(--line);padding-top:12px;}
+.he-exp-sec>summary{cursor:pointer;font-size:13.5px;font-weight:700;color:var(--ink-mute);
+  list-style:none;display:flex;align-items:baseline;gap:8px;}
+.he-exp-sec>summary::-webkit-details-marker{display:none;}
+.he-exp-sec[open]>summary{margin-bottom:10px;}
+.he-exp-body .he-card{opacity:.6;}
+.he-st{display:inline-flex;align-items:center;height:var(--chip-sm-h,20px);padding:0 8px;
+  border-radius:var(--r-full);font-size:11px;font-weight:700;white-space:nowrap;flex:0 0 auto;}
+.he-st-over{color:var(--ink-mute);background:var(--panel-2);}
+.he-st-chk{color:var(--warn,#b45309);background:var(--warn-soft,#fef3c7);}
+.he-inv-dead{opacity:.55;}
 """
 
 
@@ -1014,21 +1194,44 @@ def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
     from backend.tools import mailcrm_ui
     if groups is None:
         groups = grouped_events()
+    # OFFICIALLY verify every invite (live Zoom-resolve status, cached) then split + sort by
+    # urgency: «Актуальные — можно зайти» (live/unverified, urgency-first) vs «Истёкшие — не
+    # вернуть» (all-dead rooms, collapsed). Guarded — a verify hiccup keeps a room in «Актуальные».
+    now = time.time()
+    try:
+        verify_events([inv for g in groups for inv in (g.get("invites") or [])])
+        attend, expired = partition_groups(groups, now)
+    except Exception:
+        attend, expired = groups, []
     n_rooms = len(groups)
     n_inv = sum(len(g.get("invites") or []) for g in groups)
+    n_live = sum(g.get("_live_n", len(g.get("invites") or [])) for g in attend)
     lead = (
         "Живые события найма Teleperformance: подключитесь к Zoom-комнате под нужным "
         "кандидатом и получите оффер на месте — без теста. Отметьте галочкой, во сколько "
-        "подключитесь к кандидату — это видят все. Список формируется из входящих приглашений."
+        "подключитесь к кандидату — это видят все. Отсортировано по срочности; истёкшие "
+        "приглашения (комната недоступна или срок явно прошёл) вынесены отдельно."
     )
     if groups:
-        cards = "".join(_group_card_html(g, claims=claims, me=me, color_for=color_for)
-                        for g in groups)
-        body_inner = f'<p class="he-lead">{escape(lead)}</p>{cards}'
+        live_cards = "".join(_group_card_html(g, claims=claims, me=me, color_for=color_for)
+                             for g in attend)
+        live_html = (f'<h2 class="he-sec">Актуальные — можно зайти '
+                     f'<span class="he-sec-n">{len(attend)} комн. · {n_live} канд.</span></h2>'
+                     + (live_cards or '<div class="he-empty">Нет актуальных приглашений — '
+                        'все вынесены в «истёкшие» ниже.</div>'))
+        exp_html = ""
+        if expired:
+            exp_cards = "".join(_group_card_html(g, claims=claims, me=me, color_for=color_for)
+                                for g in expired)
+            exp_html = (
+                '<details class="he-exp-sec"><summary>Истёкшие — не вернуть '
+                f'<span class="he-sec-n">{len(expired)} комн.</span></summary>'
+                f'<div class="he-exp-body">{exp_cards}</div></details>')
+        body_inner = f'<p class="he-lead">{escape(lead)}</p>{live_html}{exp_html}'
     else:
         body_inner = ('<p class="he-lead">' + escape(lead) + '</p>'
                       '<div class="he-empty">Пока нет приглашений на события найма.</div>')
-    meta = f"комнат: {n_rooms} · приглашений: {n_inv}"
+    meta = f"комнат: {n_rooms} · приглашений: {n_inv} · актуальных: {n_live}"
     head = mailcrm_ui._page_head("События найма", count=n_rooms, meta=meta)
     body = (f'<style>{_CSS}</style><div class="he-wrap">{head}{body_inner}</div>'
             f'{_TOGGLE_JS}')

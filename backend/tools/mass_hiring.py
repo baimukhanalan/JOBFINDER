@@ -3241,12 +3241,19 @@ def fetch_experian() -> list[dict]:
     return _fetch_smartrecruiters("experian", "Experian", country="us")
 
 
-# The insurance-AEP + Chewy/Canada connectors live in separate modules that import the reusable
-# readers FROM this module — imported HERE (after every _fetch_* helper is defined) so the circular
-# import resolves cleanly.
-from backend.tools import connectors_insurance as _ci  # noqa: E402
-from backend.tools import connectors_extra as _ce  # noqa: E402
-from backend.tools import connectors_seasonal as _cs  # noqa: E402
+# The insurance-AEP + Chewy/Canada + seasonal connectors live in separate modules that import the
+# reusable readers FROM this module. Referencing their functions at _SOURCES-build time would create
+# a circular import (a test that imports the connector module first would see this module reach the
+# _SOURCES literal while the connector module is only partially initialised → AttributeError). So the
+# external fetchers are wrapped LAZILY — the connector module is resolved + called only at collect()
+# time, by which point every module is fully loaded.
+def _ext(_mod: str, _fn: str):
+    def _call():
+        import importlib
+        return getattr(importlib.import_module(f"backend.tools.{_mod}"), _fn)()
+    _call.__name__ = _fn
+    return _call
+
 
 _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "remoteok": fetch_remoteok, "amazon": fetch_amazon_remote,
@@ -3279,18 +3286,18 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             "affirm": fetch_affirm, "ramp": fetch_ramp, "kin": fetch_kin,
             "wealthfront": fetch_wealthfront, "experian": fetch_experian,
             # insurance-sales AEP seasonal ramps (2026-09-23, connectors_insurance.py)
-            "selectquote": _ci.fetch_selectquote, "healthmarkets": _ci.fetch_healthmarkets,
-            "springventure": _ci.fetch_springventure,
+            "selectquote": _ext("connectors_insurance", "fetch_selectquote"), "healthmarkets": _ext("connectors_insurance", "fetch_healthmarkets"),
+            "springventure": _ext("connectors_insurance", "fetch_springventure"),
             # Chewy holiday CS ramp + Canada fintech/tech CS (connectors_extra.py)
-            "chewy": _ce.fetch_chewy,
-            "koho": _ce.fetch_koho, "neo": _ce.fetch_neo, "wealthsimple": _ce.fetch_wealthsimple,
-            "clearco": _ce.fetch_clearco, "float": _ce.fetch_float,
-            "hootsuite": _ce.fetch_hootsuite, "coveo": _ce.fetch_coveo,
+            "chewy": _ext("connectors_extra", "fetch_chewy"),
+            "koho": _ext("connectors_extra", "fetch_koho"), "neo": _ext("connectors_extra", "fetch_neo"), "wealthsimple": _ext("connectors_extra", "fetch_wealthsimple"),
+            "clearco": _ext("connectors_extra", "fetch_clearco"), "float": _ext("connectors_extra", "fetch_float"),
+            "hootsuite": _ext("connectors_extra", "fetch_hootsuite"), "coveo": _ext("connectors_extra", "fetch_coveo"),
             # seasonal Q4 retail CS + fintech/insurtech (2026-09-23, connectors_seasonal.py)
-            "macys": _cs.fetch_macys, "ulta": _cs.fetch_ulta, "nordstrom": _cs.fetch_nordstrom,
-            "ibex": _cs.fetch_ibex, "mercury": _cs.fetch_mercury, "current": _cs.fetch_current,
-            "rocketmoney": _cs.fetch_rocketmoney, "lendingtree": _cs.fetch_lendingtree,
-            "angi": _cs.fetch_angi, "ro": _cs.fetch_ro}
+            "macys": _ext("connectors_seasonal", "fetch_macys"), "ulta": _ext("connectors_seasonal", "fetch_ulta"), "nordstrom": _ext("connectors_seasonal", "fetch_nordstrom"),
+            "ibex": _ext("connectors_seasonal", "fetch_ibex"), "mercury": _ext("connectors_seasonal", "fetch_mercury"), "current": _ext("connectors_seasonal", "fetch_current"),
+            "rocketmoney": _ext("connectors_seasonal", "fetch_rocketmoney"), "lendingtree": _ext("connectors_seasonal", "fetch_lendingtree"),
+            "angi": _ext("connectors_seasonal", "fetch_angi"), "ro": _ext("connectors_seasonal", "fetch_ro")}
 
 
 def collect(sources: list[str] | None = None, us_only: bool = True) -> dict:

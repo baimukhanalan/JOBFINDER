@@ -36,12 +36,23 @@ from backend.tools import mail_db
 # from a Teleperformance icims sender. Kept narrow so ordinary TP/icims application
 # mail (confirmations, assessment invites) is never swept in.
 _SUBJECT_RE = re.compile(r"(virtual\s+hiring\s+event|hiring\s+event)", re.I)
-_SENDER_RE = re.compile(r"(teleperformance|talent\.icims\.com)", re.I)
+# Broadened 2026-09-24: the «Hiring Event» subject is the strong signal — capture the invite from
+# ANY mass-hiring BPO that runs virtual hiring events (was TP/icims-only, so a fresh TTEC/ModernHire
+# «Virtual Hiring Event» invite never showed on the board). Subject-gated so it can't false-positive
+# a generic newsletter.
+_SENDER_RE = re.compile(
+    r"(teleperformance|talent\.icims\.com|\bttec\b|modernhire|modern\s*hire|concentrix|"
+    r"foundever|sutherland|conduent|alorica|sitel|gainwell|maximus)", re.I)
 
 # SQL predicate mirror of the two regexes above (case-insensitive), for the DB scan.
 _MATCH_SQL = (
     "NOT outbound "
-    "AND (from_email ILIKE '%teleperformance%' OR from_email ILIKE '%talent.icims.com%') "
+    "AND (from_email ILIKE '%teleperformance%' OR from_email ILIKE '%talent.icims.com%' "
+    "     OR from_email ILIKE '%ttec%' OR from_email ILIKE '%modernhire%' "
+    "     OR from_email ILIKE '%concentrix%' OR from_email ILIKE '%foundever%' "
+    "     OR from_email ILIKE '%sutherland%' OR from_email ILIKE '%conduent%' "
+    "     OR from_email ILIKE '%alorica%' OR from_email ILIKE '%sitel%' "
+    "     OR from_email ILIKE '%gainwell%' OR from_email ILIKE '%maximus%') "
     "AND (subject ILIKE '%virtual hiring event%' OR subject ILIKE '%hiring event%')"
 )
 
@@ -663,6 +674,18 @@ def classify_event(inv: dict, now: float | None = None) -> str:
                      kept in «Актуальные» with «проверить вручную» (never dropped)."""
     if _explicit_expired(inv, now):
         return "expired"
+    # A hiring-event invite older than the max age is STALE — the event has passed and its Zoom room
+    # is dead even for a recurring-window («Пн–Пт») invite whose tracking link still soft-resolves.
+    # This clears the old batch that otherwise lingers as «демо» (owner 2026-09-24). Env-tunable.
+    try:
+        import os
+        import time as _t
+        max_days = float(os.getenv("HIRING_EVENT_MAX_AGE_DAYS", "14"))
+        ts = int(inv.get("date_ts") or 0)
+        if ts > 1_000_000_000 and (((now if now is not None else _t.time()) - ts) / 86400.0) > max_days:
+            return "expired"
+    except Exception:
+        pass
     v = inv.get("verify") or ("zoom" if inv.get("meeting_id") else
                               ("other" if inv.get("resolved") else "error"))
     if v == "gone":

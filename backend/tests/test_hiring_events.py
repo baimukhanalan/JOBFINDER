@@ -257,12 +257,25 @@ def test_candidate_join_resolved_flag_derived_from_meeting_id():
 # ---- OFFICIAL verification + urgency classification (pure) ------------------------
 
 def _inv(**kw):
-    """A minimal invite dict for the classifier (pre-stamped verify/deadline fields)."""
+    """A minimal invite dict for the classifier (pre-stamped verify/deadline fields). date_ts
+    defaults to RECENT so the age-cap (a stale invite older than HIRING_EVENT_MAX_AGE_DAYS is
+    «expired») doesn't fire — the verify/deadline tests below assert verify semantics, not age."""
+    import time as _t
     base = {"mailbox": "a@takhet.com", "tracking_url": "https://tracking.icims.com/x",
-            "date_ts": 1_700_000_000, "deadline_ts": None, "deadline_days": None,
+            "date_ts": int(_t.time()) - 3600, "deadline_ts": None, "deadline_days": None,
             "deadline_estimated": True, "meeting_id": None, "resolved": False}
     base.update(kw)
     return base
+
+
+def test_classify_old_invite_expires_even_recurring_window():
+    """A hiring-event invite older than the max age is «Истёкшие» even for a recurring-window
+    (Пн–Пт) invite whose Zoom still soft-resolves — the event has passed (owner 2026-09-24)."""
+    import time as _t
+    old = _inv(verify="zoom", meeting_id="1", date_ts=int(_t.time()) - 30 * 86400)
+    assert he.classify_event(old, now=_t.time()) == "expired"
+    fresh = _inv(verify="zoom", meeting_id="1", date_ts=int(_t.time()) - 2 * 86400)
+    assert he.classify_event(fresh, now=_t.time()) == "attendable"
 
 
 def test_classify_attendable_when_zoom_resolved_and_no_past_deadline():

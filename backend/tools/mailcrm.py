@@ -42,7 +42,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-09-19-other-triage-expand"
+CLASSIFIER_VERSION = "2026-09-24-free-email-spam-demote"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be
@@ -506,6 +506,29 @@ def auto_skip_stale_assessments(days: int = 7) -> int:
     return len(mbxs)
 
 
+# Free-email senders (gmail/yahoo/…) never send REAL 1:1 interview/offer invitations to our synthetic
+# personas at VOLUME — a persona that applied gets its email harvested by JOB-SCAM spammers who blast
+# «Schedule your interview today!!!» / «Still seeking employment?» from gmail/yahoo. Real interviews
+# come from ATS / company / scheduling-tool domains (ashby/greenhouse/calendly/modernloop/goodtime/
+# company.com). So an interview/offer from a free-email sender is demoted to 'other' (spam) — it can't
+# pollute the «Собес» delegation pool or fire the reminder bot (owner report 2026-09-24: ~120 gmail
+# "interviews"/day flooding the pool + spamming the TG bot while auto-apply was paused).
+_FREE_EMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "yahoo.co.uk", "hotmail.com",
+    "hotmail.co.uk", "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
+    "mac.com", "proton.me", "protonmail.com", "gmx.com", "gmx.net", "yandex.ru", "yandex.com",
+    "mail.ru", "inbox.ru", "list.ru", "bk.ru", "zoho.com", "fastmail.com", "hey.com",
+}
+
+
+def _is_free_email_sender(from_email: str) -> bool:
+    fe = (from_email or "").strip().lower()
+    if "@" not in fe:
+        return False
+    dom = fe.split("@")[-1].strip().strip(">").strip()
+    return dom in _FREE_EMAIL_DOMAINS
+
+
 def _kind_with_done_override(subject: str, body: str, mailbox: str, from_email: str = "") -> str:
     kind = classify(subject, body)
     # A known recruiter BULK-OUTREACH blast (TP «DIRECT HIRE JOB OPPORTUNITY») is never a 1:1
@@ -513,6 +536,9 @@ def _kind_with_done_override(subject: str, body: str, mailbox: str, from_email: 
     # false owner interview alert. Belt-and-braces behind removing «get you hired today» from the
     # interview keyword bucket; scoped tight to the one sender+subject (see _is_bulk_outreach).
     if kind in ("interview", "offer") and _is_bulk_outreach(subject, from_email):
+        return "other"
+    # A job-scam interview/offer blast from a free-email sender (see _FREE_EMAIL_DOMAINS) — spam.
+    if kind in ("interview", "offer") and _is_free_email_sender(from_email):
         return "other"
     if kind == "action_needed":
         # (1) A PASSED persona (done-set): ALL its residual action rows resolve to

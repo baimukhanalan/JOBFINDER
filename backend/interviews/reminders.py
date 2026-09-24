@@ -11,6 +11,7 @@ Not wired into the dashboard — the controller deploys this as a separate proce
 """
 from __future__ import annotations
 
+import os
 import json
 import logging
 import time
@@ -223,13 +224,19 @@ def _maybe_event_pass(now: datetime) -> None:
         _EVENT_PASS_MARKER.write_text(json.dumps({"ts": now.timestamp()}))
     except Exception:
         pass
+    # AUTO-distribution is OFF by default (owner 2026-09-24: «убрать не реальные упоминания — их
+    # ещё не поставил сам человек»). It wrote an iv_event_claim per candidate that rendered as
+    # «@X · подключится HH:MM» — a fake commitment nobody actually made. Only a REAL human claim
+    # (POST /hiring-events/claim) should appear. Re-enable with HIRING_EVENT_AUTODISTRIBUTE=1 only
+    # once auto-assignments render as a SUGGESTION, not a commitment.
+    if os.getenv("HIRING_EVENT_AUTODISTRIBUTE", "0") == "1":
+        try:
+            from backend.tools import hiring_events as he
+            he.auto_distribute(now)
+        except Exception as e:
+            logger.warning("_maybe_event_pass: distribute failed: %s", e)
     try:
-        from backend.tools import hiring_events as he
-        he.auto_distribute(now)
-    except Exception as e:
-        logger.warning("_maybe_event_pass: distribute failed: %s", e)
-    try:
-        send_event_reminders(now)
+        send_event_reminders(now)  # reminds only interviewers who MANUALLY claimed a room
     except Exception as e:
         logger.warning("_maybe_event_pass: reminders failed: %s", e)
 

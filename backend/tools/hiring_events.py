@@ -674,18 +674,10 @@ def classify_event(inv: dict, now: float | None = None) -> str:
                      kept in «Актуальные» with «проверить вручную» (never dropped)."""
     if _explicit_expired(inv, now):
         return "expired"
-    # A hiring-event invite older than the max age is STALE — the event has passed and its Zoom room
-    # is dead even for a recurring-window («Пн–Пт») invite whose tracking link still soft-resolves.
-    # This clears the old batch that otherwise lingers as «демо» (owner 2026-09-24). Env-tunable.
-    try:
-        import os
-        import time as _t
-        max_days = float(os.getenv("HIRING_EVENT_MAX_AGE_DAYS", "14"))
-        ts = int(inv.get("date_ts") or 0)
-        if ts > 1_000_000_000 and (((now if now is not None else _t.time()) - ts) / 86400.0) > max_days:
-            return "expired"
-    except Exception:
-        pass
+    # Expiry is LINK-BASED, NOT age-based (owner 2026-09-24: «истёк значит только когда ссылка не
+    # рабочая»). A recurring hiring event runs for weeks, so a 2–3-week-old invite whose Zoom room
+    # still resolves is STILL joinable — never expire it on age alone. Only a definitively-dead link
+    # (verify='gone': 404/410/event-ended/registration-closed) is «не вернуть».
     v = inv.get("verify") or ("zoom" if inv.get("meeting_id") else
                               ("other" if inv.get("resolved") else "error"))
     if v == "gone":

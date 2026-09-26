@@ -410,8 +410,12 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
     from backend.tools import interview_priority as ip
     rtz = responsible.get("tz")
     interviews = interviews or []
-    active = [iv for iv in interviews if not iv.get("done_at")]
     done = [iv for iv in interviews if iv.get("done_at")]
+    not_done = [iv for iv in interviews if not iv.get("done_at")]
+    # non-actual (EXPLICITLY-expired: booking window closed / link dead) sink to a «Пропущенные»
+    # block at the very bottom; the actionable list is only the still-bookable ones.
+    active = [iv for iv in not_done if not iv.get("expired")]
+    expired = [iv for iv in not_done if iv.get("expired")]
     sort = pool_sort if pool_sort in ("salary", "urgency", "age") else "urgency"
     active_sorted = ip.sort_groups(active, sort)
 
@@ -429,13 +433,19 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
         list_html = f'<div class="hv-list">{rows}</div>'
     else:
         list_html = '<div class="empty">Активных предстоящих собеседований нет.</div>'
-    done_html = ""
-    if done:
-        done_rows = "".join(_home_row(iv, rtz, as_id) for iv in done)
-        done_html = ('<details class="ivp-det" style="margin-top:8px;border:1px solid var(--line);'
-                     'border-radius:var(--r-sm)"><summary style="cursor:pointer;padding:10px 12px;'
-                     'font-weight:700;font-size:13px;list-style:none">Проведённые ('
-                     f'{len(done)})</summary><div class="hv-list" style="padding:0 8px 8px">{done_rows}</div></details>')
+
+    def _bucket(items, label):
+        if not items:
+            return ""
+        body = "".join(_home_row(iv, rtz, as_id) for iv in items)
+        return ('<details class="ivp-det" style="margin-top:8px;border:1px solid var(--line);'
+                'border-radius:var(--r-sm)"><summary style="cursor:pointer;padding:10px 12px;'
+                f'font-weight:700;font-size:13px;list-style:none">{escape(label)} ({len(items)})'
+                f'</summary><div class="hv-list" style="padding:0 8px 8px">{body}</div></details>')
+
+    # non-actual собесы (link dead / срок истёк) sink to the very bottom, then «Проведённые»
+    expired_html = _bucket(expired, "Пропущенные — ссылка не работает или срок истёк")
+    done_html = _bucket(done, "Проведённые")
 
     tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
     upcoming_n = sum(1 for iv in active if not (iv.get("start_ts") and iv["start_ts"] < datetime.now(timezone.utc)))
@@ -450,7 +460,7 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
         + _week_calendar(active, rtz, as_id)
         + '<div class="hv-card" id="hv"><div class="hv-top">'
         '<h2>Мои собеседования</h2>' + (sort_toggle if active_sorted else "") + '</div>'
-        + list_html + done_html + '</div>' + _HOME_JS)
+        + list_html + expired_html + done_html + '</div>' + _HOME_JS)
     return _shell(responsible, "home", inner, "Главная", as_id=as_id, extra_css=_HOME_CSS)
 
 

@@ -29,6 +29,10 @@ _IC_CAL = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-wi
 _IC_GUIDE = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
              'stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
              '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>')
+_IC_ADMIN = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+             'stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/>'
+             '<rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'
+             '<rect x="3" y="14" width="7" height="7" rx="1"/></svg>')
 
 
 def _role_label(roles: list[str]) -> str:
@@ -55,6 +59,10 @@ def _nav_items(roles: list[str]):
         ("hiring", "События найма", mailcrm_ui._IC_HIRING, "/hiring-events", True),
         ("guide", "Инструкции", _IC_GUIDE, "/cabinet/guide", False),
     ]
+    # an ADMIN who lands on a shared user-shell page (e.g. «События найма») gets a way BACK to the
+    # full admin dashboard — the shared page never exposes the other admin sections inline.
+    if "admin" in (roles or []):
+        items.append(("adminhome", "Админ-панель", _IC_ADMIN, "/", True))
     return items
 
 

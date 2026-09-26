@@ -149,12 +149,14 @@ def _sort_toggle(sort: str, sort_base: str, anchor: str) -> str:
     return "<div class='ivp-sort' role='group' aria-label='Сортировка'>" + "".join(out) + "</div>"
 
 
-def _section(title: str, rows: list[dict], status_of=None, href_of=None) -> str:
-    """A titled section: still-bookable rows shown, EXPLICITLY-expired ones collapsed into a
-    «Истёкшие» details (the header count is the actionable/bookable count). `href_of(row)->str|None`
-    makes each row a link into its переписка."""
+def _section(title: str, rows: list[dict], status_of=None, href_of=None,
+             show_expired: bool = True) -> str:
+    """A titled section: still-bookable rows shown. `href_of(row)->str|None` makes each row a link
+    into its переписка. `show_expired=True` (default, back-compat) appends this section's own
+    EXPLICITLY-expired rows in a collapsed «Пропущенные» details; `show_expired=False` renders ONLY
+    the bookable rows (the card then collects ALL expired into ONE bottom «Пропущенные» block via
+    `_expired_block`, so non-actual candidates sit at the very bottom of the WHOLE list — owner req)."""
     bookable = [r for r in rows if not r.get("expired")]
-    expired = [r for r in rows if r.get("expired")]
 
     def _sh(r):
         return status_of(r) if status_of else ""
@@ -165,11 +167,24 @@ def _section(title: str, rows: list[dict], status_of=None, href_of=None) -> str:
             f"<span class='ivp-n'>{len(bookable)}</span></div>")
     body = ("<div class='ivp-list'>" + "".join(_row(r, _sh(r), _hr(r)) for r in bookable) + "</div>"
             if bookable else "<div class='ivp-empty'>Нет доступных собеседований</div>")
-    if expired:
-        body += ("<details class='ivp-exp'><summary>Истёкшие ("
-                 f"{len(expired)})</summary><div class='ivp-list'>"
-                 + "".join(_row(r, _sh(r), _hr(r)) for r in expired) + "</div></details>")
+    if show_expired:
+        body += _expired_block([r for r in rows if r.get("expired")], status_of, href_of)
     return head + body
+
+
+def _expired_block(expired: list[dict], status_of=None, href_of=None,
+                   label: str = "Пропущенные — ссылка не работает или срок истёк") -> str:
+    """ONE collapsed «Пропущенные» details for the non-actual (EXPLICITLY-expired) candidates,
+    rendered at the very BOTTOM of a card so they never clutter the actionable list."""
+    if not expired:
+        return ""
+    def _sh(r):
+        return status_of(r) if status_of else ""
+    def _hr(r):
+        return href_of(r) if href_of else None
+    return ("<details class='ivp-exp'><summary>" + escape(label) + f" ({len(expired)})</summary>"
+            "<div class='ivp-list'>"
+            + "".join(_row(r, _sh(r), _hr(r)) for r in expired) + "</div></details>")
 
 
 def priority_card(rows: list[dict], sort: str, sort_base: str, *,
@@ -190,8 +205,10 @@ def priority_card(rows: list[dict], sort: str, sort_base: str, *,
     it, simple = ip.partition(rows)
     it = ip.sort_groups(it, sort)
     simple = ip.sort_groups(simple, sort)
-    sections = (_section("IT‑специальности", it, href_of=href_of)
-                + _section("Простые (не‑IT)", simple, href_of=href_of))
+    # bookable rows in their IT/non-IT sections, then ONE «Пропущенные» block at the very bottom
+    sections = (_section("IT‑специальности", it, href_of=href_of, show_expired=False)
+                + _section("Простые (не‑IT)", simple, href_of=href_of, show_expired=False)
+                + _expired_block([r for r in rows if r.get("expired")], href_of=href_of))
     if collapsible:
         return (f"<details class='ivp-card ivp-det' id='{anchor}' open>"
                 f"<summary><span class='ivp-sum-t'>{escape(title)}</span>"
@@ -220,7 +237,9 @@ def upcoming_list(rows: list[dict], *, title: str = "Актуальные пре
                 f"<p class='ivp-hint'>{escape(empty)}</p></div>")
     ordered = ip.sort_groups(rows, "urgency")
     live_n = sum(1 for r in ordered if not r.get("expired"))
-    section = _section("Актуальные", ordered, status_of=status_of, href_of=href_of)
+    section = (_section("Актуальные", ordered, status_of=status_of, href_of=href_of, show_expired=False)
+               + _expired_block([r for r in ordered if r.get("expired")], status_of=status_of,
+                                href_of=href_of))
     if collapsible:
         return (f"<details class='ivp-card ivp-det' id='{anchor}' open>"
                 f"<summary><span class='ivp-sum-t'>{escape(title)}</span>"

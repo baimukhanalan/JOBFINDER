@@ -45,8 +45,8 @@ def test_upcoming_list_collapses_expired_and_shows_status():
         return P.status_assigned("Иван") if r.get("responsible_id") else P.status_free()
 
     html = P.upcoming_list(rows, status_of=_st, anchor="u-live")
-    # explicitly-expired rows are dropped into a collapsed «Истёкшие (N)» details
-    assert "Истёкшие (1)" in html and "<details" in html
+    # explicitly-expired rows sink into a collapsed «Пропущенные … (N)» details at the bottom
+    assert "Пропущенные" in html and "(1)" in html and "<details" in html
     # actionable (bookable) count in the section header excludes the expired one
     assert "ivp-n'>2<" in html or "ivp-n\">2<" in html or ">2</span>" in html
     # status chips

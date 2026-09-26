@@ -443,7 +443,7 @@ def test_iv_manager_portal_two_sections():
     r = client.get("/manage", follow_redirects=False)
     assert r.status_code == 200
     # the two required sections of the auto-own model are present + separated
-    assert "Мои собеседования — не розданы команде" in r.text and "Роздано команде" in r.text
+    assert "Собеседования за вами" in r.text and "Роздано команде" in r.text
     assert "test_iv_m_s1" in r.text                    # my own (not distributed) shows
     assert "test_iv_m_s2" in r.text                    # the handed-down one shows in «Роздано команде»
 

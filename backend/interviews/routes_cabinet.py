@@ -141,6 +141,72 @@ def dashboard(as_: str = Query("", alias="as"), pool_sort: str = Query("salary")
                                                   pool_sort=pool_sort, sort_base=sort_base))
 
 
+@router.get("/guide", response_class=HTMLResponse)
+def guide(as_: str = Query("", alias="as"),
+          me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """Short, role-specific «как этим пользоваться» instructions (a nav section)."""
+    responsible = _acting_cabinet(me, as_)
+    return HTMLResponse(cabinet_ui.guide_page(responsible, as_id=_view_as(me, responsible)))
+
+
+@router.post("/self_schedule", response_class=HTMLResponse)
+def self_schedule(iid: str = Form(""), start_local: str = Form(""),
+                  as_: str = Form("", alias="as"),
+                  me: dict = Depends(auth.current_responsible)):
+    """The interviewer sets the TIME of their OWN собес after reserving the slot on the
+    recruiter's booking link («во сколько я записался») → it shows in their week calendar and
+    arms the reminders. OWNERSHIP: the interview must be assigned to the acting user
+    (responsible_id == them); a blank time clears it. Redirects back to the home."""
+    responsible = _acting_cabinet(me, as_)
+    from datetime import timedelta
+    try:
+        iid_i = int((iid or "").strip())
+    except (ValueError, TypeError):
+        iid_i = None
+    if iid_i is not None:
+        iv = db.interview_by_id(iid_i)
+        if iv and iv.get("responsible_id") == responsible["id"] and iv.get("status") != "cancelled":
+            start_ts = end_ts = None
+            raw = (start_local or "").strip()
+            if raw:
+                try:
+                    naive = datetime.fromisoformat(raw[:16])
+                    rtz = responsible.get("tz") or slots.DEFAULT_TZ
+                    start_ts = naive.replace(second=0, microsecond=0,
+                                             tzinfo=slots.zone(rtz)).astimezone(slots.UTC)
+                    end_ts = start_ts + timedelta(minutes=slots.DURATION_MIN)
+                except ValueError:
+                    start_ts = end_ts = None
+            try:
+                db.set_interview_start(iid_i, start_ts, end_ts)
+            except Exception as e:
+                log.warning("self_schedule failed: %s", e)
+    back = f"/cabinet?as={responsible['id']}" if _view_as(me, responsible) else "/cabinet"
+    return RedirectResponse(back, status_code=303)
+
+
+@router.post("/mark_done", response_class=HTMLResponse)
+def mark_done(iid: str = Form(""), done: str = Form("1"),
+              as_: str = Form("", alias="as"),
+              me: dict = Depends(auth.current_responsible)):
+    """Toggle a собес «проведено». OWNERSHIP: assigned to the acting user. Redirects home."""
+    responsible = _acting_cabinet(me, as_)
+    try:
+        iid_i = int((iid or "").strip())
+    except (ValueError, TypeError):
+        iid_i = None
+    if iid_i is not None:
+        iv = db.interview_by_id(iid_i)
+        if iv and iv.get("responsible_id") == responsible["id"]:
+            on = (done or "").strip() not in ("0", "false", "no", "off", "")
+            try:
+                db.mark_interview_done(iid_i, on)
+            except Exception as e:
+                log.warning("mark_done failed: %s", e)
+    back = f"/cabinet?as={responsible['id']}" if _view_as(me, responsible) else "/cabinet"
+    return RedirectResponse(back, status_code=303)
+
+
 @router.get("/availability", response_class=HTMLResponse)
 def availability_get(as_: str = Query("", alias="as"),
                      me: dict = Depends(auth.current_responsible)) -> HTMLResponse:

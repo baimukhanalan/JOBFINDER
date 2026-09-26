@@ -15,8 +15,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from html import escape
 
-from backend.interviews import slots
+from backend.interviews import portal_shell, slots
 from backend.tools import mailcrm_ui
+
+
+def _roles_of(u: dict) -> list:
+    r = u.get("roles")
+    if r:
+        return list(r)
+    return [u.get("role")] if u.get("role") else ["manager"]
 
 _MG_CSS = """
 main{max-width:940px;margin:0 auto;padding:20px 18px;}
@@ -388,7 +395,7 @@ def portal_page(manager: dict, subs: list[dict], own_ivs: list[dict],
         '<button class="hbtn btn" type="submit">Забрать</button>'
         '</form>') if active_subs else ""
     dist = (
-        '<div class="mg-card"><h3>Раздать / забрать у команды</h3>'
+        '<div class="mg-card"><h3>2. Раздать / забрать у команды</h3>'
         '<p class="mg-hint">Раздайте N своих собесов конкретному сотруднику (по текущему фильтру '
         'пола/направления ниже) — они уйдут ему; или заберите их обратно себе. Либо распределите '
         'все свои нераспределённые собесы поровну между вами и командой одной кнопкой.</p>'
@@ -470,37 +477,45 @@ def portal_page(manager: dict, subs: list[dict], own_ivs: list[dict],
         blurb=("Ваши нераспределённые собеседования по приоритету — сложные (IT) и простые (не‑IT), "
                "по зарплате, срочности брони слота или давности заявки. Нажмите на кандидата — "
                "откроется переписка. Разбирайте сверху вниз."),
-        empty="Нераспределённых собесов нет.", href_of=_mg_href)
+        empty="Нераспределённых собесов нет.", href_of=_mg_href, collapsible=True)
     upcoming_card = priority_ui.upcoming_list(
         scope_ivs, anchor="mg-live", status_of=_mg_status,
         title="Актуальные предстоящие собеседования",
         blurb=("Все ваши живые собесы (свои + розданные команде), у которых срок брони ещё не истёк, "
                "— от самых срочных. Явно просроченные — в «Истёкшие»."),
-        empty="Актуальных предстоящих собеседований у вас нет.", href_of=_mg_href)
+        empty="Актуальных предстоящих собеседований у вас нет.", href_of=_mg_href, collapsible=True)
 
+    banner = portal_shell.admin_banner(manager.get("name") or "", as_id)
     body = (
-        priority_ui.CSS +
-        _topbar(manager, "portal", is_admin_view) +
-        admin_bar +
+        banner +
         _tg_banner(tg_missing) +
-        '<h1 class="mg-h1">Портал управляющего</h1>'
-        '<p class="mg-lead">Выделенные вам собеседования сразу числятся за вами. Что не раздадите '
-        'команде — проводите сами; остальное распределяйте между сотрудниками.</p>'
-        + _note(notice) + stats + upcoming_card +
-        '<div class="mg-card"><h3>Моя команда</h3>'
-        '<p class="mg-hint">Сотрудники под вашим руководством. Раздавайте им собесы, забирайте '
-        'обратно и видьте их загрузку.</p>'
+        '<h1 class="mg-h1">Команда</h1>'
+        '<p class="mg-lead">Здесь вы распределяете собеседования на свою команду. Всё, что выделил '
+        'вам админ, сразу числится за вами; что не раздадите — проводите сами (они на вкладке '
+        '«Главная»). Раздача сотруднику присылает ему уведомление в Telegram.</p>'
+        + _note(notice) + stats
+        # 1) кого раздать первым (collapsible priority)
+        + priority_card
+        # 2) моя команда + добавить сотрудника
+        + '<div class="mg-card"><h3>1. Моя команда</h3>'
+        '<p class="mg-hint">Сотрудники под вашим руководством и их загрузка. «Докинуть N» рядом с '
+        'сотрудником сразу отдаёт ему N собесов по текущему фильтру.</p>'
         + team_list + add_form + '</div>'
-        + dist +
-        # Section A — my own, not yet distributed
-        '<div class="mg-card"><h3>Мои собеседования — не розданы команде</h3>'
-        '<p class="mg-hint">Собесы, которые пока за вами. Проведёте сами или раздайте сотруднику. '
-        'Найдите нужный по e-mail, отфильтруйте по полу/направлению.</p>'
+        # 3) раздать / забрать (bulk)
+        + dist
+        # 4) собесы, которые ещё за мной — провести самому или раздать
+        + '<div class="mg-card"><h3>3. Собеседования за вами — провести самому или раздать</h3>'
+        '<p class="mg-hint">Пока не розданы: проведёте сами (тогда они на «Главной») или раздайте '
+        'сотруднику из выпадающего списка. Найдите нужный по e-mail, отфильтруйте по полу/направлению.</p>'
         + _filter_form(q, gender, direction, as_id)
         + own_block + '</div>'
-        + priority_card +
-        # Section B — handed to the team
-        '<div class="mg-card"><h3>Роздано команде</h3>'
+        # 5) роздано команде
+        + '<div class="mg-card"><h3>4. Роздано команде</h3>'
         '<p class="mg-hint">Собесы, которые проводят ваши сотрудники. Любой можно забрать себе.</p>'
-        + team_block + '</div>')
-    return _doc(body)
+        + team_block + '</div>'
+        # 6) весь живой поток (collapsible)
+        + upcoming_card)
+    extra_head = f"<style>{_MG_CSS}</style>{priority_ui.CSS}"
+    return portal_shell.shell(active="team", roles=_roles_of(manager),
+                              name=manager.get("name") or manager.get("login") or "",
+                              body=body, title="Команда", as_id=as_id, extra_head=extra_head)

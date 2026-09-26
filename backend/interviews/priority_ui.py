@@ -75,6 +75,18 @@ a.ivp-bk:hover{color:var(--accent-deep);text-decoration:none;filter:brightness(.
 .ivp-exp[open]>summary::before{content:'▾';}
 .ivp-exp>summary:hover{color:var(--ink-soft);}
 .ivp-exp .ivp-list{margin-top:8px;}
+/* collapsible card: the title lives in <summary>, click the ▸/▾ to fold the whole card away so
+   the sections BELOW it are reachable without scrolling past a long list (owner request). */
+details.ivp-det{padding:0;overflow:hidden;}
+details.ivp-det>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:9px;
+  padding:14px 18px;user-select:none;}
+details.ivp-det>summary::-webkit-details-marker{display:none;}
+details.ivp-det>summary::before{content:'▸';color:var(--ink-mute);font-size:12px;flex:0 0 auto;transition:transform .15s;}
+details.ivp-det[open]>summary::before{content:'▾';}
+details.ivp-det>summary:hover{background:var(--panel-2);}
+.ivp-sum-t{font-size:15px;font-weight:700;}
+.ivp-sum-n{font-family:var(--ff-mono);font-size:11px;font-weight:700;color:#fff;background:var(--ink-mute);border-radius:var(--r-full);padding:1px 8px;}
+.ivp-det-body{padding:0 18px 16px;}
 /* per-user colour: a legend mapping name→colour + a coloured dot */
 .ivp-legend{display:flex;gap:6px 12px;flex-wrap:wrap;margin:0 0 10px;font-size:11.5px;color:var(--ink-soft);}
 .ivp-legend .lg{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;}
@@ -165,10 +177,11 @@ def priority_card(rows: list[dict], sort: str, sort_base: str, *,
                   blurb: str = ("Собеседования по приоритету — сложные (IT) и простые (не‑IT), "
                                 "по зарплате, срочности брони слота или давности заявки."),
                   anchor: str = "ivp-pri", empty: str = "Пока ничего не назначено.",
-                  href_of=None) -> str:
+                  href_of=None, collapsible: bool = False) -> str:
     """The IT/non-IT split priority card (part 1). `sort_base` is the surface URL WITH its
     current query (minus pool_sort) so the sort links keep the portal's context (?as/?q/…).
-    `href_of(row)->str|None` makes each candidate row a link into its переписка."""
+    `href_of(row)->str|None` makes each candidate row a link into its переписка.
+    `collapsible=True` renders the whole card as a foldable <details> (title in the summary)."""
     sort = sort if sort in ("salary", "urgency", "age") else "salary"
     rows = rows or []
     if not rows:
@@ -177,12 +190,18 @@ def priority_card(rows: list[dict], sort: str, sort_base: str, *,
     it, simple = ip.partition(rows)
     it = ip.sort_groups(it, sort)
     simple = ip.sort_groups(simple, sort)
+    sections = (_section("IT‑специальности", it, href_of=href_of)
+                + _section("Простые (не‑IT)", simple, href_of=href_of))
+    if collapsible:
+        return (f"<details class='ivp-card ivp-det' id='{anchor}' open>"
+                f"<summary><span class='ivp-sum-t'>{escape(title)}</span>"
+                f"<span class='ivp-sum-n'>{len(rows)}</span></summary>"
+                f"<div class='ivp-det-body'>"
+                f"<div class='ivp-top'>{_sort_toggle(sort, sort_base, anchor)}</div>"
+                f"<p class='ivp-hint'>{escape(blurb)}</p>{sections}</div></details>")
     return (f"<div class='ivp-card' id='{anchor}'>"
             f"<div class='ivp-top'><h3>{escape(title)}</h3>{_sort_toggle(sort, sort_base, anchor)}</div>"
-            f"<p class='ivp-hint'>{escape(blurb)}</p>"
-            + _section("IT‑специальности", it, href_of=href_of)
-            + _section("Простые (не‑IT)", simple, href_of=href_of)
-            + "</div>")
+            f"<p class='ivp-hint'>{escape(blurb)}</p>{sections}</div>")
 
 
 def upcoming_list(rows: list[dict], *, title: str = "Актуальные предстоящие собеседования",
@@ -190,21 +209,26 @@ def upcoming_list(rows: list[dict], *, title: str = "Актуальные пре
                                 "срочных. Явно просроченные собраны в «Истёкшие» ниже."),
                   anchor: str = "ivp-live", status_of=None,
                   empty: str = "Актуальных предстоящих собеседований нет.",
-                  href_of=None) -> str:
+                  href_of=None, collapsible: bool = False) -> str:
     """A flat «actual upcoming» list (part 2): urgency-first, EXPLICITLY-expired collapsed, an
     optional per-row status chip via `status_of(row) -> html`. NOT split by direction (an
     at-a-glance live pipeline, not a delegation-priority view). `href_of(row)->str|None` makes each
-    row a link into its переписка."""
+    row a link into its переписка. `collapsible=True` folds the whole card (title in the summary)."""
     rows = rows or []
     if not rows:
         return (f"<div class='ivp-card' id='{anchor}'><div class='ivp-top'><h3>{escape(title)}</h3></div>"
                 f"<p class='ivp-hint'>{escape(empty)}</p></div>")
     ordered = ip.sort_groups(rows, "urgency")
+    live_n = sum(1 for r in ordered if not r.get("expired"))
+    section = _section("Актуальные", ordered, status_of=status_of, href_of=href_of)
+    if collapsible:
+        return (f"<details class='ivp-card ivp-det' id='{anchor}' open>"
+                f"<summary><span class='ivp-sum-t'>{escape(title)}</span>"
+                f"<span class='ivp-sum-n'>{live_n}</span></summary>"
+                f"<div class='ivp-det-body'><p class='ivp-hint'>{escape(blurb)}</p>{section}</div></details>")
     return (f"<div class='ivp-card' id='{anchor}'>"
             f"<div class='ivp-top'><h3>{escape(title)}</h3></div>"
-            f"<p class='ivp-hint'>{escape(blurb)}</p>"
-            + _section("Актуальные", ordered, status_of=status_of, href_of=href_of)
-            + "</div>")
+            f"<p class='ivp-hint'>{escape(blurb)}</p>{section}</div>")
 
 
 # ---- status chips (part-2 «all upcoming» rows) --------------------------------------------

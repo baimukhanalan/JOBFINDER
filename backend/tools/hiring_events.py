@@ -1418,9 +1418,19 @@ def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
                       '<div class="he-empty">Пока нет приглашений на события найма.</div>')
     meta = f"комнат: {n_rooms} · приглашений: {n_inv} · актуальных: {n_live}"
     head = mailcrm_ui._page_head("События найма", count=n_rooms, meta=meta)
-    body = (f'<style>{_CSS}</style><div class="he-wrap">{head}{body_inner}</div>'
-            f'{_TOGGLE_JS}')
-    return mailcrm_ui._page("hiring", body)
+    inner = f'<div class="he-wrap">{head}{body_inner}</div>{_TOGGLE_JS}'
+    # ROLE-AWARE SHELL (fixes the leak where a manager/interviewer saw the ADMIN rail here):
+    # an admin (or the CLI, me=None) gets the full admin dashboard rail; a non-admin gets ONLY
+    # their own user portal left-menu (Главная/Кандидаты/Команда/Расписание/События найма/…),
+    # so they can NOT reach Вакансии/Статистика/Пользователи/Health from here.
+    roles = list((me or {}).get("roles") or ([] if me is None else [me.get("role")]))
+    if me is None or "admin" in roles:
+        return mailcrm_ui._page("hiring", f'<style>{_CSS}</style>{inner}')
+    from backend.interviews import portal_shell
+    return portal_shell.shell(active="hiring", roles=roles,
+                              name=me.get("name") or me.get("login") or "",
+                              body=inner, title="События найма",
+                              extra_head=f"<style>{_CSS}</style>")
 
 
 # ---- CLI -------------------------------------------------------------------------

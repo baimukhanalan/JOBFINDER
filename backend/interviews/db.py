@@ -12,7 +12,7 @@ receive aware `datetime` objects — the owner asked for GMT/UTC only in the MVP
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.tools import mail_db
 
@@ -136,6 +136,11 @@ def ensure_schema() -> None:
                     "ADD COLUMN IF NOT EXISTS reminded_120 BOOLEAN NOT NULL DEFAULT FALSE;")
         cur.execute("ALTER TABLE iv_interviews "
                     "ADD COLUMN IF NOT EXISTS reminded_15 BOOLEAN NOT NULL DEFAULT FALSE;")
+        # additive «проведено» stamp: the interviewer (or admin read-through) marks a собес
+        # DONE after it happened — a nullable TIMESTAMPTZ (constant NULL default => fast ALTER,
+        # no table rewrite). Done rows drop OUT of «предстоящие» into a «Проведённые» bucket.
+        cur.execute("ALTER TABLE iv_interviews "
+                    "ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ;")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_responsible_idx "
                     "ON iv_interviews (responsible_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS iv_interviews_mailbox_idx "
@@ -640,6 +645,25 @@ def interview_by_id(iid: int) -> dict | None:
         cur.execute("SELECT * FROM iv_interviews WHERE id=%s", (iid,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def mark_interview_done(iid: int, done: bool = True) -> None:
+    """Toggle a собес «проведено» (`done_at` = now / NULL). Set by the interviewer (or an admin
+    read-through) after the собес happened — it then leaves «предстоящие» and collapses into the
+    «Проведённые» bucket. Scoped by the caller to a row the acting user actually attends."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_interviews SET done_at = %s WHERE id=%s",
+                    (datetime.now(timezone.utc) if done else None, iid))
+
+
+def set_interview_start(iid: int, start_ts, end_ts=None) -> None:
+    """Set (or clear) an interview's start time WITHOUT changing its responsible/manager — the
+    interviewer's own «я записался на HH:MM» after reserving the slot via the recruiter's booking
+    link. Re-arms the notifier (announced=FALSE) so the −2h/−1h/−15m/−5m reminders fire for the
+    freshly-chosen time. Raises psycopg2.IntegrityError on an exact-start double-book."""
+    with mail_db._cur(dict_rows=False) as cur:
+        cur.execute("UPDATE iv_interviews SET start_ts=%s, end_ts=%s, announced=FALSE "
+                    "WHERE id=%s", (start_ts, end_ts, iid))
 
 
 def manager_assign_interview(iid: int, responsible_id: int,

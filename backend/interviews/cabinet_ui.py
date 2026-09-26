@@ -10,11 +10,31 @@ responsible's OWN timezone (auto-detected from their device; see routes_cabinet 
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 
-from backend.interviews import avail_editor, slots
+from backend.interviews import avail_editor, portal_shell, slots
 from backend.tools import mailcrm_ui
+
+
+def _roles_of(responsible: dict) -> list:
+    """The acting user's role set for the shared shell nav (multi-role aware, tolerant of an
+    old single-role row)."""
+    r = responsible.get("roles")
+    if r:
+        return list(r)
+    return [responsible.get("role")] if responsible.get("role") else ["employee"]
+
+
+def _shell(responsible: dict, active: str, inner: str, title: str, as_id=None,
+           extra_css: str = "") -> str:
+    """Wrap a cabinet page body in the shared left-menu portal shell (fixes the old top-nav +
+    the hiring-events admin-rail leak). `inner` already includes the admin-view banner where
+    needed (callers prepend `portal_shell.admin_banner`)."""
+    head = f"<style>{_CAB_CSS}{extra_css}</style>"
+    return portal_shell.shell(active=active, roles=_roles_of(responsible),
+                              name=responsible.get("name") or responsible.get("login") or "",
+                              body=inner, title=title, as_id=as_id, extra_head=head)
 
 _WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг",
              "Пятница", "Суббота", "Воскресенье"]
@@ -219,69 +239,219 @@ def _fmt_local(dt, tz=None) -> str:
         return str(dt)
 
 
-def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
-                   pool_sort: str = "salary", sort_base: str = "/cabinet") -> str:
-    rtz = responsible.get("tz")
+# ---- home: week calendar + actionable interview list --------------------------------------
+_HOME_CSS = """
+.hm-lead{color:var(--ink-soft);font-size:13px;line-height:1.5;margin:0 0 16px;}
+/* week calendar */
+.wk-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;margin-bottom:16px;}
+.wk-h{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px;flex-wrap:wrap;}
+.wk-h h2{margin:0;font-size:15px;font-weight:700;}
+.wk-h .wk-sub{font-size:12px;color:var(--ink-mute);font-weight:600;}
+.wk-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;}
+@media(max-width:760px){.wk-grid{grid-template-columns:repeat(2,1fr);}}
+@media(max-width:420px){.wk-grid{grid-template-columns:1fr;}}
+.wk-day{border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px;min-height:74px;background:var(--panel-2);}
+.wk-day.today{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+.wk-day.empty{opacity:.6;}
+.wk-dh{font-size:11px;font-weight:700;color:var(--ink-soft);margin-bottom:6px;display:flex;justify-content:space-between;gap:4px;}
+.wk-dh .wk-dow{color:var(--ink-mute);font-weight:600;}
+.wk-ev{display:block;font-size:11.5px;line-height:1.3;padding:3px 6px;margin-bottom:4px;border-radius:6px;
+  background:var(--accent-soft);color:var(--accent-deep);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.wk-ev:hover{filter:brightness(.97);text-decoration:none;}
+.wk-ev b{font-variant-numeric:tabular-nums;}
+.wk-ev.done{background:var(--panel);color:var(--ink-mute);text-decoration:line-through;}
+.wk-none{font-size:11px;color:var(--ink-mute);}
+/* actionable interview rows (collapse/expand by icon) */
+.hv-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:8px;margin-bottom:16px;}
+.hv-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px 10px;flex-wrap:wrap;}
+.hv-top h2{margin:0;font-size:15px;font-weight:700;}
+.hv-sort{display:inline-flex;gap:2px;padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);}
+.hv-sortb{display:inline-flex;align-items:center;height:28px;padding:0 11px;border-radius:var(--r-full);font-size:12px;font-weight:600;color:var(--ink-mute);text-decoration:none;}
+.hv-sortb.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.hv-list{display:flex;flex-direction:column;gap:7px;}
+.hv-row{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;}
+.hv-row.done{opacity:.66;}
+.hv-head{display:flex;align-items:center;gap:9px;padding:10px 11px;cursor:pointer;user-select:none;}
+.hv-head:hover{background:var(--panel-2);}
+.hv-chev{flex:0 0 auto;color:var(--ink-mute);font-size:12px;transition:transform .15s;}
+.hv-row.open .hv-chev{transform:rotate(90deg);}
+.hv-mid{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.hv-nm{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hv-sub{font-size:11.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.hv-when{flex:0 0 auto;font-size:12px;font-weight:700;color:var(--accent-deep);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.hv-when.none{color:var(--ink-mute);font-weight:600;}
+.hv-sal{flex:0 0 auto;font-family:var(--ff-mono);font-size:11.5px;font-weight:700;color:var(--ok);white-space:nowrap;}
+.hv-dl{flex:0 0 auto;font-size:11px;font-weight:700;border-radius:var(--r-full);padding:2px 8px;white-space:nowrap;}
+.hv-dl-ok{color:var(--ink-soft);background:var(--panel-2);}
+.hv-dl-soon{color:var(--warn);background:var(--warn-soft);}
+.hv-dl-urgent{color:var(--danger);background:#fce8e6;}
+.hv-dl-over{color:#fff;background:var(--danger);}
+.hv-done-badge{flex:0 0 auto;font-size:10.5px;font-weight:700;color:#166534;background:#dcfce7;border-radius:var(--r-full);padding:2px 8px;}
+.hv-panel{padding:0 11px 12px 30px;display:none;flex-direction:column;gap:10px;}
+.hv-row.open .hv-panel{display:flex;}
+.hv-acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.hv-acts a.hbtn,.hv-acts button{white-space:nowrap;}
+.hv-sched{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin:0;}
+.hv-sched input[type=datetime-local]{padding:8px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--panel);color:var(--ink);font-size:13px;min-height:var(--ctl-h);flex:1 1 180px;min-width:0;}
+.hv-hint{font-size:11.5px;color:var(--ink-mute);line-height:1.4;margin:0;}
+.hv-done-form{margin:0;}
+"""
 
-    def _item(iv: dict, past: bool = False) -> str:
-        mailbox = escape(iv.get("mailbox") or "")
-        company = escape(iv.get("company") or "")
-        when = escape(_fmt_local(iv.get("start_ts"), rtz))
-        h = iv.get("source_message_hash")
-        # the WHOLE card is the tap target (a wrapping <a>), not just the small text link
-        href = (_cab_href(f"/cabinet/thread?hash={escape(str(h), quote=True)}", as_id) if h
-                else _cab_href("/cabinet/inbox", as_id))
-        open_lbl = "Переписка →" if h else "Почта →"
-        meta = mailbox + (f' · <b>{company}</b>' if company else "")
-        li_open = '<li style="opacity:.62;">' if past else '<li>'
-        tag = ('<span style="color:var(--ink-mute);font-weight:600;font-size:12px;">'
-               ' · прошло</span>' if past else "")
-        return (f'{li_open}<a class="iv-card-link" href="{href}">'
-                f'<span class="iv-when">{when}{tag}</span>'
-                f'<span class="iv-meta">{meta}</span>'
-                f'<span class="iv-open">{open_lbl}</span></a></li>')
+_HOME_JS = ("<script>(function(){document.addEventListener('click',function(e){"
+            "var h=e.target.closest('.hv-head');if(!h)return;"
+            "if(e.target.closest('a,button,input,form,label'))return;"
+            "var row=h.closest('.hv-row');if(row)row.classList.toggle('open');});})();</script>")
 
-    # An assigned собес whose slot time has already passed (but that was never cancelled)
-    # is STILL shown — the operator week grid can book an already-passed day of the current
-    # week — so a just-assigned собес never silently vanishes. Upcoming ones (soonest first,
-    # from the DB's ascending order) sit on top; past-but-still-assigned ones follow (most
-    # recent first), clearly marked «прошло».
-    now = datetime.now(timezone.utc)
-    upcoming, past = [], []
+_WK_DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_WK_MON = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+
+def _week_calendar(interviews: list[dict], rtz, as_id) -> str:
+    """A Mon–Sun week grid in the interviewer's own zone, each day listing its booked собесы
+    (time + company, linking into переписка). The visual «расписание на неделю» the owner wants
+    on the home screen. Собесы with no time set don't appear here (they're in the list below with
+    «назначить время»)."""
+    z = rtz or slots.DEFAULT_TZ
+    now_local = slots.to_local(datetime.now(timezone.utc), z)
+    monday = now_local.date() - timedelta(days=now_local.weekday())
+    today = now_local.date()
+    by_day: dict = {}
     for iv in interviews:
         st = iv.get("start_ts")
-        (past if (st is not None and st < now) else upcoming).append(iv)
+        if not st:
+            continue
+        try:
+            loc = slots.to_local(st, z)
+        except Exception:
+            continue
+        by_day.setdefault(loc.date(), []).append((loc, iv))
+    cols = []
+    for i in range(7):
+        d = monday + timedelta(days=i)
+        evs = sorted(by_day.get(d, []), key=lambda t: t[0])
+        cells = []
+        for loc, iv in evs:
+            company = escape((iv.get("company") or "Собес")[:22])
+            h = iv.get("source_message_hash") or iv.get("source_hash") or ""
+            href = _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else _cab_href("/cabinet", as_id)
+            done = " done" if iv.get("done_at") else ""
+            cells.append(f'<a class="wk-ev{done}" href="{escape(href, quote=True)}" '
+                         f'title="{company}"><b>{loc.strftime("%H:%M")}</b> {company}</a>')
+        body = "".join(cells) if cells else '<span class="wk-none">—</span>'
+        cls = "wk-day" + (" today" if d == today else "") + ("" if cells else " empty")
+        cols.append(f'<div class="{cls}"><div class="wk-dh"><span>{d.day} {_WK_MON[d.month]}</span>'
+                    f'<span class="wk-dow">{_WK_DOW[i]}</span></div>{body}</div>')
+    n = sum(len(v) for v in by_day.values())
+    return (f'<div class="wk-card"><div class="wk-h"><h2>Календарь недели</h2>'
+            f'<span class="wk-sub">запланировано на этой неделе: {n} · время по {escape(slots.tz_label(z))}</span></div>'
+            f'<div class="wk-grid">{"".join(cols)}</div></div>')
 
-    if interviews:
-        items = [_item(iv) for iv in upcoming] + [_item(iv, past=True) for iv in reversed(past)]
-        block = f'<ul class="iv-list">{"".join(items)}</ul>'
+
+def _home_row(iv: dict, rtz, as_id) -> str:
+    """One actionable собес row: a collapsed one-liner (candidate · company · time · deadline ·
+    salary) that expands (chevron) to reveal переписка, the booking/созвон link, a «во сколько я
+    записался» time-set form and a «проведено» toggle."""
+    from backend.tools import interview_priority as ip
+    mb = iv.get("mailbox") or ""
+    nm = (iv.get("candidate") or "").strip() or (mb.split("@")[0] if mb else "—")
+    company = escape(iv.get("company") or "")
+    iid = iv.get("id")
+    done = bool(iv.get("done_at"))
+    h = iv.get("source_message_hash") or iv.get("source_hash") or ""
+    thread_href = _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else ""
+    when_txt = _fmt_local(iv.get("start_ts"), rtz)
+    when_html = (f'<span class="hv-when">{escape(when_txt)}</span>' if iv.get("start_ts")
+                 else '<span class="hv-when none">время не назначено</span>')
+    sal = iv.get("salary_label") or ""
+    sal_html = f'<span class="hv-sal">{escape(sal)}/год</span>' if sal else ""
+    dtext, dlvl = ip.deadline_text(iv)
+    dl_html = f'<span class="hv-dl hv-dl-{dlvl}">{escape(dtext)}</span>' if dtext and not done else ""
+    done_badge = '<span class="hv-done-badge">✓ проведено</span>' if done else ""
+    sub = escape(mb) + (f' · {company}' if company else "")
+    head = (f'<div class="hv-head"><span class="hv-chev">▸</span>'
+            f'<span class="hv-mid"><span class="hv-nm">{escape(nm)}</span>'
+            f'<span class="hv-sub">{sub}</span></span>'
+            f'{done_badge}{sal_html}{dl_html}{when_html}</div>')
+
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
+    acts = []
+    if thread_href:
+        acts.append(f'<a class="hbtn" href="{escape(thread_href, quote=True)}">Переписка кандидата →</a>')
+    bk = iv.get("booking_url") or iv.get("iv_booking_url") or ""
+    if bk:
+        acts.append(f'<a class="hbtn" href="{escape(bk, quote=True)}" target="_blank" '
+                    'rel="noopener noreferrer">📅 Записаться / созвон →</a>')
+    acts_html = f'<div class="hv-acts">{"".join(acts)}</div>' if acts else ""
+    # «во сколько я записался» — set my OWN slot time (appears in the week calendar + arms reminders)
+    sched = (
+        f'<form class="hv-sched" method="post" action="/cabinet/self_schedule">'
+        f'<input type="hidden" name="iid" value="{iid}">{as_field}'
+        '<input type="datetime-local" name="start_local" aria-label="Во сколько собеседование">'
+        '<button class="primary" type="submit">Записать время</button></form>'
+        '<p class="hv-hint">Перейдите по ссылке записи выше, забронируйте слот у рекрутёра, '
+        'затем впишите сюда это время — собес появится в вашем календаре недели, и бот напомнит '
+        'заранее.</p>')
+    # «проведено» toggle
+    done_form = (
+        f'<form class="hv-done-form" method="post" action="/cabinet/mark_done">'
+        f'<input type="hidden" name="iid" value="{iid}">{as_field}'
+        f'<input type="hidden" name="done" value="{"0" if done else "1"}">'
+        f'<button class="{"ghost" if done else "hbtn"}" type="submit">'
+        f'{"↩︎ Снять отметку «проведено»" if done else "○ Отметить проведённым"}</button></form>')
+    panel = f'<div class="hv-panel">{acts_html}{sched}{done_form}</div>'
+    return f'<div class="hv-row{" done" if done else ""}">{head}{panel}</div>'
+
+
+def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
+                   pool_sort: str = "salary", sort_base: str = "/cabinet") -> str:
+    """Home screen: the week calendar (schedule) + the actionable «Мои собеседования» list whose
+    rows collapse/expand by icon, sorted by urgency/salary/age. Done собесы collapse into a
+    «Проведённые» details at the bottom."""
+    from backend.tools import interview_priority as ip
+    rtz = responsible.get("tz")
+    interviews = interviews or []
+    active = [iv for iv in interviews if not iv.get("done_at")]
+    done = [iv for iv in interviews if iv.get("done_at")]
+    sort = pool_sort if pool_sort in ("salary", "urgency", "age") else "urgency"
+    active_sorted = ip.sort_groups(active, sort)
+
+    # sort toggle keeps ?as
+    sep = "&" if "?" in sort_base else "?"
+    def _sb(k):
+        return f'{escape(sort_base, quote=True)}{sep}pool_sort={k}#hv'
+    sort_toggle = ('<div class="hv-sort" role="group" aria-label="Сортировка">'
+                   + "".join(f'<a class="hv-sortb{" active" if sort==k else ""}" href="{_sb(k)}">{l}</a>'
+                             for k, l in (("urgency", "Срочность"), ("salary", "Зарплата"), ("age", "Давность")))
+                   + "</div>")
+
+    if active_sorted:
+        rows = "".join(_home_row(iv, rtz, as_id) for iv in active_sorted)
+        list_html = f'<div class="hv-list">{rows}</div>'
     else:
-        block = '<div class="empty">Предстоящих собеседований нет.</div>'
-    # a «Подключить Telegram» prompt right on the dashboard when the bot isn't linked yet — the
-    # notifier pings a linked interviewer an hour + 5 min before each собес (Task 3). Hidden once
-    # connected so it never nags.
+        list_html = '<div class="empty">Активных предстоящих собеседований нет.</div>'
+    done_html = ""
+    if done:
+        done_rows = "".join(_home_row(iv, rtz, as_id) for iv in done)
+        done_html = ('<details class="ivp-det" style="margin-top:8px;border:1px solid var(--line);'
+                     'border-radius:var(--r-sm)"><summary style="cursor:pointer;padding:10px 12px;'
+                     'font-weight:700;font-size:13px;list-style:none">Проведённые ('
+                     f'{len(done)})</summary><div class="hv-list" style="padding:0 8px 8px">{done_rows}</div></details>')
+
     tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
-    # priority card: the SAME urgency/priority filter as the «Собес» screen over the interviews
-    # assigned to this interviewer — «с чего начать» (по срочности брони / зарплате / давности).
-    from backend.interviews import priority_ui
+    upcoming_n = sum(1 for iv in active if not (iv.get("start_ts") and iv["start_ts"] < datetime.now(timezone.utc)))
 
-    def _pri_href(iv: dict):
-        # each priority row → straight into that собес's переписка (the interviewer owns every
-        # assigned mailbox, so /cabinet/thread never 404s here). Hash escaped once inside _row.
-        h = iv.get("source_message_hash") or iv.get("source_hash")
-        return _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else None
-
-    pri = priority_ui.priority_card(
-        interviews, pool_sort, sort_base, anchor="cab-pri",
-        title="Приоритет: с чего начать",
-        blurb=("Ваши собеседования по приоритету — по зарплате, срочности брони слота или "
-               "давности заявки. Нажмите на кандидата — откроется переписка. "
-               "Явно просроченные — в «Истёкшие»."),
-        empty="Назначенных собеседований пока нет.", href_of=_pri_href) if interviews else ""
-    body = (priority_ui.CSS + _topbar(responsible, "home", as_id, iv_count=len(upcoming)) +
-            _asview_banner(responsible, as_id) +
-            '<h1 class="cab-h">Мои собеседования</h1>' + tg_prompt + block + pri)
-    return _doc(body, "Мои собеседования")
+    inner = (
+        portal_shell.admin_banner(responsible.get("name") or "", as_id)
+        + '<h1 class="cab-h">Главная</h1>'
+        + '<p class="hm-lead">Ваше расписание на неделю и актуальные собеседования по приоритету. '
+        'Нажмите на кандидата, чтобы раскрыть: перейти в переписку, записаться на слот у рекрутёра, '
+        'проставить время и отметить собес проведённым.</p>'
+        + tg_prompt
+        + _week_calendar(active, rtz, as_id)
+        + '<div class="hv-card" id="hv"><div class="hv-top">'
+        '<h2>Мои собеседования</h2>' + (sort_toggle if active_sorted else "") + '</div>'
+        + list_html + done_html + '</div>' + _HOME_JS)
+    return _shell(responsible, "home", inner, "Главная", as_id=as_id, extra_css=_HOME_CSS)
 
 
 def _tg_card(responsible: dict, as_id=None) -> str:
@@ -336,22 +506,22 @@ def availability_page(responsible: dict, rows: list[dict], saved: bool = False, 
         "catch(e){return;}var cur=" + _json.dumps(rtz) + ";if(b&&b!==cur){var f=new FormData();"
         "f.append('tz',b);fetch('/cabinet/tz',{method:'POST',body:f}).then(function(){"
         "location.reload();}).catch(function(){});}})();</script>")
-    body = (_topbar(responsible, "availability", as_id) + _asview_banner(responsible, as_id) +
-            '<h1 class="cab-h">Расписание доступности</h1>' + note +
-            '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
-            f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>). '
-            'Можно добавить <b>несколько промежутков</b> в один день (напр. 06:30–14:00 и 18:00–01:00). '
-            'День без промежутков — выходной. Конец раньше начала — ночное окно через полночь.</p>'
-            + _tg_card(responsible, as_id) +
-            f'<style>{avail_editor.CSS}</style>'
-            '<form method="post" action="/cabinet/availability">'
-            + _as_field(as_id)
-            + avail_editor.render_days(rows) +
-            '<div class="avd-actions">'
-            '<button class="primary" type="submit">Сохранить</button>'
-            '<button class="ghost" type="button" onclick="avdCopyMon()">Скопировать Пн</button>'
-            '</div></form>' + avail_editor.JS + tz_js)
-    return _doc(body, "Расписание")
+    inner = (portal_shell.admin_banner(responsible.get("name") or "", as_id) +
+             '<h1 class="cab-h">Расписание доступности</h1>' + note +
+             '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
+             f'Время — по вашему устройству (<b>{escape(slots.tz_label(rtz))}</b>). '
+             'Можно добавить <b>несколько промежутков</b> в один день (напр. 06:30–14:00 и 18:00–01:00). '
+             'День без промежутков — выходной. Конец раньше начала — ночное окно через полночь.</p>'
+             + _tg_card(responsible, as_id) +
+             '<form method="post" action="/cabinet/availability">'
+             + _as_field(as_id)
+             + avail_editor.render_days(rows) +
+             '<div class="avd-actions">'
+             '<button class="primary" type="submit">Сохранить</button>'
+             '<button class="ghost" type="button" onclick="avdCopyMon()">Скопировать Пн</button>'
+             '</div></form>' + avail_editor.JS + tz_js)
+    return _shell(responsible, "schedule", inner, "Расписание", as_id=as_id,
+                  extra_css=avail_editor.CSS)
 
 
 def inbox_page(responsible: dict, rows: list[dict], as_id=None) -> str:
@@ -366,9 +536,9 @@ def inbox_page(responsible: dict, rows: list[dict], as_id=None) -> str:
     listing = listing.replace("/mail/message?id=", thread_link)
     inner = (f'<div class="maillist">{listing}</div>' if rows
              else '<div class="empty">Писем пока нет.</div>')
-    body = (_topbar(responsible, "inbox", as_id) + _asview_banner(responsible, as_id) +
+    body = (portal_shell.admin_banner(responsible.get("name") or "", as_id) +
             '<h1 class="cab-h">Почта</h1>' + inner)
-    return _doc(body, "Почта")
+    return _shell(responsible, "candidates", body, "Почта", as_id=as_id)
 
 
 # ---- scoped candidate inbox (full Gmail-style inbox of the interviewer's собес candidates) ----
@@ -471,12 +641,11 @@ def candidates_page(responsible: dict, groups: list, *, q: str = "", has_more: b
              else '<div class="empty">Кандидатов пока нет.</div>')
     sentinel = (f'<div id="grpmore" data-offset="{next_off}" '
                 f'data-q="{escape(q or "", quote=True)}"{"" if has_more else " hidden"}></div>')
-    body = (f'<style>{candidates_inbox._CG_CSS}</style>'
-            + _topbar(responsible, "candidates", as_id, iv_count=iv_count)
-            + _asview_banner(responsible, as_id)
+    body = (portal_shell.admin_banner(responsible.get("name") or "", as_id)
             + '<h1 class="cab-h">Кандидаты</h1>' + tools + inner + sentinel
             + _cab_inbox_js(as_id, candidates_inbox.PAGE))
-    return _doc(body, "Кандидаты")
+    return _shell(responsible, "candidates", body, "Кандидаты", as_id=as_id,
+                  extra_css=candidates_inbox._CG_CSS)
 
 
 def _cal_item(iv: dict, time_lbl: str, past: bool, as_id=None) -> str:
@@ -551,13 +720,12 @@ def calendar_page(responsible: dict, interviews: list, as_id=None) -> str:
         block = '<div class="empty">Предстоящих собеседований нет.</div>'
 
     tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
-    body = (_topbar(responsible, "calendar", as_id, iv_count=len(upcoming))
-            + _asview_banner(responsible, as_id)
+    body = (portal_shell.admin_banner(responsible.get("name") or "", as_id)
             + '<h1 class="cab-h">Мой календарь</h1>'
             + '<p style="color:var(--ink-soft);margin:0 0 16px;font-size:13px;line-height:1.5;">'
             f'Ваши собеседования по дням — когда и во сколько (время по <b>{escape(slots.tz_label(rtz))}</b>).</p>'
             + tg_prompt + block)
-    return _doc(body, "Календарь")
+    return _shell(responsible, "home", body, "Календарь", as_id=as_id)
 
 
 def _thread_card(m: dict) -> str:
@@ -615,8 +783,75 @@ def thread_page(responsible: dict, thread: dict, hash: str = "", sent=None, link
             '<button class="primary" type="submit">Отправить ответ</button>'
             '</form>')
 
-    body = (_topbar(responsible, "candidates", as_id) + _asview_banner(responsible, as_id) +
+    body = (portal_shell.admin_banner(responsible.get("name") or "", as_id) +
             f'<a class="back-link" href="{_cab_href("/cabinet/candidates", as_id)}">← К списку</a>'
             f'<h1 class="tsubj">{escape(subj)}</h1>'
             f'<div class="tbox">Ящик: {box}</div>' + sent_banner + cards + reply_form)
-    return _doc(body, subj)
+    return _shell(responsible, "candidates", body, subj, as_id=as_id)
+
+
+# ---- Инструкции (role-specific short user-flow guide) --------------------------------------
+_GUIDE_CSS = """
+.gd-lead{color:var(--ink-soft);font-size:13.5px;line-height:1.55;margin:0 0 18px;}
+.gd-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;margin-bottom:16px;}
+.gd-card h2{margin:0 0 4px;font-size:16px;font-weight:800;letter-spacing:-.01em;}
+.gd-card .gd-role{font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin:0 0 12px;}
+.gd-steps{list-style:none;counter-reset:s;margin:0;padding:0;display:flex;flex-direction:column;gap:11px;}
+.gd-steps li{position:relative;padding-left:38px;font-size:13.5px;line-height:1.5;color:var(--ink);}
+.gd-steps li::before{counter-increment:s;content:counter(s);position:absolute;left:0;top:-1px;width:26px;height:26px;
+  border-radius:50%;background:var(--accent-soft);color:var(--accent-deep);font-weight:800;font-size:13px;
+  display:flex;align-items:center;justify-content:center;}
+.gd-steps li b{color:var(--ink);}
+.gd-steps li .gd-note{display:block;color:var(--ink-mute);font-size:12px;margin-top:2px;}
+.gd-tip{background:var(--accent-soft);border:1px solid var(--accent);border-radius:var(--r-sm);
+  padding:11px 14px;font-size:12.5px;color:var(--accent-deep);line-height:1.5;margin-top:12px;}
+"""
+
+_GUIDE_INTERVIEWER = """
+<div class="gd-card">
+  <div class="gd-role">Интервьюер</div>
+  <h2>Как проводить собеседования</h2>
+  <ol class="gd-steps">
+    <li>Откройте <b>«Расписание»</b> и укажите, в какие часы по дням недели вы свободны для собесов.
+        <span class="gd-note">Можно несколько промежутков в день; ночное окно — конец раньше начала.</span></li>
+    <li>Подключите <b>Telegram</b> (кнопка на «Главной» или в «Расписании») — бот напомнит о каждом собесе за 2 часа, час, 15 и 5 минут.</li>
+    <li>На <b>«Главной»</b> в списке «Мои собеседования» разберите кандидатов сверху вниз (сортировка по срочности / зарплате / давности). Нажмите на кандидата, чтобы раскрыть карточку.</li>
+    <li>Нажмите <b>«Переписка кандидата»</b> — прочитайте письмо рекрутёра и, если нужно, ответьте прямо оттуда (ответ уходит от имени кандидата).</li>
+    <li>Нажмите <b>«Записаться / созвон»</b> — откроется ссылка рекрутёра, где вы бронируете время собеседования.</li>
+    <li>Вернитесь и впишите это время в поле <b>«Записать время»</b> — собес появится в вашем «Календаре недели», и придут напоминания.</li>
+    <li>После проведения нажмите <b>«○ Отметить проведённым»</b> — собес уйдёт в «Проведённые».</li>
+  </ol>
+  <div class="gd-tip">«Кандидаты» — вся переписка ваших собесов в одном месте (поиск + ответ). «События найма» — живые Zoom-комнаты Teleperformance, куда можно зайти и получить оффер без теста.</div>
+</div>
+"""
+
+_GUIDE_MANAGER = """
+<div class="gd-card">
+  <div class="gd-role">Управляющий</div>
+  <h2>Как распределять собеседования на команду</h2>
+  <ol class="gd-steps">
+    <li>Всё, что выделил вам главный админ, <b>сразу числится за вами</b> — вы видите это в разделе <b>«Команда»</b>.</li>
+    <li>Добавьте сотрудников в блоке <b>«Моя команда»</b> (имя + логин; пароль сгенерируется — передайте его сотруднику).</li>
+    <li>В блоке <b>«Раздать / забрать»</b> отдайте N собесов сотруднику (по фильтру пол/направление) или распределите всё поровну одной кнопкой.</li>
+    <li>В <b>«Приоритет»</b> смотрите, кого раздать первым (по зарплате/срочности). Нажатие на кандидата открывает переписку.</li>
+    <li>Что не раздали — <b>проводите сами</b>: эти собесы лежат у вас на «Главной», как у интервьюера.</li>
+    <li>Нужно вернуть собес от сотрудника — «← Забрать себе» на карточке или «Забрать» в блоке раздачи.</li>
+  </ol>
+  <div class="gd-tip">Раздача сотруднику присылает ему уведомление в Telegram. «Актуальные предстоящие» на «Команде» показывают весь ваш поток: свои + розданные, по срочности.</div>
+</div>
+"""
+
+
+def guide_page(responsible: dict, as_id=None) -> str:
+    """Short, role-specific «как этим пользоваться» guide. Interviewer steps are shown to
+    everyone (every role attends собесы); the manager section is added for managers."""
+    roles = _roles_of(responsible)
+    is_mgr = "manager" in roles
+    lead = ("Короткая инструкция по вашему порталу. " +
+            ("Вы управляющий и интервьюер: распределяете собесы на команду и проводите свои."
+             if is_mgr else "Вы проводите назначенные вам собеседования."))
+    blocks = (_GUIDE_MANAGER if is_mgr else "") + _GUIDE_INTERVIEWER
+    body = (portal_shell.admin_banner(responsible.get("name") or "", as_id)
+            + '<h1 class="cab-h">Инструкции</h1>'
+            + f'<p class="gd-lead">{lead}</p>' + blocks)
+    return _shell(responsible, "guide", body, "Инструкции", as_id=as_id, extra_css=_GUIDE_CSS)

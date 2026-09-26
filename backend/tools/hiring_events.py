@@ -1423,14 +1423,15 @@ def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
     # an admin (or the CLI, me=None) gets the full admin dashboard rail; a non-admin gets ONLY
     # their own user portal left-menu (Главная/Кандидаты/Команда/Расписание/События найма/…),
     # so they can NOT reach Вакансии/Статистика/Пользователи/Health from here.
-    # «События найма» is a SHARED page: EVERY logged-in role (incl. admin) gets the USER left-menu
-    # shell, so nobody can jump to the other admin sections (Вакансии/Статистика/Пользователи/…)
-    # from here (owner: «в событиях найма не должно быть меню админа»). An admin still gets a
-    # «Админ-панель» link in that shell to return to the full dashboard. Only the CLI (me=None)
-    # keeps the plain admin page (it renders to a file/stdout, not a live nav).
-    if me is None:
+    # «События найма» is a SHARED page whose CONTENT (rooms/candidates/claims) is common to
+    # everyone, but each role keeps ITS OWN menu around it — never a mixed one (owner:
+    # «у каждого пользователя своё меню, не смешивай, а внутри общее»):
+    #   * admin (or the CLI, me=None) → the full admin dashboard rail (their own menu);
+    #   * a non-admin (manager/interviewer) → their OWN user portal left-menu, so they can NOT
+    #     reach the admin sections (Вакансии/Статистика/Пользователи/Health) from here.
+    roles = list((me or {}).get("roles") or ([] if me is None else [me.get("role")]))
+    if me is None or "admin" in roles:
         return mailcrm_ui._page("hiring", f'<style>{_CSS}</style>{inner}')
-    roles = list(me.get("roles") or ([me.get("role")] if me.get("role") else ["employee"]))
     from backend.interviews import portal_shell
     return portal_shell.shell(active="hiring", roles=roles,
                               name=me.get("name") or me.get("login") or "",

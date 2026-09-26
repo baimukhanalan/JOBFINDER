@@ -59,10 +59,6 @@ def _nav_items(roles: list[str]):
         ("hiring", "События найма", mailcrm_ui._IC_HIRING, "/hiring-events", True),
         ("guide", "Инструкции", _IC_GUIDE, "/cabinet/guide", False),
     ]
-    # an ADMIN who lands on a shared user-shell page (e.g. «События найма») gets a way BACK to the
-    # full admin dashboard — the shared page never exposes the other admin sections inline.
-    if "admin" in (roles or []):
-        items.append(("adminhome", "Админ-панель", _IC_ADMIN, "/", True))
     return items
 
 

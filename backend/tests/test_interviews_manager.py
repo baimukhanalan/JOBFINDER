@@ -194,20 +194,20 @@ def test_iv_manage_unassign_rejects_cancelled():
 # ---- auth routing (fail-closed) --------------------------------------------------
 def test_iv_manager_confined_to_manage_and_cabinet():
     ids = _chain()
-    # a manager login lands on /manage
+    # a manager login lands on /cabinet (Главная) — the portal starts on the user home (2026-09-26)
     r = client.post("/login", data={"login": "test_iv_m_A", "password": _PW},
                     follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/manage"
+    assert r.status_code == 303 and r.headers["location"] == "/cabinet"
     cookie = r.cookies.get(auth.COOKIE_NAME)
     client.cookies.set(auth.COOKIE_NAME, cookie)
 
     # /manage reaches its handler (200), /cabinet is allowed too
     assert client.get("/manage", follow_redirects=False).status_code == 200
     assert client.get("/cabinet", follow_redirects=False).status_code == 200
-    # every admin surface is bounced to /manage (never leaks the PII dashboard)
+    # every admin surface is bounced to /cabinet (never leaks the PII dashboard)
     for path in ("/users", "/mail/candidates", "/catalog", "/stats"):
         rr = client.get(path, follow_redirects=False)
-        assert rr.status_code == 303 and rr.headers["location"] == "/manage", path
+        assert rr.status_code == 303 and rr.headers["location"] == "/cabinet", path
 
 
 def test_iv_employee_still_confined_to_cabinet():
@@ -300,12 +300,12 @@ def test_iv_multi_role_access_union():
     # [manager, employee]: /manage AND /cabinet, but NOT admin surfaces
     db.add_responsible("test_iv_mr_ME", auth.hash_password(_PW), "ME", roles=["manager", "employee"])
     r = client.post("/login", data={"login": "test_iv_mr_ME", "password": _PW}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/manage"
+    assert r.status_code == 303 and r.headers["location"] == "/cabinet"   # lands on Главная
     client.cookies.set(auth.COOKIE_NAME, r.cookies.get(auth.COOKIE_NAME))
     assert client.get("/manage", follow_redirects=False).status_code == 200
     assert client.get("/cabinet", follow_redirects=False).status_code == 200
     rr = client.get("/users", follow_redirects=False)
-    assert rr.status_code == 303 and rr.headers["location"] == "/manage"   # bounced off admin
+    assert rr.status_code == 303 and rr.headers["location"] == "/cabinet"   # bounced off admin → Главная
 
 
 def test_iv_role_edit_from_list_changes_access_live():

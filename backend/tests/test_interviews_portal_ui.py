@@ -158,13 +158,15 @@ def test_hiring_events_has_no_admin_nav_leak_for_non_admin():
 def test_mark_done_and_self_schedule_roundtrip():
     rid, iid = _seed()
     _login("test_iv_pu_E")
-    # mark done → done_at set, собес shows under «Проведённые»
+    # mark done → done_at set; the row STAYS IN PLACE (owner: «отмечаются, а не уходят вниз»),
+    # just filled — the home shows the marked circle, NOT a «Проведённые» bucket.
     r = _post("/cabinet/mark_done", {"iid": str(iid), "done": "1"})
     assert r.status_code == 303
     row = _retry(lambda: db.interview_by_id(iid))
     assert row and row.get("done_at") is not None
     home = _stable_get("/cabinet").text
-    assert "Проведённые" in home
+    assert "hv-circle on" in home and "hv-row marked" in home
+    assert "Проведённые" not in home     # no bottom bucket — marked stays in the list
     # un-mark → done_at cleared
     r = _post("/cabinet/mark_done", {"iid": str(iid), "done": "0"})
     assert r.status_code == 303

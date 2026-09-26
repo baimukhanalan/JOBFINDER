@@ -38,6 +38,7 @@ def _shell(responsible: dict, active: str, inner: str, title: str, as_id=None,
 
 _WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг",
              "Пятница", "Суббота", "Воскресенье"]
+_DIR_LBL = {"it": "IT", "nonit": "не‑IT", "other": "Другое"}
 
 # Cabinet-specific styling layered on top of the shared base CSS.
 _CAB_CSS = """
@@ -277,11 +278,24 @@ _HOME_CSS = """
 .hv-sort{display:inline-flex;gap:2px;padding:3px;background:var(--panel-2);border:1px solid var(--line-strong);border-radius:var(--r-full);}
 .hv-sortb{display:inline-flex;align-items:center;height:28px;padding:0 11px;border-radius:var(--r-full);font-size:12px;font-weight:600;color:var(--ink-mute);text-decoration:none;}
 .hv-sortb.active{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.12);}
+.hv-search{width:100%;margin:0 0 10px;}
 .hv-list{display:flex;flex-direction:column;gap:7px;}
 .hv-row{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden;}
-.hv-row.done{opacity:.66;}
+.hv-row.marked{border-left:3px solid var(--ok);background:#f6fdf9;}
 .hv-head{display:flex;align-items:center;gap:9px;padding:10px 11px;cursor:pointer;user-select:none;}
 .hv-head:hover{background:var(--panel-2);}
+/* inline mark-circle: click = reserved/handled (stays in place, just fills ✓) */
+.hv-mark{margin:0;flex:0 0 auto;display:flex;}
+.hv-circle{width:22px;height:22px;border-radius:50%;border:2px solid var(--line-strong);background:var(--panel);
+  color:#fff;font-size:13px;font-weight:800;line-height:1;cursor:pointer;padding:0;display:flex;
+  align-items:center;justify-content:center;transition:background .12s,border-color .12s;}
+.hv-circle:hover{border-color:var(--ok);}
+.hv-circle.on{background:var(--ok);border-color:var(--ok);}
+/* small direction colour dot (like the coloured stage cues in «Кандидаты») */
+.hv-dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--ink-mute);}
+.hv-dot.dir-it{background:#2563eb;}
+.hv-dot.dir-nonit{background:#f59e0b;}
+.hv-dot.dir-other{background:var(--ink-mute);}
 .hv-chev{flex:0 0 auto;color:var(--ink-mute);font-size:12px;transition:transform .15s;}
 .hv-row.open .hv-chev{transform:rotate(90deg);}
 .hv-mid{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;}
@@ -306,10 +320,18 @@ _HOME_CSS = """
 .hv-done-form{margin:0;}
 """
 
-_HOME_JS = ("<script>(function(){document.addEventListener('click',function(e){"
+_HOME_JS = ("<script>(function(){"
+            "document.addEventListener('click',function(e){"
             "var h=e.target.closest('.hv-head');if(!h)return;"
             "if(e.target.closest('a,button,input,form,label'))return;"
-            "var row=h.closest('.hv-row');if(row)row.classList.toggle('open');});})();</script>")
+            "var row=h.closest('.hv-row');if(row)row.classList.toggle('open');});"
+            # inbox-style client search over the собес rows (candidate/company/email)
+            "window.hvSearch=function(inp){var q=(inp.value||'').trim().toLowerCase();"
+            "var rows=document.querySelectorAll('#hv .hv-row');var shown=0;"
+            "rows.forEach(function(r){var hit=!q||(r.getAttribute('data-search')||'').indexOf(q)>=0;"
+            "r.style.display=hit?'':'none';if(hit)shown++;});"
+            "var em=document.getElementById('hv-empty');if(em)em.hidden=(shown>0||!q);};"
+            "})();</script>")
 
 _WK_DOW = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 _WK_MON = ["", "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
@@ -373,15 +395,26 @@ def _home_row(iv: dict, rtz, as_id) -> str:
     sal = iv.get("salary_label") or ""
     sal_html = f'<span class="hv-sal">{escape(sal)}/год</span>' if sal else ""
     dtext, dlvl = ip.deadline_text(iv)
-    dl_html = f'<span class="hv-dl hv-dl-{dlvl}">{escape(dtext)}</span>' if dtext and not done else ""
-    done_badge = '<span class="hv-done-badge">✓ проведено</span>' if done else ""
+    dl_html = f'<span class="hv-dl hv-dl-{dlvl}">{escape(dtext)}</span>' if dtext else ""
     sub = escape(mb) + (f' · {company}' if company else "")
-    head = (f'<div class="hv-head"><span class="hv-chev">▸</span>'
+    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
+    direction = iv.get("direction") or "other"
+    # INLINE circle: mark that YOU reserved the slot / handled this candidate — a single click
+    # (a form button, so it does NOT expand the row); marked rows STAY IN PLACE, just filled ✓
+    # (owner: «отмечаются, а не уходят вниз»). Toggles done_at both ways.
+    circle = (
+        f'<form class="hv-mark" method="post" action="/cabinet/mark_done">'
+        f'<input type="hidden" name="iid" value="{iid}">{as_field}'
+        f'<input type="hidden" name="done" value="{"0" if done else "1"}">'
+        f'<button class="hv-circle{" on" if done else ""}" type="submit" '
+        f'title="{"Снять отметку" if done else "Отметить: слот зарезервирован / готово"}" '
+        f'aria-label="Отметить">{"✓" if done else ""}</button></form>')
+    head = (f'<div class="hv-head">{circle}<span class="hv-chev">▸</span>'
+            f'<span class="hv-dot dir-{escape(direction)}" title="{escape(_DIR_LBL.get(direction, ""))}"></span>'
             f'<span class="hv-mid"><span class="hv-nm">{escape(nm)}</span>'
             f'<span class="hv-sub">{sub}</span></span>'
-            f'{done_badge}{sal_html}{dl_html}{when_html}</div>')
+            f'{sal_html}{dl_html}{when_html}</div>')
 
-    as_field = f'<input type="hidden" name="as" value="{as_id}">' if as_id else ""
     acts = []
     if thread_href:
         acts.append(f'<a class="hbtn" href="{escape(thread_href, quote=True)}">Переписка кандидата →</a>')
@@ -398,16 +431,12 @@ def _home_row(iv: dict, rtz, as_id) -> str:
         '<button class="primary" type="submit">Записать время</button></form>'
         '<p class="hv-hint">Перейдите по ссылке записи выше, забронируйте слот у рекрутёра, '
         'затем впишите сюда это время — собес появится в вашем календаре недели, и бот напомнит '
-        'заранее.</p>')
-    # «проведено» toggle
-    done_form = (
-        f'<form class="hv-done-form" method="post" action="/cabinet/mark_done">'
-        f'<input type="hidden" name="iid" value="{iid}">{as_field}'
-        f'<input type="hidden" name="done" value="{"0" if done else "1"}">'
-        f'<button class="{"ghost" if done else "hbtn"}" type="submit">'
-        f'{"↩︎ Снять отметку «проведено»" if done else "○ Отметить проведённым"}</button></form>')
-    panel = f'<div class="hv-panel">{acts_html}{sched}{done_form}</div>'
-    return f'<div class="hv-row{" done" if done else ""}">{head}{panel}</div>'
+        'заранее. Отметьте кружок слева, когда зарезервировали время.</p>')
+    panel = f'<div class="hv-panel">{acts_html}{sched}</div>'
+    # data-search: candidate + company + email for the client-side inbox-style search
+    ds = escape(f"{nm} {company} {mb}".lower(), quote=True)
+    return (f'<div class="hv-row{" marked" if done else ""}" data-search="{ds}">'
+            f'{head}{panel}</div>')
 
 
 def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
@@ -418,12 +447,10 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
     from backend.tools import interview_priority as ip
     rtz = responsible.get("tz")
     interviews = interviews or []
-    done = [iv for iv in interviews if iv.get("done_at")]
-    not_done = [iv for iv in interviews if not iv.get("done_at")]
-    # non-actual (EXPLICITLY-expired: booking window closed / link dead) sink to a «Пропущенные»
-    # block at the very bottom; the actionable list is only the still-bookable ones.
-    active = [iv for iv in not_done if not iv.get("expired")]
-    expired = [iv for iv in not_done if iv.get("expired")]
+    # Marked собесы (done_at) STAY IN PLACE (owner: «отмечаются, а не уходят вниз») — the circle
+    # just fills. Only non-actual (EXPLICITLY-expired: link dead / срок истёк) sink to «Пропущенные».
+    active = [iv for iv in interviews if not iv.get("expired")]
+    expired = [iv for iv in interviews if iv.get("expired")]
     sort = pool_sort if pool_sort in ("salary", "urgency", "age") else "urgency"
     active_sorted = ip.sort_groups(active, sort)
 
@@ -435,12 +462,16 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
                    + "".join(f'<a class="hv-sortb{" active" if sort==k else ""}" href="{_sb(k)}">{l}</a>'
                              for k, l in (("urgency", "Срочность"), ("salary", "Зарплата"), ("age", "Давность")))
                    + "</div>")
+    # inbox-style search over the собес candidates (client-side filter of the rows) — «поиск как в
+    # кандидатах» (part of merging «Кандидаты» into this one surface).
+    search = ('<input class="hv-search" type="search" placeholder="Поиск: кандидат, компания, e-mail" '
+              'aria-label="Поиск" oninput="hvSearch(this)">')
 
     if active_sorted:
         rows = "".join(_home_row(iv, rtz, as_id) for iv in active_sorted)
         list_html = f'<div class="hv-list">{rows}</div>'
     else:
-        list_html = '<div class="empty">Активных предстоящих собеседований нет.</div>'
+        list_html = '<div class="empty">Актуальных предстоящих собеседований нет.</div>'
 
     def _bucket(items, label):
         if not items:
@@ -451,24 +482,24 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
                 f'font-weight:700;font-size:13px;list-style:none">{escape(label)} ({len(items)})'
                 f'</summary><div class="hv-list" style="padding:0 8px 8px">{body}</div></details>')
 
-    # non-actual собесы (link dead / срок истёк) sink to the very bottom, then «Проведённые»
+    # non-actual собесы (link dead / срок истёк) sink to the very bottom
     expired_html = _bucket(expired, "Пропущенные — ссылка не работает или срок истёк")
-    done_html = _bucket(done, "Проведённые")
 
     tg_prompt = "" if responsible.get("telegram_chat_id") else _tg_card(responsible, as_id)
-    upcoming_n = sum(1 for iv in active if not (iv.get("start_ts") and iv["start_ts"] < datetime.now(timezone.utc)))
 
     inner = (
         portal_shell.admin_banner(responsible.get("name") or "", as_id)
         + '<h1 class="cab-h">Главная</h1>'
-        + '<p class="hm-lead">Ваше расписание на неделю и актуальные собеседования по приоритету. '
-        'Нажмите на кандидата, чтобы раскрыть: перейти в переписку, записаться на слот у рекрутёра, '
-        'проставить время и отметить собес проведённым.</p>'
+        + '<p class="hm-lead">Ваше расписание на неделю и все ваши собеседования: поиск, сортировка и '
+        'полная переписка кандидата. Нажмите на кандидата, чтобы раскрыть — переписка, запись на слот '
+        'у рекрутёра, время. Кружок слева отмечает, что вы зарезервировали время (остаётся на месте).</p>'
         + tg_prompt
         + _week_calendar(active, rtz, as_id)
         + '<div class="hv-card" id="hv"><div class="hv-top">'
         '<h2>Мои собеседования</h2>' + (sort_toggle if active_sorted else "") + '</div>'
-        + list_html + expired_html + done_html + '</div>' + _HOME_JS)
+        + (search if active_sorted else "")
+        + '<div id="hv-empty" class="empty" hidden>Ничего не найдено.</div>'
+        + list_html + expired_html + '</div>' + _HOME_JS)
     return _shell(responsible, "home", inner, "Главная", as_id=as_id, extra_css=_HOME_CSS)
 
 
@@ -837,13 +868,13 @@ _GUIDE_INTERVIEWER = """
     <li>Откройте <b>«Расписание»</b> и укажите, в какие часы по дням недели вы свободны для собесов.
         <span class="gd-note">Можно несколько промежутков в день; ночное окно — конец раньше начала.</span></li>
     <li>Подключите <b>Telegram</b> (кнопка на «Главной» или в «Расписании») — бот напомнит о каждом собесе за 2 часа, час, 15 и 5 минут.</li>
-    <li>На <b>«Главной»</b> в списке «Мои собеседования» разберите кандидатов сверху вниз (сортировка по срочности / зарплате / давности). Нажмите на кандидата, чтобы раскрыть карточку.</li>
-    <li>Нажмите <b>«Переписка кандидата»</b> — прочитайте письмо рекрутёра и, если нужно, ответьте прямо оттуда (ответ уходит от имени кандидата).</li>
+    <li>На <b>«Главной»</b> — список «Мои собеседования» со всеми вашими кандидатами: поиск, сортировка (срочность / зарплата / давность), полная переписка. Разбирайте сверху вниз; нажмите на кандидата, чтобы раскрыть карточку.</li>
+    <li>Нажмите <b>«Переписка кандидата»</b> — откроется полный кликабельный инбокс этого кандидата (как раньше в «Кандидатах»): все письма, можно ответить рекрутёру от имени кандидата.</li>
     <li>Нажмите <b>«Записаться / созвон»</b> — откроется ссылка рекрутёра, где вы бронируете время собеседования.</li>
     <li>Вернитесь и впишите это время в поле <b>«Записать время»</b> — собес появится в вашем «Календаре недели», и придут напоминания.</li>
-    <li>После проведения нажмите <b>«○ Отметить проведённым»</b> — собес уйдёт в «Проведённые».</li>
+    <li>Отметьте <b>кружок слева</b> от кандидата, когда зарезервировали время / разобрались — он станет зелёным ✓ и <b>останется на месте</b> (чтобы не потерять место в списке и идти к следующему).</li>
   </ol>
-  <div class="gd-tip">«Кандидаты» — вся переписка ваших собесов в одном месте (поиск + ответ). «События найма» — живые Zoom-комнаты Teleperformance, куда можно зайти и получить оффер без теста.</div>
+  <div class="gd-tip">Поиск и переписка теперь прямо здесь — отдельный раздел «Кандидаты» больше не нужен. «События найма» — живые Zoom-комнаты Teleperformance, куда можно зайти и получить оффер без теста.</div>
 </div>
 """
 

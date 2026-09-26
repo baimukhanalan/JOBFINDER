@@ -46,7 +46,8 @@ def _parse_join(raw: str, me: dict | None):
 
 
 @router.get("/hiring-events", response_class=HTMLResponse)
-def hiring_events_page(me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+def hiring_events_page(ctx: str = "",
+                       me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     """The live-hiring-events surface, SHARED across all roles. Resolution is cache-first
     (only new invites hit the network), so repeat renders are fast. Every claim («кто и во
     сколько подключится к кандидату») is loaded + shown to everyone; the acting user gets the
@@ -63,7 +64,7 @@ def hiring_events_page(me: dict = Depends(auth.current_responsible)) -> HTMLResp
     except Exception:
         claims, color_for = {}, None
     return HTMLResponse(hiring_events.render_page(
-        groups, claims=claims, me=me, color_for=color_for))
+        groups, claims=claims, me=me, color_for=color_for, ctx=ctx))
 
 
 @router.post("/hiring-events/claim")

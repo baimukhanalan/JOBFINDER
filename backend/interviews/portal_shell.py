@@ -48,17 +48,24 @@ def _role_label(roles: list[str]) -> str:
 def _nav_items(roles: list[str]):
     """(key, label, icon, path, global?) — role-scoped. `global` links (События найма) are NOT
     ?as-threaded. «Команда» only for managers."""
+    # «Кандидаты» is MERGED into «Главная» → «Мои собеседования» (search + colours + the full
+    # clickable inbox via «Переписка»), so it is no longer a separate nav item (owner 2026-09-26).
     items = [
         ("home", "Главная", _IC_HOME, "/cabinet", False),
-        ("candidates", "Кандидаты", mailcrm_ui._IC_CANDIDATES, "/cabinet/candidates", False),
     ]
     if "manager" in (roles or []):
         items.append(("team", "Команда", mailcrm_ui._IC_USERS, "/manage", False))
     items += [
         ("schedule", "Расписание", _IC_CAL, "/cabinet/availability", False),
-        ("hiring", "События найма", mailcrm_ui._IC_HIRING, "/hiring-events", True),
+        # ?ctx=user → the shared «События найма» page KEEPS this user menu (never flips to the
+        # admin rail) even for a multi-role admin who is navigating the USER portal.
+        ("hiring", "События найма", mailcrm_ui._IC_HIRING, "/hiring-events?ctx=user", True),
         ("guide", "Инструкции", _IC_GUIDE, "/cabinet/guide", False),
     ]
+    # a multi-role ADMIN who lives in the user portal needs a way back to the full admin
+    # dashboard (the user menu deliberately shows NO other admin sections).
+    if "admin" in (roles or []):
+        items.append(("adminhome", "Админ-панель", _IC_ADMIN, "/", True))
     return items
 
 

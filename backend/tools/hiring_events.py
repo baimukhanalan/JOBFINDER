@@ -1367,7 +1367,7 @@ _TOGGLE_JS = """<script>
 
 
 def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
-                me: dict | None = None, color_for=None) -> str:
+                me: dict | None = None, color_for=None, ctx: str = "") -> str:
     """The «События найма» SHARED surface: live Zoom hiring events, each with its
     schedule + a «Присоединиться» button + the personas invited to it. Distinct from the
     «Собес» interview pool. Neutral RU; no stack names.
@@ -1424,13 +1424,16 @@ def render_page(groups: list[dict] | None = None, *, claims: dict | None = None,
     # their own user portal left-menu (Главная/Кандидаты/Команда/Расписание/События найма/…),
     # so they can NOT reach Вакансии/Статистика/Пользователи/Health from here.
     # «События найма» is a SHARED page whose CONTENT (rooms/candidates/claims) is common to
-    # everyone, but each role keeps ITS OWN menu around it — never a mixed one (owner:
-    # «у каждого пользователя своё меню, не смешивай, а внутри общее»):
-    #   * admin (or the CLI, me=None) → the full admin dashboard rail (their own menu);
-    #   * a non-admin (manager/interviewer) → their OWN user portal left-menu, so they can NOT
-    #     reach the admin sections (Вакансии/Статистика/Пользователи/Health) from here.
+    # everyone; the menu around it is the viewer's OWN — and it must KEEP the menu the user
+    # arrived with (owner 2026-09-26: navigating from the user portal it must NOT flip to the
+    # admin rail). So the USER-portal nav links here with `?ctx=user`:
+    #   * ctx=='user' (came from the user portal, ANY role incl. a multi-role admin) → the USER
+    #     left-menu shell (an admin gets an «Админ-панель» link in it to return);
+    #   * a non-admin always → the user shell;
+    #   * an admin coming from the ADMIN dashboard rail (no ctx) OR the CLI (me=None) → admin rail.
     roles = list((me or {}).get("roles") or ([] if me is None else [me.get("role")]))
-    if me is None or "admin" in roles:
+    user_shell = (me is not None) and (ctx == "user" or "admin" not in roles)
+    if not user_shell:
         return mailcrm_ui._page("hiring", f'<style>{_CSS}</style>{inner}')
     from backend.interviews import portal_shell
     return portal_shell.shell(active="hiring", roles=roles,

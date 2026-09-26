@@ -120,15 +120,13 @@ def _admin_from_request(request: Request) -> dict | None:
 
 
 def _home_for(resp: dict) -> str:
-    """Where a freshly-authenticated / misrouted session belongs — the HIGHEST surface they
-    hold (admin > manager > employee), so a multi-role user lands on their richest home:
-    admin → the whole operator dashboard (/), manager → the management portal (/manage),
-    employee → their cabinet (/cabinet)."""
-    primary = db.primary_role(db.roles_of(resp))
-    if primary == "admin":
+    """Where a freshly-authenticated / misrouted session belongs. An ADMIN lands on the whole
+    operator dashboard (/). Everyone else — manager AND interviewer — lands on their **Главная**
+    (/cabinet): the user portal must START on the user home (owner 2026-09-26), NOT the manager
+    «Команда» distribution page. A manager reaches «Команда» from the left menu; the cabinet is
+    allowed for managers too (`_manager_allowed`)."""
+    if db.has_role(resp, "admin"):
         return "/"
-    if primary == "manager":
-        return "/manage"
     return "/cabinet"
 
 
@@ -194,11 +192,12 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
         roles = db.roles_of(resp)
         if "admin" in roles:
             return await call_next(request)
-        # manager: confined to the management portal + the interviewer cabinet
+        # manager: confined to the management portal + the interviewer cabinet. A disallowed path
+        # bounces to /cabinet (Главная) — the portal starts on the user home, not «Команда».
         if "manager" in roles:
             if _manager_allowed(request.url.path):
                 return await call_next(request)
-            return RedirectResponse("/manage", status_code=303)
+            return RedirectResponse("/cabinet", status_code=303)
         # employee (or any other): confined to the cabinet whitelist
         if _employee_allowed(request.url.path):
             return await call_next(request)

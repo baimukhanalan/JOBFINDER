@@ -62,6 +62,8 @@ a.ivp-main:hover .ivp-nm{color:var(--accent);text-decoration:underline;}
 .ivp-dir{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--ink-soft);background:var(--panel-2);border-radius:var(--r-full);padding:2px 8px;}
 .ivp-sal{flex:0 0 auto;font-family:var(--ff-mono);font-size:12px;font-weight:700;color:var(--ok);}
 .ivp-bk{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--accent);background:var(--accent-soft,#e8f0fe);border-radius:var(--r-full);padding:2px 8px;white-space:nowrap;}
+a.ivp-bk{text-decoration:none;}
+a.ivp-bk:hover{color:var(--accent-deep);text-decoration:none;filter:brightness(.97);}
 .ivp-dl{flex:0 0 auto;font-size:11.5px;font-weight:700;border-radius:var(--r-full);padding:3px 9px;white-space:nowrap;}
 .ivp-dl-ok{color:var(--ink-soft);background:var(--panel-2);}
 .ivp-dl-soon{color:var(--warn);background:var(--warn-soft);}
@@ -102,8 +104,16 @@ def _row(r: dict, status_html: str = "", href: str | None = None) -> str:
     dir_html = f"<span class='ivp-dir'>{escape(dir_lbl)}</span>" if dir_lbl else ""
     sal_html = f"<span class='ivp-sal'>{escape(sal)}/год</span>" if sal else ""
     dl_html = f"<span class='ivp-dl ivp-dl-{dlvl}'>{escape(dtext)}</span>" if dtext else ""
-    bk_html = ("<span class='ivp-bk' title='есть ссылка записи — можно бронировать'>📅 запись</span>"
-               if r.get("has_booking") else "")
+    bk_url = r.get("booking_url") or r.get("iv_booking_url") or ""
+    if bk_url:
+        # a real self-schedule / Zoom link → open it directly (one click to the scheduler), else a
+        # plain marker. target=_blank so it never leaves the portal.
+        bk_html = (f"<a class='ivp-bk' href='{escape(bk_url, quote=True)}' target='_blank' "
+                   "rel='noopener noreferrer' title='Открыть запись / созвон'>📅 запись</a>")
+    elif r.get("has_booking"):
+        bk_html = "<span class='ivp-bk' title='есть ссылка записи — можно бронировать'>📅 запись</span>"
+    else:
+        bk_html = ""
     row_cls = "ivp-row past" if dlvl == "over" else "ivp-row"
     inner = (f"<span class='ivp-nm'>{escape(nm)}</span>"
              f"<span class='ivp-em'>{escape(mb)}</span>")

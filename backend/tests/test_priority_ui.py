@@ -73,3 +73,15 @@ def test_href_of_makes_rows_clickable_into_thread():
     # NO builder → rows are a plain <div>, never a link (back-compat with existing callers)
     plain = P.priority_card(rows, "salary", "/cabinet")
     assert "a class='ivp-main'" not in plain and "ivp-go" not in plain
+
+
+def test_booking_badge_is_a_link_when_url_present():
+    """«📅 запись» links straight to the scheduler/созвон when the row carries a booking_url
+    (one click to book); a has_booking row with no URL stays a plain badge."""
+    linked = P.priority_card([_row("a@x", "it", "$90k", 3, booking_url="https://calendly.com/x")],
+                             "salary", "/cabinet")
+    assert "a class='ivp-bk' href='https://calendly.com/x'" in linked
+    assert "target='_blank'" in linked
+    # marker-only (has_booking but no url) → not an anchor
+    marker = P.priority_card([_row("b@x", "nonit", "$40k", 3, book=True)], "salary", "/cabinet")
+    assert "ivp-bk" in marker and "a class='ivp-bk'" not in marker

@@ -48,6 +48,11 @@ CSS = """
 .ivp-row.past{opacity:.6;}
 .ivp-row.past:hover{opacity:1;}
 .ivp-main{flex:1 1 190px;min-width:0;display:flex;flex-direction:column;gap:1px;}
+/* clickable row: the candidate block is a link straight into переписка («разбирайте сверху вниз») */
+a.ivp-main{cursor:pointer;text-decoration:none;}
+a.ivp-main:hover .ivp-nm{color:var(--accent);text-decoration:underline;}
+.ivp-go{flex:0 0 auto;align-self:center;color:var(--accent);font-weight:700;font-size:15px;line-height:1;text-decoration:none;padding:2px 4px;border-radius:6px;}
+.ivp-go:hover{color:var(--accent-deep);background:var(--accent-soft,#e8f0fe);text-decoration:none;}
 .ivp-nm{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ivp-em{font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ivp-badge{flex:0 0 auto;font-size:10.5px;font-weight:700;border-radius:var(--r-full);padding:2px 8px;white-space:nowrap;}
@@ -83,10 +88,12 @@ def _cand_name(r: dict) -> str:
     return (r.get("candidate") or "").strip() or (mb.split("@")[0] if mb else "—")
 
 
-def _row(r: dict, status_html: str = "") -> str:
+def _row(r: dict, status_html: str = "", href: str | None = None) -> str:
     """One interview row: candidate + email, optional status chip, direction, salary, a booking
     marker and the deadline/urgency chip (the SAME wording as the «Собес» card via
-    `interview_priority.deadline_text`)."""
+    `interview_priority.deadline_text`). When `href` is given the candidate block becomes a link
+    straight into that собес's переписка + a «→» affordance, so the priority list is an actionable
+    worklist you clear top-to-bottom (one click, no hunting for the same email in the list below)."""
     mb = r.get("mailbox") or ""
     nm = _cand_name(r)
     sal = r.get("salary_label") or ""
@@ -98,10 +105,17 @@ def _row(r: dict, status_html: str = "") -> str:
     bk_html = ("<span class='ivp-bk' title='есть ссылка записи — можно бронировать'>📅 запись</span>"
                if r.get("has_booking") else "")
     row_cls = "ivp-row past" if dlvl == "over" else "ivp-row"
-    return (f"<div class='{row_cls}'>"
-            f"<div class='ivp-main'><span class='ivp-nm'>{escape(nm)}</span>"
-            f"<span class='ivp-em'>{escape(mb)}</span></div>"
-            f"{status_html}{bk_html}{dir_html}{sal_html}{dl_html}</div>")
+    inner = (f"<span class='ivp-nm'>{escape(nm)}</span>"
+             f"<span class='ivp-em'>{escape(mb)}</span>")
+    if href:
+        h = escape(href, quote=True)
+        main = f"<a class='ivp-main' href='{h}' title='Открыть переписку'>{inner}</a>"
+        go = f"<a class='ivp-go' href='{h}' aria-label='Открыть переписку'>→</a>"
+    else:
+        main = f"<div class='ivp-main'>{inner}</div>"
+        go = ""
+    return (f"<div class='{row_cls}'>{main}"
+            f"{status_html}{bk_html}{dir_html}{sal_html}{dl_html}{go}</div>")
 
 
 def _sort_toggle(sort: str, sort_base: str, anchor: str) -> str:
@@ -113,22 +127,26 @@ def _sort_toggle(sort: str, sort_base: str, anchor: str) -> str:
     return "<div class='ivp-sort' role='group' aria-label='Сортировка'>" + "".join(out) + "</div>"
 
 
-def _section(title: str, rows: list[dict], status_of=None) -> str:
+def _section(title: str, rows: list[dict], status_of=None, href_of=None) -> str:
     """A titled section: still-bookable rows shown, EXPLICITLY-expired ones collapsed into a
-    «Истёкшие» details (the header count is the actionable/bookable count)."""
+    «Истёкшие» details (the header count is the actionable/bookable count). `href_of(row)->str|None`
+    makes each row a link into its переписка."""
     bookable = [r for r in rows if not r.get("expired")]
     expired = [r for r in rows if r.get("expired")]
 
     def _sh(r):
         return status_of(r) if status_of else ""
+
+    def _hr(r):
+        return href_of(r) if href_of else None
     head = (f"<div class='ivp-sec'><span class='ivp-sect'>{escape(title)}</span>"
             f"<span class='ivp-n'>{len(bookable)}</span></div>")
-    body = ("<div class='ivp-list'>" + "".join(_row(r, _sh(r)) for r in bookable) + "</div>"
+    body = ("<div class='ivp-list'>" + "".join(_row(r, _sh(r), _hr(r)) for r in bookable) + "</div>"
             if bookable else "<div class='ivp-empty'>Нет доступных собеседований</div>")
     if expired:
         body += ("<details class='ivp-exp'><summary>Истёкшие ("
                  f"{len(expired)})</summary><div class='ivp-list'>"
-                 + "".join(_row(r, _sh(r)) for r in expired) + "</div></details>")
+                 + "".join(_row(r, _sh(r), _hr(r)) for r in expired) + "</div></details>")
     return head + body
 
 
@@ -136,9 +154,11 @@ def priority_card(rows: list[dict], sort: str, sort_base: str, *,
                   title: str = "Приоритет собеседований",
                   blurb: str = ("Собеседования по приоритету — сложные (IT) и простые (не‑IT), "
                                 "по зарплате, срочности брони слота или давности заявки."),
-                  anchor: str = "ivp-pri", empty: str = "Пока ничего не назначено.") -> str:
+                  anchor: str = "ivp-pri", empty: str = "Пока ничего не назначено.",
+                  href_of=None) -> str:
     """The IT/non-IT split priority card (part 1). `sort_base` is the surface URL WITH its
-    current query (minus pool_sort) so the sort links keep the portal's context (?as/?q/…)."""
+    current query (minus pool_sort) so the sort links keep the portal's context (?as/?q/…).
+    `href_of(row)->str|None` makes each candidate row a link into its переписка."""
     sort = sort if sort in ("salary", "urgency", "age") else "salary"
     rows = rows or []
     if not rows:
@@ -150,8 +170,8 @@ def priority_card(rows: list[dict], sort: str, sort_base: str, *,
     return (f"<div class='ivp-card' id='{anchor}'>"
             f"<div class='ivp-top'><h3>{escape(title)}</h3>{_sort_toggle(sort, sort_base, anchor)}</div>"
             f"<p class='ivp-hint'>{escape(blurb)}</p>"
-            + _section("IT‑специальности", it)
-            + _section("Простые (не‑IT)", simple)
+            + _section("IT‑специальности", it, href_of=href_of)
+            + _section("Простые (не‑IT)", simple, href_of=href_of)
             + "</div>")
 
 
@@ -159,10 +179,12 @@ def upcoming_list(rows: list[dict], *, title: str = "Актуальные пре
                   blurb: str = ("Собеседования, у которых срок брони ещё не истёк, — от самых "
                                 "срочных. Явно просроченные собраны в «Истёкшие» ниже."),
                   anchor: str = "ivp-live", status_of=None,
-                  empty: str = "Актуальных предстоящих собеседований нет.") -> str:
+                  empty: str = "Актуальных предстоящих собеседований нет.",
+                  href_of=None) -> str:
     """A flat «actual upcoming» list (part 2): urgency-first, EXPLICITLY-expired collapsed, an
     optional per-row status chip via `status_of(row) -> html`. NOT split by direction (an
-    at-a-glance live pipeline, not a delegation-priority view)."""
+    at-a-glance live pipeline, not a delegation-priority view). `href_of(row)->str|None` makes each
+    row a link into its переписка."""
     rows = rows or []
     if not rows:
         return (f"<div class='ivp-card' id='{anchor}'><div class='ivp-top'><h3>{escape(title)}</h3></div>"
@@ -171,7 +193,7 @@ def upcoming_list(rows: list[dict], *, title: str = "Актуальные пре
     return (f"<div class='ivp-card' id='{anchor}'>"
             f"<div class='ivp-top'><h3>{escape(title)}</h3></div>"
             f"<p class='ivp-hint'>{escape(blurb)}</p>"
-            + _section("Актуальные", ordered, status_of=status_of)
+            + _section("Актуальные", ordered, status_of=status_of, href_of=href_of)
             + "</div>")
 
 

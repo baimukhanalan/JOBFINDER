@@ -56,3 +56,20 @@ def test_upcoming_list_collapses_expired_and_shows_status():
 def test_status_chips_escape_names():
     assert "&lt;b&gt;" in P.status_assigned("<b>") and "ivp-st-set" in P.status_assigned("x")
     assert "ivp-st-mgr" in P.status_manager("m") and "ivp-st-free" in P.status_free()
+
+
+def test_href_of_makes_rows_clickable_into_thread():
+    """`href_of(row)->url` turns each candidate block into a link into переписка + a «→» arrow,
+    so the priority list is a top-to-bottom worklist. Without it, rows stay plain (no <a>)."""
+    rows = [_row("a@x", "it", "$120k", 2, salv=120000, source_hash="H1")]
+    # with a link builder → both the candidate block and the arrow are <a href=…>
+    html = P.priority_card(rows, "salary", "/cabinet",
+                           href_of=lambda r: f"/cabinet/thread?hash={r['source_hash']}")
+    assert "a class='ivp-main'" in html and "/cabinet/thread?hash=H1" in html
+    assert "ivp-go" in html and "→" in html
+    # the same builder works on the flat upcoming list too
+    up = P.upcoming_list(rows, href_of=lambda r: f"/mail/message?id={r['source_hash']}")
+    assert "/mail/message?id=H1" in up
+    # NO builder → rows are a plain <div>, never a link (back-compat with existing callers)
+    plain = P.priority_card(rows, "salary", "/cabinet")
+    assert "a class='ivp-main'" not in plain and "ivp-go" not in plain

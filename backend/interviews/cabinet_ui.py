@@ -264,12 +264,20 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
     # priority card: the SAME urgency/priority filter as the «Собес» screen over the interviews
     # assigned to this interviewer — «с чего начать» (по срочности брони / зарплате / давности).
     from backend.interviews import priority_ui
+
+    def _pri_href(iv: dict):
+        # each priority row → straight into that собес's переписка (the interviewer owns every
+        # assigned mailbox, so /cabinet/thread never 404s here). Hash escaped once inside _row.
+        h = iv.get("source_message_hash") or iv.get("source_hash")
+        return _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else None
+
     pri = priority_ui.priority_card(
         interviews, pool_sort, sort_base, anchor="cab-pri",
         title="Приоритет: с чего начать",
         blurb=("Ваши собеседования по приоритету — по зарплате, срочности брони слота или "
-               "давности заявки. Явно просроченные — в «Истёкшие»."),
-        empty="Назначенных собеседований пока нет.") if interviews else ""
+               "давности заявки. Нажмите на кандидата — откроется переписка. "
+               "Явно просроченные — в «Истёкшие»."),
+        empty="Назначенных собеседований пока нет.", href_of=_pri_href) if interviews else ""
     body = (priority_ui.CSS + _topbar(responsible, "home", as_id, iv_count=len(upcoming)) +
             _asview_banner(responsible, as_id) +
             '<h1 class="cab-h">Мои собеседования</h1>' + tg_prompt + block + pri)

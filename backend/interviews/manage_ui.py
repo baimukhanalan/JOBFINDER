@@ -142,10 +142,22 @@ def _topbar(manager: dict, active: str = "portal", is_admin_view: bool = False) 
     back = ('<a href="/users">← Пользователи</a>' if is_admin_view else "")
     nav = (back +
            f'<a class="{"active" if active=="portal" else ""}" href="/manage{q}">Портал</a>')
-    if not is_admin_view:
+    if is_admin_view:
+        # admin read-through: let the admin traverse this user's WHOLE world (his cabinet:
+        # собесы / календарь / кандидаты / расписание), each carrying ?as=<id> so it stays scoped
+        # to him — without this the read-through was a dead-end on the portal («как раньше»). The
+        # shared «События найма» board is global (no ?as).
+        nav += (f'<a href="/cabinet{q}">Собесы</a>'
+                f'<a href="/cabinet/calendar{q}">Календарь</a>'
+                f'<a href="/cabinet/candidates{q}">Кандидаты</a>'
+                f'<a href="/cabinet/availability{q}">Расписание</a>'
+                '<a href="/hiring-events">События найма</a>')
+    else:
         # a manager also attends interviews assigned to himself → his own cabinet; the shared
         # «События найма» board is open to every role (admin/управляющий/интервьюер).
         nav += ('<a href="/cabinet">Мои собесы</a>'
+                '<a href="/cabinet/calendar">Календарь</a>'
+                '<a href="/cabinet/candidates">Кандидаты</a>'
                 '<a href="/hiring-events">События найма</a>'
                 '<a href="/cabinet/availability">Расписание</a>'
                 '<a href="/logout">Выход</a>')
@@ -442,18 +454,32 @@ def portal_page(manager: dict, subs: list[dict], own_ivs: list[dict],
             return priority_ui.status_manager(names.get(mid) or "—", color=colors.get(mid))  # мой — провожу сам
         return priority_ui.status_assigned(names.get(rid) or "—", color=colors.get(rid))      # роздан сотруднику
 
+    def _mg_href(iv: dict):
+        # link a row into its переписка — but ONLY the manager's OWN собесы (responsible_id==mid):
+        # /cabinet/thread's ownership guard keys on assigned_mailboxes(mid), which contains his own
+        # rows but NOT team rows (those would 404), so team rows stay non-clickable here. In the
+        # admin read-through the ?as=<mid> keeps it scoped to the manager.
+        if iv.get("responsible_id") != mid:
+            return None
+        h = iv.get("source_message_hash") or iv.get("source_hash")
+        if not h:
+            return None
+        base = f"/cabinet/thread?hash={h}"
+        return f"{base}&as={as_id}" if as_id else base
+
     priority_card = priority_ui.priority_card(
         pool_all, pool_sort, sort_base, anchor="mg-pri",
         title="Приоритет: что раздать/провести первым",
         blurb=("Ваши нераспределённые собеседования по приоритету — сложные (IT) и простые (не‑IT), "
-               "по зарплате, срочности брони слота или давности заявки. Разбирайте сверху вниз."),
-        empty="Нераспределённых собесов нет.")
+               "по зарплате, срочности брони слота или давности заявки. Нажмите на кандидата — "
+               "откроется переписка. Разбирайте сверху вниз."),
+        empty="Нераспределённых собесов нет.", href_of=_mg_href)
     upcoming_card = priority_ui.upcoming_list(
         scope_ivs, anchor="mg-live", status_of=_mg_status,
         title="Актуальные предстоящие собеседования",
         blurb=("Все ваши живые собесы (свои + розданные команде), у которых срок брони ещё не истёк, "
                "— от самых срочных. Явно просроченные — в «Истёкшие»."),
-        empty="Актуальных предстоящих собеседований у вас нет.")
+        empty="Актуальных предстоящих собеседований у вас нет.", href_of=_mg_href)
 
     body = (
         priority_ui.CSS +

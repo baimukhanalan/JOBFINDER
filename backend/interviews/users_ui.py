@@ -160,6 +160,10 @@ label.u-rolechk input{width:17px;height:17px;flex:0 0 auto;margin:0}
 .u-pri-row.past{opacity:.6}
 .u-pri-row.past:hover{opacity:1}
 .u-pri-main{flex:1 1 200px;min-width:0;display:flex;flex-direction:column;gap:1px}
+a.u-pri-main{cursor:pointer;text-decoration:none}
+a.u-pri-main:hover .u-pri-nm{color:var(--accent);text-decoration:underline}
+.u-pri-go{flex:0 0 auto;align-self:center;color:var(--accent);font-weight:700;font-size:15px;line-height:1;text-decoration:none;padding:2px 4px;border-radius:6px}
+.u-pri-go:hover{color:var(--accent-deep);background:var(--accent-soft,#e8f0fe);text-decoration:none}
 .u-pri-nm{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u-pri-em{font-family:var(--ff-mono);font-size:11px;color:var(--ink-mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .u-pri-dir{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--ink-soft);background:var(--panel-2);border-radius:var(--r-full);padding:2px 8px}
@@ -579,10 +583,19 @@ def _pool_row(r: dict) -> str:
     bk_html = ("<span class='u-pri-bk' title='есть ссылка записи — можно бронировать'>📅 запись</span>"
                if r.get("has_booking") else "")
     row_cls = "u-pri-row past" if dlvl == "over" else "u-pri-row"   # expired = dimmed + sorted last
-    return (f"<div class='{row_cls}'>"
-            f"<div class='u-pri-main'><span class='u-pri-nm'>{escape(nm)}</span>"
-            f"<span class='u-pri-em'>{escape(mb)}</span></div>"
-            f"{bk_html}{dir_html}{sal_html}{dl_html}</div>")
+    # click the candidate → open their переписка in the operator inbox (peek before delegating).
+    h = r.get("source_hash") or r.get("source_message_hash")
+    inner = (f"<span class='u-pri-nm'>{escape(nm)}</span>"
+             f"<span class='u-pri-em'>{escape(mb)}</span>")
+    if h:
+        href = escape(f"/mail/message?id={h}", quote=True)
+        main = f"<a class='u-pri-main u-pri-link' href='{href}' title='Открыть переписку'>{inner}</a>"
+        go = f"<a class='u-pri-go' href='{href}' aria-label='Открыть переписку'>→</a>"
+    else:
+        main = f"<div class='u-pri-main'>{inner}</div>"
+        go = ""
+    return (f"<div class='{row_cls}'>{main}"
+            f"{bk_html}{dir_html}{sal_html}{dl_html}{go}</div>")
 
 
 def _pool_section(title: str, rows: list[dict]) -> str:
@@ -719,12 +732,18 @@ def _all_live_card(pool_rows: list[dict], allocated_rows: list[dict], names_by_i
     # and the counts describe the whole pipeline), then the card renders the (possibly) filtered rows.
     owner_filter = _live_owner_filter(allocated_rows or [], names_by_id, live_owner)
     summary = _live_summary(rows)
+
+    def _href(r: dict):
+        # admin peek: click a row → its переписка in the operator inbox (hash escaped once in _row).
+        h = r.get("source_hash") or r.get("source_message_hash")
+        return f"/mail/message?id={h}" if h else None
+
     return (priority_ui.CSS + owner_filter + summary + legend + priority_ui.upcoming_list(
-        rows, anchor="u-live", status_of=_status,
+        rows, anchor="u-live", status_of=_status, href_of=_href,
         title="Актуальные предстоящие собеседования",
         blurb=("Весь живой поток: свободные в пуле, переданные управляющим и назначенные "
-               "интервьюерам — у которых срок брони ещё не истёк, от самых срочных. Явно "
-               "просроченные собраны в «Истёкшие»."),
+               "интервьюерам — у которых срок брони ещё не истёк, от самых срочных. Нажмите на "
+               "кандидата — откроется переписка. Явно просроченные собраны в «Истёкшие»."),
         empty="Актуальных предстоящих собеседований нет."))
 
 

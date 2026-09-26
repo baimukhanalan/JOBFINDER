@@ -29,10 +29,6 @@ _IC_CAL = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-wi
 _IC_GUIDE = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
              'stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>'
              '<path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>')
-_IC_ADMIN = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
-             'stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/>'
-             '<rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'
-             '<rect x="3" y="14" width="7" height="7" rx="1"/></svg>')
 
 
 def _role_label(roles: list[str]) -> str:
@@ -62,10 +58,7 @@ def _nav_items(roles: list[str]):
         ("hiring", "События найма", mailcrm_ui._IC_HIRING, "/hiring-events?ctx=user", True),
         ("guide", "Инструкции", _IC_GUIDE, "/cabinet/guide", False),
     ]
-    # a multi-role ADMIN who lives in the user portal needs a way back to the full admin
-    # dashboard (the user menu deliberately shows NO other admin sections).
-    if "admin" in (roles or []):
-        items.append(("adminhome", "Админ-панель", _IC_ADMIN, "/", True))
+    # The user menu is PURE — only the user's own sections, never an admin link (owner 2026-09-26).
     return items
 
 

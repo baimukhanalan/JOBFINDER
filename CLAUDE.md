@@ -1652,6 +1652,30 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   on `routes_cabinet._inbox_scope` (own +, for a manager, the whole team's assigned mailboxes — the SAME set his candidate inbox
   uses), NOT `assigned_mailboxes` alone. So a manager can open the переписка of a собес he handed down, and every /manage priority
   + upcoming row (own AND team) is clickable. An EMPLOYEE's scope is unchanged (his own only) → interviewer isolation is intact.
+- **USER-PORTAL REDESIGN — shared LEFT-MENU shell (2026-09-26, `interviews/portal_shell.py`).** The manager + interviewer
+  portals + the shared «События найма» board now share ONE left-rail shell that REUSES the admin `.sidebar`/`.nav`/`.gm-drawer`
+  `_CSS` classes but renders the USER's OWN role-scoped nav (Главная → /cabinet · Кандидаты → /cabinet/candidates · Команда →
+  /manage [managers only] · Расписание → /cabinet/availability · События найма → /hiring-events · Инструкции → /cabinet/guide),
+  never the admin sections. `portal_shell.shell(active, roles, name, body, title, as_id, extra_head)`; admin read-through threads
+  `?as` onto every link (except the global /hiring-events + /logout) + shows `admin_banner`. cabinet_ui uses `_shell(...)` (roles
+  via `_roles_of`); manage_ui `portal_page` renders `active="team"` via the shell; the old cabinet top-nav + `manage_ui._topbar`
+  are dead. **FIX (the reported leak): `hiring_events.render_page` is now ROLE-AWARE** — admin (or CLI `me=None`) keeps
+  `mailcrm_ui._page` (admin rail); a NON-admin gets `portal_shell.shell(active="hiring")` so a manager/interviewer can NOT reach
+  Вакансии/Статистика/Пользователи/Health from «События найма». Tests assert `ADMIN-LEAK=0` for a non-admin there.
+- **Cabinet HOME = week calendar + collapsible actionable list (2026-09-26, `cabinet_ui.dashboard_page`).** Leads with a Mon–Sun
+  **week calendar** (`_week_calendar`, собесы placed by day/time in the user's tz, click → переписка) then «Мои собеседования» —
+  rows that COLLAPSE/EXPAND by icon (`.hv-row`/`_HOME_JS`), sorted urgency/salary/age (`?pool_sort=`), done собесы in a
+  «Проведённые» details. Each expanded row: Переписка + «📅 Записаться/созвон» (booking_url) + a «Записать время» self-schedule
+  form + a «○ Отметить проведённым» toggle. `priority_ui.priority_card`/`upcoming_list` gained `collapsible=True` (title in
+  `<summary>`), used on /manage.
+- **Booking self-schedule + «проведено» (2026-09-26).** New col `iv_interviews.done_at` (additive, nullable TIMESTAMPTZ) +
+  `db.mark_interview_done(iid,on)` / `db.set_interview_start(iid,start,end)` (re-arms the notifier). Routes `POST
+  /cabinet/self_schedule` (the interviewer sets THEIR собес's time after reserving the recruiter slot → shows in the week
+  calendar + arms reminders) + `POST /cabinet/mark_done` — both OWNERSHIP-guarded (`iv.responsible_id == acting user`, so a
+  foreign iid is a no-op) + redirect home. `GET /cabinet/guide` = the «Инструкции» section: short role-specific user-flow
+  (interviewer steps always; manager section added for managers). **Deploy: `pm2 restart jobfinder-alan-dash`** (UI + routes;
+  the `done_at` ALTER is idempotent in `ensure_schema`). Tests: `test_interviews_portal_ui.py` +
+  `test_priority_ui.py::test_*collapsible`-adjacent.
 - **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): **DELEGATION-FIRST layout** — the whole user
   LIST + the «Добавить пользователя» form live in a right-side slide-out DRAWER (the «Список» header toggle → `uDrawer`; scrim +
   Esc close; `#u-list` stays the auto-refresh swap target); the main column is the «Делегирование интервью» card + a

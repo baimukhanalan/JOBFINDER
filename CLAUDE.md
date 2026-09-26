@@ -507,7 +507,19 @@ US-residential slot in the moment one is available) WITHOUT degrading what works
   reclassifies. `_normalise_phrase` maps smart punctuation to ASCII BEFORE casefold (curly `’`→`'`). A `code` kind (LAST in
   `KEYWORD_KINDS`, «🔑 Код») captures ATS "Security code" mail so `other` = genuinely unclassified. Defaults require explicit
   interview invitations (no broad "next steps"/"screening"). Changing the classifier needs BOTH dash + indexer restart, then
-  `reclassify_existing()`; bump `CLASSIFIER_VERSION`. **GOTCHA: `keyword_rules()` caps each kind at `raw[:100]` phrases** —
+  `reclassify_existing()`; bump `CLASSIFIER_VERSION`. **KEYWORD SAFETY (2026-09-26): a rejection/offer phrase
+  must be UNAMBIGUOUSLY that kind — NO substring that also sits inside a POSITIVE/marketing sentence.** Removed
+  `"able to move forward with your"` + `"move forward with your profile"` from `rejection` (they substring-matched a
+  POSITIVE «we ARE able to move forward with your application» → interview invites mislabelled as отказ — owner:
+  «собес за отказ»); the negative sense stays via `unable to move forward`/`not moving forward`/`decided not to…`/the
+  explicit `we won't be moving forward with your application`. Removed `"excited/happy/delighted to offer you"` from
+  `offer` (matched MARKETING «excited to offer you 20% off / opportunities» → 67 promo/job-alert mails mislabelled offer);
+  keep offer on `extend an offer`/`offer you the position`. Expanded interview/offer/rejection with specific phrases +
+  raised the per-kind cap **`raw[:100]`→`raw[:160]`** (interview was AT the 100 cap). The LIVE rules live in the gitignored
+  `uploads/mail_keywords.json` (not the code DEFAULTS) — edit it via `save_keyword_rules(dict)`; `keyword_rules()` hot-reloads
+  it by mtime (no restart needed for a phrase edit, but a CAP/code change needs the dash+indexer restart). Targeted reclass:
+  re-run `build_index_row` over ONLY the affected `kind` bucket (query `mail_index WHERE kind=…` → `mail_db.update_kinds`),
+  not the full `reclassify_existing()`. **GOTCHA: `keyword_rules()` caps each kind at `raw[:160]` phrases** —
   edit the lists via `save_keyword_rules(dict)` (normalises + caps + updates the mtime-keyed cache), NOT a raw `json.dump`; a
   raw edit that pushes a list past 100 SILENTLY drops the overflow (a phrase appended at #101 never fires). `classify` reads
   subject+body only (not the DB snippet), so a phrase present only in the snippet won't match. `reclassify_existing()`

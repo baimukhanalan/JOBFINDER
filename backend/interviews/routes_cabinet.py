@@ -315,10 +315,12 @@ def calendar(as_: str = Query("", alias="as"),
 
 @router.get("/candidates", response_class=HTMLResponse)
 def candidates(as_: str = Query("", alias="as"), q: str = Query(""),
+               open: str = Query(""),
                me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
     """The FULL candidate inbox (grouped, Gmail-style) SCOPED to this user's собес candidates —
     the same surface as the admin «Кандидаты» tab, filtered to `_inbox_scope`. `q` searches across
-    only THEIR candidates."""
+    only THEIR candidates. `open=<mailbox>` (from a «Переписка кандидата» link) AUTO-EXPANDS that
+    candidate's card so переписка lands directly on the thread inside the full clickable inbox."""
     responsible = _acting_cabinet(me, as_)
     scope = sorted(_inbox_scope(responsible))
     from backend.tools import candidates_inbox
@@ -328,9 +330,12 @@ def candidates(as_: str = Query("", alias="as"), q: str = Query(""),
     except Exception as e:
         log.warning("cabinet candidate_groups failed: %s", e)
         groups = []
+    # only auto-open a mailbox this user may actually see (ownership guard parity)
+    open_mbx = open if (open and open in scope) else ""
     return HTMLResponse(cabinet_ui.candidates_page(
         responsible, groups, q=q, has_more=(len(groups) == candidates_inbox.PAGE),
-        offset=0, as_id=_view_as(me, responsible), iv_count=_upcoming_count(responsible["id"])))
+        offset=0, as_id=_view_as(me, responsible), iv_count=_upcoming_count(responsible["id"]),
+        open_mbx=open_mbx))
 
 
 @router.get("/candidates/more", response_class=HTMLResponse)

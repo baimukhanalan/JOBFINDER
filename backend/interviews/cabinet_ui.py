@@ -174,6 +174,15 @@ def _cab_href(path: str, as_id=None) -> str:
     return f"{path}{sep}as={as_id}"
 
 
+def _inbox_href(mailbox: str, as_id=None) -> str:
+    """«Переписка» → the FULL clickable candidate inbox (the same grouped Gmail-style surface as
+    the «Кандидаты» tab), scoped to this candidate and AUTO-EXPANDED to their thread (`open=`),
+    instead of the flat non-clickable /cabinet/thread. So переписка = the whole inbox, clickable."""
+    from urllib.parse import quote
+    mb = quote(mailbox or "", safe="@.")
+    return _cab_href(f"/cabinet/candidates?q={mb}&open={mb}", as_id)
+
+
 def _as_field(as_id=None) -> str:
     """A hidden `as` form field so an admin's POST (save availability / reply) targets the
     user being viewed, not the admin. Empty for a self-view."""
@@ -332,8 +341,8 @@ def _week_calendar(interviews: list[dict], rtz, as_id) -> str:
         cells = []
         for loc, iv in evs:
             company = escape((iv.get("company") or "Собес")[:22])
-            h = iv.get("source_message_hash") or iv.get("source_hash") or ""
-            href = _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else _cab_href("/cabinet", as_id)
+            mb = iv.get("mailbox") or ""
+            href = _inbox_href(mb, as_id) if mb else _cab_href("/cabinet", as_id)
             done = " done" if iv.get("done_at") else ""
             cells.append(f'<a class="wk-ev{done}" href="{escape(href, quote=True)}" '
                          f'title="{company}"><b>{loc.strftime("%H:%M")}</b> {company}</a>')
@@ -357,8 +366,7 @@ def _home_row(iv: dict, rtz, as_id) -> str:
     company = escape(iv.get("company") or "")
     iid = iv.get("id")
     done = bool(iv.get("done_at"))
-    h = iv.get("source_message_hash") or iv.get("source_hash") or ""
-    thread_href = _cab_href(f"/cabinet/thread?hash={h}", as_id) if h else ""
+    thread_href = _inbox_href(mb, as_id) if mb else ""
     when_txt = _fmt_local(iv.get("start_ts"), rtz)
     when_html = (f'<span class="hv-when">{escape(when_txt)}</span>' if iv.get("start_ts")
                  else '<span class="hv-when none">время не назначено</span>')
@@ -552,17 +560,19 @@ def inbox_page(responsible: dict, rows: list[dict], as_id=None) -> str:
 
 
 # ---- scoped candidate inbox (full Gmail-style inbox of the interviewer's собес candidates) ----
-def _cab_inbox_js(as_id, page: int) -> str:
+def _cab_inbox_js(as_id, page: int, open_mbx: str = "") -> str:
     """Cabinet-scoped card JS: expand a candidate card → its thread, open a message inline, and
     infinite-scroll — all pointing at the guarded /cabinet/candidates/* routes (never the operator
     ones). The reused message card's reply button is re-routed to the full guarded /cabinet/thread
     view (which owns the reply form). `as_id` is carried on every fetch so an admin read-through
-    stays in the viewed user's context."""
+    stays in the viewed user's context. `open_mbx` (from «Переписка кандидата» → ?open=) AUTO-EXPANDS
+    that candidate's card on load, so переписка lands right on the thread inside the full inbox."""
     import json as _json
     a = _json.dumps(str(as_id) if as_id else "")
+    om = _json.dumps(open_mbx or "")
     return (
         "<script>(function(){\n"
-        f"  var AS={a}; var PAGE={int(page)};\n"
+        f"  var AS={a}; var PAGE={int(page)}; var OPEN={om};\n"
         "  function asq(){ return AS ? ('&as=' + encodeURIComponent(AS)) : ''; }\n"
         "  window.cgToggle = function(head){\n"
         "    if(window.event && window.event.target && window.event.target.closest('a, button')) return;\n"
@@ -625,11 +635,14 @@ def _cab_inbox_js(as_id, page: int) -> str:
         "    }, {rootMargin: '400px'});\n"
         "    io.observe(sentinel);\n"
         "  }\n"
+        "  if(OPEN){ var card=document.querySelector('.cg-card[data-mailbox=\"'+OPEN+'\"]');\n"
+        "    if(card && !card.classList.contains('open')){ var h=card.querySelector('.cg-head')||card;\n"
+        "      window.cgToggle(h); card.scrollIntoView({block:'start'}); } }\n"
         "})();</script>")
 
 
 def candidates_page(responsible: dict, groups: list, *, q: str = "", has_more: bool = False,
-                    offset: int = 0, as_id=None, iv_count=None) -> str:
+                    offset: int = 0, as_id=None, iv_count=None, open_mbx: str = "") -> str:
     """The interviewer/manager's FULL candidate inbox, scoped to their собес candidates — the
     same Gmail-style grouped cards as the admin «Кандидаты» tab (via candidates_inbox.render_groups
     in `plain` mode: no operator assign/assessment controls), the same search, expand-a-card-to-its-
@@ -653,17 +666,16 @@ def candidates_page(responsible: dict, groups: list, *, q: str = "", has_more: b
                 f'data-q="{escape(q or "", quote=True)}"{"" if has_more else " hidden"}></div>')
     body = (portal_shell.admin_banner(responsible.get("name") or "", as_id)
             + '<h1 class="cab-h">Кандидаты</h1>' + tools + inner + sentinel
-            + _cab_inbox_js(as_id, candidates_inbox.PAGE))
+            + _cab_inbox_js(as_id, candidates_inbox.PAGE, open_mbx=open_mbx))
     return _shell(responsible, "candidates", body, "Кандидаты", as_id=as_id,
                   extra_css=candidates_inbox._CG_CSS)
 
 
 def _cal_item(iv: dict, time_lbl: str, past: bool, as_id=None) -> str:
     company = escape(iv.get("company") or "Собеседование")
-    mailbox = escape(iv.get("mailbox") or "")
-    h = iv.get("source_message_hash") or iv.get("source_hash") or ""
-    href = (_cab_href(f"/cabinet/thread?hash={escape(str(h), quote=True)}", as_id) if h
-            else _cab_href("/cabinet/candidates", as_id))
+    mb = iv.get("mailbox") or ""
+    mailbox = escape(mb)
+    href = _inbox_href(mb, as_id) if mb else _cab_href("/cabinet/candidates", as_id)
     time_html = (f'<span class="cal-time">{escape(time_lbl)}</span>' if time_lbl
                  else '<span class="cal-time none">—</span>')
     chips = ""

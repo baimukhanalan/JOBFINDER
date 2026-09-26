@@ -42,7 +42,7 @@ MAX_BODY = 200_000
 # ---- classification (RU/EN, offer > rejection > interview > ack > other) ----
 # Rules are phrases, not regexes: they are editable from /mail/keywords and each
 # saved phrase has transparent "text contains phrase" semantics.
-CLASSIFIER_VERSION = "2026-09-24-free-email-spam-demote"
+CLASSIFIER_VERSION = "2026-09-26-kw-expand-fix-forward-falsepos"
 KEYWORDS_FILE = ROOT / "uploads" / "mail_keywords.json"
 # `code` is a transactional bucket for the ATS "here is your security/verification code"
 # emails (Greenhouse's "Security code for your application to X", ~half of what used to be
@@ -72,6 +72,13 @@ DEFAULT_KEYWORDS = {
         "приглашаем на собеседование", "приглашаем на интервью",
         "собеседование назначено", "назначить собеседование", "назначить звонок",
         "приглашение на тестовое задание",
+        # expanded 2026-09-26 — more genuine invite/advance wordings (kept specific so an ack /
+        # newsletter can't match; interview sits BELOW offer+rejection so a real reject still wins)
+        "move to the interview stage", "advance to the interview", "invite you to the next round",
+        "would like to schedule a call", "set up a call to discuss", "book a time to chat",
+        "second round interview", "final round interview", "technical screen invitation",
+        "приглашаем на следующий этап", "готовы пригласить вас на собеседование",
+        "хотим пригласить вас на интервью", "назначим созвон", "давайте назначим встречу",
     ],
     "offer": [
         "offer letter", "pleased to offer", "we are pleased to offer you",
@@ -81,12 +88,25 @@ DEFAULT_KEYWORDS = {
         "рады предложить вам работу", "рады предложить вам должность",
         "предлагаем вам работу", "предлагаем вам должность", "предлагаем вам оффер",
         "направляем оффер", "направляем вам оффер", "высылаем вам оффер",
+        # expanded 2026-09-26 — anchored on "extend an offer" ONLY (a decision phrase). The bare
+        # "excited/happy/delighted to offer you" forms were TRIED + REVERTED same day: they
+        # substring-matched MARKETING ("we're excited to offer you 20% off / opportunities for
+        # growth") and mislabelled 67 promo/job-alert mails as offers. Never re-add a bare
+        # "…to offer you" — keep offer phrases on "extend an offer"/"offer you the position".
+        "pleased to extend an offer", "extend an offer to you", "we would like to extend an offer",
+        "we're excited to extend an offer", "рады сделать вам оффер",
+        "готовы сделать вам предложение", "высылаем вам предложение о работе",
     ],
     "rejection": [
         "not moving forward", "not be moving forward",
         "decided not to move forward", "decided not to proceed", "decided not to continue",
         "won't be proceeding", "will not be proceeding", "regret to inform",
-        "unable to move forward", "able to move forward with your",
+        "unable to move forward",
+        # NB: NO bare "able to move forward with your" / "move forward with your profile" — those
+        # substring-match a POSITIVE advancement ("we ARE able to move forward with your
+        # application") and mislabelled interview invites as rejections (owner: «собес за отказ»).
+        # The negative sense is covered by "unable to move forward" / "not moving forward" / the
+        # "decided not to..." family + the explicit "won't be moving forward with your application".
         "move forward with other candidates", "move forward with another candidate",
         "pursuing other candidates", "selected other candidates",
         "not a good fit for this", "not the right fit for this",
@@ -99,6 +119,15 @@ DEFAULT_KEYWORDS = {
         # appears in benign CONDITIONAL acks ("if you're selected to move forward").
         "not be proceeding with your candidacy", "wasn't selected to move forward",
         "candidates whose experience is a closer match", "the position has been filled",
+        # expanded 2026-09-26 — more genuine NEGATIVE rejection wordings (every one is
+        # unambiguously negative or names OTHER/ANOTHER candidate, never a positive about YOU)
+        "will not be extending an offer", "not moving forward with your candidacy",
+        "decided to go with another candidate", "decided to go with other candidates",
+        "selected another candidate", "chosen another candidate", "no longer being considered",
+        "not selected to continue", "will not be advancing", "not advancing your application",
+        "we won't be moving forward with your application",
+        "мы выбрали другого кандидата", "ваша кандидатура отклонена", "вакансия закрыта",
+        "не будем продолжать общение",
     ],
     # action_needed = the submit landed but the ATS needs the CANDIDATE to do something to
     # complete/advance it (sign an NDA, verify identity, e-sign) — looks like an ack but the
@@ -169,7 +198,7 @@ def _clean_keyword_rules(data: dict | None) -> dict[str, list[str]]:
         if not isinstance(raw, list):
             raw = DEFAULT_KEYWORDS[kind]
         seen, items = set(), []
-        for value in raw[:100]:
+        for value in raw[:160]:
             phrase = _normalise_phrase(str(value))[:120]
             if phrase and phrase not in seen:
                 seen.add(phrase)

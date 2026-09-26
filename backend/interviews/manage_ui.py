@@ -455,12 +455,9 @@ def portal_page(manager: dict, subs: list[dict], own_ivs: list[dict],
         return priority_ui.status_assigned(names.get(rid) or "—", color=colors.get(rid))      # роздан сотруднику
 
     def _mg_href(iv: dict):
-        # link a row into its переписка — but ONLY the manager's OWN собесы (responsible_id==mid):
-        # /cabinet/thread's ownership guard keys on assigned_mailboxes(mid), which contains his own
-        # rows but NOT team rows (those would 404), so team rows stay non-clickable here. In the
-        # admin read-through the ?as=<mid> keeps it scoped to the manager.
-        if iv.get("responsible_id") != mid:
-            return None
+        # link a row into its переписка. /cabinet/thread's guard now keys on the manager's
+        # `_inbox_scope` (his own собесы + his whole team's), so BOTH his own and team-assigned
+        # rows open cleanly. In the admin read-through the ?as=<mid> keeps it scoped to the manager.
         h = iv.get("source_message_hash") or iv.get("source_hash")
         if not h:
             return None

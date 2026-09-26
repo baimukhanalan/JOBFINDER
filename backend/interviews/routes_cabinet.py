@@ -329,14 +329,16 @@ def candidates_message(id: str = Query(""), as_: str = Query("", alias="as"),
 def thread(hash: str, as_: str = Query("", alias="as"),
            me: dict = Depends(auth.current_responsible)):
     responsible = _acting_cabinet(me, as_)
-    # OWNERSHIP GUARD (security core): resolve the row first, verify its mailbox is
-    # assigned to THIS responsible, and only then read the thread. Any miss → 404.
+    # OWNERSHIP GUARD (security core): resolve the row first, verify its mailbox is in THIS
+    # user's scope, and only then read the thread. Scope = `_inbox_scope` (an interviewer: his
+    # own assigned персоны; a MANAGER: his own + his whole team's — the SAME set as his candidate
+    # inbox), so a manager can open the переписка of a собес he handed to a subordinate. Any miss → 404.
     row = None
     try:
         row = mail_db.get_row(hash)
     except Exception as e:
         log.warning("get_row failed: %s", e)
-    if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
+    if not row or row.get("mailbox") not in _inbox_scope(responsible):
         return _not_found()
     # READ-ONLY: mark=False so opening a thread never flips the persona's messages to
     # seen (which would also move them in the OPERATOR's inbox).
@@ -360,7 +362,9 @@ def reply(hash: str = Form(...), body: str = Form(...), as_: str = Form("", alia
         row = mail_db.get_row(hash)
     except Exception as e:
         log.warning("reply get_row failed: %s", e)
-    if not row or row.get("mailbox") not in db.assigned_mailboxes(responsible["id"]):
+    # same scope as /thread: an interviewer replies on his own собесы; a manager may also reply on
+    # a собес he oversees for the team (his `_inbox_scope`). A miss → 404.
+    if not row or row.get("mailbox") not in _inbox_scope(responsible):
         return _not_found()
 
     thread = mailcrm.get_thread(hash, mark=False) or {}

@@ -1639,6 +1639,19 @@ that zone, the «Собес» grid drawn in the OPERATOR's zone (`?tz=`). Bridge
   status = в пуле / управл.: ФИО / назначен: ФИО). **`is_expired` = an EXPLICIT parsed past deadline ONLY** (an estimated one is
   never «истёк»), so «актуальные» = everything except explicit-expired. Restart: `pm2 restart jobfinder-alan-dash` (all three
   portals are served by the dash). Tests: `test_priority_ui.py` (pure render).
+  **CLICKABLE ROWS (2026-09-26):** `priority_card`/`upcoming_list` take an optional `href_of(row)->url|None` — each candidate
+  block + a «→» arrow become links straight into that собес's переписка (an actionable top-to-bottom worklist, no hunting for the
+  same email below); `booking_url` rows render «📅 запись» as a direct `target=_blank` link to the scheduler/созвон. Wiring:
+  /cabinet + /manage rows → `/cabinet/thread?hash=…`(+`&as=` in the admin read-through), /users pool + live list →
+  `/mail/message?id=…`. No builder passed = plain rows (back-compat).
+- **Admin read-through (2026-09-26): `/manage?as=<id>` now navigates INTO that user's cabinet.** `manage_ui._topbar` in
+  `is_admin_view` renders Собесы/Календарь/Кандидаты/Расписание (each `?as=<id>`-scoped) + События найма, so the admin can
+  traverse a user's whole world from the portal instead of dead-ending on it (the earlier «всё как раньше»). The self-manager nav
+  also gained Календарь/Кандидаты.
+- **Manager reads/replies a TEAM собес thread (2026-09-26):** `GET /cabinet/thread` + `POST /cabinet/reply` ownership guard keys
+  on `routes_cabinet._inbox_scope` (own +, for a manager, the whole team's assigned mailboxes — the SAME set his candidate inbox
+  uses), NOT `assigned_mailboxes` alone. So a manager can open the переписка of a собес he handed down, and every /manage priority
+  + upcoming row (own AND team) is clickable. An EMPLOYEE's scope is unchanged (his own only) → interviewer isolation is intact.
 - **Пользователи `/users`** (`users_ui.py` + `routes_users.py`, ADMIN-ONLY): **DELEGATION-FIRST layout** — the whole user
   LIST + the «Добавить пользователя» form live in a right-side slide-out DRAWER (the «Список» header toggle → `uDrawer`; scrim +
   Esc close; `#u-list` stays the auto-refresh swap target); the main column is the «Делегирование интервью» card + a

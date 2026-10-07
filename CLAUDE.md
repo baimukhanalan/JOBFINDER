@@ -182,6 +182,10 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   ProxyCommand at a dynamically-chosen live slot. (3) A token already driven into an `/…/evaluating` state (griffin, hammered
   for hours) re-shows the SAME item and won't advance — the AMCAT battery-ADVANCE, not the transport, is the next barrier.
 - `*/15` `health --alert` — probe `health.gather()` + Telegram owner on DOWN (throttled 4h) → `logs/health_alert.log`.
+  **Owner-muted categories (`health.OWNER_MUTE_PATTERNS`, owner 2026-10-07) are excluded from this push too** (see the
+  health_heal TELEGRAM MUTE note below — SAME single source) so «🔴 JobFinder health — N сбоя» no longer spams Bright Data /
+  «Пул прокси» / paused «Кампании» / `oscar_clover` / «Codex»; they still show RED on the /health tab. `HEALTH_UNMUTE=1` (or
+  legacy `HEAL_UNMUTE=1`) restores. A genuine failure (pm2 `jobfinder-*` / DNS / Maildir / nginx …) still alerts.
 - `5-55/10` `health_heal` (= `health --heal`; `backend/tools/health_heal.py`) — **SELF-HEALING watcher** (owner-requested
   permanent agent, 2026-09-20). Runs `health.gather()`, auto-remediates ONLY the bounded/idempotent failure modes and
   Telegram-alerts on the rest: pm2 `jobfinder-*` down → `pm2 restart`; local LLM unreachable → `pm2 restart llm-server` (but a
@@ -189,12 +193,16 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   (de-duped to one run); leaked Chromium → `chrome_reaper --min-age 3600`; a pm2 cwd-mismatch or an unknown `down` → ALERT only.
   Hard safety: per-target cooldown (`HEAL_COOLDOWN_SECS`=300) + circuit breaker (`HEAL_BREAKER_MAX`=3/`HEAL_BREAKER_WINDOW_SECS`
   =3600 → stop + escalate), fcntl lock `logs/health_heal.lock` (NO shell `flock` — self-deadlocks the child), `--dry-run` runs/
-  sends/writes nothing. No `sg mail`/`DISPLAY` (each remediation subprocess handles its own). **TELEGRAM MUTE (owner 2026-10-07,
-  `_ALERT_MUTE`/`_MUTE_TARGETS`/`_is_muted`):** owner-silenced RED-but-no-auto-heal categories are dropped from the Telegram
-  message + its throttle signature ONLY (still logged to stdout) — Bright Data daily/zone, empty «Пул прокси», paused «Кампании»
-  daily apply, collect-first `oscar_clover`, and the local-LLM provider-token («Codex») `llm:token` alert the owner tops up by
-  hand. A genuine auto-heal is NEVER suppressed (these have none); real pm2 `jobfinder-*` / egress / Chromium alerts still fire.
-  `HEAL_UNMUTE=1` restores everything. Fresh cron subprocess each tick → no restart needed. Tests: `test_health_heal.py`.
+  sends/writes nothing. No `sg mail`/`DISPLAY` (each remediation subprocess handles its own). **TELEGRAM MUTE (owner 2026-10-07):**
+  the substring list is the SINGLE SOURCE OF TRUTH `health.OWNER_MUTE_PATTERNS` (`bright data`/`пул прокси`/`кампани`/
+  `oscar_clover`/`codex`/`кодекс`), shared by BOTH push paths — `health --alert` (`health._is_owner_muted`, filters the DOWN
+  list) AND `health_heal` (`_is_muted` = that list + the heal-only `_MUTE_TARGETS=('llm:token',)`, since the «Codex» alert
+  carries its meaning in the TARGET not always the detail). Owner-silenced RED-but-no-auto-heal categories are dropped from the
+  Telegram message + throttle signature ONLY (still logged to stdout / shown on the /health tab) — Bright Data daily/zone, empty
+  «Пул прокси», paused «Кампании» daily apply, collect-first `oscar_clover`, the local-LLM provider-token («Codex») alert the
+  owner tops up by hand. A genuine auto-heal is NEVER suppressed (these have none); real pm2 `jobfinder-*` / egress / Chromium
+  alerts still fire. `HEALTH_UNMUTE=1` (or legacy `HEAL_UNMUTE=1`) restores everything. Fresh cron subprocess each tick → no
+  restart needed. Tests: `test_health_heal.py`, `test_health.py`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
   dead daemons, boot-safe). Reads the REUSABLE key from `backend/.ts_authkey` (chmod 600, gitignored; owner-approved on disk

@@ -246,6 +246,55 @@ def test_recovery_note_retries_until_delivered(tmp_path, monkeypatch):
     assert health._load_json(health._ALERT_STATE).get("active") is True   # NOT cleared on failed send
 
 
+def _alert_rows(tmp_path, monkeypatch, rows, tg_ok=True):
+    """check_and_alert with an arbitrary row list; returns the captured _tg calls."""
+    monkeypatch.delenv("HEALTH_UNMUTE", raising=False)
+    monkeypatch.delenv("HEAL_UNMUTE", raising=False)
+    monkeypatch.setattr(health, "_ALERT_STATE", str(tmp_path / "alert_state.json"))
+    snap = {"sections": [{"rows": rows}], "overall": "down", "ts": "2026-10-07 13:15:00"}
+    monkeypatch.setattr(health, "gather", lambda *a, **k: snap)
+    calls = []
+    monkeypatch.setattr(health, "_tg", lambda text: (calls.append(text), tg_ok)[1])
+    return calls
+
+
+_MUTED_ROWS = [
+    {"name": "Прокси: Bright Data (daily)", "status": "down", "detail": "ОШИБКА · HTTP 407"},
+    {"name": "Кампании: ежедневная подача", "status": "down", "detail": "нет строки в crontab"},
+    {"name": "Пул прокси", "status": "down", "detail": "0 живых"},
+    {"name": "Bright Data", "status": "down", "detail": "зона alibaba_dc"},
+]
+
+
+def test_owner_muted_rows_never_alert(tmp_path, monkeypatch):
+    # The 4 owner-silenced categories alone → NO Telegram push, and the active flag stays clear.
+    calls = _alert_rows(tmp_path, monkeypatch, _MUTED_ROWS)
+    res = health.check_and_alert(cooldown=14400)
+    assert calls == []                                       # nothing sent
+    assert res["down"] == []                                 # all filtered out of the push list
+    assert health._load_json(health._ALERT_STATE).get("active") is False
+
+
+def test_real_down_alerts_without_the_muted_rows(tmp_path, monkeypatch):
+    # A genuine failure beside muted rows → alert fires, body carries ONLY the real one.
+    rows = _MUTED_ROWS + [{"name": "jobfinder-alan-dash", "status": "down", "detail": "errored"}]
+    calls = _alert_rows(tmp_path, monkeypatch, rows)
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 1
+    body = calls[0]
+    assert "jobfinder-alan-dash" in body
+    assert "1 сбой" in body                                  # counted as ONE, muted excluded
+    for muted in ("Bright Data", "Пул прокси", "Кампании"):
+        assert muted not in body
+
+
+def test_health_unmute_env_restores_the_alert(tmp_path, monkeypatch):
+    calls = _alert_rows(tmp_path, monkeypatch, _MUTED_ROWS)
+    monkeypatch.setenv("HEALTH_UNMUTE", "1")
+    health.check_and_alert(cooldown=14400)
+    assert len(calls) == 1 and "4 сбоя" in calls[0]          # all 4 back when unmuted
+
+
 def test_plural_and_restart_growth():
     assert health._plural(1, "сбой", "сбоя", "сбоев") == "1 сбой"
     assert health._plural(3, "сбой", "сбоя", "сбоев") == "3 сбоя"

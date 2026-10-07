@@ -1378,15 +1378,37 @@ def _tg(text: str) -> bool:
         return False
 
 
+# --------------------------------------------------------------------------------------------------
+# TELEGRAM MUTE — owner-silenced DOWN categories (owner 2026-10-07). SINGLE SOURCE OF TRUTH, shared by
+# BOTH push paths: `health --alert` (check_and_alert, below) AND `health_heal` (imports these). These
+# are RED rows with no auto-heal that are expected/by-design under the current strategy and were
+# spamming the owner's Telegram: Bright Data daily/zone (balance owner-funded), the empty phone proxy
+# pool (phones offline is the default), the paused daily apply campaigns, the collect-first oscar/clover
+# lane, and the local-LLM provider-token («Codex») alert the owner tops up by hand. A genuine failure
+# (pm2 jobfinder-* / egress / Maildir / DNS / nginx …) is NEVER matched. `HEALTH_UNMUTE=1` (or the
+# legacy `HEAL_UNMUTE=1`) restores everything. Substring match, case-insensitive, over NAME + DETAIL.
+OWNER_MUTE_PATTERNS = ("bright data", "пул прокси", "кампани", "oscar_clover", "codex", "кодекс")
+
+
+def _is_owner_muted(name: str, detail: str = "") -> bool:
+    if os.environ.get("HEALTH_UNMUTE") == "1" or os.environ.get("HEAL_UNMUTE") == "1":
+        return False
+    hay = f"{name} {detail}".lower()
+    return any(p in hay for p in OWNER_MUTE_PATTERNS)
+
+
 def check_and_alert(cooldown: int = 14400) -> dict:
     """Run gather(); Telegram the owner when anything is DOWN (throttled per `cooldown`), and send ONE
     recovery note when it clears. This is the PUSH the pull-only /health tab lacked — a failing service
     or cron now pings the owner within a cron tick instead of waiting to be noticed. Never raises.
     Every RED row of every group (pm2 / crons / data / deps / system) is included — the new probes
-    (DB locks, Maildir silence, DNS, the model, nginx…) alert the same way the crons do."""
+    (DB locks, Maildir silence, DNS, the model, nginx…) alert the same way the crons do.
+    Owner-muted categories (`OWNER_MUTE_PATTERNS`) are excluded from the Telegram push + the active/
+    recovery state (they still show RED on the /health tab)."""
     snap = gather()
     down = [f"{r.get('name')}: {re.sub(r'<[^>]+>', '', str(r.get('detail', '')))}"
-            for sec in snap["sections"] for r in sec["rows"] if r.get("status") == "down"]
+            for sec in snap["sections"] for r in sec["rows"]
+            if r.get("status") == "down" and not _is_owner_muted(str(r.get("name", "")), str(r.get("detail", "")))]
     st = _load_json(_ALERT_STATE)
     now = int(time.time())
 

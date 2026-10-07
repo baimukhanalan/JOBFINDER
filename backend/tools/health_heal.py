@@ -372,17 +372,19 @@ def heal(dry_run: bool = False, snapshot: dict | None = None) -> dict:
 # its throttle signature — the stdout log (logs/health_heal.log) still records them, and a genuine
 # auto-heal is never suppressed (none of these have one). Substring match (case-insensitive) over the
 # row NAME + DETAIL + heal target, plus explicit heal targets. `HEAL_UNMUTE=1` restores everything.
-_ALERT_MUTE = ("bright data", "пул прокси", "кампани", "oscar_clover", "codex", "кодекс")
+# The substring list is the SINGLE SOURCE OF TRUTH in health.OWNER_MUTE_PATTERNS (shared with the
+# `health --alert` push). `_MUTE_TARGETS` is heal-specific: the llm:token alert carries the «Codex»
+# meaning in its TARGET, not always in its detail text, so mute it by target too.
 _MUTE_TARGETS = ("llm:token",)
 
 
 def _is_muted(act: dict) -> bool:
-    if os.environ.get("HEAL_UNMUTE") == "1":
+    if os.environ.get("HEAL_UNMUTE") == "1" or os.environ.get("HEALTH_UNMUTE") == "1":
         return False
     if act.get("target") in _MUTE_TARGETS:
         return True
     hay = f"{act.get('name', '')} {act.get('detail', '')} {act.get('target', '')}".lower()
-    return any(p in hay for p in _ALERT_MUTE)
+    return any(p in hay for p in health.OWNER_MUTE_PATTERNS)
 
 
 def _signature(fixed: list[dict], unresolved: list[dict]) -> str:

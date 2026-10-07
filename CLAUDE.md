@@ -189,7 +189,12 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   (de-duped to one run); leaked Chromium → `chrome_reaper --min-age 3600`; a pm2 cwd-mismatch or an unknown `down` → ALERT only.
   Hard safety: per-target cooldown (`HEAL_COOLDOWN_SECS`=300) + circuit breaker (`HEAL_BREAKER_MAX`=3/`HEAL_BREAKER_WINDOW_SECS`
   =3600 → stop + escalate), fcntl lock `logs/health_heal.lock` (NO shell `flock` — self-deadlocks the child), `--dry-run` runs/
-  sends/writes nothing. No `sg mail`/`DISPLAY` (each remediation subprocess handles its own). Tests: `test_health_heal.py`.
+  sends/writes nothing. No `sg mail`/`DISPLAY` (each remediation subprocess handles its own). **TELEGRAM MUTE (owner 2026-10-07,
+  `_ALERT_MUTE`/`_MUTE_TARGETS`/`_is_muted`):** owner-silenced RED-but-no-auto-heal categories are dropped from the Telegram
+  message + its throttle signature ONLY (still logged to stdout) — Bright Data daily/zone, empty «Пул прокси», paused «Кампании»
+  daily apply, collect-first `oscar_clover`, and the local-LLM provider-token («Codex») `llm:token` alert the owner tops up by
+  hand. A genuine auto-heal is NEVER suppressed (these have none); real pm2 `jobfinder-*` / egress / Chromium alerts still fire.
+  `HEAL_UNMUTE=1` restores everything. Fresh cron subprocess each tick → no restart needed. Tests: `test_health_heal.py`.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
   dead daemons, boot-safe). Reads the REUSABLE key from `backend/.ts_authkey` (chmod 600, gitignored; owner-approved on disk

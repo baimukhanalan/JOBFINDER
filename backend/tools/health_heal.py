@@ -330,11 +330,16 @@ def heal(dry_run: bool = False, snapshot: dict | None = None) -> dict:
         unresolved.append(act)
         log.append(f"{ts} ALERT {act['target']}: {act['name']} — {act['note']}")
 
-    # 4) notify (throttled by signature; never in dry-run)
+    # 4) notify (throttled by signature; never in dry-run). Owner-muted categories are dropped from
+    # the Telegram message + its throttle signature ONLY — they already logged to stdout in step 3.
+    notify_unresolved = [u for u in unresolved if not _is_muted(u)]
+    muted = [u["target"] for u in unresolved if _is_muted(u)]
+    if muted:
+        log.append(f"{ts} Telegram muted (owner-silenced): {', '.join(muted)}")
     alerted = False
-    if not dry_run and (fixed or unresolved):
-        msg = _build_message(ts, fixed, unresolved)
-        sig = _signature(fixed, unresolved)
+    if not dry_run and (fixed or notify_unresolved):
+        msg = _build_message(ts, fixed, notify_unresolved)
+        sig = _signature(fixed, notify_unresolved)
         if ledger.should_alert("heal", sig, now):
             if health._tg(msg):
                 ledger.mark_alert("heal", sig, now)
@@ -355,6 +360,29 @@ def heal(dry_run: bool = False, snapshot: dict | None = None) -> dict:
             "fixed": [f"{f['target']}({'?' if f['ok'] is None else 'ok' if f['ok'] else 'FAIL'})" for f in fixed],
             "unresolved": [u["target"] for u in unresolved],
             "skipped": skipped, "alerted": alerted}
+
+
+# --------------------------------------------------------------------------------------------------
+# TELEGRAM MUTE — owner-silenced alert categories (owner 2026-10-07)
+# These are RED rows with NO auto-heal that are expected/by-design under the current strategy and
+# were spamming the owner's Telegram every tick ("требуется владелец"): the Bright Data daily
+# reissue + zone rows (balance is owner-funded), the empty phone proxy pool (phones offline is the
+# default), the paused daily apply campaigns, the collect-first oscar/clover lane, and the local-LLM
+# provider-token ("Codex") alert the owner tops up by hand. Muting drops ONLY the Telegram alert +
+# its throttle signature — the stdout log (logs/health_heal.log) still records them, and a genuine
+# auto-heal is never suppressed (none of these have one). Substring match (case-insensitive) over the
+# row NAME + DETAIL + heal target, plus explicit heal targets. `HEAL_UNMUTE=1` restores everything.
+_ALERT_MUTE = ("bright data", "пул прокси", "кампани", "oscar_clover", "codex", "кодекс")
+_MUTE_TARGETS = ("llm:token",)
+
+
+def _is_muted(act: dict) -> bool:
+    if os.environ.get("HEAL_UNMUTE") == "1":
+        return False
+    if act.get("target") in _MUTE_TARGETS:
+        return True
+    hay = f"{act.get('name', '')} {act.get('detail', '')} {act.get('target', '')}".lower()
+    return any(p in hay for p in _ALERT_MUTE)
 
 
 def _signature(fixed: list[dict], unresolved: list[dict]) -> str:

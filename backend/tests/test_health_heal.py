@@ -202,3 +202,49 @@ def test_dry_run_plans_but_changes_nothing(monkeypatch):
     assert any("jobfinder-alan-dash" in f for f in res["fixed"])   # planned
     assert res["unresolved"] == ["llm:token"]                      # token issue surfaced, not restarted
     assert saved["n"] == 0                                         # no state write in dry-run
+
+
+# --------------------------------------------------------------------------- Telegram mute (owner-silenced)
+def test_mute_matches_owner_silenced_categories(monkeypatch):
+    monkeypatch.delenv("HEAL_UNMUTE", raising=False)
+    muted = [
+        {"target": "down:crons:Прокси: Bright Data (daily)", "name": "Прокси: Bright Data (daily)", "detail": "ОШИБКА"},
+        {"target": "down:crons:Кампании: ежедневная подача", "name": "Кампании: ежедневная подача", "detail": "нет строки"},
+        {"target": "down:deps:Пул прокси", "name": "Пул прокси", "detail": "0 живых"},
+        {"target": "down:deps:Bright Data", "name": "Bright Data", "detail": "зона alibaba_dc"},
+        {"target": "down:crons:oscar_clover_recon (не в списке)", "name": "oscar_clover_recon (не в списке)", "detail": "err"},
+        {"target": "llm:token", "name": "Локальная модель", "detail": "completions HTTP 500"},
+        {"target": "down:deps:Локальная модель", "name": "Локальная модель", "detail": "истёк токен кодекс"},
+    ]
+    for a in muted:
+        assert H._is_muted(a) is True, a["name"]
+    # a genuine failure is NEVER muted
+    assert H._is_muted({"target": "pm2:jobfinder-alan-dash", "name": "jobfinder-alan-dash", "detail": "errored"}) is False
+    assert H._is_muted({"target": "egress:sync", "name": "Exit-node мост", "detail": "демон отвалился"}) is False
+
+
+def test_heal_drops_muted_from_telegram_but_still_alerts_real(monkeypatch):
+    sent = {}
+    monkeypatch.delenv("HEAL_UNMUTE", raising=False)
+    monkeypatch.setattr(H, "_load_state", lambda: {})
+    monkeypatch.setattr(H, "_save_state", lambda s: None)
+    monkeypatch.setattr(H.health, "_tg", lambda m: sent.__setitem__("msg", m) or True)
+    # only muted rows present → NO Telegram at all
+    snap = _snap(("crons", [_row("Кампании: ежедневная подача", "down", "нет строки")]),
+                 ("deps", [_row("Пул прокси", "down", "0 живых")]))
+    H.heal(dry_run=False, snapshot=snap)
+    assert "msg" not in sent                                        # fully muted → silent
+    # a muted row beside a real pm2 failure → the message carries ONLY the real one
+    sent.clear()
+    snap = _snap(("pm2", [_row("jobfinder-alan-dash", "down", "errored")]),
+                 ("deps", [_row("Пул прокси", "down", "0 живых")]))
+    monkeypatch.setattr(H, "_run_cmd", lambda c: (0, "ok"))
+    H.heal(dry_run=False, snapshot=snap)
+    assert "msg" in sent and "jobfinder-alan-dash" in sent["msg"]
+    assert "Пул прокси" not in sent["msg"]
+
+
+def test_heal_unmute_env_restores_alerts(monkeypatch):
+    monkeypatch.setenv("HEAL_UNMUTE", "1")
+    assert H._is_muted({"target": "llm:token", "name": "Локальная модель", "detail": "HTTP 500"}) is False
+    assert H._is_muted({"target": "down:deps:Bright Data", "name": "Bright Data", "detail": "зона"}) is False

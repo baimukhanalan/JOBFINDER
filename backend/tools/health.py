@@ -1387,7 +1387,12 @@ def _tg(text: str) -> bool:
 # lane, and the local-LLM provider-token («Codex») alert the owner tops up by hand. A genuine failure
 # (pm2 jobfinder-* / egress / Maildir / DNS / nginx …) is NEVER matched. `HEALTH_UNMUTE=1` (or the
 # legacy `HEAL_UNMUTE=1`) restores everything. Substring match, case-insensitive, over NAME + DETAIL.
-OWNER_MUTE_PATTERNS = ("bright data", "пул прокси", "кампани", "oscar_clover", "codex", "кодекс")
+OWNER_MUTE_PATTERNS = (
+    "bright data", "пул прокси", "кампани", "oscar_clover", "codex", "кодекс",
+    # collect-first self-verifying / recon apply lanes: their "errors" (no_form, box busy, pending,
+    # could-not-resolve-apply-url, 0 applications) are BY DESIGN and self-retry — never owner-actionable.
+    "probe_promote", "_recon", "parallel_taleo_drain",
+)
 
 
 def _is_owner_muted(name: str, detail: str = "") -> bool:

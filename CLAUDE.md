@@ -186,6 +186,10 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   health_heal TELEGRAM MUTE note below — SAME single source) so «🔴 JobFinder health — N сбоя» no longer spams Bright Data /
   «Пул прокси» / paused «Кампании» / `oscar_clover` / «Codex»; they still show RED on the /health tab. `HEALTH_UNMUTE=1` (or
   legacy `HEAL_UNMUTE=1`) restores. A genuine failure (pm2 `jobfinder-*` / DNS / Maildir / nginx …) still alerts.
+  Muted set also covers the collect-first self-verifying lanes (`probe_promote`/`_recon`/`parallel_taleo_drain`) whose
+  `no_form`/`box busy`/`pending`/`0 applications` churn is by-design. **A THIRD, separate Codex pager was ALSO disabled
+  (owner 2026-10-07):** the `*/5` crontab line `/home/projects/LLM/codex-health-alert.py` («⚠️ Codex ПРОТУХ») is commented
+  out (not a jobfinder file; re-enable by uncommenting that crontab line). crontab backed up to `~/backups/crontab.*.bak`.
 - `5-55/10` `health_heal` (= `health --heal`; `backend/tools/health_heal.py`) — **SELF-HEALING watcher** (owner-requested
   permanent agent, 2026-09-20). Runs `health.gather()`, auto-remediates ONLY the bounded/idempotent failure modes and
   Telegram-alerts on the rest: pm2 `jobfinder-*` down → `pm2 restart`; local LLM unreachable → `pm2 restart llm-server` (but a

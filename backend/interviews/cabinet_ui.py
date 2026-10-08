@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from html import escape
+from urllib.parse import quote
 
 from backend.interviews import avail_editor, portal_shell, slots
 from backend.tools import mailcrm_ui
@@ -416,6 +417,9 @@ def _home_row(iv: dict, rtz, as_id) -> str:
             f'{sal_html}{dl_html}{when_html}</div>')
 
     acts = []
+    if mb:
+        prep_href = f"/cabinet/prep?mailbox={quote(mb, safe='@.')}" + (f"&as={as_id}" if as_id else "")
+        acts.append(f'<a class="hbtn primary" href="{escape(prep_href, quote=True)}">Сгенерировать пакет →</a>')
     if thread_href:
         acts.append(f'<a class="hbtn" href="{escape(thread_href, quote=True)}">Переписка кандидата →</a>')
     bk = iv.get("booking_url") or iv.get("iv_booking_url") or ""
@@ -501,6 +505,66 @@ def dashboard_page(responsible: dict, interviews: list[dict], as_id=None,
         + '<div id="hv-empty" class="empty" hidden>Ничего не найдено.</div>'
         + list_html + expired_html + '</div>' + _HOME_JS)
     return _shell(responsible, "home", inner, "Главная", as_id=as_id, extra_css=_HOME_CSS)
+
+
+def prep_page(responsible: dict, pack, cheatsheet: str | None, as_id=None) -> str:
+    """«Сгенерировать пакет» result: a read-only prep card for ONE собес — auto-parsed candidate
+    data + the recruiter invite + links + résumé status + an optional role/company cheat-sheet.
+    No assignment side-effects; purely a brief the interviewer reads before the call."""
+    def row(label, val):
+        return (f'<div class="pk-row"><span class="pk-k">{escape(label)}</span>'
+                f'<span class="pk-v">{escape(str(val)) if val else "—"}</span></div>')
+    age = f"~{pack.age} лет" if getattr(pack, "age", None) else ""
+    when = _fmt_local(pack.start_ts, responsible.get("tz")) if getattr(pack, "start_ts", None) else "время не назначено"
+    data = (
+        '<div class="pk-card"><div class="pk-h">Данные кандидата (авто)</div>'
+        + row("ФИО", pack.candidate_name) + row("Штат / страна", pack.state)
+        + row("Возраст", age) + row("Направление / роль", pack.role)
+        + row("Компания", pack.company) + row("Вакансия (job id)", pack.jobid)
+        + row("Время собеса", when)
+        + row("Резюме", (pack.resume_filename or "готово") if pack.has_resume
+              else "не найдено (старый бэклог)")
+        + '</div>')
+    inv = ('<div class="pk-card"><div class="pk-h">Приглашение</div>'
+           + row("Тема", pack.invite_subject) + row("От кого", pack.invite_from) + '</div>')
+    links = []
+    mb = pack.mailbox
+    if mb:
+        links.append(f'<a class="hbtn" href="{escape(_inbox_href(mb, as_id), quote=True)}">Переписка кандидата →</a>')
+    if pack.booking_url:
+        links.append(f'<a class="hbtn" href="{escape(pack.booking_url, quote=True)}" target="_blank" '
+                     'rel="noopener noreferrer">📅 Запись у рекрутёра →</a>')
+    if pack.join_url:
+        links.append(f'<a class="hbtn" href="{escape(pack.join_url, quote=True)}" target="_blank" '
+                     'rel="noopener noreferrer">🔗 Созвон →</a>')
+    links_html = f'<div class="pk-links">{"".join(links)}</div>' if links else ""
+    if cheatsheet:
+        sheet = (f'<div class="pk-card"><div class="pk-h">Шпаргалка к собесу</div>'
+                 f'<div class="pk-sheet">{escape(cheatsheet)}</div></div>')
+    else:
+        sheet = ('<div class="pk-card"><div class="pk-h">Шпаргалка к собесу</div>'
+                 '<p class="pk-note">Автошпаргалка сейчас недоступна — подготовьтесь по данным выше.</p></div>')
+    back = _cab_href("/cabinet", as_id)
+    inner = (
+        portal_shell.admin_banner(responsible.get("name") or "", as_id)
+        + f'<a class="hbtn" href="{escape(back, quote=True)}" style="margin-bottom:10px;display:inline-block">← К собесам</a>'
+        + '<h1 class="cab-h">Пакет к собеседованию</h1>'
+        + data + inv + links_html + sheet)
+    return _shell(responsible, "home", inner, "Пакет", as_id=as_id, extra_css=_PREP_CSS)
+
+
+_PREP_CSS = """
+.pk-card{border:1px solid var(--line);border-radius:var(--r-sm);padding:14px 16px;margin:0 0 12px;background:var(--panel);}
+.pk-h{font-weight:800;font-size:13px;color:var(--ink);margin:0 0 10px;letter-spacing:-.01em;}
+.pk-row{display:flex;gap:10px;padding:4px 0;font-size:13.5px;border-top:1px solid var(--line);}
+.pk-row:first-of-type{border-top:0;}
+.pk-k{flex:0 0 150px;color:var(--ink-soft);font-weight:600;}
+.pk-v{color:var(--ink);word-break:break-word;}
+.pk-links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;}
+.pk-sheet{white-space:pre-wrap;font-size:13.5px;line-height:1.55;color:var(--ink);}
+.pk-note{color:var(--ink-soft);font-size:13px;margin:0;}
+@media(max-width:560px){.pk-k{flex-basis:110px;}}
+"""
 
 
 def _tg_card(responsible: dict, as_id=None) -> str:

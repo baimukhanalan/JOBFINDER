@@ -122,6 +122,35 @@ def build_pack(mailbox: str, *, iv_row: dict | None = None) -> PrepPack:
     return pack
 
 
+def cheat_sheet(pack: "PrepPack") -> str | None:
+    """A concise, role/company-specific interview cheat-sheet for the собес — likely questions +
+    the candidate's talking points. Uses the project's existing LLM path (`services.tailor._llm_complete`,
+    Sumrak-router → Claude-CLI fallback, honoring its shared circuit-breaker). GUARDED: any failure /
+    LLM-down returns None so the caller shows the deterministic card without the sheet (never errors).
+    Neutral Russian output; no stack names (the prompt is about the role, not the engine)."""
+    try:
+        from backend.services.tailor import tailor
+    except Exception:
+        return None
+    role = (pack.role or "").strip() or "данной роли"
+    company = (pack.company or "").strip() or "компании"
+    where = (pack.state or "").strip() or "США"
+    prompt = (
+        f"Ты готовишь интервьюера к собеседованию на позицию «{role}» в компании «{company}». "
+        f"Кандидат: {pack.candidate_name}, проживает: {where}. "
+        f"Контекст приглашения: {(pack.invite_subject or '').strip()[:160]}.\n\n"
+        "Дай короткую шпаргалку на РУССКОМ ровно из двух разделов, без вступления и без markdown-заголовков:\n"
+        "«Вероятные вопросы» — 6–8 типичных вопросов именно под эту роль и компанию.\n"
+        "«Сильные стороны и ответы» — 4–5 кратких тезисов, что подчёркивать кандидату.\n"
+        "Только суть, маркированными строками.")
+    try:
+        out = tailor._llm_complete(prompt)
+    except Exception:
+        return None
+    out = (out or "").strip()
+    return out or None
+
+
 def _render_brief(p: PrepPack) -> str:
     when = p.start_ts.strftime("%d.%m %H:%M") if getattr(p.start_ts, "strftime", None) else "время не назначено"
     age = f", ~{p.age} лет" if p.age else ""

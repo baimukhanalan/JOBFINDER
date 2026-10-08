@@ -149,6 +149,25 @@ def guide(as_: str = Query("", alias="as"),
     return HTMLResponse(cabinet_ui.guide_page(responsible, as_id=_view_as(me, responsible)))
 
 
+@router.get("/prep", response_class=HTMLResponse)
+def prep(mailbox: str = Query(""), as_: str = Query("", alias="as"),
+         me: dict = Depends(auth.current_responsible)) -> HTMLResponse:
+    """«Сгенерировать пакет»: a READ-ONLY prep card for ONE собес the user owns (auto-parsed
+    candidate data + invite + links + an optional role/company cheat-sheet). NO assignment /
+    side-effects. Ownership-guarded via `_inbox_scope` — a mailbox the user doesn't own → 404."""
+    responsible = _acting_cabinet(me, as_)
+    if not mailbox or mailbox not in _inbox_scope(responsible):
+        return _not_found()
+    from backend.interviews import interview_prep
+    pack = interview_prep.build_pack(mailbox)
+    try:
+        cheatsheet = interview_prep.cheat_sheet(pack)
+    except Exception:
+        cheatsheet = None
+    return HTMLResponse(cabinet_ui.prep_page(responsible, pack, cheatsheet,
+                                             as_id=_view_as(me, responsible)))
+
+
 @router.post("/self_schedule", response_class=HTMLResponse)
 def self_schedule(iid: str = Form(""), start_local: str = Form(""),
                   as_: str = Form("", alias="as"),

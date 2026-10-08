@@ -427,6 +427,10 @@ _AUTO_STATUS = {
     "ibex": "needs_laptop", "mercury": "needs_laptop", "current": "needs_laptop",
     "rocketmoney": "needs_laptop", "lendingtree": "needs_laptop",
     "angi": "needs_laptop", "ro": "needs_laptop",
+    # Qurate Retail Group (QVC/HSN) — Workday CxS, seasonal Q4 WFH customer-care ramp (2026-10-08).
+    # Routed to the Workday create-account lane (host in SUPPORTED_HOSTS + _MASSHIRING_HOST_RE);
+    # register-captcha probe pending (workday_probe_promote) → collect-first.
+    "qurate": "needs_laptop",
 }
 
 
@@ -2989,6 +2993,30 @@ def fetch_devoted() -> list[dict]:
                           title_remote=True, us_confirmed=True, offset_cap=200)
 
 
+# --- Qurate Retail Group (QVC / HSN) — Workday CxS (qvc.wd5/QRG) ----------------------------------
+# QVC + HSN's parent. US-only Workday board (live 2026-10-08: Location_Country facet = United States
+# of America for the WHOLE board, 138 reqs), so us_confirmed=True. Remote reqs encode the state in the
+# externalPath slug ("…/Pennsylvania-Remote/…", "…/Ohio-Remote/…") while locationsText is a bare
+# "N Locations" — the default _workday_row externalPath scan catches it; title_remote also keeps a
+# "Remote"-titled role at a physical office. HONEST live yield 2026-10-08: 138 reqs, most remote rows
+# senior/eng (Sr Software Engineer / Principal Engineer, correctly dropped) → ~0-1 remote-US ENTRY CSR
+# today. Future-proof: QVC/HSN runs a large SEASONAL work-from-home Customer Care / order-taking ramp
+# (Oct-Jan peak) that categorize() captures the moment it opens. Apply reuses the Workday create-
+# account lane (host in SUPPORTED_HOSTS + _MASSHIRING_HOST_RE, _TENANT qvc->qurate); register-captcha
+# PROBE PENDING (workday_probe_promote drives it on a quiet :98) → COLLECT-FIRST / 'needs_laptop'.
+def _qurate_row(j: dict) -> dict | None:
+    """PURE (network-free): one Qurate/QVC Workday jobPosting → a remote-US mass-hiring row or None."""
+    return _workday_row(j, "qurate", "Qurate Retail Group", "qvc.wd5.myworkdayjobs.com", "QRG",
+                        us_confirmed=True, title_remote=True)
+
+
+def fetch_qurate() -> list[dict]:
+    return _fetch_workday("qurate", "Qurate Retail Group", "qvc.wd5.myworkdayjobs.com", "qvc", "QRG",
+                          search_texts=("", "remote"),
+                          applied_facets={"Location_Country": [_WD_US_FACET]},
+                          title_remote=True, us_confirmed=True, offset_cap=180)
+
+
 # --- CANADA remote-CSR (the biggest coverage gap) ------------------------------------------------
 # The mass_hiring board has only a `us_eligible` boolean (no CA column), and collect(us_only=True)
 # drops any row with us_eligible=False. So a CA source FORCES us_eligible=True to persist on the
@@ -3279,6 +3307,8 @@ _SOURCES = {"remotive": fetch_remotive, "himalayas": fetch_himalayas,
             # BPO + healthcare-payer coverage expansion (2026-09-22)
             "everise": fetch_everise, "oscar": fetch_oscar, "clover": fetch_clover,
             "devoted": fetch_devoted,
+            # Seasonal Q4 retail work-from-home customer-care ramp on existing Workday lane (2026-10-08)
+            "qurate": fetch_qurate,
             # CANADA remote-CSR (the biggest gap)
             "concentrix_ca": fetch_concentrix_canada, "sutherland_ca": fetch_sutherland_canada,
             # keyless-board fintech/gig/insurtech expansion (2026-09-23)

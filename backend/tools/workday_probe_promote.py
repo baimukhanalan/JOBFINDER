@@ -46,6 +46,15 @@ from backend.tools import mass_hiring_apply_workday_cron as wc  # noqa: E402
 PENDING: dict[str, int] = {"sagility": 15576, "highmark": 15561, "cvshealth": 1108, "humana": 16492,
                            "everise": 17085, "devoted": 17093, "cigna": 16481, "elevance": 15559}
 
+# Seasonal Q4 retail WFH customer-care tenants collected onto the SAME Workday CxS lane (2026-10-08:
+# Qurate/QVC-HSN qvc.wd5/QRG; Chewy chewy.wd5/External). They ramp a large WFH Customer Care pipeline
+# at peak but have ~0-1 remote-US ENTRY row TODAY, so a STATIC probe job id would be stale — the id is
+# resolved at RUNTIME (the newest active mass_hiring_jobs row for that source, like avature_probe_promote).
+# A source with 0 active rows is a graceful no-op (nothing to probe yet); once categorize() captures a
+# seasonal CSR req the probe drives its create-account on a quiet :98 and auto-promotes on a confirmed
+# on-page submit — no code edit.
+PENDING_DYNAMIC: tuple[str, ...] = ("qurate", "chewy")
+
 QUIET_LOAD = float(os.getenv("PROBE_QUIET_LOAD", "9"))   # 1-min load must be below this
 DRIVE_SECS = int(os.getenv("PROBE_DRIVE_SECS", "540"))    # hard cap per probe drive
 LOCK_PATH = os.path.join(REPO, "logs", "workday_probe_promote.lock")
@@ -81,11 +90,35 @@ def box_is_quiet() -> tuple[bool, str]:
     return ok, f"load1={load:.1f}(<{QUIET_LOAD}) jobfinder_drives={drives}"
 
 
+def newest_active_job(source: str) -> int | None:
+    """The newest active mass_hiring_jobs id for a dynamic-source tenant (highest id = newest), or
+    None when the tenant has 0 active rows (⇒ the probe is a no-op). Mirrors avature_probe_promote."""
+    try:
+        from backend.tools import mail_db
+        with mail_db.conn() as c:
+            cur = c.cursor()
+            cur.execute(
+                "SELECT id FROM mass_hiring_jobs WHERE source=%s AND active ORDER BY id DESC LIMIT 1",
+                (source,))
+            row = cur.fetchone()
+        return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def _resolve_job(tenant: str) -> int | None:
+    """The job id to probe for a tenant — the STATIC PENDING id, else the newest active row for a
+    dynamic-source tenant (resolved at runtime)."""
+    if tenant in PENDING:
+        return PENDING[tenant]
+    return newest_active_job(tenant)
+
+
 def next_pending() -> str | None:
-    """First pending tenant not already verified/blocked."""
+    """First pending tenant not already verified/blocked (static PENDING first, then dynamic)."""
     verified = wc._read_verified()
     blocked = _read_json(BLOCKED_PATH)
-    for t in PENDING:
+    for t in list(PENDING) + list(PENDING_DYNAMIC):
         if t not in verified and t not in blocked:
             return t
     return None
@@ -153,13 +186,16 @@ def run_once(force_tenant: str | None = None, force: bool = False, dry: bool = F
     if tenant is None:
         LOG("workday_probe_promote: nothing pending (all verified/blocked)")
         return {"done": True}
+    job = _resolve_job(tenant)
+    if job is None:
+        LOG(f"workday_probe_promote: {tenant} has 0 active rows — no-op (nothing to probe yet)")
+        return {"noop": True, "tenant": tenant}
     if not (quiet or force):
-        LOG(f"workday_probe_promote: box busy ({why}) — skip, retry next tick. next={tenant}")
+        LOG(f"workday_probe_promote: box busy ({why}) — skip, retry next tick. next={tenant} job={job}")
         return {"skipped": True, "why": why, "next": tenant}
     if dry:
-        LOG(f"workday_probe_promote DRY: would probe {tenant} (job {PENDING.get(tenant)}); {why}")
-        return {"dry": True, "tenant": tenant}
-    job = PENDING[tenant]
+        LOG(f"workday_probe_promote DRY: would probe {tenant} (job {job}); {why}")
+        return {"dry": True, "tenant": tenant, "job": job}
     LOG(f"workday_probe_promote: probing {tenant} job={job} ({why})")
     log = _drive(job)
     verdict, detail = classify(log)

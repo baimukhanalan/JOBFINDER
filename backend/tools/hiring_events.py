@@ -42,7 +42,9 @@ _SUBJECT_RE = re.compile(r"(virtual\s+hiring\s+event|hiring\s+event)", re.I)
 # a generic newsletter.
 _SENDER_RE = re.compile(
     r"(teleperformance|talent\.icims\.com|\bttec\b|modernhire|modern\s*hire|concentrix|"
-    r"foundever|sutherland|conduent|alorica|sitel|gainwell|maximus)", re.I)
+    r"foundever|sutherland|conduent|alorica|sitel|gainwell|maximus|"
+    # Kelly Services — domain-anchored so a person merely NAMED "Kelly" in from_email isn't swept in.
+    r"kellyservices|mykelly|kelly\.com)", re.I)
 
 # SQL predicate mirror of the two regexes above (case-insensitive), for the DB scan.
 _MATCH_SQL = (
@@ -52,12 +54,34 @@ _MATCH_SQL = (
     "     OR from_email ILIKE '%concentrix%' OR from_email ILIKE '%foundever%' "
     "     OR from_email ILIKE '%sutherland%' OR from_email ILIKE '%conduent%' "
     "     OR from_email ILIKE '%alorica%' OR from_email ILIKE '%sitel%' "
-    "     OR from_email ILIKE '%gainwell%' OR from_email ILIKE '%maximus%') "
+    "     OR from_email ILIKE '%gainwell%' OR from_email ILIKE '%maximus%' "
+    "     OR from_email ILIKE '%kellyservices%' OR from_email ILIKE '%mykelly%' "
+    "     OR from_email ILIKE '%kelly.com%') "
     "AND (subject ILIKE '%virtual hiring event%' OR subject ILIKE '%hiring event%')"
 )
 
 # icims click-tracking link shape (redirects to the real Zoom room).
 _ICIMS_RE = re.compile(r"https://tracking\.icims\.com/f/a/\S+")
+# a DIRECT video-meeting room link, no tracking hop — Zoom / Microsoft Teams / Google Meet. Non-TP
+# BPOs (TTEC/Concentrix/Kelly…) often embed the real room URL straight in the body, so the invite has
+# no icims redirect to follow. Anchored so a bare footer/privacy URL isn't mistaken for a room.
+_DIRECT_MEETING_RE = re.compile(
+    r"https?://[^\s\"'<>]*?(?:"
+    r"zoom\.us/(?:j|s|w|my|meeting)/|zoom\.us/wc/|"
+    r"teams\.microsoft\.com/l/meetup-join/|teams\.microsoft\.com/dl/|teams\.live\.com/meet/|"
+    r"meet\.google\.com/)[^\s\"'<>]*", re.I)
+
+
+def _is_join_candidate(url: str) -> bool:
+    """A link that could open a hiring-event room: an icims tracking link (resolves to Zoom) OR a
+    DIRECT video-meeting link (Zoom / MS Teams / Google Meet)."""
+    u = url or ""
+    return bool(_ICIMS_RE.match(u) or _DIRECT_MEETING_RE.match(u))
+
+
+def is_direct_meeting_link(url: str | None) -> bool:
+    """True iff ``url`` is a DIRECT Zoom/Teams/Meet room link (no icims hop to resolve)."""
+    return bool(url and _DIRECT_MEETING_RE.match(url))
 # an <a href="…">text</a> anchor (DOTALL for multi-line inner text).
 _ANCHOR_RE = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 # the unsubscribe URL follows "please go to:" in the plain footer.
@@ -109,13 +133,18 @@ def extract_role(subject: str, plain: str) -> str:
 
 
 def extract_join(plain: str, html: str) -> tuple[str | None, str | None]:
-    """(join_tracking_url, unsubscribe_url) — the icims tracking link that opens the Zoom
-    room, and the unsubscribe link (so it is never mistaken for the join link).
+    """(join_url, unsubscribe_url) — the link that opens the hiring-event room, and the unsubscribe
+    link (so it is never mistaken for the join link).
 
-    Resolution order for the join link:
-      1. an inline "Zoom:<url>" in the plain body (variant A);
-      2. the HTML anchor whose visible text says "Join …" (variant B);
-      3. the first icims tracking link that is NOT the unsubscribe link.
+    ``join_url`` is EITHER an icims tracking link (TP-style, resolved to Zoom later) OR a DIRECT
+    Zoom / MS Teams / Google Meet room link (non-TP BPOs embed the real room straight in the body).
+
+    Resolution order (prefer the most unambiguous):
+      1. a DIRECT meeting link in the plain body (it IS the room — no hop);
+      2. an inline "Zoom:<icims-url>" in the plain body (TP variant A);
+      3. the HTML anchor whose visible text says "Join …" (icims or direct — TP variant B);
+      4. the first non-unsubscribe join-candidate anchor (direct preferred, then icims);
+      5. the first non-unsubscribe icims link anywhere in the plain body.
     Returns (None, …) if only the unsubscribe link exists."""
     plain = plain or ""
     html = html or ""
@@ -125,33 +154,47 @@ def extract_join(plain: str, html: str) -> tuple[str | None, str | None]:
         unsub = mu.group(1).rstrip(".,)")
 
     anchors = [(href, _strip_tags(txt)) for href, txt in _ANCHOR_RE.findall(html)
-               if _ICIMS_RE.match(href)]
+               if _is_join_candidate(href)]
     if unsub is None:
         # fall back to the LAST icims anchor whose visible text is a bare URL / "unsubscribe"
         for href, txt in reversed(anchors):
-            if txt.lower().startswith("http") or "unsub" in txt.lower():
+            if _ICIMS_RE.match(href) and (txt.lower().startswith("http") or "unsub" in txt.lower()):
                 unsub = href
                 break
 
-    # 1: inline plain URL right after the Zoom label
+    def _ok(u: str | None) -> bool:
+        return bool(u) and u != unsub
+
+    # 1: a DIRECT meeting link in the plain body (zoom/teams/meet — the room itself, no icims hop)
+    for m in _DIRECT_MEETING_RE.finditer(plain):
+        cand = m.group(0).rstrip(".,)\"'")
+        if _ok(cand):
+            return cand, unsub
+
+    # 2: inline plain icims URL right after the Zoom label (TP variant A)
     mi = _ZOOM_INLINE_RE.search(plain)
     if mi:
         cand = mi.group(1).rstrip(".,)")
-        if cand != unsub:
+        if _ok(cand):
             return cand, unsub
 
-    # 2: the HTML "Join …" anchor
+    # 3: the HTML "Join …" anchor (icims or direct)
     for href, txt in anchors:
-        if href != unsub and re.search(r"\bjoin\b", txt, re.I):
+        if _ok(href) and re.search(r"\bjoin\b", txt, re.I):
             return href, unsub
 
-    # 3: first icims link that is not the unsubscribe link
+    # 4: first non-unsubscribe candidate anchor — a direct room link wins over a bare icims link
     for href, _txt in anchors:
-        if href != unsub:
+        if _ok(href) and _DIRECT_MEETING_RE.match(href):
             return href, unsub
+    for href, _txt in anchors:
+        if _ok(href) and _ICIMS_RE.match(href):
+            return href, unsub
+
+    # 5: first non-unsubscribe icims link anywhere in the plain body
     for m in _ICIMS_RE.finditer(plain):
         cand = m.group(0).rstrip(".,)")
-        if cand != unsub:
+        if _ok(cand):
             return cand, unsub
     return None, unsub
 
@@ -502,15 +545,24 @@ def events(*, resolve: bool = True) -> list[dict]:
     resolved ``join_url`` (the real Zoom room) + ``meeting_id``. Falls back to the
     tracking link as ``join_url`` when resolution fails (it still opens Zoom on click)."""
     invites = [inv for inv in (_parse_invite(r) for r in _event_rows()) if inv]
+    # Only icims tracking links need a network hop; a DIRECT Zoom/Teams/Meet link is already the room.
     if resolve:
-        mapping = resolve_many([inv["tracking_url"] for inv in invites if inv["tracking_url"]])
+        mapping = resolve_many([inv["tracking_url"] for inv in invites
+                                if inv["tracking_url"] and not is_direct_meeting_link(inv["tracking_url"])])
     else:
         mapping = {}
     for inv in invites:
-        resolved = mapping.get(inv["tracking_url"]) if inv["tracking_url"] else None
-        inv["join_url"] = resolved or inv["tracking_url"]
-        inv["meeting_id"] = zoom_meeting_id(resolved)
-        inv["resolved"] = bool(resolved)
+        tu = inv.get("tracking_url")
+        if is_direct_meeting_link(tu):
+            # already the final room — no icims redirect to follow
+            inv["join_url"] = tu
+            inv["meeting_id"] = zoom_meeting_id(tu)   # None for Teams/Meet (grouped by join_url)
+            inv["resolved"] = True
+        else:
+            resolved = mapping.get(tu) if tu else None
+            inv["join_url"] = resolved or tu
+            inv["meeting_id"] = zoom_meeting_id(resolved)
+            inv["resolved"] = bool(resolved)
     return invites
 
 
@@ -628,6 +680,10 @@ def verify_events(invites: list[dict], *, live: bool = True) -> list[dict]:
     for inv in invites:
         try:
             if inv.get("meeting_id"):
+                inv["verify"] = "zoom"
+                continue
+            # A DIRECT room link (Teams/Meet have no Zoom meeting_id) IS the attendable room — no hop.
+            if is_direct_meeting_link(inv.get("join_url")) or is_direct_meeting_link(inv.get("tracking_url")):
                 inv["verify"] = "zoom"
                 continue
             tu = inv.get("tracking_url")

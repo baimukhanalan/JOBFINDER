@@ -73,6 +73,9 @@ SUPPORTED_HOSTS = ("avature.net", "oraclecloud.com", "apply.workingsolutions.com
                    # lane 2026-09-22 (register-captcha probe pending, driven by workday_probe_promote).
                    "weareeverise.wd1.myworkdayjobs.com", "devoted.wd1.myworkdayjobs.com",
                    "geico.wd1.myworkdayjobs.com",
+                   # Seasonal Q4 retail WFH customer-care ramp — Qurate (QVC/HSN) + Chewy, same Workday
+                   # CxS lane (collected 2026-10-08 / 2026-09-23; register-captcha probe pending).
+                   "qvc.wd5.myworkdayjobs.com", "chewy.wd5.myworkdayjobs.com",
                    # iCIMS family: Teleperformance (careersus-teleperformance.icims.com) — the
                    # iframe iForm is account-gated with AWS-WAF + reCAPTCHA on submit
                    # (strategies/icims.py). Account creation + submit gated behind ICIMS_ADVANCE;

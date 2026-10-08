@@ -1596,6 +1596,44 @@ def test_devoted_clinical_and_senior_are_dropped():
         us_confirmed=True, title_remote=True) is None
 
 
+# ---- Qurate Retail Group (QVC / HSN) — Workday CxS (qvc.wd5/QRG), US-only board (us_confirmed).
+# Remote encoded in the externalPath slug ("…/Pennsylvania-Remote/…") while locationsText is a bare
+# "N Locations". Live 2026-10-08: 138 board, remote rows mostly senior/eng → ~0 remote entry today;
+# seasonal WFH Customer Care ramp (Oct-Jan) captured automatically. Shares _workday_row / _qurate_row.
+def test_qurate_remote_via_path_entry_is_kept():
+    row = mh._qurate_row(
+        {"locationsText": "2 Locations", "title": "Customer Care Representative",
+         "bulletFields": ["R83346"],
+         "externalPath": "/job/Pennsylvania-Remote/Customer-Care-Representative_R83346"})
+    assert row is not None
+    assert row["source"] == "qurate"
+    assert row["source_id"] == "R83346"
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+    assert row["apply_url"].startswith("https://qvc.wd5.myworkdayjobs.com/en-US/QRG")
+
+
+def test_qurate_remote_title_at_office_is_kept():
+    # A "Remote" TITLE at a physical office is kept via title_remote.
+    row = mh._qurate_row(
+        {"locationsText": "USA-PA-West-Chester", "title": "Order Support Associate - Remote",
+         "bulletFields": ["R83347"], "externalPath": "/job/USA-PA-West-Chester/x_R83347"})
+    assert row is not None
+    assert row["category"] == "customer_support"
+    assert row["us_eligible"] is True
+
+
+def test_qurate_senior_and_onsite_are_dropped():
+    # QVC's actual remote inventory is mostly senior/eng → dropped by categorize().
+    assert mh._qurate_row(
+        {"locationsText": "2 Locations", "title": "Sr Software Engineer",
+         "bulletFields": ["R82949"], "externalPath": "/job/Pennsylvania-Remote/x_R82949"}) is None
+    # an on-site store sales/receiving role (no remote signal) is dropped.
+    assert mh._qurate_row(
+        {"locationsText": "USA-GA-Atlanta", "title": "Receiving Associate Full Time",
+         "bulletFields": ["R81933"], "externalPath": "/job/USA-GA-Atlanta/x_R81933"}) is None
+
+
 # ---- Greenhouse boards (Oscar / Clover healthcare payers) — _greenhouse_row. Remote from title/loc,
 # US from wording/state/title (US-only payers). Live 2026-09-22: oscar ~1, clover ~1 remote entry.
 def test_greenhouse_bare_remote_us_payer_is_kept():

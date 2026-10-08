@@ -124,6 +124,66 @@ def test_extract_join_never_returns_unsub_when_only_unsub_present():
     assert join is None
 
 
+# ---- Kelly sender (broadened BPO capture) ---------------------------------------
+def test_is_hiring_event_kelly_sender():
+    assert he.is_hiring_event("You're invited to our Virtual Hiring Event",
+                              "careers@kellyservices.com")
+    assert he.is_hiring_event("Hiring Event – Remote CSR", "no-reply@mykelly.com")
+    # a person merely NAMED "Kelly" at another domain is NOT a Kelly sender (domain-anchored)
+    assert not he.is_hiring_event("You're invited to our Virtual Hiring Event",
+                                  "kelly.roberts@some-other-company.com")
+
+
+def test_is_hiring_event_other_bpo_senders():
+    for sender in ("jobopportunities@ttec.com", "noreply@concentrix.com",
+                   "events@conduent.com"):
+        assert he.is_hiring_event("Virtual Hiring Event – Remote Customer Service", sender)
+
+
+# ---- direct Zoom / Teams / Meet links (non-TP BPOs embed the real room, no icims hop) -----------
+def test_is_direct_meeting_link():
+    assert he.is_direct_meeting_link("https://us06web.zoom.us/j/8812345678?pwd=x")
+    assert he.is_direct_meeting_link(
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0")
+    assert he.is_direct_meeting_link("https://meet.google.com/abc-defg-hij")
+    assert not he.is_direct_meeting_link("https://tracking.icims.com/f/a/x~~/y/z")
+    assert not he.is_direct_meeting_link("https://example.com/unsubscribe")
+    assert not he.is_direct_meeting_link(None)
+
+
+def test_extract_join_direct_zoom_inline():
+    # TTEC-style invite with the Zoom room URL straight in the plain body (no icims hop)
+    plain = ("Join our Virtual Hiring Event!\nZoom: https://ttec.zoom.us/j/8812345678?pwd=abc\n"
+             "To unsubscribe, go to:\nhttps://tracking.icims.com/f/a/UNSUB~~/AAIB5hA~/t")
+    join, unsub = he.extract_join(plain, "")
+    assert join == "https://ttec.zoom.us/j/8812345678?pwd=abc"
+    assert unsub == "https://tracking.icims.com/f/a/UNSUB~~/AAIB5hA~/t"
+    assert join != unsub
+    assert he.zoom_meeting_id(join) == "8812345678"
+
+
+def test_extract_join_direct_teams_anchor():
+    # Concentrix/Kelly-style invite: the real room is an MS Teams meetup-join link in a "Join" anchor
+    html = ('<html><body><p>'
+            '<a href="https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0">'
+            'Join the Hiring Event</a></p>'
+            '<p><a href="https://example.com/unsub">unsubscribe</a></p></body></html>')
+    join, unsub = he.extract_join("Virtual Hiring Event\nTime: 10 AM ET", html)
+    assert join == "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0"
+    # no icims footer present → unsub stays None, and the Teams link is still returned
+    assert unsub is None
+
+
+def test_extract_join_direct_link_preferred_over_bare_icims_but_never_unsub():
+    # a direct room link in the body AND an icims unsubscribe link → return the room, never the unsub
+    plain = ("Hiring Event today!\nhttps://zoom.us/j/9998887777\n"
+             "please go to:\nhttps://tracking.icims.com/f/a/UNSUB~~/AAIB5hA~/t")
+    join, unsub = he.extract_join(plain, "")
+    assert join == "https://zoom.us/j/9998887777"
+    assert unsub == "https://tracking.icims.com/f/a/UNSUB~~/AAIB5hA~/t"
+    assert join != unsub
+
+
 # ---- zoom meeting id -------------------------------------------------------------
 def test_zoom_meeting_id():
     assert he.zoom_meeting_id(

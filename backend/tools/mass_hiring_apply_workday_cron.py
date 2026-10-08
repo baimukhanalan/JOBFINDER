@@ -61,7 +61,10 @@ _TENANT = {"cnx": "concentrix", "cvshealth": "cvshealth", "centene": "centene",
            # Healthcare payers/BPOs collected onto the same Workday lane (probe pending).
            "elevancehealth": "elevance", "highmarkhealth": "highmark", "sagility": "sagility",
            # Everise BPO — host slug `weareeverise` ≠ the tenant/source name `everise`.
-           "weareeverise": "everise"}
+           "weareeverise": "everise",
+           # Qurate (QVC/HSN) — host slug `qvc` ≠ the tenant/source name `qurate`. Chewy's host slug
+           # `chewy` == its source name, so it needs no mapping (the slug falls through as-is).
+           "qvc": "qurate"}
 
 # Tenants live-validated to land a real Workday application ack — driven by the cron.
 #

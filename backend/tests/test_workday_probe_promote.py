@@ -22,9 +22,17 @@ def test_next_pending_skips_verified(monkeypatch):
 
 
 def test_next_pending_none_when_all_done(monkeypatch):
-    monkeypatch.setattr(wc, "_read_verified", lambda: set(p.PENDING))
+    # all STATIC + DYNAMIC tenants verified -> nothing pending
+    monkeypatch.setattr(wc, "_read_verified", lambda: set(p.PENDING) | set(p.PENDING_DYNAMIC))
     monkeypatch.setattr(p, "_read_json", lambda path: set())
     assert p.next_pending() is None
+
+
+def test_next_pending_reaches_dynamic_after_static(monkeypatch):
+    # static all verified/blocked -> the first unverified DYNAMIC-source tenant is returned
+    monkeypatch.setattr(wc, "_read_verified", lambda: set(p.PENDING))
+    monkeypatch.setattr(p, "_read_json", lambda path: set())
+    assert p.next_pending() == p.PENDING_DYNAMIC[0]
 
 
 def test_quiet_gate(monkeypatch):

@@ -294,6 +294,15 @@ def tick() -> int:
     except Exception as e:
         logger.warning("tick: event pass failed: %s", e)
 
+    # ADDITIVE: Cockpit «Будешь за маком Алана?» confirm — DM Alan ~40 min before each собес with
+    # Да/Нет buttons; a «Да» press (handled in notify.poll_updates) wakes his Mac + stages the
+    # candidate. Fully guarded — never affects the reminder pass below.
+    try:
+        from backend.interviews import cockpit_wake
+        cockpit_wake.maybe_cockpit_pass(now)
+    except Exception as e:
+        logger.warning("tick: cockpit pass failed: %s", e)
+
     announcements = db.due_announcements()
     due120 = db.due_reminders(now, 120)
     due60 = db.due_reminders(now, 60)

@@ -58,6 +58,41 @@ def send_dm(chat_id: int, text: str) -> bool:
         return False
 
 
+def send_dm_buttons(chat_id: int, text: str, buttons: list[list[dict]]) -> bool:
+    """Like send_dm but with an inline keyboard (`buttons` = rows of {text, callback_data}). Used by
+    the Cockpit «Будешь за маком?» confirm. Same token-safe logging; returns False on any problem."""
+    token = _bot_token()
+    if not token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        resp = httpx.post(url, json={"chat_id": chat_id, "text": text,
+                                     "reply_markup": {"inline_keyboard": buttons}}, timeout=10)
+        if resp.status_code != 200:
+            logger.warning("send_dm_buttons: chat %s failed: %s %s",
+                           chat_id, resp.status_code, resp.text[:300])
+            return False
+        return True
+    except Exception as e:
+        logger.warning("send_dm_buttons: chat %s transport error: %s", chat_id, type(e).__name__)
+        return False
+
+
+def answer_callback(callback_query_id: str, text: str = "") -> bool:
+    """Acknowledge a pressed inline button (pops the Telegram toast). Best-effort; never raises."""
+    token = _bot_token()
+    if not token or not callback_query_id:
+        return False
+    url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
+    try:
+        resp = httpx.post(url, json={"callback_query_id": callback_query_id, "text": text[:190]},
+                          timeout=10)
+        return resp.status_code == 200
+    except Exception as e:
+        logger.warning("answer_callback: transport error: %s", type(e).__name__)
+        return False
+
+
 def _admin_token() -> str:
     """The dedicated ADMIN-alert bot token (@jobfinderadminnbot): new offers/interviews + walk-in
     reminders go here, kept SEPARATE from the responsible-facing interview reminder bot. Falls back to
@@ -167,6 +202,20 @@ def poll_updates() -> int:
     new_offset = offset
     for upd in (r.get("result") or []):
         new_offset = max(new_offset, int(upd.get("update_id", 0)) + 1)
+        # ADDITIVE: Cockpit «Будешь за маком?» inline-button presses arrive as callback_query.
+        # Handle them additively (lazy import, fully guarded) without touching /start linking below.
+        cb = upd.get("callback_query")
+        if cb:
+            try:
+                from backend.interviews import cockpit_wake
+                parsed = cockpit_wake.parse_callback_data((cb.get("data") or ""))
+                if parsed:
+                    cb_chat = ((cb.get("message") or {}).get("chat") or {}).get("id")
+                    cockpit_wake.handle_callback(parsed[0], parsed[1], chat_id=cb_chat,
+                                                 callback_query_id=cb.get("id"))
+            except Exception as e:
+                logger.warning("poll_updates: callback handling failed: %s", type(e).__name__)
+            continue
         msg = upd.get("message") or {}
         text = (msg.get("text") or "").strip()
         chat = (msg.get("chat") or {}).get("id")

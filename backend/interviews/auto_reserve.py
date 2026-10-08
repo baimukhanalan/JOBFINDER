@@ -90,13 +90,29 @@ def _taken_starts(rid: int) -> set[datetime]:
         return {r[0] for r in cur.fetchall() if r[0] is not None}
 
 
+def _hiring_event_mailboxes() -> set[str]:
+    """Mailboxes with an active TP/BPO hiring-event invite (событие найма). Best-effort: any failure
+    → empty set. These are Zoom rooms needing NO recruiter booking — the owner wants them prioritised."""
+    try:
+        return {inv.get("mailbox") for inv in _he.events(resolve=False) if inv.get("mailbox")}
+    except Exception:
+        return set()
+
+
 def _unscheduled(rid: int) -> list[dict]:
-    """Alan's non-cancelled собесы with NO start_ts (need a time), oldest invite first."""
+    """Alan's non-cancelled собесы with NO start_ts (need a time). События найма FIRST (owner emphasis:
+    they're Zoom rooms, no booking friction → schedule them onto the calendar first), then oldest invite."""
     with mail_db._cur() as cur:
         cur.execute("SELECT id, mailbox, company, jobid FROM iv_interviews "
                     "WHERE responsible_id=%s AND status<>'cancelled' AND start_ts IS NULL "
                     "ORDER BY created_at ASC, id ASC", (rid,))
-        return [dict(r) for r in cur.fetchall()]
+        rows = [dict(r) for r in cur.fetchall()]
+    he_mbx = _hiring_event_mailboxes()
+    for i, r in enumerate(rows):
+        r["_he"] = r.get("mailbox") in he_mbx
+    # stable sort: hiring events first, otherwise keep the oldest-invite order
+    rows.sort(key=lambda r: (0 if r["_he"] else 1,))
+    return rows
 
 
 def _booking_url(mailbox: str) -> tuple[str | None, str | None]:

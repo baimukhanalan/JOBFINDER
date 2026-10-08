@@ -46,9 +46,21 @@ def test_book_slot_no_url():
 
 
 def test_unsupported_provider_never_books(monkeypatch):
-    # a non-Calendly provider returns provider_unsupported WITHOUT launching a browser
+    # a GENUINELY unknown provider (not in _DRIVABLE) returns provider_unsupported WITHOUT a browser
     called = {"n": 0}
     import backend.applier.browser as br
     monkeypatch.setattr(br, "BrowserManager", lambda *a, **k: called.__setitem__("n", called["n"] + 1))
-    r = bb.book_slot("https://acme.modernloop.io/x", candidate={"name": "A", "email": "a@takhet.com"})
+    r = bb.book_slot("https://zoom.us/j/123", candidate={"name": "A", "email": "a@takhet.com"})
     assert r["booked"] is False and r["reason"] == "provider_unsupported" and called["n"] == 0
+
+
+def test_codified_provider_is_drivable_not_unsupported():
+    # the enumerated providers are recognised + in _DRIVABLE (attempted via the generic driver),
+    # NOT dismissed as provider_unsupported — only calendly is live-proven, the rest are unverified
+    for host, prov in [("https://acme.modernloop.io/x", "modernloop"),
+                       ("https://portal.goodtime.io/candidate-portal/a/b/1", "goodtime"),
+                       ("https://intercom.candidate.fyi/scheduling/x", "candidate_fyi"),
+                       ("https://www.gem.com/scheduling/schedule/u", "gem")]:
+        assert bb.detect_provider(host) == prov
+        assert prov in bb._DRIVABLE
+    assert bb._LIVE_PROVEN == {"calendly"}

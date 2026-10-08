@@ -64,14 +64,33 @@ def pick_slot(offered, window=(18, 30, 21, 30), prefer="20:00"):
 
 
 def detect_provider(url: str) -> str:
+    u = (url or "").lower()
     host = (urlparse(url or "").hostname or "").lower()
     if "calendly.com" in host:
         return "calendly"
     if "modernloop" in host:
         return "modernloop"
-    if "goodtime" in host or "app.goodtime.io" in host:
+    if "goodtime" in host:
         return "goodtime"
+    if "candidate.fyi" in host:
+        return "candidate_fyi"
+    if "ashbyhq.com" in host or "ashbymail.com" in host:
+        return "ashby"
+    if "gem.com" in host and "/scheduling/" in u:
+        return "gem"
+    # Greenhouse native candidate self-schedule / availability-request pages
+    if "greenhouse.io" in host and ("/availability" in u or "/scheduling" in u or "schedul" in u):
+        return "greenhouse"
     return "unknown"
+
+
+# Providers we attempt via the generic ISO-slot driver. Only Calendly is LIVE-PROVEN; the rest are
+# CODIFIED-but-LIVE-UNVERIFIED (enumerated from real invites — Greenhouse/ModernLoop/GoodTime/
+# candidate.fyi/Ashby/Gem — but every backlog link was expired/0-slot, so their exact slot/confirm DOM
+# needs a fresh open-slot link to validate; the driver reads ISO `data-start-time` buttons + fills the
+# standard name/email form, returns booked ONLY on an on-page confirmation, else a clear reason).
+_DRIVABLE = {"calendly", "modernloop", "goodtime", "candidate_fyi", "ashby", "gem", "greenhouse"}
+_LIVE_PROVEN = {"calendly"}
 
 
 def _result(booked=False, when=None, provider="unknown", reason=""):
@@ -181,8 +200,9 @@ async def _screenshot(page, tag: str):
 async def _drive(booking_url, candidate, window, prefer, dry_run):
     from backend.applier.browser import BrowserManager
     provider = detect_provider(booking_url)
-    if provider != "calendly":
+    if provider not in _DRIVABLE:
         return _result(provider=provider, reason="provider_unsupported")
+    unverified = provider not in _LIVE_PROVEN
     headful = os.environ.get("BOOKING_HEADFUL") == "1"
     try:
         async with BrowserManager(headless=not headful) as bm:
@@ -191,14 +211,24 @@ async def _drive(booking_url, candidate, window, prefer, dry_run):
             try:
                 await page.goto(booking_url, timeout=_NAV_TIMEOUT, wait_until="domcontentloaded")
                 await page.wait_for_timeout(2500)
-                await _screenshot(page, "calendly_landed")
+                await _screenshot(page, f"{provider}_landed")
+                # Generic ISO-slot reader — works for any SPA exposing <button data-start-time=ISO>
+                # (Calendly proven; others share the pattern). Greenhouse /availability is an
+                # availability-REQUEST (submit ranges), not a slot-pick — flagged, never faked.
                 offered = await _read_calendly_slots(page)
                 when = pick_slot(offered, window=window, prefer=prefer)
                 if when is None:
-                    return _result(provider=provider, reason=f"no_in_window_slot(offered={len(offered)})")
+                    tag = "unverified:" if unverified else ""
+                    return _result(provider=provider,
+                                   reason=f"{tag}no_in_window_slot(offered={len(offered)})")
                 ok, reason = await _book_calendly(page, candidate, when, dry_run)
-                return _result(booked=ok, when=when if ok else None, provider=provider,
-                               reason=(reason if ok else f"would_book:{when.isoformat()}" if reason == "dry_run" else reason))
+                if ok:
+                    return _result(booked=True, when=when, provider=provider, reason=reason)
+                if reason == "dry_run":
+                    reason = f"would_book:{when.isoformat()}"
+                if unverified:
+                    reason = f"unverified:{reason}"
+                return _result(provider=provider, reason=reason)
             finally:
                 await ctx.close()
     except Exception as exc:                     # never break the caller

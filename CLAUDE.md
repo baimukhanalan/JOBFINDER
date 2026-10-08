@@ -207,6 +207,17 @@ All lines `cd` into the LOWERCASE `/home/projects/jobfinder`. (Exception left de
   owner tops up by hand. A genuine auto-heal is NEVER suppressed (these have none); real pm2 `jobfinder-*` / egress / Chromium
   alerts still fire. `HEALTH_UNMUTE=1` (or legacy `HEAL_UNMUTE=1`) restores everything. Fresh cron subprocess each tick → no
   restart needed. Tests: `test_health_heal.py`, `test_health.py`.
+- `0 7 * * *` `backend.interviews.auto_reserve` (ENABLED 2026-10-08) — the ISOLATED daily auto-assign + evening-slot
+  reservation for interviewer **Alan Bai (iv_responsibles id=1035)**: when his unscheduled queue is low auto-owns ONE fresh
+  pool interview (preferring a mailbox whose résumé is still on disk), and gives each unscheduled собес the next free slot near
+  **20:00 (window 18:30–21:30, Europe/Berlin)** via `db.set_interview_start`; recruiter self-schedule links are recorded as
+  «нужна ручная бронь» in `data/auto_reserve_manual.json` (live Calendly/ModernLoop booking is a JS-SPA behind bot-mitigation →
+  a separate headful project, deferred — never fabricates a booking). Alan has no Telegram so auto-rows are marked
+  `announced`+`reminded_*`=TRUE to keep the ivremind daemon silent. Pure DB, idempotent, `--dry-run` changes nothing; module
+  touches no other portal code. Feeds the «Interview Cockpit» prep (`interview_prep.build_pack`). Tests: `test_interviews_auto_reserve.py`.
+  **NOTE:** `prefill_retention._protected_demo_ids()` already KEEPS the résumé/persona.json of any interview-stage persona
+  (non-cancelled iv row / pool / hiring-event), so fresh собесы always have a résumé for Natively; the old backlog was pruned
+  before that guard (2026-09-23) and is historically lost.
 - `*/10` + `@reboot sleep 45` `tailscale_egress --sync --authkey file:backend/.ts_authkey` (`flock -n logs/ts_egress.lock`) →
   `logs/ts_egress.log` — reconcile the exit-node egress bridge (one local-SOCKS slot per online exit-node phone; self-heals
   dead daemons, boot-safe). Reads the REUSABLE key from `backend/.ts_authkey` (chmod 600, gitignored; owner-approved on disk

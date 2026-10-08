@@ -18,8 +18,10 @@ import re
 import secrets
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from backend.interviews import auth, cabinet_ui, db, notify, slots
 from backend.tools import mail_db, mailcrm
@@ -166,6 +168,39 @@ def prep(mailbox: str = Query(""), as_: str = Query("", alias="as"),
         cheatsheet = None
     return HTMLResponse(cabinet_ui.prep_page(responsible, pack, cheatsheet,
                                              as_id=_view_as(me, responsible)))
+
+
+@router.post("/prep/photo")
+async def prep_photo_upload(mailbox: str = Form(""), as_: str = Form("", alias="as"),
+                            photo: UploadFile = File(...),
+                            me: dict = Depends(auth.current_responsible)):
+    """Attach a candidate photo to the prep card (image only, ≤8MB). Ownership-guarded; redirects
+    back to the prep page. NOT an identity document — just a headshot kept with the brief."""
+    responsible = _acting_cabinet(me, as_)
+    if not mailbox or mailbox not in _inbox_scope(responsible):
+        return _not_found()
+    from backend.interviews import interview_prep
+    try:
+        data = await photo.read()
+        interview_prep.save_prep_photo(mailbox, data, photo.content_type or "")
+    except Exception:
+        pass
+    dest = f"/cabinet/prep?mailbox={quote(mailbox, safe='@.')}" + (f"&as={as_}" if as_ else "")
+    return RedirectResponse(dest, status_code=303)
+
+
+@router.get("/prep/photo/view")
+def prep_photo_view(mailbox: str = Query(""), as_: str = Query("", alias="as"),
+                    me: dict = Depends(auth.current_responsible)):
+    """Serve the attached candidate photo (ownership-guarded)."""
+    responsible = _acting_cabinet(me, as_)
+    if not mailbox or mailbox not in _inbox_scope(responsible):
+        return _not_found()
+    from backend.interviews import interview_prep
+    p = interview_prep.prep_photo_path(mailbox)
+    if not p:
+        return _not_found()
+    return FileResponse(p)
 
 
 @router.post("/self_schedule", response_class=HTMLResponse)

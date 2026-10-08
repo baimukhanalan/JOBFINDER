@@ -50,7 +50,7 @@ def test_prep_page_pruned_resume_and_missing_sheet():
 
 def test_home_row_has_generate_button():
     row = cabinet_ui._home_row({"mailbox": "a@b.com", "id": 5, "candidate": "A"}, "Europe/Berlin", None)
-    assert "/cabinet/prep?mailbox=" in row and "Сгенерировать пакет" in row
+    assert "/cabinet/prep?mailbox=" in row and "Получить →" in row
 
 
 def test_cheat_sheet_llm_down_returns_none(monkeypatch):
@@ -152,3 +152,20 @@ def _mark_announced():
     from backend.tools import mail_db as _m
     with _m._cur(dict_rows=False) as cur:
         cur.execute("UPDATE iv_interviews SET announced=TRUE WHERE mailbox LIKE 'test_iv_prep%'")
+
+
+def test_prep_photo_save_reject_and_lookup(tmp_path, monkeypatch):
+    """The candidate-photo slot: images save + round-trip; non-images + oversize are rejected."""
+    from backend.interviews import interview_prep as ip
+    monkeypatch.setattr(ip, "_PREP_PHOTO_DIR", str(tmp_path))
+    mb = "test_iv_photo@takhet.com"
+    assert ip.prep_photo_path(mb) is None
+    p = ip.save_prep_photo(mb, b"\xff\xd8\xff\xe0jpegbytes", "image/jpeg")
+    assert p and ip.prep_photo_path(mb) == p
+    assert ip.save_prep_photo(mb, b"hello", "text/plain") is None      # not an image
+    assert ip.save_prep_photo(mb, b"x" * (9 * 1024 * 1024), "image/png") is None  # oversize
+    # replacing keeps ONE file per mailbox
+    p2 = ip.save_prep_photo(mb, b"\x89PNGpngbytes", "image/png")
+    assert p2 and p2.endswith(".png") and ip.prep_photo_path(mb) == p2
+    import os
+    assert sum(1 for f in os.listdir(tmp_path) if f.startswith("test_iv_photo")) == 1

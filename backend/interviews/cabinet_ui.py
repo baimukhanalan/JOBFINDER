@@ -419,7 +419,7 @@ def _home_row(iv: dict, rtz, as_id) -> str:
     acts = []
     if mb:
         prep_href = f"/cabinet/prep?mailbox={quote(mb, safe='@.')}" + (f"&as={as_id}" if as_id else "")
-        acts.append(f'<a class="hbtn primary" href="{escape(prep_href, quote=True)}">Сгенерировать пакет →</a>')
+        acts.append(f'<a class="hbtn primary" href="{escape(prep_href, quote=True)}">Получить →</a>')
     if thread_href:
         acts.append(f'<a class="hbtn" href="{escape(thread_href, quote=True)}">Переписка кандидата →</a>')
     bk = iv.get("booking_url") or iv.get("iv_booking_url") or ""
@@ -525,6 +525,21 @@ def prep_page(responsible: dict, pack, cheatsheet: str | None, as_id=None) -> st
         + row("Резюме", (pack.resume_filename or "готово") if pack.has_resume
               else "не найдено (старый бэклог)")
         + '</div>')
+    # Candidate photo slot (owner 2026-10-08): show the attached photo if any + an attach form.
+    from backend.interviews import interview_prep as _ip
+    _q = f"mailbox={quote(pack.mailbox, safe='@.')}" + (f"&as={as_id}" if as_id else "")
+    has_photo = bool(_ip.prep_photo_path(pack.mailbox)) if pack.mailbox else False
+    img = (f'<img class="pk-photo" src="/cabinet/prep/photo/view?{_q}" alt="фото кандидата">'
+           if has_photo else '<div class="pk-photo pk-photo-empty">фото не прикреплено</div>')
+    photo = (
+        '<div class="pk-card"><div class="pk-h">Фото кандидата</div>' + img
+        + f'<form class="pk-photo-form" method="post" action="/cabinet/prep/photo" '
+          'enctype="multipart/form-data">'
+        + f'<input type="hidden" name="mailbox" value="{escape(pack.mailbox, quote=True)}">'
+        + (f'<input type="hidden" name="as" value="{escape(str(as_id), quote=True)}">' if as_id else '')
+        + '<input type="file" name="photo" accept="image/*" required>'
+        + f'<button class="hbtn primary" type="submit">{"Заменить" if has_photo else "Прикрепить"} фото</button>'
+        + '</form></div>')
     inv = ('<div class="pk-card"><div class="pk-h">Приглашение</div>'
            + row("Тема", pack.invite_subject) + row("От кого", pack.invite_from) + '</div>')
     links = []
@@ -549,7 +564,7 @@ def prep_page(responsible: dict, pack, cheatsheet: str | None, as_id=None) -> st
         portal_shell.admin_banner(responsible.get("name") or "", as_id)
         + f'<a class="hbtn" href="{escape(back, quote=True)}" style="margin-bottom:10px;display:inline-block">← К собесам</a>'
         + '<h1 class="cab-h">Пакет к собеседованию</h1>'
-        + data + inv + links_html + sheet)
+        + data + photo + inv + links_html + sheet)
     return _shell(responsible, "home", inner, "Пакет", as_id=as_id, extra_css=_PREP_CSS)
 
 
@@ -563,6 +578,9 @@ _PREP_CSS = """
 .pk-links{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;}
 .pk-sheet{white-space:pre-wrap;font-size:13.5px;line-height:1.55;color:var(--ink);}
 .pk-note{color:var(--ink-soft);font-size:13px;margin:0;}
+.pk-photo{display:block;max-width:180px;max-height:220px;border-radius:var(--r-sm);border:1px solid var(--line);object-fit:cover;margin:0 0 10px;}
+.pk-photo-empty{display:flex;align-items:center;justify-content:center;width:180px;height:120px;color:var(--ink-soft);font-size:12.5px;background:var(--bg);}
+.pk-photo-form{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;}
 @media(max-width:560px){.pk-k{flex-basis:110px;}}
 """
 

@@ -13,10 +13,58 @@ by the manual P1 playbook, the P2 Mac auto-prep, and the cockpit schedule view.
 """
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field, asdict
 
 from backend.tools import hiring_events as he
 from backend.tools import mail_db
+
+# Candidate prep photo (owner 2026-10-08): a slot on the prep card to attach a candidate photo.
+# Stored per-mailbox under gitignored uploads/ (PII) — NOT an identity document, just a headshot the
+# interviewer can keep with the brief.
+_PREP_PHOTO_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                               "uploads", "prep_photos")
+_PHOTO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+
+def _photo_key(mailbox: str) -> str:
+    return re.sub(r"[^a-z0-9_.@-]", "_", (mailbox or "").lower())[:120]
+
+
+def prep_photo_path(mailbox: str) -> str | None:
+    """The on-disk path of this candidate's attached photo, or None if none attached."""
+    key = _photo_key(mailbox)
+    if not key:
+        return None
+    for ext in ("jpg", "png", "webp"):
+        p = os.path.join(_PREP_PHOTO_DIR, f"{key}.{ext}")
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def save_prep_photo(mailbox: str, data: bytes, content_type: str) -> str | None:
+    """Save an attached candidate photo (image only, ≤8MB). Returns the path, or None on reject."""
+    ext = _PHOTO_EXT.get((content_type or "").split(";")[0].strip().lower())
+    if not ext or not data or len(data) > 8 * 1024 * 1024:
+        return None
+    key = _photo_key(mailbox)
+    if not key:
+        return None
+    try:
+        os.makedirs(_PREP_PHOTO_DIR, exist_ok=True)
+        # drop any prior ext so one photo per mailbox
+        for e in ("jpg", "png", "webp"):
+            old = os.path.join(_PREP_PHOTO_DIR, f"{key}.{e}")
+            if os.path.exists(old):
+                os.remove(old)
+        path = os.path.join(_PREP_PHOTO_DIR, f"{key}.{ext}")
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    except Exception:
+        return None
 
 
 @dataclass

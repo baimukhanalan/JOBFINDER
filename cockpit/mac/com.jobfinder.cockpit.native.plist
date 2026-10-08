@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Interview Cockpit NATIVE menu-bar app LaunchAgent. Runs in the Aqua GUI session so the status-bar
+     item appears; auto-launches at login + stays resident. Supersedes the old com.jobfinder.cockpit
+     (Chrome-window) opener. Only opens apps/windows + caffeinate; never touches OBS/camera/CDP. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobfinder.cockpit.native</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Interview Cockpit.app/Contents/MacOS/InterviewCockpit</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>StandardOutPath</key>
+  <string>/Users/alanbaimukhan/NativelyInbox/cockpit_native.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alanbaimukhan/NativelyInbox/cockpit_native.err.log</string>
+</dict>
+</plist>

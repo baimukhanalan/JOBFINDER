@@ -1,21 +1,29 @@
 #!/bin/bash
-# Install the Interview Cockpit opener on Alan's Mac (reversible — see uninstall.sh).
-# Run FROM the Mac (the server scp's this dir to ~/NativelyCockpit.staging first), or via:
-#   ssh macalan 'bash ~/NativelyCockpit.staging/install.sh'
+# Install the native «Interview Cockpit» app + its LaunchAgent, and SUPERSEDE the old Chrome-window
+# opener (com.jobfinder.cockpit). Run ON Alan's Mac. Idempotent + reversible (see uninstall.sh).
 set -euo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"
-DEST="$HOME/Library/NativelyCockpit"
-AGENTS="$HOME/Library/LaunchAgents"
-PLIST="$AGENTS/com.jobfinder.cockpit.plist"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+UID_N="$(id -u)"
+LA="$HOME/Library/LaunchAgents"
+OLD="com.jobfinder.cockpit"
+NEW="com.jobfinder.cockpit.native"
 
-mkdir -p "$DEST" "$AGENTS" "$HOME/NativelyInbox"
-cp "$HERE/cockpit_open.py" "$DEST/cockpit_open.py"
-chmod +x "$DEST/cockpit_open.py"
-sed "s#__HOME__#$HOME#g" "$HERE/com.jobfinder.cockpit.plist" > "$PLIST"
+# 1) build + install the .app
+bash "$SRC_DIR/build.sh"
 
-# reload cleanly (modern launchd)
-launchctl bootout "gui/$(id -u)/com.jobfinder.cockpit" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-launchctl enable "gui/$(id -u)/com.jobfinder.cockpit" 2>/dev/null || true
-echo "installed: $DEST/cockpit_open.py + $PLIST (polls every 5 min + at login/wake)"
-echo "manual open now:  /usr/bin/python3 $DEST/cockpit_open.py --now"
+# 2) supersede the OLD Chrome-window opener (disable, keep for rollback)
+launchctl bootout "gui/$UID_N/$OLD" 2>/dev/null || true
+if [ -f "$LA/$OLD.plist" ]; then
+  mv -f "$LA/$OLD.plist" "$LA/$OLD.plist.disabled"
+  echo "[install] disabled old opener ($OLD) -> $OLD.plist.disabled"
+fi
+
+# 3) install + (re)load the NEW native LaunchAgent into the GUI session
+mkdir -p "$LA"
+cp "$SRC_DIR/$NEW.plist" "$LA/$NEW.plist"
+launchctl bootout "gui/$UID_N/$NEW" 2>/dev/null || true
+launchctl bootstrap "gui/$UID_N" "$LA/$NEW.plist"
+launchctl enable "gui/$UID_N/$NEW"
+launchctl kickstart -k "gui/$UID_N/$NEW" 2>/dev/null || true
+
+echo "[install] native Interview Cockpit installed + loaded (menu-bar app)."

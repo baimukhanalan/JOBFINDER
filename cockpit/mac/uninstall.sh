@@ -1,9 +1,20 @@
 #!/bin/bash
-# Fully remove the Interview Cockpit opener from Alan's Mac. Leaves ~/NativelyInbox data in place
-# (delete it by hand if wanted). Does NOT touch Natively, OBS, the camera, or the CDP lane.
+# Remove the native «Interview Cockpit» app + LaunchAgent and RESTORE the old Chrome-window opener.
+# Run ON Alan's Mac. Does not delete ~/NativelyInbox data.
 set -uo pipefail
-PLIST="$HOME/Library/LaunchAgents/com.jobfinder.cockpit.plist"
-launchctl bootout "gui/$(id -u)/com.jobfinder.cockpit" 2>/dev/null || true
-rm -f "$PLIST"
-rm -rf "$HOME/Library/NativelyCockpit"
-echo "uninstalled: LaunchAgent + ~/Library/NativelyCockpit removed (NativelyInbox left intact)"
+UID_N="$(id -u)"
+LA="$HOME/Library/LaunchAgents"
+OLD="com.jobfinder.cockpit"
+NEW="com.jobfinder.cockpit.native"
+
+launchctl bootout "gui/$UID_N/$NEW" 2>/dev/null || true
+rm -f "$LA/$NEW.plist"
+rm -rf "/Applications/Interview Cockpit.app"
+
+# restore the old opener if it was disabled
+if [ -f "$LA/$OLD.plist.disabled" ]; then
+  mv -f "$LA/$OLD.plist.disabled" "$LA/$OLD.plist"
+  launchctl bootstrap "gui/$UID_N" "$LA/$OLD.plist" 2>/dev/null || true
+  echo "[uninstall] restored old opener ($OLD)"
+fi
+echo "[uninstall] native Interview Cockpit removed."

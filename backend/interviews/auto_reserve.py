@@ -207,12 +207,31 @@ def run(dry_run: bool = True, notify: bool = False, now: datetime | None = None)
         if burl:
             result["manual_booking"].append({"id": iv["id"], "mailbox": iv["mailbox"],
                                              "booking_url": burl, "provider": bprov})
+        # BOOK the recruiter slot automatically when live-booking is enabled (BOOKING_ADVANCE=1):
+        # a confirmed booking replaces the provisional ~20:00 slot with the real one and clears the
+        # manual flag. Guarded: any failure/unsupported provider → keep the manual flag + the slot.
+        booked_when = None
+        if burl and not dry_run and os.environ.get("BOOKING_ADVANCE") == "1":
+            try:
+                from backend.interviews import booking_bot
+                name = (iv.get("mailbox") or "").split("@")[0].replace(".", " ").title()
+                r = booking_bot.book_slot(burl, candidate={"name": name, "email": iv["mailbox"]})
+                if r.get("booked") and r.get("when"):
+                    booked_when = r["when"].astimezone(tz)
+                    entry["booked"] = True
+                    entry["start"] = booked_when.strftime("%Y-%m-%d %H:%M %Z")
+                    entry["needs_manual_booking"] = False
+                else:
+                    entry["booking_reason"] = r.get("reason")
+            except Exception as exc:
+                entry["booking_reason"] = f"err:{type(exc).__name__}"
         if not dry_run:
             try:
-                db.set_interview_start(iv["id"], slot, slot + timedelta(hours=1))
+                use = booked_when or slot
+                db.set_interview_start(iv["id"], use, use + timedelta(hours=1))
                 if not notify:
                     _suppress_notifications(iv["id"])
-                if burl:
+                if burl and not booked_when:          # only flag manual when auto-booking didn't land
                     manual[str(iv["id"])] = {"mailbox": iv["mailbox"], "booking_url": burl,
                                              "provider": bprov, "start": entry["start"],
                                              "flagged_on": today}

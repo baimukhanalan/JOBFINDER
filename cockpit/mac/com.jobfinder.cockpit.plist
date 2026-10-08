@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Interview Cockpit opener LaunchAgent. Polls the staged manifest every 5 min + at login/wake, and
+     opens the Cockpit + Natively 20 min before each собес. Install/remove via install.sh/uninstall.sh.
+     ONLY opens apps/windows — never touches the Sutherland OBS/camera/CDP lane. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jobfinder.cockpit</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__HOME__/Library/NativelyCockpit/cockpit_open.py</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__HOME__/NativelyInbox/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/NativelyInbox/launchd.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

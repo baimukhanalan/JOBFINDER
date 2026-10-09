@@ -26,4 +26,4 @@ launchctl bootstrap "gui/$UID_N" "$LA/$NEW.plist"
 launchctl enable "gui/$UID_N/$NEW"
 launchctl kickstart -k "gui/$UID_N/$NEW" 2>/dev/null || true
 
-echo "[install] native Interview Cockpit installed + loaded (menu-bar app)."
+echo "[install] native Interview Cockpit installed + loaded (windowed app)."

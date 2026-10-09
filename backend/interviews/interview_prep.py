@@ -165,9 +165,24 @@ def build_pack(mailbox: str, *, iv_row: dict | None = None) -> PrepPack:
     pack.booking_url = inv.get("booking_url")
     pack.booking_provider = inv.get("booking_provider")
     pack.join_url = _find_join_url(f"{pack.invite_subject}\n{pack.invite_snippet}")
+    if not pack.join_url:                      # hiring-event Zoom rooms live in the body → ask hiring_events
+        pack.join_url = _hiring_event_join(mailbox)
 
     pack.brief = _render_brief(pack)
     return pack
+
+
+def _hiring_event_join(mailbox: str) -> str | None:
+    """A hiring-event (событие найма) Zoom room for this persona — the join link lives in the invite
+    BODY (not the snippet), so pull the resolved room from `hiring_events`. Guarded: any failure → None.
+    This is the owner's emphasised case (события найма): the Cockpit opens Chrome right on this room."""
+    try:
+        for inv in he.events(resolve=True):
+            if inv.get("mailbox") == mailbox and inv.get("join_url"):
+                return inv["join_url"]
+    except Exception:
+        return None
+    return None
 
 
 def cheat_sheet(pack: "PrepPack") -> str | None:

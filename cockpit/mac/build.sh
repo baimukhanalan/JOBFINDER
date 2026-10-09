@@ -12,7 +12,7 @@ mkdir -p "$MACOS"
 /usr/bin/swiftc -O \
   -o "$MACOS/InterviewCockpit" \
   "$SRC_DIR/InterviewCockpit.swift" \
-  -framework AppKit -framework Foundation
+  -framework AppKit -framework Foundation -framework WebKit
 cp "$SRC_DIR/Info.plist" "$APP/Contents/Info.plist"
 
 # ad-hoc sign so Gatekeeper launches a locally-built app; clear any quarantine bit.

@@ -65,12 +65,43 @@ func spawn(_ path: String, _ args: [String]) {
     let proc = Process(); proc.executableURL = URL(fileURLWithPath: path); proc.arguments = args
     try? proc.run()
 }
-let CHROME = "/Applications/Google Chrome.app"
+let CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+let CHROME_PROFILE = HOME.appendingPathComponent("Library/NativelyCockpit/chrome").path
+let DEBUG_PORT = 9222
+
+// Open `url` in a DEDICATED, controllable Chrome instance (its own clean profile + a loopback-only
+// remote-debugging port) — never touches the user's main 33-tab Chrome, and the landed tab is
+// verifiable via http://127.0.0.1:9222/json. Re-launching with the SAME --user-data-dir reuses the
+// running instance (focuses it + adds/opens the tab) instead of duplicating.
 func openInChrome(_ url: String) {
-    if FileManager.default.fileExists(atPath: CHROME) {
-        spawn("/usr/bin/open", ["-a", "Google Chrome", url])
+    if FileManager.default.fileExists(atPath: CHROME_BIN) {
+        spawn(CHROME_BIN, ["--user-data-dir=\(CHROME_PROFILE)",
+                           "--remote-debugging-port=\(DEBUG_PORT)",
+                           "--no-first-run", "--no-default-browser-check", url])
     } else {
         spawn("/usr/bin/open", [url])   // fallback: default browser
+    }
+}
+
+func shellCapture(_ path: String, _ args: [String]) -> String {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+    let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
+    do { try p.run() } catch { return "" }
+    let data = out.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+    return String(data: data, encoding: .utf8) ?? ""
+}
+
+// Poll the dedicated Chrome's loopback /json and LOG whether a tab really landed on `needle`
+// (so cockpit_native.log proves the Zoom room opened — not just that a process was spawned).
+func verifyChromeTab(_ needle: String) {
+    DispatchQueue.global().async {
+        for _ in 0..<10 {
+            let j = shellCapture("/usr/bin/curl", ["-s", "--max-time", "2",
+                                                   "http://127.0.0.1:\(DEBUG_PORT)/json"])
+            if j.contains(needle) { logLine("VERIFY ok — dedicated Chrome tab on \(needle)"); return }
+            Thread.sleep(forTimeInterval: 1.2)
+        }
+        logLine("VERIFY fail — no dedicated Chrome tab on \(needle) after 10 tries")
     }
 }
 func targetURL(_ p: Plan) -> String { p.joinUrl ?? p.bookingUrl ?? p.cockpitUrl }
@@ -79,11 +110,14 @@ func alreadyPrepped(_ p: Plan) -> Bool {
     (try? String(contentsOf: MARKER, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) == markerKey(p)
 }
 func prepare(_ p: Plan, manual: Bool) {
+    let url = targetURL(p)
     spawn("/usr/bin/caffeinate", ["-dimsu", "-t", "\(KEEP_AWAKE_SECS)"])
     spawn("/usr/bin/open", ["-a", "Natively"])
-    openInChrome(targetURL(p))
+    openInChrome(url)
     try? markerKey(p).data(using: .utf8)?.write(to: MARKER)
-    logLine("PREP(\(manual ? "manual" : "auto")) \(p.name) · \(p.company) -> \(targetURL(p))")
+    logLine("PREP(\(manual ? "manual" : "auto")) \(p.name) · \(p.company) -> \(url)")
+    let needle = url.firstIndex(of: "?").map { String(url[..<$0]) } ?? url   // room URL sans ?pwd query
+    verifyChromeTab(needle)
 }
 func fmtWhen(_ d: Date?) -> String {
     guard let d = d else { return "время не назначено" }
